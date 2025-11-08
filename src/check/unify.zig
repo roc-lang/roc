@@ -811,6 +811,34 @@ const Unifier = struct {
                     .num => |b_num| {
                         try self.unifyNum(vars, a_num, b_num);
                     },
+                    .nominal_type => |b_nominal| {
+                        // Check if the number literal can unify with this nominal type
+                        // by unifying the nominal type's from_*_digits method signature with the expected type
+                        switch (a_num) {
+                            .int_unbound, .num_unbound => {
+                                // Integer literal - unify with from_int_digits: List(U8) -> Try(Self, [OutOfRange])
+                                if (try self.nominalTypeHasFromIntDigits(b_nominal)) {
+                                    // Unification succeeded - the nominal type can accept integer literals
+                                    self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .frac_unbound => {
+                                // Decimal literal - unify with from_dec_digits: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
+                                if (try self.nominalTypeHasFromDecDigits(b_nominal)) {
+                                    // Unification succeeded - the nominal type can accept decimal literals
+                                    self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            else => {
+                                // Concrete numeric types (U8, F64, etc.) don't unify with nominal types
+                                return error.TypeMismatch;
+                            },
+                        }
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -850,6 +878,34 @@ const Unifier = struct {
                         } else {
                             // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
+                        }
+                    },
+                    .num => |b_num| {
+                        // Check if the nominal type (a) can accept number literals (b)
+                        // based on whether it has the appropriate from_*_digits method
+                        switch (b_num) {
+                            .int_unbound, .num_unbound => {
+                                // Integer literal - check for from_int_digits
+                                if (try self.nominalTypeHasFromIntDigits(a_type)) {
+                                    // The nominal type can accept integer literals
+                                    self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .frac_unbound => {
+                                // Decimal literal - check for from_dec_digits
+                                if (try self.nominalTypeHasFromDecDigits(a_type)) {
+                                    // The nominal type can accept decimal literals
+                                    self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            else => {
+                                // Concrete numeric types don't unify with nominal types
+                                return error.TypeMismatch;
+                            },
                         }
                     },
                     else => return error.TypeMismatch,
@@ -1083,6 +1139,175 @@ const Unifier = struct {
         }
 
         self.merge(vars, vars.b.desc.content);
+    }
+
+    /// Check if a nominal type has a from_int_digits method by unifying its signature
+    /// with the expected type: List(U8) -> Try(Self, [OutOfRange])
+    /// Returns true if unification succeeds, false otherwise.
+    fn nominalTypeHasFromIntDigits(
+        self: *Self,
+        nominal_type: NominalType,
+    ) Error!bool {
+        // Get the backing var (record extension) of the nominal type
+        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+        const backing_resolved = self.types_store.resolveVar(backing_var);
+
+        // Check if the backing is a record
+        const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
+
+        // Use the pre-interned identifier from ModuleEnv for fast integer comparison
+        const from_int_digits_ident = self.module_env.from_int_digits_ident;
+
+        // Look for the from_int_digits field using fast integer comparison
+        const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        for (field_names, 0..) |name_idx, i| {
+            if (name_idx == from_int_digits_ident) {
+                // Found the method - now check it's a function and unify with expected signature
+                const field_var = field_vars[i];
+                const field_resolved = self.types_store.resolveVar(field_var);
+
+                // Check that it's a function
+                switch (field_resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                                // Check it takes exactly 1 argument
+                                const args_slice = self.types_store.sliceVars(func.args);
+                                if (args_slice.len != 1) return false;
+
+                                // Create List(U8) type and unify with the argument
+                                const u8_var = self.types_store.register(.{ .content = .{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+                                const list_u8_var = self.types_store.register(.{ .content = .{ .structure = .{ .list = u8_var } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Attempt to unify the argument with List(U8)
+                                self.unifyGuarded(args_slice[0], list_u8_var) catch return false;
+
+                                // For the return type, we need Try(Self, [OutOfRange])
+                                // Create a fresh var for Self (the nominal type)
+                                const self_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = nominal_type } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Create [OutOfRange] tag union
+                                const out_of_range_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("OutOfRange")) catch return error.AllocatorError;
+                                const empty_payload_range = self.types_store.appendTags(&[_]Tag{.{ .name = out_of_range_ident, .args = Var.SafeList.Range.empty() }}) catch return error.AllocatorError;
+                                const empty_ext_var = self.types_store.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+                                const error_tag_union_var = self.types_store.register(.{ .content = .{ .structure = .{ .tag_union = .{ .tags = empty_payload_range, .ext = empty_ext_var } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Create Try(Self, [OutOfRange]) - Try is a nominal type with 2 type params
+                                const try_ident_text = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Try")) catch return error.AllocatorError;
+                                const try_type_ident = TypeIdent{ .ident_idx = try_ident_text };
+                                const builtin_module_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Builtin")) catch return error.AllocatorError;
+                                const try_vars_range = self.types_store.appendVars(&[_]Var{ self_var, error_tag_union_var }) catch return error.AllocatorError;
+                                const try_vars_nonempty = Var.SafeList.NonEmptyRange{ .nonempty = try_vars_range };
+                                const try_nominal = NominalType{
+                                    .ident = try_type_ident,
+                                    .vars = try_vars_nonempty,
+                                    .origin_module = builtin_module_ident,
+                                };
+                                const try_return_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = try_nominal } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Unify the return type with Try(Self, [OutOfRange])
+                                self.unifyGuarded(func.ret, try_return_var) catch return false;
+
+                                return true;
+                            },
+                            else => return false,
+                        }
+                    },
+                    else => return false,
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// Check if a nominal type has a from_dec_digits method by unifying its signature
+    /// with the expected type: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
+    /// Returns true if unification succeeds, false otherwise.
+    fn nominalTypeHasFromDecDigits(
+        self: *Self,
+        nominal_type: NominalType,
+    ) Error!bool {
+        // Get the backing var (record extension) of the nominal type
+        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+        const backing_resolved = self.types_store.resolveVar(backing_var);
+
+        // Check if the backing is a record
+        const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
+
+        // Use the pre-interned identifier from ModuleEnv for fast integer comparison
+        const from_dec_digits_ident = self.module_env.from_dec_digits_ident;
+
+        // Look for the from_dec_digits field using fast integer comparison
+        const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        for (field_names, 0..) |name_idx, i| {
+            if (name_idx == from_dec_digits_ident) {
+                // Found the method - now check it's a function and unify with expected signature
+                const field_var = field_vars[i];
+                const field_resolved = self.types_store.resolveVar(field_var);
+
+                // Check that it's a function
+                switch (field_resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                                // Check it takes exactly 2 arguments
+                                const args_slice = self.types_store.sliceVars(func.args);
+                                if (args_slice.len != 2) return false;
+
+                                // Create List(U8) type and unify with both arguments
+                                const u8_var1 = self.types_store.register(.{ .content = .{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+                                const list_u8_var1 = self.types_store.register(.{ .content = .{ .structure = .{ .list = u8_var1 } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+                                const u8_var2 = self.types_store.register(.{ .content = .{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+                                const list_u8_var2 = self.types_store.register(.{ .content = .{ .structure = .{ .list = u8_var2 } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Attempt to unify both arguments with List(U8)
+                                self.unifyGuarded(args_slice[0], list_u8_var1) catch return false;
+                                self.unifyGuarded(args_slice[1], list_u8_var2) catch return false;
+
+                                // For the return type, we need Try(Self, [OutOfRange])
+                                // Create a fresh var for Self (the nominal type)
+                                const self_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = nominal_type } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Create [OutOfRange] tag union
+                                const out_of_range_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("OutOfRange")) catch return error.AllocatorError;
+                                const empty_payload_range = self.types_store.appendTags(&[_]Tag{.{ .name = out_of_range_ident, .args = Var.SafeList.Range.empty() }}) catch return error.AllocatorError;
+                                const empty_ext_var = self.types_store.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+                                const error_tag_union_var = self.types_store.register(.{ .content = .{ .structure = .{ .tag_union = .{ .tags = empty_payload_range, .ext = empty_ext_var } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Create Try(Self, [OutOfRange]) - Try is a nominal type with 2 type params
+                                const try_ident_text = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Try")) catch return error.AllocatorError;
+                                const try_type_ident = TypeIdent{ .ident_idx = try_ident_text };
+                                const builtin_module_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Builtin")) catch return error.AllocatorError;
+                                const try_vars_range = self.types_store.appendVars(&[_]Var{ self_var, error_tag_union_var }) catch return error.AllocatorError;
+                                const try_vars_nonempty = Var.SafeList.NonEmptyRange{ .nonempty = try_vars_range };
+                                const try_nominal = NominalType{
+                                    .ident = try_type_ident,
+                                    .vars = try_vars_nonempty,
+                                    .origin_module = builtin_module_ident,
+                                };
+                                const try_return_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = try_nominal } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
+
+                                // Unify the return type with Try(Self, [OutOfRange])
+                                self.unifyGuarded(func.ret, try_return_var) catch return false;
+
+                                return true;
+                            },
+                            else => return false,
+                        }
+                    },
+                    else => return false,
+                }
+            }
+        }
+
+        return false;
     }
 
     fn unifyNum(

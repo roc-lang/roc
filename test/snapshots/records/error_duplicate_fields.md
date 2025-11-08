@@ -90,5 +90,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: Num(_size), email: Str, name: Str }"))
+(expr (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], email: Str, name: Str }"))
 ~~~

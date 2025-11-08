@@ -941,10 +941,31 @@ fn compileSource(source: []const u8) !CompilerStageData {
             const base_ptr = @intFromPtr(buffer.ptr);
 
             logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            // Use the built-in deserialize method instead of manually deserializing each field
-            // This ensures proper offset calculations when the struct layout changes
-            logDebug("loadCompiledModule: About to deserialize ModuleEnv\n", .{});
-            module_env_ptr.* = (try serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param)).*;
+            const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), module_source).*;
+
+            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
+            module_env_ptr.* = ModuleEnv{
+                .gpa = gpa,
+                .common = common,
+                .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .module_kind = serialized_ptr.module_kind,
+                .all_defs = serialized_ptr.all_defs,
+                .all_statements = serialized_ptr.all_statements,
+                .exports = serialized_ptr.exports,
+                .builtin_statements = serialized_ptr.builtin_statements,
+                .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
+                .module_name = module_name_param,
+                .module_name_idx = undefined, // Not used for deserialized modules
+                .diagnostics = serialized_ptr.diagnostics,
+                .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .evaluation_order = null,
+                .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
+                .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
+                .try_ident = common.findIdent("Try") orelse unreachable,
+                .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
+                .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
+            };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
             logDebug("loadCompiledModule: Returning LoadedModule\n", .{});

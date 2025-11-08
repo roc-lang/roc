@@ -396,8 +396,40 @@ pub const Expr = union(enum) {
 
     /// Low-level builtin operations that are implemented by the compiler backend.
     pub const LowLevel = enum {
+        // String operations
         str_is_empty,
+
+        // Set operations
         set_is_empty,
+
+        // Bool operations
+        bool_is_eq,
+        bool_is_ne,
+
+        // Numeric type checking operations
+        num_is_zero, // All numeric types
+        num_is_negative, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_is_positive, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+
+        // Numeric comparison operations
+        num_is_eq, // All integer types + Dec (NOT F32/F64 due to float imprecision)
+        num_is_ne, // Dec only (intentionally separate from is_eq for clarity)
+        num_is_gt, // All numeric types
+        num_is_gte, // All numeric types
+        num_is_lt, // All numeric types
+        num_is_lte, // All numeric types
+
+        // Numeric arithmetic operations
+        num_negate, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_plus, // All numeric types
+        num_minus, // All numeric types
+        num_times, // All numeric types
+        num_div_by, // All numeric types
+        num_rem_by, // All numeric types
+
+        // Numeric parsing operations
+        num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
+        num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
     };
 
     pub const Idx = enum(u32) { _ };

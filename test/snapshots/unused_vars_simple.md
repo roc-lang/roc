@@ -254,15 +254,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Num(_size)"))
+		(patt (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "e -> e"))
-		(patt (type "_arg -> Num(_size)"))
-		(patt (type "Num(_size) -> Num(_size2)"))
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
 	(expressions
-		(expr (type "_arg -> Num(_size)"))
+		(expr (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "e -> e"))
-		(expr (type "_arg -> Num(_size)"))
-		(expr (type "Num(_size) -> Num(_size2)"))
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
 ~~~

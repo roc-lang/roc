@@ -694,7 +694,7 @@ pub const Interpreter = struct {
                     const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                     const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
 
-                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
+                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
                     // Comparison operators - evaluate both sides and compare
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -712,7 +712,7 @@ pub const Interpreter = struct {
                     defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
                     // Compare the values
-                    const comparison_result = try self.compareValues(lhs, rhs, binop.op);
+                    const comparison_result = try self.compareValues(lhs, rhs, binop.op, roc_ops);
                     return try self.makeBoolValue(result_rt_var, comparison_result);
                 } else if (binop.op == .@"or") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -2137,54 +2137,9 @@ pub const Interpreter = struct {
                 const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
 
-                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                const result_layout = try self.getRuntimeLayout(result_rt_var);
-                if (result_layout.tag != .scalar) return error.TypeMismatch;
-
-                return switch (result_layout.data.scalar.tag) {
-                    .int => {
-                        if (!(operand.layout.tag == .scalar and operand.layout.data.scalar.tag == .int)) {
-                            return error.TypeMismatch;
-                        }
-                        const value = operand.asI128();
-                        var out = try self.pushRaw(result_layout, 0);
-                        out.is_initialized = false;
-                        out.setInt(-value);
-                        out.is_initialized = true;
-                        return out;
-                    },
-                    .frac => switch (result_layout.data.scalar.data.frac) {
-                        .dec => {
-                            const operand_dec = try self.stackValueToDecimal(operand);
-                            const out = try self.pushRaw(result_layout, 0);
-                            if (out.ptr) |ptr| {
-                                const dest: *RocDec = @ptrCast(@alignCast(ptr));
-                                dest.* = RocDec{ .num = -operand_dec.num };
-                            }
-                            return out;
-                        },
-                        .f32 => {
-                            const operand_float = try self.stackValueToFloat(f32, operand);
-                            const out = try self.pushRaw(result_layout, 0);
-                            if (out.ptr) |ptr| {
-                                const dest: *f32 = @ptrCast(@alignCast(ptr));
-                                dest.* = -operand_float;
-                            }
-                            return out;
-                        },
-                        .f64 => {
-                            const operand_float = try self.stackValueToFloat(f64, operand);
-                            const out = try self.pushRaw(result_layout, 0);
-                            if (out.ptr) |ptr| {
-                                const dest: *f64 = @ptrCast(@alignCast(ptr));
-                                dest.* = -operand_float;
-                            }
-                            return out;
-                        },
-                    },
-                    else => error.TypeMismatch,
-                };
+                // Use the num_negate low-level operation
+                var args = [_]StackValue{operand};
+                return try self.callLowLevelBuiltin(.num_negate, args[0..], roc_ops);
             },
             .e_unary_not => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
@@ -2293,18 +2248,297 @@ pub const Interpreter = struct {
                 const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
                 const result = builtins.str.isEmpty(roc_str.*);
 
-                // Create a boolean value
-                const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
-                const bool_value = try self.pushRaw(bool_layout, 0);
-                if (bool_value.ptr) |ptr| {
-                    const bool_ptr: *bool = @ptrCast(@alignCast(ptr));
-                    bool_ptr.* = result;
-                }
-                return bool_value;
+                return try self.makeSimpleBoolValue(result);
             },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
+                return error.Crash;
+            },
+
+            // Bool operations
+            .bool_is_eq => {
+                // Bool.is_eq : Bool, Bool -> Bool
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = args[0].asBool();
+                const rhs = args[1].asBool();
+                const result = lhs == rhs;
+                return try self.makeSimpleBoolValue(result);
+            },
+            .bool_is_ne => {
+                // Bool.is_ne : Bool, Bool -> Bool
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = args[0].asBool();
+                const rhs = args[1].asBool();
+                const result = lhs != rhs;
+                return try self.makeSimpleBoolValue(result);
+            },
+
+            // Numeric type checking operations
+            .num_is_zero => {
+                // num.is_zero : num -> Bool
+                if (args.len != 1) return error.TypeMismatch;
+                const num_val = try self.extractNumericValue(args[0]);
+                const result = switch (num_val) {
+                    .int => |i| i == 0,
+                    .f32 => |f| f == 0.0,
+                    .f64 => |f| f == 0.0,
+                    .dec => |d| d.num == 0,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_negative => {
+                // num.is_negative : num -> Bool (signed types only)
+                if (args.len != 1) return error.TypeMismatch;
+                const num_val = try self.extractNumericValue(args[0]);
+                const result = switch (num_val) {
+                    .int => |i| i < 0,
+                    .f32 => |f| f < 0.0,
+                    .f64 => |f| f < 0.0,
+                    .dec => |d| d.num < 0,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_positive => {
+                // num.is_positive : num -> Bool (signed types only)
+                if (args.len != 1) return error.TypeMismatch;
+                const num_val = try self.extractNumericValue(args[0]);
+                const result = switch (num_val) {
+                    .int => |i| i > 0,
+                    .f32 => |f| f > 0.0,
+                    .f64 => |f| f > 0.0,
+                    .dec => |d| d.num > 0,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+
+            // Numeric comparison operations
+            .num_is_eq => {
+                // num.is_eq : num, num -> Bool (all integer types + Dec, NOT F32/F64)
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result = switch (lhs) {
+                    .int => |l| l == rhs.int,
+                    .dec => |l| l.num == rhs.dec.num,
+                    .f32, .f64 => {
+                        self.triggerCrash("Equality comparison not supported for F32/F64 due to floating point imprecision", false, roc_ops);
+                        return error.Crash;
+                    },
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_ne => {
+                // num.is_ne : num, num -> Bool (Dec only)
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result = switch (lhs) {
+                    .dec => |l| l.num != rhs.dec.num,
+                    .int, .f32, .f64 => {
+                        self.triggerCrash("is_ne only supported for Dec type", false, roc_ops);
+                        return error.Crash;
+                    },
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_gt => {
+                // num.is_gt : num, num -> Bool
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result = switch (lhs) {
+                    .int => |l| l > rhs.int,
+                    .f32 => |l| l > rhs.f32,
+                    .f64 => |l| l > rhs.f64,
+                    .dec => |l| l.num > rhs.dec.num,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_gte => {
+                // num.is_gte : num, num -> Bool
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result = switch (lhs) {
+                    .int => |l| l >= rhs.int,
+                    .f32 => |l| l >= rhs.f32,
+                    .f64 => |l| l >= rhs.f64,
+                    .dec => |l| l.num >= rhs.dec.num,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_lt => {
+                // num.is_lt : num, num -> Bool
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result = switch (lhs) {
+                    .int => |l| l < rhs.int,
+                    .f32 => |l| l < rhs.f32,
+                    .f64 => |l| l < rhs.f64,
+                    .dec => |l| l.num < rhs.dec.num,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+            .num_is_lte => {
+                // num.is_lte : num, num -> Bool
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result = switch (lhs) {
+                    .int => |l| l <= rhs.int,
+                    .f32 => |l| l <= rhs.f32,
+                    .f64 => |l| l <= rhs.f64,
+                    .dec => |l| l.num <= rhs.dec.num,
+                };
+                return try self.makeSimpleBoolValue(result);
+            },
+
+            // Numeric arithmetic operations
+            .num_negate => {
+                // num.negate : num -> num (signed types only)
+                if (args.len != 1) return error.TypeMismatch;
+                const num_val = try self.extractNumericValue(args[0]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (num_val) {
+                    .int => |i| out.setInt(-i),
+                    .f32 => |f| out.setF32(-f),
+                    .f64 => |f| out.setF64(-f),
+                    .dec => |d| out.setDec(RocDec{ .num = -d.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_plus => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| out.setInt(l + rhs.int),
+                    .f32 => |l| out.setF32(l + rhs.f32),
+                    .f64 => |l| out.setF64(l + rhs.f64),
+                    .dec => |l| out.setDec(RocDec{ .num = l.num + rhs.dec.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_minus => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| out.setInt(l - rhs.int),
+                    .f32 => |l| out.setF32(l - rhs.f32),
+                    .f64 => |l| out.setF64(l - rhs.f64),
+                    .dec => |l| out.setDec(RocDec{ .num = l.num - rhs.dec.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_times => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| out.setInt(l * rhs.int),
+                    .f32 => |l| out.setF32(l * rhs.f32),
+                    .f64 => |l| out.setF64(l * rhs.f64),
+                    .dec => |l| out.setDec(RocDec{ .num = @divTrunc(l.num * rhs.dec.num, RocDec.one_point_zero_i128) }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_div_by => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| {
+                        if (rhs.int == 0) return error.DivisionByZero;
+                        out.setInt(@divTrunc(l, rhs.int));
+                    },
+                    .f32 => |l| {
+                        if (rhs.f32 == 0) return error.DivisionByZero;
+                        out.setF32(l / rhs.f32);
+                    },
+                    .f64 => |l| {
+                        if (rhs.f64 == 0) return error.DivisionByZero;
+                        out.setF64(l / rhs.f64);
+                    },
+                    .dec => |l| {
+                        if (rhs.dec.num == 0) return error.DivisionByZero;
+                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
+                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_rem_by => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| {
+                        if (rhs.int == 0) return error.DivisionByZero;
+                        out.setInt(@rem(l, rhs.int));
+                    },
+                    .f32 => |l| {
+                        if (rhs.f32 == 0) return error.DivisionByZero;
+                        out.setF32(@rem(l, rhs.f32));
+                    },
+                    .f64 => |l| {
+                        if (rhs.f64 == 0) return error.DivisionByZero;
+                        out.setF64(@rem(l, rhs.f64));
+                    },
+                    .dec => |l| {
+                        if (rhs.dec.num == 0) return error.DivisionByZero;
+                        out.setDec(RocDec{ .num = @rem(l.num, rhs.dec.num) });
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
+
+            // Numeric parsing operations
+            .num_from_int_digits => {
+                // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])
+                self.triggerCrash("num_from_int_digits not yet implemented", false, roc_ops);
+                return error.Crash;
+            },
+            .num_from_dec_digits => {
+                // num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])
+                self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
                 return error.Crash;
             },
         }
@@ -2389,6 +2623,16 @@ pub const Interpreter = struct {
         return result_value;
     }
 
+    /// Helper to create a simple boolean StackValue (for low-level builtins)
+    fn makeSimpleBoolValue(self: *Interpreter, value: bool) !StackValue {
+        const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
+        const bool_value = try self.pushRaw(bool_layout, 0);
+        if (bool_value.ptr) |ptr| {
+            const bool_ptr: *bool = @ptrCast(@alignCast(ptr));
+            bool_ptr.* = value;
+        }
+        return bool_value;
+    }
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
         defer if (owned) self.allocator.free(@constCast(message));
         roc_ops.crash(message);
@@ -2543,6 +2787,7 @@ pub const Interpreter = struct {
         rhs: StackValue,
         lhs_rt_var: types.Var,
         rhs_rt_var: types.Var,
+        roc_ops: *RocOps,
     ) !StackValue {
         const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
         const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
@@ -2551,15 +2796,20 @@ pub const Interpreter = struct {
         result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);
 
         if (result_layout.tag != .scalar) return error.TypeMismatch;
-        return switch (result_layout.data.scalar.tag) {
-            .int => try self.evalIntBinop(op, result_layout, lhs, rhs),
-            .frac => switch (result_layout.data.scalar.data.frac) {
-                .dec => try self.evalDecBinop(op, result_layout, lhs, rhs),
-                .f32 => try self.evalFloatBinop(f32, op, result_layout, lhs, rhs),
-                .f64 => try self.evalFloatBinop(f64, op, result_layout, lhs, rhs),
-            },
-            else => error.TypeMismatch,
+
+        // Map binary operator to low-level operation
+        const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
+            .add => .num_plus,
+            .sub => .num_minus,
+            .mul => .num_times,
+            .div, .div_trunc => .num_div_by,
+            .rem => .num_rem_by,
+            else => return error.NotImplemented,
         };
+
+        // Call the low-level builtin with both arguments
+        var args = [_]StackValue{ lhs, rhs };
+        return try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
     }
 
     fn evalIntBinop(
@@ -3443,41 +3693,61 @@ pub const Interpreter = struct {
         }
     }
 
-    fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op) !bool {
-        // Handle numeric comparisons
-        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
-            lhs.layout.data.scalar.tag == .int and rhs.layout.data.scalar.tag == .int)
-        {
-            const lhs_val = lhs.asI128();
-            const rhs_val = rhs.asI128();
+    fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op, roc_ops: *RocOps) !bool {
+        // Handle numeric comparisons using the new low-level dispatch system
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+            const lhs_scalar = lhs.layout.data.scalar;
+            const rhs_scalar = rhs.layout.data.scalar;
 
-            return switch (op) {
-                .eq => lhs_val == rhs_val,
-                .ne => lhs_val != rhs_val,
-                .lt => lhs_val < rhs_val,
-                .le => lhs_val <= rhs_val,
-                .gt => lhs_val > rhs_val,
-                .ge => lhs_val >= rhs_val,
-                else => error.NotImplemented,
-            };
-        }
+            // Check if both operands are numeric types
+            const is_numeric = (lhs_scalar.tag == .int or lhs_scalar.tag == .frac) and
+                (rhs_scalar.tag == .int or rhs_scalar.tag == .frac);
 
-        // Handle bool comparisons (like True == False)
-        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
-            lhs.layout.data.scalar.tag == .bool and rhs.layout.data.scalar.tag == .bool)
-        {
-            const lhs_val = lhs.asBool();
-            const rhs_val = rhs.asBool();
+            if (is_numeric) {
+                // Map binary operator to low-level operation
+                const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
+                    .eq => .num_is_eq,
+                    .ne => .num_is_ne,
+                    .lt => .num_is_lt,
+                    .le => .num_is_lte,
+                    .gt => .num_is_gt,
+                    .ge => .num_is_gte,
+                    else => return error.NotImplemented,
+                };
 
-            return switch (op) {
-                .eq => lhs_val == rhs_val,
-                .ne => lhs_val != rhs_val,
-                else => error.NotImplemented,
-            };
+                // Call the low-level builtin with both arguments
+                var args = [_]StackValue{ lhs, rhs };
+                const result = try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
+
+                // Extract boolean result
+                if (result.ptr) |ptr| {
+                    const bool_ptr: *const bool = @ptrCast(@alignCast(ptr));
+                    return bool_ptr.*;
+                }
+                return error.TypeMismatch;
+            }
+
+            // Handle bool comparisons using low-level dispatch
+            if (lhs_scalar.tag == .bool and rhs_scalar.tag == .bool) {
+                const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
+                    .eq => .bool_is_eq,
+                    .ne => .bool_is_ne,
+                    else => return error.NotImplemented,
+                };
+
+                var args = [_]StackValue{ lhs, rhs };
+                const result = try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
+
+                // Extract boolean result
+                if (result.ptr) |ptr| {
+                    const bool_ptr: *const bool = @ptrCast(@alignCast(ptr));
+                    return bool_ptr.*;
+                }
+                return error.TypeMismatch;
+            }
         }
 
         // For now, only numeric and bool comparisons are supported
-        _ = self;
         return error.NotImplemented;
     }
 

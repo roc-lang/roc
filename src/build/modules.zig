@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Build = std.Build;
 const Module = Build.Module;
 const Step = Build.Step;
@@ -29,6 +30,12 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .fmt => &.{"fmt tests"},
         else => &.{},
     };
+}
+
+fn targetMatchesHost(target: ResolvedTarget) bool {
+    return target.result.os.tag == builtin.target.os.tag and
+        target.result.cpu.arch == builtin.target.cpu.arch and
+        target.result.abi == builtin.target.abi;
 }
 
 fn extendWithAggregatorFilters(
@@ -340,7 +347,7 @@ pub const RocModules = struct {
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
             // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
-            if (module_type == .watch and target.result.os.tag == .macos and target.query.isNative()) {
+            if (module_type == .watch and target.result.os.tag == .macos and targetMatchesHost(target)) {
                 test_step.linkFramework("CoreFoundation");
                 test_step.linkFramework("CoreServices");
             }

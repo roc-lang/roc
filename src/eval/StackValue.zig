@@ -285,6 +285,96 @@ pub fn asBool(self: StackValue) bool {
     return bool_ptr.* != 0;
 }
 
+/// Read this StackValue's f32 value
+pub fn asF32(self: StackValue) f32 {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .f32);
+
+    const typed_ptr = @as(*const f32, @ptrCast(@alignCast(self.ptr.?)));
+    return typed_ptr.*;
+}
+
+/// Read this StackValue's f64 value
+pub fn asF64(self: StackValue) f64 {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .f64);
+
+    const typed_ptr = @as(*const f64, @ptrCast(@alignCast(self.ptr.?)));
+    return typed_ptr.*;
+}
+
+/// Read this StackValue's Dec value
+pub fn asDec(self: StackValue) RocDec {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .dec);
+
+    const typed_ptr = @as(*const RocDec, @ptrCast(@alignCast(self.ptr.?)));
+    return typed_ptr.*;
+}
+
+/// Initialise the StackValue f32 value
+pub fn setF32(self: *StackValue, value: f32) void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is an f32
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .f32);
+
+    // Assert this is uninitialised memory
+    //
+    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
+    std.debug.assert(!self.is_initialized);
+
+    // Write the f32 value
+    const typed_ptr: *f32 = @ptrCast(@alignCast(self.ptr.?));
+    typed_ptr.* = value;
+}
+
+/// Initialise the StackValue f64 value
+pub fn setF64(self: *StackValue, value: f64) void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is an f64
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .f64);
+
+    // Assert this is uninitialised memory
+    //
+    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
+    std.debug.assert(!self.is_initialized);
+
+    // Write the f64 value
+    const typed_ptr: *f64 = @ptrCast(@alignCast(self.ptr.?));
+    typed_ptr.* = value;
+}
+
+/// Initialise the StackValue Dec value
+pub fn setDec(self: *StackValue, value: RocDec) void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is a Dec
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .dec);
+
+    // Assert this is uninitialised memory
+    //
+    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
+    std.debug.assert(!self.is_initialized);
+
+    // Write the Dec value
+    const typed_ptr: *RocDec = @ptrCast(@alignCast(self.ptr.?));
+    typed_ptr.* = value;
+}
+
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing

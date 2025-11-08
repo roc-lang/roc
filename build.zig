@@ -192,7 +192,14 @@ pub fn build(b: *std.Build) void {
     }
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
-    build_options.addOption(bool, "target_is_native", target.query.isNative());
+
+    const target_is_native =
+        // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
+        // but we still want to treat those builds as native so macOS can link against real FSEvents.
+        target.result.os.tag == builtin.target.os.tag and
+        target.result.cpu.arch == builtin.target.cpu.arch and
+        target.result.abi == builtin.target.abi;
+    build_options.addOption(bool, "target_is_native", target_is_native);
 
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
@@ -564,7 +571,7 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
         // Link platform-specific libraries for file watching
-        if (target.result.os.tag == .macos) {
+        if (target.result.os.tag == .macos and target_is_native) {
             watch_test.linkFramework("CoreFoundation");
             watch_test.linkFramework("CoreServices");
         } else if (target.result.os.tag == .windows) {
