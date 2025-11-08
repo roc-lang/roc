@@ -4,6 +4,7 @@
 //! constructs into a simplified, normalized form suitable for type inference.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
@@ -608,10 +609,6 @@ fn processTypeDeclFirstPass(
                                             .found => |pattern_idx| {
                                                 const scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                                // NOTE: Normally we would use introduceValue() to check for shadowing, but here
-                                                // we are creating aliases to make parent scope definitions accessible with shorter
-                                                // names in the associated block scope. We use direct .put() to avoid false shadowing warnings.
-
                                                 // Add unqualified name (e.g., "my_not")
                                                 try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
 
@@ -641,10 +638,6 @@ fn processTypeDeclFirstPass(
                             switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                                 .found => |pattern_idx| {
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                                    // NOTE: Normally we would use introduceValue() to check for shadowing, but here
-                                    // we are creating aliases to make parent scope definitions accessible with shorter
-                                    // names in the associated block scope. We use direct .put() to avoid false shadowing warnings.
 
                                     // Add unqualified name (e.g., "my_not")
                                     try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
@@ -686,10 +679,6 @@ fn processTypeDeclFirstPass(
                         switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                             .found => |pattern_idx| {
                                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                                // NOTE: Normally we would use introduceValue() to check for shadowing, but here
-                                // we are creating aliases to make parent scope definitions accessible with shorter
-                                // names in the associated block scope. We use direct .put() to avoid false shadowing warnings.
 
                                 // Add unqualified name (e.g., "len")
                                 try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
@@ -897,19 +886,15 @@ fn processAssociatedItemsSecondPass(
                                         const pattern_idx = def_cir.pattern;
                                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                        // NOTE: Normally we would use introduceValue() to check for shadowing, but here
-                                        // we are updating existing placeholder entries (not introducing new names), so we
-                                        // use direct .put() to avoid false duplicate definition diagnostics.
-
                                         // Update unqualified name (e.g., "my_not")
-                                        try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                        try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
 
                                         // Update type-qualified name (e.g., "MyBool.my_not")
                                         const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                        try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+                                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
 
                                         // Update fully qualified name (e.g., "Test.MyBool.my_not")
-                                        try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
                                     }
                                 }
                             }
@@ -937,19 +922,15 @@ fn processAssociatedItemsSecondPass(
                             const pattern_idx = def_cir.pattern;
                             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                            // NOTE: Normally we would use introduceValue() to check for shadowing, but here
-                            // we are updating existing placeholder entries (not introducing new names), so we
-                            // use direct .put() to avoid false duplicate definition diagnostics.
-
                             // Update unqualified name (e.g., "is_empty")
-                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+                            try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
 
                             // Update type-qualified name (e.g., "List.is_empty")
                             const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+                            try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
 
                             // Update fully qualified name (e.g., "Builtin.List.is_empty")
-                            try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                            try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
 
                             try self.env.store.addScratchDef(def_idx);
                         },
@@ -8215,6 +8196,23 @@ fn introduceType(
             });
         },
     }
+}
+
+/// Update a placeholder pattern in scope with the actual pattern.
+/// In debug builds, asserts that the old value was actually a placeholder (.assign pattern).
+fn updatePlaceholder(
+    self: *Self,
+    scope: *Scope,
+    ident_idx: Ident.Idx,
+    pattern_idx: Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    if (builtin.mode == .Debug) {
+        if (scope.idents.get(ident_idx)) |old_pattern_idx| {
+            const old_pattern = self.env.store.getPattern(old_pattern_idx);
+            std.debug.assert(old_pattern == .assign);
+        }
+    }
+    try scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
 }
 
 fn scopeUpdateTypeDecl(
