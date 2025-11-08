@@ -316,9 +316,7 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
     ) Error!void {
-        std.debug.print("TRACE evaluateExpression: arg_ptr={any}\n", .{arg_ptr});
         if (arg_ptr) |args_ptr| {
-            std.debug.print("TRACE evaluateExpression: Taking WITH-ARGS path\n", .{});
             const func_val = try self.evalMinimal(expr_idx, roc_ops);
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
@@ -387,30 +385,15 @@ pub const Interpreter = struct {
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
-            std.debug.print("TRACE evaluateExpression: About to evaluate closure body (params.len={})\n", .{self.env.store.slicePatterns(header.params).len});
-            std.debug.print("TRACE evaluateExpression: body_idx={}, body expr type={s}\n", .{header.body_idx, @tagName(self.env.store.getExpr(header.body_idx))});
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
             // TEMPORARY: Comment out decref to debug
             // defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
-            std.debug.print("TRACE evaluateExpression: Closure body evaluated, copying result\n", .{});
-            // Test 1: Can we access layout.tag?
-            const layout_tag = result_value.layout.tag;
-            std.debug.print("TRACE: layout_tag={s}\n", .{@tagName(layout_tag)});
+            _ = result_value;
 
-            // Test 2: Can we call layoutSize?
-            const result_size = self.runtime_layout_store.layoutSize(result_value.layout);
-            std.debug.print("TRACE: layoutSize returned {}\n", .{result_size});
-
-            // Test 3: Can we access is_initialized?
-            const is_init = result_value.is_initialized;
-            std.debug.print("TRACE: is_init={}\n", .{is_init});
-
-            std.debug.print("TRACE evaluateExpression: All tests passed, returning\n", .{});
             return;
         }
 
-        std.debug.print("TRACE evaluateExpression: Taking NO-ARGS path\n", .{});
         const result = try self.evalMinimal(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
@@ -424,7 +407,6 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
-        std.debug.print("EVAL: expr_idx={}, tag={s}\n", .{expr_idx, @tagName(expr)});
         switch (expr) {
             .e_block => |blk| {
                 // New scope for bindings
@@ -828,28 +810,21 @@ pub const Interpreter = struct {
                         std.mem.copyForwards(u8, buffer[offset .. offset + slice.len], slice);
                         offset += slice.len;
                     }
-                    std.debug.print("TRACE e_str: buffer=\"{s}\" len={}\n", .{buffer, buffer.len});
                     const created = RocStr.fromSlice(buffer, roc_ops);
-                    std.debug.print("TRACE e_str: created RocStr - bytes={any}, length={}, capacity_or_alloc_ptr={}\n", .{created.bytes, created.length, created.capacity_or_alloc_ptr});
                     break :blk created;
                 };
 
                 const value = try self.pushStr("");
                 const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
-                std.debug.print("TRACE e_str: About to store at ptr={*}\n", .{roc_str_ptr});
                 roc_str_ptr.* = result_str;
-                std.debug.print("TRACE e_str: Stored RocStr - bytes={any}, length={}, capacity_or_alloc_ptr={}\n", .{roc_str_ptr.bytes, roc_str_ptr.length, roc_str_ptr.capacity_or_alloc_ptr});
                 return value;
             },
             .e_str_segment => |seg| {
                 const content = self.env.getString(seg.literal);
-                std.debug.print("TRACE e_str_segment: content=\"{s}\" len={}\n", .{content, content.len});
                 const value = try self.pushStr(content);
                 const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
                 const created_str = RocStr.fromSlice(content, roc_ops);
-                std.debug.print("TRACE e_str_segment: created RocStr - bytes={any}, length={}, capacity_or_alloc_ptr={}\n", .{created_str.bytes, created_str.length, created_str.capacity_or_alloc_ptr});
                 roc_str.* = created_str;
-                std.debug.print("TRACE e_str_segment: stored RocStr - bytes={any}, length={}, capacity_or_alloc_ptr={}\n", .{roc_str.bytes, roc_str.length, roc_str.capacity_or_alloc_ptr});
                 return value;
             },
             .e_frac_f32 => |lit| {
@@ -1437,13 +1412,9 @@ pub const Interpreter = struct {
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {
                 // Build a closure value with empty captures using the runtime layout for the lambda's type
-                std.debug.print("EVAL e_lambda: lam.body={}, lam.args.len={}\n", .{lam.body, self.env.store.slicePatterns(lam.args).len});
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                std.debug.print("EVAL e_lambda: ct_var={}\n", .{ct_var});
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
-                std.debug.print("EVAL e_lambda: rt_var={}\n", .{rt_var});
                 const closure_layout = try self.getRuntimeLayout(rt_var);
-                std.debug.print("EVAL e_lambda: closure_layout.tag={s}\n", .{@tagName(closure_layout.tag)});
                 // Expect a closure layout from type-to-layout translation
                 if (closure_layout.tag != .closure) return error.NotImplemented;
                 const value = try self.pushRaw(closure_layout, 0);
@@ -1637,7 +1608,6 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                std.debug.print("TRACE e_call START: args.len={}\n", .{all.len});
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
@@ -1667,9 +1637,7 @@ pub const Interpreter = struct {
 
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
-                std.debug.print("TRACE e_call: func_ct_var={}\n", .{func_ct_var});
                 const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
-                std.debug.print("TRACE e_call: func_rt_var={}\n", .{func_rt_var});
 
                 // Skip the function return type checking for now - it's causing issues
                 // Just use prepareCallWithFuncVar which will extract the return type
@@ -1682,13 +1650,10 @@ pub const Interpreter = struct {
                     arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
                 }
                 const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
-                std.debug.print("TRACE e_call: poly_entry.return_var={}\n", .{poly_entry.return_var});
 
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                std.debug.print("TRACE e_call: call_ret_ct_var={}\n", .{call_ret_ct_var});
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
-                std.debug.print("TRACE e_call: call_ret_rt_var (before unify)={}\n", .{call_ret_rt_var});
 
                 _ = try unify.unifyWithContext(
                     self.env,
@@ -1702,9 +1667,7 @@ pub const Interpreter = struct {
                     false,
                 );
 
-                std.debug.print("TRACE e_call: After unify, getting layout for call_ret_rt_var={}\n", .{call_ret_rt_var});
-                const post_unify_layout = try self.getRuntimeLayout(call_ret_rt_var);
-                std.debug.print("TRACE e_call: Post-unify layout.tag={s}, size={}\n", .{@tagName(post_unify_layout.tag), self.runtime_layout_store.layoutSize(post_unify_layout)});
+                _ = try self.getRuntimeLayout(call_ret_rt_var);
 
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
 
@@ -1749,10 +1712,8 @@ pub const Interpreter = struct {
                     }
 
                     // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
-                    std.debug.print("TRACE e_call: lambda_expr type={s}\n", .{@tagName(lambda_expr)});
                     if (lambda_expr == .e_hosted_lambda) {
                         const hosted = lambda_expr.e_hosted_lambda;
-                        std.debug.print("TRACE e_call: Calling hosted function index={}\n", .{hosted.index});
                         const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, call_ret_rt_var);
 
                         // Decref all args
@@ -1760,7 +1721,6 @@ pub const Interpreter = struct {
                             arg.decref(&self.runtime_layout_store, roc_ops);
                         }
 
-                        std.debug.print("TRACE e_call: Hosted function returned\n", .{});
                         return result;
                     }
 
@@ -2365,7 +2325,6 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         return_rt_var: types.Var,
     ) !StackValue {
-        std.debug.print("TRACE callHostedFunction: index={}, count={}\n", .{hosted_fn_index, roc_ops.hosted_fns.count});
         // Validate index is within bounds
         if (hosted_fn_index >= roc_ops.hosted_fns.count) {
             self.triggerCrash("Hosted function index out of bounds", false, roc_ops);
@@ -2374,17 +2333,11 @@ pub const Interpreter = struct {
 
         // Get the hosted function pointer from RocOps
         const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
-        std.debug.print("TRACE callHostedFunction: Got function pointer\n", .{});
 
         // Allocate space for the return value
-        std.debug.print("TRACE callHostedFunction: Getting return layout\n", .{});
         const return_layout = try self.getRuntimeLayout(return_rt_var);
-        std.debug.print("TRACE callHostedFunction: Got return layout: tag={s}\n", .{@tagName(return_layout.tag)});
-        const return_size = self.runtime_layout_store.layoutSize(return_layout);
-        std.debug.print("TRACE callHostedFunction: return_size={}\n", .{return_size});
+        _ = self.runtime_layout_store.layoutSize(return_layout);
         const result_value = try self.pushRaw(return_layout, 0);
-        std.debug.print("TRACE callHostedFunction: Pushed return value\n", .{});
-        std.debug.print("TRACE callHostedFunction: result_value ptr={any}, &result_value={any}\n", .{result_value.ptr, &result_value});
 
         // Allocate stack space for marshalled arguments
         // The host now uses the same RocStr as builtins, so no conversion needed
@@ -2405,11 +2358,7 @@ pub const Interpreter = struct {
             const arg_ptr = @as(*anyopaque, @ptrCast(&args_struct));
 
             // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            std.debug.print("TRACE callHostedFunction: About to call hosted_fn (0 args)\n", .{});
-            std.debug.print("TRACE callHostedFunction: ret_ptr={any}, arg_ptr={any}\n", .{ret_ptr, arg_ptr});
             hosted_fn(roc_ops, ret_ptr, arg_ptr);
-            std.debug.print("TRACE callHostedFunction: hosted_fn returned, result_value still valid?\n", .{});
-            std.debug.print("TRACE callHostedFunction: result_value.is_initialized={}\n", .{result_value.is_initialized});
         } else if (args.len == 1) {
             // Single argument case - we need to marshal it properly
             // For strings, we need to pass a RocStr struct wrapped in Args
@@ -2435,9 +2384,7 @@ pub const Interpreter = struct {
             };
 
             // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            std.debug.print("TRACE callHostedFunction: About to call hosted_fn\n", .{});
             hosted_fn(roc_ops, ret_ptr, arg_ptr);
-            std.debug.print("TRACE callHostedFunction: hosted_fn returned\n", .{});
         } else {
             // Multi-argument case - pack arguments into a struct
             // TODO: implement multi-argument marshalling
@@ -2445,7 +2392,6 @@ pub const Interpreter = struct {
             return error.Crash;
         }
 
-        std.debug.print("TRACE callHostedFunction: About to return, result_value.layout.tag={s}\n", .{@tagName(result_value.layout.tag)});
         return result_value;
     }
 
@@ -4110,6 +4056,22 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
+                .record => |rec| blk: {
+                    // Check if this is an empty record (no fields)
+                    const fields_slice = self.runtime_types.getRecordFieldsSlice(rec.fields);
+                    if (fields_slice.len == 0) {
+                        break :blk try self.runtime_layout_store.ensureEmptyRecordLayout();
+                    }
+                    break :blk try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
+                },
+                .tuple => |tup| blk: {
+                    // Check if this is an empty tuple (no elements)
+                    const elems_slice = self.runtime_types.sliceVars(tup.elems);
+                    if (elems_slice.len == 0) {
+                        break :blk try self.runtime_layout_store.ensureEmptyRecordLayout();
+                    }
+                    break :blk try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
+                },
                 else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
             },
             // Treat flex/unconstrained variables as empty records (zero-sized)
@@ -4195,9 +4157,7 @@ pub const Interpreter = struct {
 
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
-        std.debug.print("translateTypeVar: compile_var={}\n", .{compile_var});
         const resolved = module.types.resolveVar(compile_var);
-        std.debug.print("translateTypeVar: resolved.desc.content={s}\n", .{@tagName(resolved.desc.content)});
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
         if (self.translate_cache.get(key)) |found| return found;
@@ -4603,7 +4563,6 @@ pub const Interpreter = struct {
                     const struct_flat = param_resolved.desc.content.structure;
                     // Empty tuple has 0 fields
                     if (struct_flat == .tuple and struct_flat.tuple.elems.len() == 0) {
-                        std.debug.print("TRACE prepareCallWithFuncVar: Detected unit () parameter - treating call with 0 args as valid\n", .{});
                         break :unit_check true;
                     }
                 }

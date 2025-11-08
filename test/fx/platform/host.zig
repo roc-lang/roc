@@ -102,7 +102,6 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     const Args = extern struct { str: RocStr };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
 
-    std.debug.print("HOST: hostedStderrLine called\n", .{});
     const message = args.str.asSlice();
     std.fs.File.stderr().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
@@ -157,11 +156,7 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     const Args = extern struct { str: RocStr };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
 
-    std.debug.print("HOST: hostedStdoutLine called\n", .{});
-    std.debug.print("HOST: args.str.bytes={any}, length={}, capacity_or_alloc_ptr={}\n", .{args.str.bytes, args.str.length, args.str.capacity_or_alloc_ptr});
-
     const message = args.str.asSlice();
-    std.debug.print("HOST: message.len={}, message.ptr={*}\n", .{message.len, message.ptr});
     std.fs.File.stdout().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
 
