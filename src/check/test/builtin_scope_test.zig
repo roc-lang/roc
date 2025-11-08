@@ -58,3 +58,41 @@ test "builtin types are still available without import" {
     try test_env.assertDefType("x", "Str");
     try test_env.assertDefType("y", "List(Num(Int(Unsigned64)))");
 }
+
+test "can import userspace Builtin module" {
+    const builtin_module_src =
+        \\Builtin := [D, E, F]
+        \\
+        \\value : Builtin
+        \\value = D
+    ;
+
+    var builtin_module = try TestEnv.init("Builtin", builtin_module_src);
+    defer builtin_module.deinit();
+
+    const main_src =
+        \\Main := [Whatever]
+        \\
+        \\import Builtin
+        \\
+        \\x : Builtin
+        \\x = Builtin.value
+    ;
+
+    var main_module = try TestEnv.initWithImport("Main", main_src, "Builtin", &builtin_module);
+    defer main_module.deinit();
+
+    // Should successfully import the userspace Builtin module without "module not found" error
+    const diagnostics = try main_module.module_env.getDiagnostics();
+    defer main_module.module_env.gpa.free(diagnostics);
+
+    // Check that there's no "module not found" error for "Builtin"
+    for (diagnostics) |diag| {
+        if (diag == .module_not_found) {
+            const module_name = main_module.module_env.getIdent(diag.module_not_found.module_name);
+            if (std.mem.eql(u8, module_name, "Builtin")) {
+                try testing.expect(false); // Should not have module_not_found for Builtin
+            }
+        }
+    }
+}
