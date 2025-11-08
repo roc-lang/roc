@@ -1280,51 +1280,77 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Phase 1.5.5: Create placeholders for top-level decls
-    // This ensures they're available when processing associated blocks
-    // IMPORTANT: Only do this for type-modules, not apps/hosted/etc
-    // Apps and other module types process their decls normally without placeholders
+    // Phase 1.5.5: Process anno-only top-level type annotations EARLY
+    // For type-modules, anno-only top-level type annotations (like list_get_unsafe) need to be
+    // processed before associated blocks so they can be referenced inside those blocks
+    // IMPORTANT: Only process anno-only (no matching decl), and only for type-modules
     switch (self.env.module_kind) {
         .type_module => {
             const top_level_stmts = self.parse_ir.store.statementSlice(file.statements);
-            for (top_level_stmts) |stmt_id| {
+            var i: usize = 0;
+            while (i < top_level_stmts.len) : (i += 1) {
+                const stmt_id = top_level_stmts[i];
                 const stmt = self.parse_ir.store.getStatement(stmt_id);
-                switch (stmt) {
-                    .decl => |decl| {
-                        const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                        if (pattern == .ident) {
-                            const pattern_ident_tok = pattern.ident.ident_tok;
-                            if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                                const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
-                                const placeholder_pattern = Pattern{
-                                    .assign = .{
-                                        .ident = decl_ident,
-                                    },
-                                };
-                                const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-                                try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
-                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                                try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
+                if (stmt == .type_anno) {
+                    const ta = stmt.type_anno;
+                    const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse continue;
+
+                    // Check if there's a matching decl (skipping malformed statements)
+                    const has_matching_decl = blk: {
+                        var next_i = i + 1;
+                        while (next_i < top_level_stmts.len) : (next_i += 1) {
+                            const next_stmt = self.parse_ir.store.getStatement(top_level_stmts[next_i]);
+                            // Skip malformed statements
+                            if (next_stmt == .malformed) continue;
+                            // Check if this is a matching decl
+                            if (next_stmt == .decl) {
+                                const next_pattern = self.parse_ir.store.getPattern(next_stmt.decl.pattern);
+                                if (next_pattern == .ident) {
+                                    if (self.parse_ir.tokens.resolveIdentifier(next_pattern.ident.ident_tok)) |decl_ident| {
+                                        break :blk name_ident.idx == decl_ident.idx;
+                                    }
+                                }
                             }
+                            // Found a non-malformed, non-matching statement
+                            break :blk false;
                         }
-                    },
-                    .type_anno => |type_anno| {
-                        // Also create placeholders for top-level type annotations (like list_get_unsafe)
-                        // These are anno-only defs that need to be available in associated blocks
-                        if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                            const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
-                            const placeholder_pattern = Pattern{
-                                .assign = .{
-                                    .ident = anno_ident,
-                                },
-                            };
-                            const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-                            try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                            try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
+                        // Reached end of statements
+                        break :blk false;
+                    };
+
+                    // Skip if there's a matching decl - it will be processed normally
+                    if (has_matching_decl) continue;
+
+                    const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+
+                    // Extract type variables and canonicalize the annotation
+                    const type_vars_top: u32 = @intCast(self.scratch_idents.top());
+                    try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
+                    const type_var_scope = self.scopeEnterTypeVar();
+                    defer self.scopeExitTypeVar(type_var_scope);
+                    const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+
+                    // Canonicalize where clauses if present
+                    const where_clauses = if (ta.where) |where_coll| blk: {
+                        const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                        const where_start = self.env.store.scratchWhereClauseTop();
+                        for (where_slice) |where_idx| {
+                            const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                            try self.env.store.addScratchWhereClause(canonicalized_where);
                         }
-                    },
-                    else => {},
+                        break :blk try self.env.store.whereClauseSpanFrom(where_start);
+                    } else null;
+
+                    // Create the anno-only def immediately
+                    const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                    try self.env.store.addScratchDef(def_idx);
+
+                    // If exposed, register it
+                    const ident_text = self.env.getIdent(name_ident);
+                    if (self.exposed_ident_texts.contains(ident_text)) {
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                    }
                 }
             }
         },
@@ -1484,6 +1510,41 @@ pub fn canonicalizeFile(
 
                     continue;
                 };
+
+                // For type-modules, check if this is an anno-only annotation that was already processed in Phase 1.5.5
+                // We need to check if there's a matching decl - if there isn't, this was processed early
+                switch (self.env.module_kind) {
+                    .type_module => {
+                        // Check if there's a matching decl (skipping malformed statements)
+                        const has_matching_decl = blk: {
+                            var check_i = i + 1;
+                            while (check_i < ast_stmt_idxs.len) : (check_i += 1) {
+                                const check_stmt = self.parse_ir.store.getStatement(ast_stmt_idxs[check_i]);
+                                // Skip malformed statements
+                                if (check_stmt == .malformed) continue;
+                                // Check if this is a matching decl
+                                if (check_stmt == .decl) {
+                                    const check_pattern = self.parse_ir.store.getPattern(check_stmt.decl.pattern);
+                                    if (check_pattern == .ident) {
+                                        if (self.parse_ir.tokens.resolveIdentifier(check_pattern.ident.ident_tok)) |decl_ident| {
+                                            break :blk name_ident.idx == decl_ident.idx;
+                                        }
+                                    }
+                                }
+                                // Found a non-malformed, non-matching statement
+                                break :blk false;
+                            }
+                            // Reached end of statements
+                            break :blk false;
+                        };
+
+                        // Skip if this is anno-only (no matching decl) - it was processed in Phase 1.5.5
+                        if (!has_matching_decl) {
+                            continue;
+                        }
+                    },
+                    else => {},
+                }
 
                 // First, make the top of our scratch list
                 const type_vars_top: u32 = @intCast(self.scratch_idents.top());
