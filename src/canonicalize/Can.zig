@@ -301,30 +301,26 @@ pub fn setupAutoImportedBuiltinTypes(
         const current_scope = &self.scopes.items[0]; // Top-level scope
 
         const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+
+        var builtin_import_idx: ?Import.Idx = null;
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
-                const module_env = type_entry.env;
-
-                // Create an import entry for the parent Builtin module
-                // Add to import_indices (needed for type resolution) but NOT to scope
-                // (so "Builtin" is not directly importable)
-                const builtin_module_name = module_env.module_name;
-
-                const module_import_idx = try self.env.imports.getOrPut(
-                    gpa,
-                    self.env.common.getStringStore(),
-                    builtin_module_name,
-                );
-
-                const is_new_import = !self.import_indices.contains(builtin_module_name);
-                if (is_new_import) {
-                    try self.import_indices.put(gpa, builtin_module_name, module_import_idx);
-                }
+                // Add Builtin module to import_indices on first match
+                const import_idx = builtin_import_idx orelse blk: {
+                    const idx = try self.env.imports.getOrPut(
+                        gpa,
+                        self.env.common.getStringStore(),
+                        "Builtin",
+                    );
+                    try self.import_indices.put(gpa, "Builtin", idx);
+                    builtin_import_idx = idx;
+                    break :blk idx;
+                };
 
                 // Get target_node_idx from statement_idx
                 const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
-                    module_env.getExposedNodeIndexByStatementIdx(stmt_idx)
+                    type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx)
                 else
                     null;
 
@@ -334,7 +330,7 @@ pub fn setupAutoImportedBuiltinTypes(
                         .module_ident = type_ident, // Use type name as module ident for module_envs lookup
                         .original_ident = type_ident,
                         .target_node_idx = target_node_idx,
-                        .import_idx = module_import_idx,
+                        .import_idx = import_idx,
                         .origin_region = zero_region,
                         .module_not_found = false,
                     },
