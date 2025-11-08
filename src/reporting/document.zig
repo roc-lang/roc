@@ -327,6 +327,51 @@ pub const Document = struct {
         try self.elements.append(.{ .reflowing_text = owned_text });
     }
 
+    /// Add reflowing text with backtick-delimited inline code support.
+    /// Text between backticks (`) will be rendered as inline code.
+    /// Example: "Use `when` for pattern matching" will render "when" as code.
+    pub fn addReflowingTextWithBackticks(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
+        if (text.len == 0) return;
+
+        var i: usize = 0;
+        var last_pos: usize = 0;
+        var in_backticks = false;
+        var backtick_start: usize = 0;
+
+        while (i < text.len) {
+            if (text[i] == '`') {
+                if (in_backticks) {
+                    // Closing backtick - add the code content
+                    const code_content = text[backtick_start..i];
+                    if (code_content.len > 0) {
+                        try self.addInlineCode(code_content);
+                    }
+                    last_pos = i + 1;
+                    in_backticks = false;
+                } else {
+                    // Opening backtick - add any preceding text
+                    if (i > last_pos) {
+                        const regular_text = text[last_pos..i];
+                        if (regular_text.len > 0) {
+                            try self.addReflowingText(regular_text);
+                        }
+                    }
+                    backtick_start = i + 1;
+                    in_backticks = true;
+                }
+            }
+            i += 1;
+        }
+
+        // Add any remaining text after the last backtick
+        if (last_pos < text.len) {
+            const remaining_text = text[last_pos..];
+            if (remaining_text.len > 0) {
+                try self.addReflowingText(remaining_text);
+            }
+        }
+    }
+
     /// Add a source code display with multiple underlines.
     pub fn addSourceCodeWithUnderlines(
         self: *Document,
@@ -725,4 +770,53 @@ test "Document string memory safety" {
     try std.testing.expect(second_element == .annotated);
     try std.testing.expectEqualStrings("This is annotated", second_element.annotated.content);
     try std.testing.expect(second_element.annotated.annotation == .emphasized);
+}
+
+test "Document addReflowingTextWithBackticks - simple case" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    try document.addReflowingTextWithBackticks("Use `when` for pattern matching.");
+
+    // Should have 3 elements: "Use ", inline code "when", " for pattern matching."
+    try std.testing.expectEqual(@as(usize, 3), document.elements.items.len);
+
+    try std.testing.expect(document.elements.items[0] == .reflowing_text);
+    try std.testing.expectEqualStrings("Use ", document.elements.items[0].reflowing_text);
+
+    try std.testing.expect(document.elements.items[1] == .annotated);
+    try std.testing.expectEqualStrings("when", document.elements.items[1].annotated.content);
+    try std.testing.expect(document.elements.items[1].annotated.annotation == .inline_code);
+
+    try std.testing.expect(document.elements.items[2] == .reflowing_text);
+    try std.testing.expectEqualStrings(" for pattern matching.", document.elements.items[2].reflowing_text);
+}
+
+test "Document addReflowingTextWithBackticks - multiple inline code" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    try document.addReflowingTextWithBackticks("Roc uses `and` instead of `&&`.");
+
+    // Should have 5 elements
+    try std.testing.expectEqual(@as(usize, 5), document.elements.items.len);
+
+    try std.testing.expectEqualStrings("Roc uses ", document.elements.items[0].reflowing_text);
+    try std.testing.expectEqualStrings("and", document.elements.items[1].annotated.content);
+    try std.testing.expectEqualStrings(" instead of ", document.elements.items[2].reflowing_text);
+    try std.testing.expectEqualStrings("&&", document.elements.items[3].annotated.content);
+    try std.testing.expectEqualStrings(".", document.elements.items[4].reflowing_text);
+}
+
+test "Document addReflowingTextWithBackticks - no backticks" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    try document.addReflowingTextWithBackticks("Plain text without code.");
+
+    try std.testing.expectEqual(@as(usize, 1), document.elements.items.len);
+    try std.testing.expectEqualStrings("Plain text without code.", document.elements.items[0].reflowing_text);
 }
