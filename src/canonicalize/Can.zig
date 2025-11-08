@@ -171,7 +171,9 @@ fn addAllQualifiedVariants(
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Add unqualified name (e.g., "get")
-    const name_ident = try self.env.insertIdent(base.Ident.for_text(name_text));
+    // Use findIdent first to reuse existing ident if present, otherwise insert
+    const name_ident = self.env.common.findIdent(name_text) orelse
+        try self.env.insertIdent(base.Ident.for_text(name_text));
     try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
 
     // Add all qualified variants by iterating through dots
