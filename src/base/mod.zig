@@ -1,5 +1,6 @@
 //! Basic types that are useful throughout the compiler.
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
@@ -7,7 +8,8 @@ pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
-pub const parallel = @import("parallel.zig");
+// parallel module uses std.Thread which is not available on wasm32-freestanding
+pub const parallel = if (builtin.cpu.arch == .wasm32) struct {} else @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const safe_memory = @import("safe_memory.zig");

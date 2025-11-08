@@ -162,12 +162,9 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const expr_idx = def.expr;
 
     // Evaluate the expression (with optional arguments)
-    std.debug.print("TRACE roc_entrypoint: About to evaluate expression\n", .{});
     interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
-        std.debug.print("TRACE roc_entrypoint: Evaluation failed: {}\n", .{err});
         return err;
     };
-    std.debug.print("TRACE roc_entrypoint: Evaluation completed\n", .{});
 }
 
 /// Set up ModuleEnvs from shared memory with proper relocation
@@ -218,21 +215,17 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         return error.ModuleEnvSetupFailed;
     };
 
-    std.debug.print("=== SHIM: Loading modules from shared memory ===\n", .{});
-    std.debug.print("Module count: {}\n", .{header_ptr.module_count});
 
     // Deserialize ALL module environments
     for (0..header_ptr.module_count) |i| {
         const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_env_offsets[i]));
         const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
 
-        std.debug.print("  Loading module {}: offset=0x{x}\n", .{ i, module_env_offsets[i] });
 
         // Extract and relocate module_name from serialized data
         const module_name_slice_parts = serialized_ptr.module_name;
         const module_name_ptr = @as(usize, @intCast(module_name_slice_parts[0]));
         const module_name_len = @as(usize, @intCast(module_name_slice_parts[1]));
-        std.debug.print("    Raw module_name_ptr: 0x{x}, len: {}\n", .{ module_name_ptr, module_name_len });
 
         const module_name = if (module_name_len > 0 and module_name_ptr > 0) blk: {
             const relocated_module_name_ptr = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(@as(isize, @intCast(module_name_ptr)) + offset))));
@@ -243,13 +236,11 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         // Empty string is used for source since it's not needed in the interpreter
         module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", module_name);
 
-        std.debug.print("    Module name: {s}\n", .{module_envs[i].module_name});
     }
 
     // Store all module envs globally
     global_module_envs = module_envs;
 
-    std.debug.print("Stored {} module envs globally\n", .{module_envs.len});
 
     // Return the first (primary/root) module
     return module_envs[0];
@@ -294,18 +285,10 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
         }
     } else &[_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
 
-    std.debug.print("=== SHIM: Creating interpreter ===\n", .{});
-    std.debug.print("Primary env: {*} (module: {s})\n", .{ env_ptr, env_ptr.module_name });
-    std.debug.print("Other envs count: {}\n", .{other_envs.len});
-    for (other_envs, 0..) |other_env, i| {
-        std.debug.print("  Other env {}: {*} (module: {s})\n", .{ i, other_env, other_env.module_name });
-    }
-
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, other_envs) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
 
-    std.debug.print("Interpreter created successfully\n", .{});
     return interpreter;
 }

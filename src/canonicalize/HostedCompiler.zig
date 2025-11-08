@@ -11,9 +11,6 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
     var modified_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
-    std.debug.print("=== REPLACE ANNO ONLY WITH HOSTED START ===\n", .{});
-    std.debug.print("Total defs in module: {}\n", .{env.all_defs.span.len});
-
     // Ensure types array has entries for all existing nodes
     // This is necessary because varFrom(node_idx) assumes type_var index == node index
     const current_nodes = env.store.nodes.len();
@@ -47,16 +44,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     const func_type = type_anno.@"fn";
                     const args_slice = env.store.sliceTypeAnnos(func_type.args);
 
-                    std.debug.print("  func has {} type args\n", .{args_slice.len});
-
                     // Check if single argument is empty tuple () - if so, create 0 params
                     if (args_slice.len == 1) {
                         const first_arg = env.store.getTypeAnno(args_slice[0]);
-                        std.debug.print("  first arg type: {s}\n", .{@tagName(first_arg)});
                         if (first_arg == .tuple) {
-                            std.debug.print("  tuple.elems.len = {}\n", .{first_arg.tuple.elems.span.len});
                             if (first_arg.tuple.elems.span.len == 0) {
-                                std.debug.print("  Detected () - creating 0 params\n", .{});
                                 break :blk 0; // () means 0 parameters
                             }
                         }
@@ -64,8 +56,6 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
                     break :blk args_slice.len;
                 } else 0;
-
-                std.debug.print("  Creating hosted lambda with {} args\n", .{num_args});
 
                 // Create dummy parameter patterns for the lambda (one for each argument)
                 const patterns_start = env.store.scratchTop("patterns");
@@ -186,10 +176,6 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
         }
     };
     std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
-
-    for (hosted_fns.items, 0..) |fn_info, i| {
-        std.debug.print("  [{d}] {s}\n", .{ i, fn_info.name_text });
-    }
 
     return hosted_fns;
 }

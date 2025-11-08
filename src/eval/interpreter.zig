@@ -1735,7 +1735,6 @@ pub const Interpreter = struct {
 
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != arg_indices.len) {
-                        std.debug.print("ERROR: TypeMismatch at line 1658 - params.len={} != arg_indices.len={}\n", .{ params.len, arg_indices.len });
                         return error.TypeMismatch;
                     }
                     // Provide closure context for capture lookup during body eval
@@ -1763,7 +1762,6 @@ pub const Interpreter = struct {
                     const lambda = func_expr.e_lambda;
                     const params = self.env.store.slicePatterns(lambda.args);
                     if (params.len != arg_indices.len) {
-                        std.debug.print("ERROR: TypeMismatch at line 1686 - params.len={} != arg_indices.len={}\n", .{ params.len, arg_indices.len });
                         return error.TypeMismatch;
                     }
                     var bind_count: usize = 0;
@@ -2098,24 +2096,11 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_lookup_external => |lookup| {
-                std.debug.print("=== INTERPRETER: e_lookup_external ===\n", .{});
-                std.debug.print("module_idx: {}\n", .{lookup.module_idx});
-                std.debug.print("target_node_idx: {}\n", .{lookup.target_node_idx});
-                std.debug.print("import_envs count: {}\n", .{self.import_envs.count()});
-
-                // Print all keys in import_envs
-                var iter = self.import_envs.iterator();
-                while (iter.next()) |entry| {
-                    std.debug.print("  import_envs key: {} -> env {*}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-                }
-
                 // Cross-module reference - look up in imported module
                 const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    std.debug.print("ERROR: module_idx={} NOT FOUND in import_envs\n", .{lookup.module_idx});
                     return error.NotImplemented;
                 };
 
-                std.debug.print("Found module env: {*} (module: {s})\n", .{ other_env, other_env.module_name });
 
                 // Check what type of node this is by using the store's method
                 const is_def = other_env.store.isDefNode(lookup.target_node_idx);
@@ -4438,7 +4423,6 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
-                    std.debug.print("ERROR: translateTypeVar - type is .err, returning TypeMismatch\n", .{});
                     return error.TypeMismatch;
                 },
             }

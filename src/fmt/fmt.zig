@@ -7,7 +7,6 @@ const collections = @import("collections");
 const can = @import("can");
 
 const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
@@ -24,14 +23,18 @@ const tokenize = parse.tokenize;
 const fatal = collections.utils.fatal;
 
 const is_windows = builtin.target.os.tag == .windows;
+const is_wasm = builtin.target.cpu.arch == .wasm32;
 
-var stderr_file_writer: std.fs.File.Writer = .{
+var stderr_file_writer: if (is_wasm) void else std.fs.File.Writer = if (is_wasm) {} else .{
     .interface = std.fs.File.Writer.initInterface(&.{}),
     .file = if (is_windows) undefined else std.fs.File.stderr(),
     .mode = .streaming,
 };
 
 fn stderrWriter() *std.Io.Writer {
+    if (is_wasm) {
+        @compileError("stderr not available on WASM");
+    }
     if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
     return &stderr_file_writer.interface;
 }
@@ -172,7 +175,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
             break :blk buf;
         } else |_| {
             // Fallback on readToEndAlloc.
-            const buf = try input_file.readToEndAlloc(gpa, Filesystem.max_file_size);
+            const buf = try input_file.readToEndAlloc(gpa, fs_mod.max_file_size);
             break :blk buf;
         }
     };
@@ -213,7 +216,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
 /// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
-    const contents = try std.fs.File.stdin().readToEndAlloc(gpa, Filesystem.max_file_size);
+    const contents = try std.fs.File.stdin().readToEndAlloc(gpa, fs_mod.max_file_size);
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics

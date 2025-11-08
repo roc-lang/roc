@@ -23,7 +23,6 @@ const reporting = @import("reporting");
 const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
-const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");

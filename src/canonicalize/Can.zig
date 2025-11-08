@@ -501,42 +501,42 @@ fn processTypeDeclFirstPass(
             // Only do this for platform modules
             if (self.env.building_platform_modules) {
                 if (type_decl.associated) |assoc| {
-                const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
+                    const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
 
-                for (assoc_statements) |stmt_idx| {
-                    const stmt = self.parse_ir.store.getStatement(stmt_idx);
-                    if (stmt == .type_anno) {
-                        // This is a type annotation like `line! : Str => {}`
-                        const name_tok = stmt.type_anno.name;
-                        if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |func_name_idx| {
-                            // Canonicalize the type annotation
-                            // Use type_decl_anno since this is in a declaration context (associated block)
-                            const func_anno_idx = try self.canonicalizeTypeAnno(stmt.type_anno.anno, .type_decl_anno);
+                    for (assoc_statements) |stmt_idx| {
+                        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+                        if (stmt == .type_anno) {
+                            // This is a type annotation like `line! : Str => {}`
+                            const name_tok = stmt.type_anno.name;
+                            if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |func_name_idx| {
+                                // Canonicalize the type annotation
+                                // Use type_decl_anno since this is in a declaration context (associated block)
+                                const func_anno_idx = try self.canonicalizeTypeAnno(stmt.type_anno.anno, .type_decl_anno);
 
-                            // Create an annotation structure from the function type
-                            const anno_struct = CIR.Annotation{ .anno = func_anno_idx, .where = null };
-                            const annotation_idx = try self.env.addAnnotation(anno_struct, base.Region.zero());
+                                // Create an annotation structure from the function type
+                                const anno_struct = CIR.Annotation{ .anno = func_anno_idx, .where = null };
+                                const annotation_idx = try self.env.addAnnotation(anno_struct, base.Region.zero());
 
-                            // Create a definition for this function with e_anno_only expression
-                            const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = func_name_idx } }, base.Region.zero());
-                            const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+                                // Create a definition for this function with e_anno_only expression
+                                const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = func_name_idx } }, base.Region.zero());
+                                const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
 
-                            const def_idx = try self.env.addDef(.{
-                                .pattern = pattern_idx,
-                                .expr = expr_idx,
-                                .annotation = annotation_idx,
-                                .kind = .let,
-                            }, base.Region.zero());
+                                const def_idx = try self.env.addDef(.{
+                                    .pattern = pattern_idx,
+                                    .expr = expr_idx,
+                                    .annotation = annotation_idx,
+                                    .kind = .let,
+                                }, base.Region.zero());
 
-                            try self.env.store.addScratchDef(def_idx);
+                                try self.env.store.addScratchDef(def_idx);
 
-                            // Add the function to exposed_items with the def index as its node_idx
-                            // (following the same pattern as normal defs)
-                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                            try self.env.setExposedNodeIndexById(func_name_idx, def_idx_u16);
+                                // Add the function to exposed_items with the def index as its node_idx
+                                // (following the same pattern as normal defs)
+                                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                try self.env.setExposedNodeIndexById(func_name_idx, def_idx_u16);
+                            }
                         }
                     }
-                }
                 }
             }
         }

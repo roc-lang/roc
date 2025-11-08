@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const can = @import("can");

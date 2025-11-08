@@ -23,39 +23,7 @@ external = Foo.defaultBar
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_self_reference.md:4:18:4:21:**
-```roc
-    defaultBar : Bar
-```
-                 ^^^
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_self_reference.md:7:17:7:20:**
-```roc
-    transform : Bar -> Bar
-```
-                ^^^
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_self_reference.md:7:24:7:27:**
-```roc
-    transform : Bar -> Bar
-```
-                       ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -134,18 +102,6 @@ external = Foo.defaultBar
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "defaultBar"))
-		(e-anno-only)
-		(annotation
-			(ty-malformed)))
-	(d-let
-		(p-assign (ident "transform"))
-		(e-anno-only)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-malformed))))
-	(d-let
 		(p-assign (ident "external"))
 		(e-lookup-local
 			(p-assign (ident "Foo.defaultBar")))
@@ -189,8 +145,6 @@ external = Foo.defaultBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar -> Foo.Bar"))
@@ -201,8 +155,6 @@ external = Foo.defaultBar
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))

@@ -45,7 +45,6 @@ is_initialized: bool = false,
 
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
-    std.debug.print("TRACE copyToPtr ENTRY: layout.tag={s}\n", .{@tagName(self.layout.tag)});
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
