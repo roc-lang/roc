@@ -675,19 +675,7 @@ fn compileModule(
         return error.ParseError;
     }
 
-    // 4. Create module imports map (for cross-module references)
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    defer module_envs.deinit();
-
-    // Add dependencies (e.g., Dict for Set, Bool for Str)
-    // IMPORTANT: Use the module's own ident store, not a temporary one,
-    // because auto-import lookups will use the module's ident store
-    for (deps) |dep| {
-        const dep_ident = try module_env.insertIdent(base.Ident.for_text(dep.name));
-        try module_envs.put(dep_ident, .{ .env = dep.env });
-    }
-
-    // 5. Canonicalize
+    // 4. Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
     var can_result = try gpa.create(Can);
@@ -696,7 +684,8 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.init(module_env, parse_ast, &module_envs);
+    // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
+    can_result.* = try Can.init(module_env, parse_ast, null);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
@@ -711,6 +700,10 @@ fn compileModule(
                 .undeclared_type => |d| {
                     const type_name = module_env.getIdentText(d.name);
                     std.debug.print("  - Undeclared type: {s}\n", .{type_name});
+                },
+                .ident_not_in_scope => |d| {
+                    const ident_name = module_env.getIdentText(d.ident);
+                    std.debug.print("  - Ident not in scope: {s}\n", .{ident_name});
                 },
                 .nested_value_not_found => |d| {
                     const parent = module_env.getIdentText(d.parent_name);
@@ -788,6 +781,9 @@ fn compileModule(
     for (deps) |dep| {
         try imported_envs.append(gpa, dep.env);
     }
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
 
     var checker = try Check.init(
         gpa,

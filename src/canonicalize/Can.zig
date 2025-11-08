@@ -284,21 +284,16 @@ pub fn populateModuleEnvs(
 }
 
 /// Set up auto-imported builtin types (Bool, Result, Dict, Set, Str, and numeric types) from the Builtin module.
-/// This function is shared between production and test environments to ensure consistency.
-///
-/// These nested types in Builtin.roc need special handling:
-/// 1. Add them to scope's type_bindings so type annotations work
+/// Used for all modules EXCEPT Builtin itself.
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
     env: *ModuleEnv,
     gpa: std.mem.Allocator,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!void {
-    // Auto-import builtin types (Bool, Result, Dict, Set, Str, and numeric types)
-    // These are nested types in Builtin module but need to be auto-imported like standalone modules
     if (module_envs) |envs_map| {
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
-        const current_scope = &self.scopes.items[0]; // Top-level scope
+        const current_scope = &self.scopes.items[0];
 
         const builtin_import_idx = try self.env.imports.getOrPut(
             gpa,
@@ -311,16 +306,14 @@ pub fn setupAutoImportedBuiltinTypes(
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
-                // Get target_node_idx from statement_idx
                 const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
                     type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx)
                 else
                     null;
 
-                // Add type binding to scope
                 try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                     .external_nominal = .{
-                        .module_ident = type_ident, // Use type name as module ident for module_envs lookup
+                        .module_ident = type_ident,
                         .original_ident = type_ident,
                         .target_node_idx = target_node_idx,
                         .import_idx = builtin_import_idx,
@@ -331,22 +324,16 @@ pub fn setupAutoImportedBuiltinTypes(
             }
         }
 
-        // Also add primitive builtin types (List, Box) to type_bindings
-        // so we can detect conflicts with O(1) HashMap lookup instead of string scanning
-        // Note: Str is NOT primitive anymore - it's auto-imported like Bool
-
         const primitive_builtins = [_][]const u8{ "List", "Box" };
         for (primitive_builtins) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
 
-            // Add a minimal type binding to detect conflicts
-            // These primitives don't have module entries, so we use a marker binding
             try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                 .external_nominal = .{
                     .module_ident = type_ident,
                     .original_ident = type_ident,
                     .target_node_idx = null,
-                    .import_idx = @enumFromInt(0), // Dummy import index for primitives
+                    .import_idx = @enumFromInt(0),
                     .origin_region = zero_region,
                     .module_not_found = false,
                 },
@@ -381,6 +368,7 @@ fn processTypeDeclFirstPass(
     self: *Self,
     type_decl: anytype,
     parent_name: ?Ident.Idx,
+    defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
     // Canonicalize the type declaration header first
     const header_idx = try self.canonicalizeTypeHeader(type_decl.header);
@@ -434,6 +422,14 @@ fn processTypeDeclFirstPass(
 
     // Introduce the type name into scope early to support recursive references
     try self.introduceType(qualified_name_idx, type_decl_stmt_idx, region);
+
+    // For nested types, also add an unqualified alias so child scopes can find it
+    // E.g., when introducing "Builtin.Bool", also add "Bool" -> "Builtin.Bool"
+    // This allows nested scopes (like Str's or Num.U8's associated blocks) to find Bool via scope lookup
+    if (parent_name != null) {
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        try current_scope.introduceTypeAlias(self.env.gpa, type_header.name, type_decl_stmt_idx);
+    }
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
@@ -546,7 +542,22 @@ fn processTypeDeclFirstPass(
 
     // Process associated items completely (both symbol introduction and canonicalization)
     // This eliminates the need for a separate third pass
-    if (type_decl.associated) |assoc| {
+    // Unless defer_associated_blocks is true (when called from processAssociatedItemsFirstPass
+    // to handle sibling type forward references)
+    if (!defer_associated_blocks) {
+        if (type_decl.associated) |assoc| {
+            try self.processAssociatedBlock(qualified_name_idx, type_header.name, assoc);
+        }
+    }
+}
+
+/// Process an associated block: introduce all items, set up scope with aliases, and canonicalize
+fn processAssociatedBlock(
+    self: *Self,
+    qualified_name_idx: Ident.Idx,
+    type_name: Ident.Idx,
+    assoc: anytype,
+) std.mem.Allocator.Error!void {
         // First, introduce placeholder patterns for all associated items
         try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
 
@@ -554,17 +565,21 @@ fn processTypeDeclFirstPass(
         try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
         defer self.scopeExit(self.env.gpa) catch unreachable;
 
-        // First, introduce the parent type itself into this scope so it can be referenced by its unqualified name
+        // Introduce the parent type itself into this scope so it can be referenced by its unqualified name
         // For example, if we're processing MyBool's associated items, we need "MyBool" to resolve to "Test.MyBool"
         if (self.scopeLookupTypeDecl(qualified_name_idx)) |parent_type_decl_idx| {
             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-            try current_scope.introduceTypeAlias(self.env.gpa, type_header.name, parent_type_decl_idx);
+            try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
         }
+
+        // Note: Sibling types and ancestor types are accessible via parent scope lookup.
+        // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
+        // were added in their declaration scope, making them visible to all child scopes.
 
         // Introduce aliases into this scope so associated items can reference each other
         // We only add unqualified and type-qualified names; fully qualified names are
         // already in the parent scope and accessible via scope nesting
-        const parent_type_text = self.env.getIdent(type_header.name);
+        const parent_type_text = self.env.getIdent(type_name);
         for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
             const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
             switch (assoc_stmt) {
@@ -654,7 +669,7 @@ fn processTypeDeclFirstPass(
         }
 
         // Process the associated items (canonicalize their bodies)
-        try self.processAssociatedItemsSecondPass(qualified_name_idx, type_header.name, assoc.statements);
+        try self.processAssociatedItemsSecondPass(qualified_name_idx, type_name, assoc.statements);
 
         // After processing, introduce anno-only defs into the associated block scope
         // (They were just created by processAssociatedItemsSecondPass)
@@ -691,7 +706,6 @@ fn processTypeDeclFirstPass(
                 else => {},
             }
         }
-    }
 }
 
 /// Canonicalize an associated item declaration with a qualified name
@@ -988,15 +1002,27 @@ fn processAssociatedItemsFirstPass(
     parent_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
+    // Two-phase approach for sibling types:
+    // Phase 1: Introduce all type declarations (defer their associated blocks)
+    // Phase 2: Process all deferred associated blocks (now all siblings are in scope)
+
+    // Phase 1: Introduce type declarations without processing their associated blocks
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt == .type_decl) {
+            try self.processTypeDeclFirstPass(stmt.type_decl, parent_name, true); // defer associated blocks
+        }
+    }
+
+    // Phase 2a: Introduce all value declarations and type annotations first (before processing associated blocks)
+    // This ensures that sibling items (like list_get_unsafe) are available
+    // when processing associated blocks (like List's)
     for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
-            .type_decl => |type_decl| {
-                // Recursively process nested type declarations (this introduces the qualified name)
-                try self.processTypeDeclFirstPass(type_decl, parent_name);
-            },
             .decl => |decl| {
-                // Introduce declarations with qualified names for recursive references
+                // Create placeholder for declarations so they can be referenced by sibling types
+                // processAssociatedItemsSecondPass will later use updatePlaceholder to replace these
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
                 if (pattern == .ident) {
                     const pattern_ident_tok = pattern.ident.ident_tok;
@@ -1015,30 +1041,58 @@ fn processAssociatedItemsFirstPass(
                         };
                         const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
 
-                        // Introduce the qualified name to scope
-                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_idx, placeholder_pattern_idx, false, true)) {
-                            .success => {},
-                            .shadowing_warning => |shadowed_pattern_idx| {
-                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                                    .ident = qualified_idx,
-                                    .region = region,
-                                    .original_region = original_region,
-                                } });
-                            },
-                            .top_level_var_error => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
-                            .var_across_function_boundary => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
-                        }
+                        // Directly put placeholder in scope (no conflict checking)
+                        // updatePlaceholder will verify it's replacing a placeholder later
+                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                        try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
+                        try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
                     }
                 }
             },
-            else => {
-                // Skip other statement types in first pass
+            .type_anno => |type_anno| {
+                // Create placeholder for anno-only defs so they can be referenced by sibling types
+                // processAssociatedItemsSecondPass will later use updatePlaceholder to replace these
+                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                    const parent_text = self.env.getIdent(parent_name);
+                    const anno_text = self.env.getIdent(anno_ident);
+                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+
+                    const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
+                    const placeholder_pattern = Pattern{
+                        .assign = .{
+                            .ident = qualified_idx,
+                        },
+                    };
+                    const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+
+                    // Directly put placeholder in scope (no conflict checking)
+                    // updatePlaceholder will verify it's replacing a placeholder later
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
+                    try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
+                }
             },
+            else => {
+                // Skip other statement types
+            },
+        }
+    }
+
+    // Phase 2b: Now process all deferred associated blocks
+    // All sibling types and declarations are now in scope
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.associated) |assoc| {
+                const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+                const parent_text = self.env.getIdent(parent_name);
+                const type_text = self.env.getIdent(type_ident);
+                const qualified_idx = try self.env.insertQualifiedIdent(parent_text, type_text);
+
+                try self.processAssociatedBlock(qualified_idx, type_ident, assoc);
+            }
         }
     }
 }
@@ -1125,7 +1179,7 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .type_decl => |type_decl| {
-                try self.processTypeDeclFirstPass(type_decl, null);
+                try self.processTypeDeclFirstPass(type_decl, null, false);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
