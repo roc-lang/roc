@@ -596,10 +596,20 @@ fn processAssociatedBlock(
                 const nested_type_text = self.env.getIdent(unqualified_ident);
                 const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
 
-                // Introduce unqualified type alias (fully qualified is already in parent scope)
+                // Introduce type aliases (fully qualified is already in parent scope from processTypeDeclFirstPass)
                 if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                    // Add unqualified alias (e.g., "Bar" -> the fully qualified type)
                     try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
+
+                    // Add user-facing qualified alias (e.g., "Foo.Bar" -> the fully qualified type)
+                    // This allows users to write "Foo.Bar" in type annotations
+                    // Re-fetch nested_type_text since insertQualifiedIdent may have reallocated
+                    const type_name_text_str = self.env.getIdent(type_name);
+                    const nested_type_text_str = self.env.getIdent(unqualified_ident);
+                    const user_qualified_ident_idx = try self.env.insertQualifiedIdent(type_name_text_str, nested_type_text_str);
+                    try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, qualified_type_decl_idx);
                 }
 
                 // Introduce associated items of nested types
@@ -1020,15 +1030,113 @@ fn processAssociatedItemsFirstPass(
     parent_type_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
-    // Two-phase approach for sibling types:
-    // Phase 1: Introduce all type declarations (defer their associated blocks)
-    // Phase 2: Process all deferred associated blocks (now all siblings are in scope)
+    // Multi-phase approach for sibling types:
+    // Phase 1a: Introduce nominal type declarations (defer annotations and associated blocks)
+    // Phase 1b: Add user-facing aliases for the nominal types
+    // Phase 1c: Process type aliases (which can now reference the nominal types)
+    // Phase 2: Process deferred associated blocks
 
-    // Phase 1: Introduce type declarations without processing their associated blocks
+    // Phase 1a: Introduce nominal type declarations WITHOUT processing annotations/associated blocks
+    // This creates placeholder types that can be referenced
     for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
-            try self.processTypeDeclFirstPass(stmt.type_decl, parent_name, true); // defer associated blocks
+            const type_decl = stmt.type_decl;
+            // Only process nominal types in this phase; aliases will be processed later
+            if (type_decl.kind == .nominal) {
+                try self.processTypeDeclFirstPass(type_decl, parent_name, true); // defer associated blocks
+            }
+        }
+    }
+
+    // Phase 1b: Add user-facing qualified aliases for nominal types
+    // This must happen before Phase 1c so that type aliases can reference these types
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.kind == .nominal) {
+                const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+
+                // Build fully qualified name (e.g., "module.Foo.Bar")
+                const parent_text = self.env.getIdent(parent_name);
+                const nested_type_text = self.env.getIdent(nested_type_ident);
+                const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
+
+                // Look up the fully qualified type that was just registered
+                if (self.scopeLookupTypeDecl(fully_qualified_ident_idx)) |type_decl_idx| {
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                    // Build user-facing qualified name by stripping module prefix
+                    // Re-fetch strings since insertQualifiedIdent may have reallocated
+                    const fully_qualified_text = self.env.getIdent(fully_qualified_ident_idx);
+                    const module_prefix = self.env.module_name;
+
+                    // Check if the fully qualified name starts with the module name
+                    const user_facing_text = if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
+                                                fully_qualified_text.len > module_prefix.len and
+                                                fully_qualified_text[module_prefix.len] == '.')
+                        fully_qualified_text[module_prefix.len + 1..] // Skip "module."
+                    else
+                        fully_qualified_text; // No module prefix, use as-is
+
+                    // Only add alias if it's different from the fully qualified name
+                    if (!std.mem.eql(u8, user_facing_text, fully_qualified_text)) {
+                        const user_qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
+                        try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, type_decl_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 1c: Now process type aliases (which can reference the nominal types registered above)
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.kind == .alias) {
+                try self.processTypeDeclFirstPass(type_decl, parent_name, true); // defer associated blocks
+            }
+        }
+    }
+
+    // Phase 1d: Add user-facing aliases for type aliases too
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.kind == .alias) {
+                const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+
+                // Build fully qualified name
+                const parent_text = self.env.getIdent(parent_name);
+                const nested_type_text = self.env.getIdent(nested_type_ident);
+                const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
+
+                // Look up the type alias
+                if (self.scopeLookupTypeDecl(fully_qualified_ident_idx)) |type_decl_idx| {
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                    // Build user-facing qualified name by stripping module prefix
+                    const fully_qualified_text = self.env.getIdent(fully_qualified_ident_idx);
+                    const module_prefix = self.env.module_name;
+
+                    const user_facing_text = if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
+                                                fully_qualified_text.len > module_prefix.len and
+                                                fully_qualified_text[module_prefix.len] == '.')
+                        fully_qualified_text[module_prefix.len + 1..]
+                    else
+                        fully_qualified_text;
+
+                    if (!std.mem.eql(u8, user_facing_text, fully_qualified_text)) {
+                        const user_qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
+                        try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, type_decl_idx);
+                    }
+                }
+            }
         }
     }
 
@@ -1226,43 +1334,34 @@ pub fn canonicalizeFile(
 
     // Phase 1.5.5: Create placeholders for top-level decls and type annos
     // This ensures they're available when processing associated blocks
-    const top_level_stmts = self.parse_ir.store.statementSlice(file.statements);
-    for (top_level_stmts) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        switch (stmt) {
-            .decl => |decl| {
-                const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                if (pattern == .ident) {
-                    const pattern_ident_tok = pattern.ident.ident_tok;
-                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                        const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
-                        const placeholder_pattern = Pattern{
-                            .assign = .{
-                                .ident = decl_ident,
-                            },
-                        };
-                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-                        try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
-                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                        try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
+    // IMPORTANT: Only do this for type-modules, not apps/hosted/etc
+    // Apps and other module types process their decls normally without placeholders
+    if (self.env.module_kind == .type_module) {
+        const top_level_stmts = self.parse_ir.store.statementSlice(file.statements);
+        for (top_level_stmts) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            switch (stmt) {
+                .decl => |decl| {
+                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                    if (pattern == .ident) {
+                        const pattern_ident_tok = pattern.ident.ident_tok;
+                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                            const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                            const placeholder_pattern = Pattern{
+                                .assign = .{
+                                    .ident = decl_ident,
+                                },
+                            };
+                            const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+                            try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
+                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                            try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
+                        }
                     }
-                }
-            },
-            .type_anno => |type_anno| {
-                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                    const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
-                    const placeholder_pattern = Pattern{
-                        .assign = .{
-                            .ident = anno_ident,
-                        },
-                    };
-                    const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-                    try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
-                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                    try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
-                }
-            },
-            else => {},
+                },
+                // .type_anno handling removed - will add back with better solution
+                else => {},
+            }
         }
     }
 
@@ -1716,6 +1815,20 @@ fn createAnnoOnlyDef(
         },
     };
     const pattern_idx = try self.env.addPattern(pattern, region);
+
+    // Introduce the identifier to scope so it can be referenced
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true)) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident,
+                .region = region,
+                .original_region = original_region,
+            } });
+        },
+        else => {},
+    }
 
     // Note: We don't update placeholders here. For associated items, the calling code
     // (processAssociatedItemsSecondPass) will update all three identifiers (qualified,
@@ -7391,39 +7504,139 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
                 switch (next_stmt) {
                     .decl => |decl| {
-                        // Immediately process the next decl, with the annotation
-                        mb_canonicailzed_stmt = try self.canonicalizeBlockDecl(decl, TypeAnnoIdent{
-                            .name = name_ident,
-                            .anno_idx = type_anno_idx,
-                            .where = where_clauses,
-                        });
-                        stmts_processed = .two;
+                        // Check if the decl name matches the anno name
+                        const decl_pattern = self.parse_ir.store.getPattern(decl.pattern);
+                        const names_match = name_check: {
+                            if (decl_pattern == .ident) {
+                                if (self.parse_ir.tokens.resolveIdentifier(decl_pattern.ident.ident_tok)) |decl_ident| {
+                                    break :name_check name_ident.idx == decl_ident.idx;
+                                }
+                            }
+                            break :name_check false;
+                        };
+
+                        if (names_match) {
+                            // Names match - immediately process the next decl with the annotation
+                            mb_canonicailzed_stmt = try self.canonicalizeBlockDecl(decl, TypeAnnoIdent{
+                                .name = name_ident,
+                                .anno_idx = type_anno_idx,
+                                .where = where_clauses,
+                            });
+                            stmts_processed = .two;
+                        } else {
+                            // Names don't match - create anno-only def for this anno
+                            // and let the decl be processed separately in the next iteration
+
+                            // Check if a placeholder already exists (from Phase 1.5.5)
+                            const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check: {
+                                // Reuse the existing placeholder pattern
+                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                const existing_pattern = current_scope.idents.get(name_ident) orelse {
+                                    // This shouldn't happen, but handle it gracefully
+                                    const pattern = Pattern{
+                                        .assign = .{
+                                            .ident = name_ident,
+                                        },
+                                    };
+                                    break :placeholder_check try self.env.addPattern(pattern, region);
+                                };
+                                // Remove from placeholder tracking since we're making it real
+                                _ = self.placeholder_idents.remove(name_ident);
+                                break :placeholder_check existing_pattern;
+                            } else create_new: {
+                                // No placeholder - create new pattern and introduce to scope
+                                const pattern = Pattern{
+                                    .assign = .{
+                                        .ident = name_ident,
+                                    },
+                                };
+                                const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+                                // Introduce the name to scope
+                                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+                                    .success => {},
+                                    .shadowing_warning => |shadowed_pattern_idx| {
+                                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                            .ident = name_ident,
+                                            .region = region,
+                                            .original_region = original_region,
+                                        } });
+                                    },
+                                    else => {},
+                                }
+                                break :create_new new_pattern_idx;
+                            };
+
+                            // Create the e_anno_only expression
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                            // Create the annotation structure
+                            const annotation = CIR.Annotation{
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Add the decl as a def so it gets included in all_defs
+                            const def_idx = try self.env.addDef(.{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            }, region);
+                            try self.env.store.addScratchDef(def_idx);
+
+                            // Create the statement
+                            const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .anno = annotation_idx,
+                            } }, region);
+                            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
+                            stmts_processed = .one;
+                        }
                     },
                     else => {
                         // If the next stmt does not match this annotation,
                         // create a Def with an e_anno_only body
 
-                        // Create the pattern for this def
-                        const pattern = Pattern{
-                            .assign = .{
-                                .ident = name_ident,
-                            },
-                        };
-                        const pattern_idx = try self.env.addPattern(pattern, region);
-
-                        // Introduce the name to scope
-                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
-                            .success => {},
-                            .shadowing_warning => |shadowed_pattern_idx| {
-                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                        // Check if a placeholder already exists (from Phase 1.5.5)
+                        const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check2: {
+                            // Reuse the existing placeholder pattern
+                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                            const existing_pattern = current_scope.idents.get(name_ident) orelse {
+                                const pattern = Pattern{
+                                    .assign = .{
+                                        .ident = name_ident,
+                                    },
+                                };
+                                break :placeholder_check2 try self.env.addPattern(pattern, region);
+                            };
+                            _ = self.placeholder_idents.remove(name_ident);
+                            break :placeholder_check2 existing_pattern;
+                        } else create_new2: {
+                            const pattern = Pattern{
+                                .assign = .{
                                     .ident = name_ident,
-                                    .region = region,
-                                    .original_region = original_region,
-                                } });
-                            },
-                            else => {},
-                        }
+                                },
+                            };
+                            const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+                                .success => {},
+                                .shadowing_warning => |shadowed_pattern_idx| {
+                                    const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                    try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                        .ident = name_ident,
+                                        .region = region,
+                                        .original_region = original_region,
+                                    } });
+                                },
+                                else => {},
+                            }
+                            break :create_new2 new_pattern_idx;
+                        };
 
                         // Create the e_anno_only expression
                         const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
@@ -7458,27 +7671,42 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 // If the next stmt does not match this annotation,
                 // create a Def with an e_anno_only body
 
-                // Create the pattern for this def
-                const pattern = Pattern{
-                    .assign = .{
-                        .ident = name_ident,
-                    },
-                };
-                const pattern_idx = try self.env.addPattern(pattern, region);
-
-                // Introduce the name to scope
-                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
-                    .success => {},
-                    .shadowing_warning => |shadowed_pattern_idx| {
-                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                // Check if a placeholder already exists (from Phase 1.5.5)
+                const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check3: {
+                    // Reuse the existing placeholder pattern
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    const existing_pattern = current_scope.idents.get(name_ident) orelse {
+                        const pattern = Pattern{
+                            .assign = .{
+                                .ident = name_ident,
+                            },
+                        };
+                        break :placeholder_check3 try self.env.addPattern(pattern, region);
+                    };
+                    _ = self.placeholder_idents.remove(name_ident);
+                    break :placeholder_check3 existing_pattern;
+                } else create_new3: {
+                    const pattern = Pattern{
+                        .assign = .{
                             .ident = name_ident,
-                            .region = region,
-                            .original_region = original_region,
-                        } });
-                    },
-                    else => {},
-                }
+                        },
+                    };
+                    const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+                        .success => {},
+                        .shadowing_warning => |shadowed_pattern_idx| {
+                            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                .ident = name_ident,
+                                .region = region,
+                                .original_region = original_region,
+                            } });
+                        },
+                        else => {},
+                    }
+                    break :create_new3 new_pattern_idx;
+                };
 
                 // Create the e_anno_only expression
                 const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
