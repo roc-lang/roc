@@ -560,8 +560,10 @@ fn processTypeDeclFirstPass(
             try current_scope.introduceTypeAlias(self.env.gpa, type_header.name, parent_type_decl_idx);
         }
 
-        // Re-introduce the aliases from first pass into this scope
-        // (We need to rebuild them since we're in a new scope)
+        // Introduce aliases into this scope so associated items can reference each other
+        // We only add unqualified and type-qualified names; fully qualified names are
+        // already in the parent scope and accessible via scope nesting
+        const parent_type_text = self.env.getIdent(type_header.name);
         for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
             const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
             switch (assoc_stmt) {
@@ -569,19 +571,18 @@ fn processTypeDeclFirstPass(
                     const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
                     const unqualified_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
 
-                    // Build qualified name
+                    // Build fully qualified name (e.g., "Test.MyBool")
                     const parent_text = self.env.getIdent(qualified_name_idx);
                     const nested_type_text = self.env.getIdent(unqualified_ident);
                     const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
 
-                    // Look up and alias
+                    // Introduce unqualified type alias (fully qualified is already in parent scope)
                     if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                         try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
                     }
 
-                    // Also re-introduce associated items of this nested type
-                    // so that both `my_not` and `MyBool.my_not` work within the associated block
+                    // Introduce associated items of nested types
                     if (nested_type_decl.associated) |nested_assoc| {
                         for (self.parse_ir.store.statementSlice(nested_assoc.statements)) |nested_assoc_stmt_idx| {
                             const nested_assoc_stmt = self.parse_ir.store.getStatement(nested_assoc_stmt_idx);
@@ -596,16 +597,15 @@ fn processTypeDeclFirstPass(
                                         const nested_decl_text = self.env.getIdent(nested_decl_ident);
                                         const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
 
-                                        // Look up the fully qualified pattern
+                                        // Look up the fully qualified pattern (from parent scope via nesting)
                                         switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
                                             .found => |pattern_idx| {
                                                 const scope = &self.scopes.items[self.scopes.items.len - 1];
                                                 // Add unqualified name (e.g., "my_not")
                                                 try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
-                                                // Also add name qualified with nested type (e.g., "MyBool.my_not")
-                                                const nested_decl_text2 = self.env.getIdent(nested_decl_ident);
-                                                const nested_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text2);
-                                                try scope.idents.put(self.env.gpa, nested_qualified_ident_idx, pattern_idx);
+                                                // Add type-qualified name (e.g., "MyBool.my_not")
+                                                const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
+                                                try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                                             },
                                             .not_found => {},
                                         }
@@ -620,19 +620,20 @@ fn processTypeDeclFirstPass(
                     if (pattern == .ident) {
                         const pattern_ident_tok = pattern.ident.ident_tok;
                         if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            // Build qualified name
+                            // Build fully qualified name (e.g., "Test.MyBool.my_not")
                             const parent_text = self.env.getIdent(qualified_name_idx);
                             const decl_text = self.env.getIdent(decl_ident);
-                            const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                            const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
-                            // Look up the qualified pattern
-                            switch (self.scopeLookup(.ident, qualified_ident_idx)) {
+                            // Look up the fully qualified pattern (from parent scope via nesting)
+                            switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                                 .found => |pattern_idx| {
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                                    // Add both unqualified and qualified names to the current scope
-                                    // This allows both `my_not` and `MyBool.my_not` to work inside the associated block
+                                    // Add unqualified name (e.g., "my_not")
                                     try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
-                                    try current_scope.idents.put(self.env.gpa, qualified_ident_idx, pattern_idx);
+                                    // Add type-qualified name (e.g., "MyBool.my_not")
+                                    const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
+                                    try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                                 },
                                 .not_found => {},
                             }
@@ -650,27 +651,28 @@ fn processTypeDeclFirstPass(
         // Process the associated items (canonicalize their bodies)
         try self.processAssociatedItemsSecondPass(qualified_name_idx, assoc.statements);
 
-        // After processing, re-introduce anno-only defs into the associated block scope
-        // (They were just created by processAssociatedItemsSecondPass and need to be available
-        // for use within the associated block)
+        // After processing, introduce anno-only defs into the associated block scope
+        // (They were just created by processAssociatedItemsSecondPass)
+        // We only add unqualified and type-qualified names; fully qualified is in parent scope
         for (self.parse_ir.store.statementSlice(assoc.statements)) |anno_stmt_idx| {
             const anno_stmt = self.parse_ir.store.getStatement(anno_stmt_idx);
             switch (anno_stmt) {
                 .type_anno => |type_anno| {
                     if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build qualified name
+                        // Build fully qualified name (e.g., "Test.MyBool.len")
                         const parent_text = self.env.getIdent(qualified_name_idx);
                         const anno_text = self.env.getIdent(anno_ident);
-                        const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+                        const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
 
-                        // Look up the qualified pattern that was just created
-                        switch (self.scopeLookup(.ident, qualified_ident_idx)) {
+                        // Look up the fully qualified pattern (from parent scope via nesting)
+                        switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                             .found => |pattern_idx| {
                                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                                // Add both unqualified and qualified names to the current scope
-                                // This allows both `len` and `List.len` to work inside the associated block
+                                // Add unqualified name (e.g., "len")
                                 try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
-                                try current_scope.idents.put(self.env.gpa, qualified_ident_idx, pattern_idx);
+                                // Add type-qualified name (e.g., "List.len")
+                                const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
+                                try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                             },
                             .not_found => {
                                 // This can happen if the type_anno was followed by a matching decl
