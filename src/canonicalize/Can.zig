@@ -44,6 +44,8 @@ exposed_scope: Scope = undefined,
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
+/// Track which identifiers in the current scope are placeholders (not yet replaced with real definitions)
+placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -166,6 +168,7 @@ pub fn deinit(
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
+    self.placeholder_idents.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -742,30 +745,16 @@ fn processAssociatedItemsSecondPass(
     parent_name: Ident.Idx,
     parent_type_name: Ident.Idx,
     statements: AST.Statement.Span,
-) std.mem.Allocator.Error!void {
+)  std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
     var i: usize = 0;
     while (i < stmt_idxs.len) : (i += 1) {
         const stmt_idx = stmt_idxs[i];
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
-            .type_decl => |type_decl| {
-                // Recursively process nested type declarations
-                if (type_decl.associated) |assoc| {
-                    const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
-                    const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
-
-                    // Build qualified name for nested type
-                    const parent_text = self.env.getIdent(parent_name);
-                    const type_text = self.env.getIdent(type_ident);
-                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, type_text);
-
-                    // Enter a new scope for the nested associated block
-                    try self.scopeEnter(self.env.gpa, false);
-                    defer self.scopeExit(self.env.gpa) catch unreachable;
-
-                    try self.processAssociatedItemsSecondPass(qualified_idx, type_ident, assoc.statements);
-                }
+            .type_decl => {
+                // Skip nested type declarations - they're already processed by processAssociatedItemsFirstPass Phase 2
+                // which calls processAssociatedBlock for each nested type
             },
             .type_anno => |ta| {
                 const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
@@ -802,96 +791,97 @@ fn processAssociatedItemsSecondPass(
 
                 // Now, check the next stmt to see if it matches this anno
                 const next_i = i + 1;
-                if (next_i < stmt_idxs.len) {
+                const has_matching_decl = if (next_i < stmt_idxs.len) blk: {
                     const next_stmt_id = stmt_idxs[next_i];
                     const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
 
-                    switch (next_stmt) {
-                        .decl => |decl| {
-                            // Check if the declaration pattern matches the annotation name
-                            const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                            if (pattern == .ident) {
-                                const pattern_ident_tok = pattern.ident.ident_tok;
-                                if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                                    // Check if names match
-                                    if (name_ident.idx == decl_ident.idx) {
-                                        // Skip the next statement since we're processing it now
-                                        i = next_i;
+                    if (next_stmt == .decl) {
+                        const decl = next_stmt.decl;
+                        // Check if the declaration pattern matches the annotation name
+                        const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                        if (pattern == .ident) {
+                            const pattern_ident_tok = pattern.ident.ident_tok;
+                            if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                                // Check if names match
+                                if (name_ident.idx == decl_ident.idx) {
+                                    // Skip the next statement since we're processing it now
+                                    i = next_i;
 
-                                        // Build qualified name (e.g., "Foo.bar")
-                                        const parent_text = self.env.getIdent(parent_name);
-                                        const decl_text = self.env.getIdent(decl_ident);
-                                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                                    // Build qualified name (e.g., "Foo.bar")
+                                    const parent_text = self.env.getIdent(parent_name);
+                                    const decl_text = self.env.getIdent(decl_ident);
+                                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
-                                        // Canonicalize with the qualified name and type annotation
-                                        const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
-                                            decl,
-                                            qualified_idx,
-                                            type_anno_idx,
-                                            where_clauses,
-                                        );
-                                        try self.env.store.addScratchDef(def_idx);
+                                    // Canonicalize with the qualified name and type annotation
+                                    const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
+                                        decl,
+                                        qualified_idx,
+                                        type_anno_idx,
+                                        where_clauses,
+                                    );
+                                    try self.env.store.addScratchDef(def_idx);
 
-                                        // Register this associated item by its qualified name
-                                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    // Register this associated item by its qualified name
+                                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                                        // Make the real pattern available in current scope (replaces placeholder)
-                                        // We already added unqualified and type-qualified names earlier,
-                                        // but need to update them to point to the real pattern instead of placeholder.
-                                        const def_cir = self.env.store.getDef(def_idx);
-                                        const pattern_idx = def_cir.pattern;
-                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                    // Make the real pattern available in current scope (replaces placeholder)
+                                    // We already added unqualified and type-qualified names earlier,
+                                    // but need to update them to point to the real pattern instead of placeholder.
+                                    const def_cir = self.env.store.getDef(def_idx);
+                                    const pattern_idx = def_cir.pattern;
+                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                        // Update unqualified name (e.g., "my_not")
-                                        try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
+                                    // Update unqualified name (e.g., "my_not")
+                                    try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
 
-                                        // Update type-qualified name (e.g., "MyBool.my_not")
-                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                                    // Update type-qualified name (e.g., "MyBool.my_not")
+                                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+                                    try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
 
-                                        // Update fully qualified name (e.g., "Test.MyBool.my_not")
-                                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
-                                    }
+                                    // Update fully qualified name (e.g., "Test.MyBool.my_not")
+                                    try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+
+                                    break :blk true; // Found and processed matching decl
                                 }
                             }
-                        },
-                        else => {
-                            // If the next stmt does not match this annotation,
-                            // create an anno-only def for the associated item
-
-                            const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
-
-                            // Build qualified name for the annotation (e.g., "Str.isEmpty")
-                            const parent_text = self.env.getIdent(parent_name);
-                            const name_text = self.env.getIdent(name_ident);
-                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
-
-                            // Create anno-only def with the qualified name
-                            const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
-
-                            // Register this associated item by its qualified name
-                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-
-                            // Make the real pattern available in current scope (replaces placeholder)
-                            const def_cir = self.env.store.getDef(def_idx);
-                            const pattern_idx = def_cir.pattern;
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                            // Update unqualified name (e.g., "is_empty")
-                            try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
-
-                            // Update type-qualified name (e.g., "List.is_empty")
-                            const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                            try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
-
-                            // Update fully qualified name (e.g., "Builtin.List.is_empty")
-                            try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
-
-                            try self.env.store.addScratchDef(def_idx);
-                        },
+                        }
                     }
+                    break :blk false; // No matching decl found
+                } else false; // No next statement
+
+                // If there's no matching decl, create an anno-only def
+                if (!has_matching_decl) {
+                    const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+
+                    // Build qualified name for the annotation (e.g., "Str.isEmpty")
+                    const parent_text = self.env.getIdent(parent_name);
+                    const name_text = self.env.getIdent(name_ident);
+                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
+
+                    // Create anno-only def with the qualified name
+                    const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
+
+                    // Register this associated item by its qualified name
+                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                    // Make the real pattern available in current scope (replaces placeholder)
+                    const def_cir = self.env.store.getDef(def_idx);
+                    const pattern_idx = def_cir.pattern;
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                    // Update unqualified name (e.g., "is_empty")
+                    try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
+
+                    // Update type-qualified name (e.g., "List.is_empty")
+                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+                    try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+
+                    // Update fully qualified name (e.g., "Builtin.List.is_empty")
+                    try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+
+                    try self.env.store.addScratchDef(def_idx);
                 }
             },
             .decl => |decl| {
@@ -1005,6 +995,7 @@ fn processAssociatedItemsFirstPass(
                     const parent_text = self.env.getIdent(parent_name);
                     const anno_text = self.env.getIdent(anno_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+
 
                     const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
                     const placeholder_pattern = Pattern{
@@ -1123,11 +1114,12 @@ pub fn canonicalizeFile(
     const scratch_statements_start = self.env.store.scratch.?.statements.top();
 
     // First pass: Process all type declarations to introduce them into scope
+    // Defer associated blocks until after we've created placeholders for top-level items
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .type_decl => |type_decl| {
-                try self.processTypeDeclFirstPass(type_decl, null, false);
+                try self.processTypeDeclFirstPass(type_decl, null, true); // defer associated blocks
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -1135,8 +1127,59 @@ pub fn canonicalizeFile(
         }
     }
 
-    // For type modules, expose the main type and all associated items before the second pass
-    // This ensures unused variable checking in the third pass doesn't flag exposed items
+    // Phase 1.5: Create placeholders for top-level declarations and type annotations
+    // This ensures sibling items (like list_get_unsafe) are available during associated block processing
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        switch (stmt) {
+            .decl => |decl| {
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                        const placeholder_pattern = Pattern{
+                            .assign = .{
+                                .ident = decl_ident,
+                            },
+                        };
+                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+
+
+                        // Directly put placeholder in current scope
+                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                        try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
+                        // Track that this is a placeholder
+                        try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
+                    }
+                }
+            },
+            .type_anno => |type_anno| {
+                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                    const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
+                    const placeholder_pattern = Pattern{
+                        .assign = .{
+                            .ident = anno_ident,
+                        },
+                    };
+                    const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+
+
+                    // Directly put placeholder in current scope
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
+                    // Track that this is a placeholder
+                    try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
+                }
+            },
+            else => {
+                // Skip other statement types
+            },
+        }
+    }
+
+    // For type modules, expose the main type and all associated items BEFORE processing associated blocks
+    // This ensures unused variable checking (which happens during scope exit) doesn't flag exposed items
     if (self.env.module_kind == .type_module) {
         const module_name_text = self.env.module_name;
         for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -1154,6 +1197,23 @@ pub fn canonicalizeFile(
                     try self.exposeAssociatedItems(type_name_ident, type_decl);
                     break;
                 }
+            }
+        }
+    }
+
+    // Phase 1.6: Now process all deferred type declaration associated blocks
+    // All top-level placeholders are now in scope, and for type modules, all items are marked as exposed
+    var assoc_blocks_found: usize = 0;
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.associated) |assoc| {
+                const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+                assoc_blocks_found += 1;
+
+                try self.processAssociatedBlock(type_ident, type_ident, assoc);
             }
         }
     }
@@ -1480,18 +1540,40 @@ fn createAnnoOnlyDef(
     };
     const pattern_idx = try self.env.addPattern(pattern, region);
 
-    // Introduce the name to scope
-    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true)) {
-        .success => {},
-        .shadowing_warning => |shadowed_pattern_idx| {
-            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                .ident = ident,
-                .region = region,
-                .original_region = original_region,
-            } });
-        },
-        else => {},
+    // Check if a placeholder already exists (from Phase 1.5 for top-level items or Phase 2a for associated items)
+    // Use scopeContains to check all scopes, not just the current one
+    const existing_pattern = self.scopeContains(.ident, ident);
+    const placeholder_exists = if (existing_pattern) |existing_pat_idx| blk: {
+        // Check if it's a placeholder (assign pattern)
+        const existing_pat = self.env.store.getPattern(existing_pat_idx);
+        break :blk existing_pat == .assign;
+    } else false;
+
+    if (placeholder_exists) {
+        // Find which scope has the placeholder and replace it
+        var scope_idx = self.scopes.items.len;
+        while (scope_idx > 0) {
+            scope_idx -= 1;
+            const scope = &self.scopes.items[scope_idx];
+            if (scope.idents.get(ident)) |_| {
+                try self.updatePlaceholder(scope, ident, pattern_idx);
+                break;
+            }
+        }
+    } else {
+        // Introduce the name to scope normally
+        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true)) {
+            .success => {},
+            .shadowing_warning => |shadowed_pattern_idx| {
+                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                    .ident = ident,
+                    .region = region,
+                    .original_region = original_region,
+                } });
+            },
+            else => {},
+        }
     }
 
     // Create the e_anno_only expression
@@ -4572,31 +4654,41 @@ fn canonicalizePattern(
                     .ident = ident_idx,
                 } }, region);
 
-                // Introduce the identifier into scope mapping to this pattern node
-                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
-                    .success => {},
-                    .shadowing_warning => |shadowed_pattern_idx| {
-                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                            .ident = ident_idx,
-                            .region = region,
-                            .original_region = original_region,
-                        } });
-                    },
-                    .top_level_var_error => {
-                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                            .invalid_top_level_statement = .{
-                                .stmt = try self.env.insertString("var"),
+                // Check if a placeholder exists for this identifier
+                // Placeholders are tracked in placeholder_idents and exist only until replaced
+                const placeholder_exists = self.placeholder_idents.contains(ident_idx);
+
+                if (placeholder_exists) {
+                    // Replace the placeholder in the current scope
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
+                } else {
+                    // Introduce the identifier into scope mapping to this pattern node
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                        .success => {},
+                        .shadowing_warning => |shadowed_pattern_idx| {
+                            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                .ident = ident_idx,
                                 .region = region,
-                            },
-                        });
-                    },
-                    .var_across_function_boundary => {
-                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
-                            .ident = ident_idx,
-                            .region = region,
-                        } });
-                    },
+                                .original_region = original_region,
+                            } });
+                        },
+                        .top_level_var_error => {
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                                .invalid_top_level_statement = .{
+                                    .stmt = try self.env.insertString("var"),
+                                    .region = region,
+                                },
+                            });
+                        },
+                        .var_across_function_boundary => {
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
+                                .ident = ident_idx,
+                                .region = region,
+                            } });
+                        },
+                    }
                 }
 
                 return pattern_idx;
@@ -8073,6 +8165,8 @@ fn updatePlaceholder(
         }
     }
     try scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
+    // Remove from placeholder set since it's now a real definition
+    _ = self.placeholder_idents.remove(ident_idx);
 }
 
 fn scopeUpdateTypeDecl(
@@ -8970,6 +9064,20 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype
                             // Expose the declaration
                             try self.env.addExposedById(qualified_idx);
                         }
+                    }
+                },
+                .type_anno => |type_anno| {
+                    // Get the annotation name (for annotation-only definitions like compiler intrinsics)
+                    if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                        // Build qualified name (e.g., "Bool.is_ne")
+                        const parent_text = self.env.getIdent(parent_name);
+                        const anno_text = self.env.getIdent(anno_ident);
+                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+
+                        // Expose both the qualified and unqualified names
+                        // (both are added to scope in Phase 2a)
+                        try self.env.addExposedById(qualified_idx);
+                        try self.env.addExposedById(anno_ident);
                     }
                 },
                 else => {},
