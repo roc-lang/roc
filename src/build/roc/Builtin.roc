@@ -1,7 +1,3 @@
-# Private top-level function for unsafe list access
-# This is a low-level operation that gets replaced by the compiler
-list_get_unsafe : List(elem), U64 -> elem
-
 Builtin := [].{
 	Str := [ProvidedByCompiler].{
 		is_empty : Str -> Bool
@@ -343,3 +339,7 @@ Builtin := [].{
 		}
 	}
 }
+
+# Private top-level function for unsafe list access
+# This is a low-level operation that gets replaced by the compiler
+list_get_unsafe : List(elem), U64 -> elem
