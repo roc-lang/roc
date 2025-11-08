@@ -519,6 +519,15 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(" or ");
         try report.document.addKeyword("exposing");
         try report.document.addReflowingText(" missing up-top?");
+
+        // Check for common misspellings and add a tip if found
+        if (reporting.CommonMisspellings.getIdentifierTip(ident_name)) |tip| {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Tip: ");
+            try report.document.addReflowingText(tip);
+        }
+
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);

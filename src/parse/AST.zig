@@ -325,6 +325,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(" is not expected in a pattern.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
+
+            // Check for common misspellings and add a tip if found
+            if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Tip: ");
+                try report.document.addReflowingText(tip);
+            }
         },
         .pattern_list_rest_old_syntax => {
             try report.document.addReflowingText("List rest patterns should use the `.. as name` syntax, not `..name`.");
@@ -353,6 +361,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(", or ");
             try report.document.addType("List U64");
             try report.document.addText(".");
+
+            // Check for common misspellings and add a tip if found
+            if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Tip: ");
+                try report.document.addReflowingText(tip);
+            }
         },
         .string_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
@@ -377,6 +393,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(" is not expected in an expression.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Expressions can be identifiers, literals, function calls, or operators.");
+
+            // Check for common misspellings and add a tip if found
+            if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Tip: ");
+                try report.document.addReflowingText(tip);
+            }
         },
         .import_must_be_top_level => {
             try report.document.addReflowingText("Import statements must appear at the top level of a module.");

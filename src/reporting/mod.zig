@@ -2,6 +2,7 @@
 
 pub const Report = @import("report.zig").Report;
 pub const Document = @import("document.zig").Document;
+pub const CommonMisspellings = @import("common_misspellings.zig").CommonMisspellings;
 pub const DocumentElement = @import("document.zig").DocumentElement;
 pub const Annotation = @import("document.zig").Annotation;
 pub const SourceCodeDisplayRegion = @import("document.zig").SourceCodeDisplayRegion;
