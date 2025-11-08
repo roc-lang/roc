@@ -90,15 +90,6 @@ result = Foo.transform(Foo.defaultBar)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "Foo.transform")))
-			(e-lookup-local
-				(p-assign (ident "Foo.defaultBar"))))
-		(annotation
-			(ty-lookup (name "Foo.Bar") (local))))
-	(d-let
 		(p-assign (ident "Foo.defaultBar"))
 		(e-nominal (nominal "Foo.Bar")
 			(e-tag (name "A"))))
@@ -113,6 +104,15 @@ result = Foo.transform(Foo.defaultBar)
 			(ty-fn (effectful false)
 				(ty-lookup (name "Foo.Bar") (local))
 				(ty-lookup (name "Foo.Bar") (local)))))
+	(d-let
+		(p-assign (ident "result"))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "Foo.transform")))
+			(e-lookup-local
+				(p-assign (ident "Foo.defaultBar"))))
+		(annotation
+			(ty-lookup (name "Foo.Bar") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -129,8 +129,8 @@ result = Foo.transform(Foo.defaultBar)
 (inferred-types
 	(defs
 		(patt (type "Foo.Bar"))
-		(patt (type "Foo.Bar"))
-		(patt (type "Foo.Bar -> Foo.Bar")))
+		(patt (type "Foo.Bar -> Foo.Bar"))
+		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -138,6 +138,6 @@ result = Foo.transform(Foo.defaultBar)
 			(ty-header (name "Foo.Bar"))))
 	(expressions
 		(expr (type "Foo.Bar"))
-		(expr (type "Foo.Bar"))
-		(expr (type "Foo.Bar -> Foo.Bar"))))
+		(expr (type "Foo.Bar -> Foo.Bar"))
+		(expr (type "Foo.Bar"))))
 ~~~

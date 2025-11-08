@@ -232,6 +232,47 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Container.get_value"))
+		(e-closure
+			(captures
+				(capture (ident "s")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag)))
+				(e-lookup-local
+					(p-assign (ident "s")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Container") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "Container.transform"))
+		(e-closure
+			(captures
+				(capture (ident "s")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag))
+					(p-assign (ident "fn")))
+				(e-nominal (nominal "Container")
+					(e-tag (name "Box")
+						(args
+							(e-call
+								(e-lookup-local
+									(p-assign (ident "fn")))
+								(e-lookup-local
+									(p-assign (ident "s")))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Container") (local))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (builtin))))
+				(ty-lookup (name "Container") (local)))))
+	(d-let
 		(p-assign (ident "extract"))
 		(e-lambda
 			(args
@@ -351,47 +392,6 @@ NO CHANGE
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
-	(d-let
-		(p-assign (ident "Container.get_value"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Container") (local))
-				(ty-lookup (name "Str") (builtin)))))
-	(d-let
-		(p-assign (ident "Container.transform"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "fn")))
-				(e-nominal (nominal "Container")
-					(e-tag (name "Box")
-						(args
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "fn")))
-								(e-lookup-local
-									(p-assign (ident "s")))))))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Container") (local))
-				(ty-parens
-					(ty-fn (effectful false)
-						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "Str") (builtin))))
-				(ty-lookup (name "Container") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Container"))
 		(ty-tag-union
@@ -402,6 +402,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Container -> Str"))
+		(patt (type "Container, Str -> Str -> Container"))
 		(patt (type "a -> Str where [a.get_value : a -> Str]"))
 		(patt (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
 		(patt (type "Container"))
@@ -409,13 +411,13 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Container"))
-		(patt (type "(Str, Str, Str)"))
-		(patt (type "Container -> Str"))
-		(patt (type "Container, Str -> Str -> Container")))
+		(patt (type "(Str, Str, Str)")))
 	(type_decls
 		(nominal (type "Container")
 			(ty-header (name "Container"))))
 	(expressions
+		(expr (type "Container -> Str"))
+		(expr (type "Container, Str -> Str -> Container"))
 		(expr (type "a -> Str where [a.get_value : a -> Str]"))
 		(expr (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
 		(expr (type "Container"))
@@ -423,7 +425,5 @@ NO CHANGE
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Container"))
-		(expr (type "(Str, Str, Str)"))
-		(expr (type "Container -> Str"))
-		(expr (type "Container, Str -> Str -> Container"))))
+		(expr (type "(Str, Str, Str)"))))
 ~~~

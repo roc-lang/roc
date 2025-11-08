@@ -85,6 +85,12 @@ myNum = Foo.Bar.baz
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Foo.Bar.baz"))
+		(e-num (value "5")))
+	(d-let
+		(p-assign (ident "Foo.Bar.baz"))
+		(e-num (value "5")))
+	(d-let
 		(p-assign (ident "myType"))
 		(e-tag (name "Something"))
 		(annotation
@@ -95,9 +101,6 @@ myNum = Foo.Bar.baz
 			(p-assign (ident "Foo.Bar.baz")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "Foo.Bar.baz"))
-		(e-num (value "5")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -111,8 +114,9 @@ myNum = Foo.Bar.baz
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Foo.Bar"))
 		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Foo.Bar"))
 		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
 		(nominal (type "Foo")
@@ -120,7 +124,8 @@ myNum = Foo.Bar.baz
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Foo.Bar"))
 		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Foo.Bar"))
 		(expr (type "Num(Int(Unsigned64))"))))
 ~~~

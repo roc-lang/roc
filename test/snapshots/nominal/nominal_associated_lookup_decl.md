@@ -59,14 +59,14 @@ useBar = Foo.bar
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Foo.bar"))
+		(e-num (value "42")))
+	(d-let
 		(p-assign (ident "useBar"))
 		(e-lookup-local
 			(p-assign (ident "Foo.bar")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "Foo.bar"))
-		(e-num (value "42")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
