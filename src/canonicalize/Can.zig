@@ -178,7 +178,7 @@ fn addAllQualifiedVariants(
     // For "Builtin.List", add "List.get" and "Builtin.List.get"
     var start: usize = 0;
     while (std.mem.indexOfScalarPos(u8, parent_full_text, start, '.')) |dot_pos| {
-        const prefix = parent_full_text[dot_pos + 1..];
+        const prefix = parent_full_text[dot_pos + 1 ..];
         const qualified_idx = try self.env.insertQualifiedIdent(prefix, name_text);
         try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
         start = dot_pos + 1;
