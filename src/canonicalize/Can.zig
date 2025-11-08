@@ -496,9 +496,11 @@ fn processTypeDeclFirstPass(
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
 
             // Extract and expose functions from the associated block
-            // For Type Modules like `Stdout := [].{ line! : Str => {} }`, the associated block
+            // For Platform Type Modules like `Stdout := [].{ line! : Str => {} }`, the associated block
             // contains type annotation statements for the effectful functions
-            if (type_decl.associated) |assoc| {
+            // Only do this for platform modules
+            if (self.env.building_platform_modules) {
+                if (type_decl.associated) |assoc| {
                 const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
 
                 for (assoc_statements) |stmt_idx| {
@@ -534,6 +536,7 @@ fn processTypeDeclFirstPass(
                             try self.env.setExposedNodeIndexById(func_name_idx, def_idx_u16);
                         }
                     }
+                }
                 }
             }
         }
@@ -1309,45 +1312,13 @@ pub fn canonicalizeFile(
     // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
     // Only do this when building platform modules (i.e., when root module is a platform)
-    std.debug.print("DEBUG: canDefinitions called for module: {s}, kind={s}, building_platform={}\n", .{ self.env.module_name, @tagName(self.env.module_kind), self.env.building_platform_modules });
-
-    // Debug: Print all defs for app modules
-    const is_test_module = std.mem.eql(u8, self.env.module_name, "stdin_simple.roc") or std.mem.eql(u8, self.env.module_name, "app.roc");
-    if (is_test_module) {
-        std.debug.print("DEBUG: Defs in {s}:\n", .{self.env.module_name});
-        const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-        for (all_defs, 0..) |def_idx, def_i| {
-            const def = self.env.store.getDef(def_idx);
-            const expr = self.env.store.getExpr(def.expr);
-            std.debug.print("  def[{}] expr_idx={} expr_tag={s}\n", .{ def_i, @intFromEnum(def.expr), @tagName(expr) });
-
-            // If it's a lambda, show its body
-            if (expr == .e_lambda) {
-                const body_expr = self.env.store.getExpr(expr.e_lambda.body);
-                std.debug.print("    lambda body: expr_idx={} expr_tag={s}\n", .{ @intFromEnum(expr.e_lambda.body), @tagName(body_expr) });
-
-                // If the body is a call, show what it's calling
-                if (body_expr == .e_call) {
-                    const func_expr = self.env.store.getExpr(body_expr.e_call.func);
-                    const call_args = self.env.store.sliceExpr(body_expr.e_call.args);
-                    std.debug.print("      call func: expr_idx={} expr_tag={s} num_args={}\n", .{ @intFromEnum(body_expr.e_call.func), @tagName(func_expr), call_args.len });
-                }
-            }
-        }
-    }
-
     if (self.env.module_kind == .type_module and self.env.building_platform_modules) {
-        std.debug.print("DEBUG: Processing type module for hosted functions\n", .{});
-        std.debug.print("  Module name: {s}\n", .{self.env.module_name});
-        std.debug.print("  Module kind: {s}\n", .{@tagName(self.env.module_kind)});
-        std.debug.print("  Building platform modules: {}\n", .{self.env.building_platform_modules});
 
         // First, create definitions for Type Module annotations (like `line! : Str => {}`)
         // These annotations are exposed but don't have actual definitions yet
         // We need to create e_anno_only defs for them so replaceAnnoOnlyWithHosted can transform them
         const type_module_defs_start = self.env.store.scratchDefTop();
         var exposed_iter = self.env.common.exposed_items.iterator();
-        std.debug.print("  Exposed items count: {}\n", .{self.env.common.exposed_items.count()});
         while (exposed_iter.next()) |entry| {
             const ident_idx = entry.ident_idx;
             _ = entry.node_idx;

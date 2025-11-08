@@ -38,8 +38,6 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {
                 const ident = pattern.assign.ident;
-                const ident_name = env.getIdent(ident);
-                std.debug.print("DEBUG: Processing anno-only def: {s}, has annotation: {}\n", .{ ident_name, def.annotation != null });
 
                 // Extract the number of arguments from the annotation
                 const annotation = env.store.getAnnotation(def.annotation.?);
@@ -122,7 +120,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
                 // Verify the def still has its annotation after modification
                 const modified_def = env.store.getDef(def_idx);
-                std.debug.print("DEBUG: After modification - def still has annotation: {}\n", .{modified_def.annotation != null});
+                _ = modified_def;
 
                 // Track this modified def index
                 try modified_def_indices.append(gpa, def_idx);
