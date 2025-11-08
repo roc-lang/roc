@@ -43,6 +43,8 @@ pub const HostedFunctions = extern struct {
     fns: [*]HostedFn,
 };
 
+/// Operations that the host provides to Roc code, including memory management,
+/// panic handling, and platform-specific effects.
 pub const RocOps = extern struct {
     /// The host provides this pointer, and Roc passes it to each of the following
     /// function pointers as a second argument. This lets the host do things like use

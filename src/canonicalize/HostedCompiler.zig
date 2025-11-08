@@ -1,3 +1,8 @@
+//! Compiler support for hosted functions in platform modules.
+//!
+//! This module handles the transformation of annotation-only declarations
+//! into hosted lambda expressions that will be provided by the platform at runtime.
+
 const std = @import("std");
 const base = @import("base");
 const ModuleEnv = @import("ModuleEnv.zig");

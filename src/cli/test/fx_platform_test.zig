@@ -1,3 +1,8 @@
+//! Integration tests for the fx platform with effectful functions.
+//!
+//! Tests that platform-provided hosted functions (like Stdout.line! and Stderr.line!)
+//! can be properly invoked from Roc applications.
+
 const std = @import("std");
 const testing = std.testing;
 
