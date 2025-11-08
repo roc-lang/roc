@@ -74,20 +74,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [
-            macos-15-intel,
-            macos-15,
-            ubuntu-22.04,
-            ubuntu-24.04-arm,
-            windows-2022,
-            windows-2025,
-            windows-11-arm,
-          ] # macos-15 uses arm64
-    # Centralize the CPU flag here:
-    # - x86 runners get "-Dcpu=x86_64_v3"
-    # - arm runners / macos arm get ""
-    env:
-      CPU_FLAG: ${{ (endsWith(matrix.os, '-arm') || matrix.os == 'macos-15') && '-Dcpu=generic' || '-Dcpu=x86_64_v3' }}
+        include:
+          - os: macos-15-intel
+            artifact_name: macos_x86_64
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: macos-15
+            artifact_name: macos_apple_silicon
+            cpu_flag: ''
+          - os: ubuntu-22.04
+            artifact_name: linux_x86_64
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: ubuntu-24.04-arm
+            artifact_name: linux_arm64
+            cpu_flag: ''
+          - os: windows-2022
+            artifact_name: windows_x86_64
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: windows-2025
+            artifact_name: windows_x86_64_new
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: windows-11-arm
+            artifact_name: windows_arm64
+            cpu_flag: ''
 
     steps:
       - name: Checkout
@@ -110,7 +118,7 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ env.CPU_FLAG }}"
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }}"
           error_string_contains: "EndOfStream"
           retry_count: 3
 
@@ -152,7 +160,7 @@ jobs:
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Dfuzz -Dsystem-afl=false ${{ env.CPU_FLAG }}"
+          command: "zig build test -Dfuzz -Dsystem-afl=false"
           error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
@@ -160,7 +168,7 @@ jobs:
       - name: Build and execute tests, build repro executables. All in release mode.
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ env.CPU_FLAG }}"
+          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }}"
           error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
