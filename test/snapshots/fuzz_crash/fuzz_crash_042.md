@@ -23,17 +23,6 @@ import u.R}g:r->R.a.E
           ^
 
 
-**MODULE NOT FOUND**
-The module `u.R` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_042.md:1:1:1:11:**
-```roc
-import u.R}g:r->R.a.E
-```
-^^^^^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `R.a` imported into this Roc file.
 
@@ -43,6 +32,17 @@ You're attempting to use this module here:
 import u.R}g:r->R.a.E
 ```
                 ^^^^^
+
+
+**MODULE NOT FOUND**
+The module `u.R` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_042.md:1:1:1:11:**
+```roc
+import u.R}g:r->R.a.E
+```
+^^^^^^^^^^
 
 
 # TOKENS

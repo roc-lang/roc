@@ -77,6 +77,24 @@ process = |list| "processed"
            ^^^^
 
 
+**DUPLICATE DEFINITION**
+The name `transform` is being redeclared in this scope.
+
+The redeclaration is here:
+**underscore_in_regular_annotations.md:29:1:29:10:**
+```roc
+transform = |_, b| b
+```
+^^^^^^^^^
+
+But `transform` was already defined here:
+**underscore_in_regular_annotations.md:28:1:28:21:**
+```roc
+transform : _a -> _b -> _b
+```
+^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,
@@ -246,6 +264,13 @@ transform = |_, b| b
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "transform"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "_a"))
+				(ty-rigid-var (name "_b")))))
+	(d-let
 		(p-assign (ident "main"))
 		(e-lambda
 			(args
@@ -360,6 +385,7 @@ transform = |_, b| b
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "_a -> _b"))
 		(patt (type "_arg -> _ret"))
 		(patt (type "a -> a"))
 		(patt (type "List(_elem) -> Str"))
@@ -368,6 +394,7 @@ transform = |_, b| b
 		(patt (type "a -> b, List(a) -> List(b)"))
 		(patt (type "_arg, c -> c")))
 	(expressions
+		(expr (type "_a -> _b"))
 		(expr (type "_arg -> _ret"))
 		(expr (type "a -> a"))
 		(expr (type "List(_elem) -> Str"))
