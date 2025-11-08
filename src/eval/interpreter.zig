@@ -199,10 +199,15 @@ pub const Interpreter = struct {
                     if (other_envs.len > 2) {
                         matched_module = other_envs[2];
                     }
-                } else if (std.mem.indexOf(u8, import_name, "Host") != null) {
-                    // Match Host - should be other_env[3]
+                } else if (std.mem.indexOf(u8, import_name, "Stdin") != null) {
+                    // Match Stdin - should be other_env[3]
                     if (other_envs.len > 3) {
                         matched_module = other_envs[3];
+                    }
+                } else if (std.mem.indexOf(u8, import_name, "Host") != null) {
+                    // Match Host - should be other_env[4]
+                    if (other_envs.len > 4) {
+                        matched_module = other_envs[4];
                     }
                 }
 
@@ -385,14 +390,23 @@ pub const Interpreter = struct {
             std.debug.print("TRACE evaluateExpression: About to evaluate closure body (params.len={})\n", .{self.env.store.slicePatterns(header.params).len});
             std.debug.print("TRACE evaluateExpression: body_idx={}, body expr type={s}\n", .{header.body_idx, @tagName(self.env.store.getExpr(header.body_idx))});
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
-            defer result_value.decref(&self.runtime_layout_store, roc_ops);
+            // TEMPORARY: Comment out decref to debug
+            // defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             std.debug.print("TRACE evaluateExpression: Closure body evaluated, copying result\n", .{});
-            std.debug.print("TRACE evaluateExpression: result_value.layout.tag={s}, ptr={any}\n", .{@tagName(result_value.layout.tag), result_value.ptr});
+            // Test 1: Can we access layout.tag?
+            const layout_tag = result_value.layout.tag;
+            std.debug.print("TRACE: layout_tag={s}\n", .{@tagName(layout_tag)});
+
+            // Test 2: Can we call layoutSize?
             const result_size = self.runtime_layout_store.layoutSize(result_value.layout);
-            std.debug.print("TRACE evaluateExpression: result_size={}\n", .{result_size});
-            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
-            std.debug.print("TRACE evaluateExpression: Result copied, returning\n", .{});
+            std.debug.print("TRACE: layoutSize returned {}\n", .{result_size});
+
+            // Test 3: Can we access is_initialized?
+            const is_init = result_value.is_initialized;
+            std.debug.print("TRACE: is_init={}\n", .{is_init});
+
+            std.debug.print("TRACE evaluateExpression: All tests passed, returning\n", .{});
             return;
         }
 
@@ -1623,7 +1637,7 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                if (all.len == 0) return error.TypeMismatch;
+                std.debug.print("TRACE e_call START: args.len={}\n", .{all.len});
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
@@ -2370,6 +2384,7 @@ pub const Interpreter = struct {
         std.debug.print("TRACE callHostedFunction: return_size={}\n", .{return_size});
         const result_value = try self.pushRaw(return_layout, 0);
         std.debug.print("TRACE callHostedFunction: Pushed return value\n", .{});
+        std.debug.print("TRACE callHostedFunction: result_value ptr={any}, &result_value={any}\n", .{result_value.ptr, &result_value});
 
         // Allocate stack space for marshalled arguments
         // The host now uses the same RocStr as builtins, so no conversion needed
@@ -2377,8 +2392,25 @@ pub const Interpreter = struct {
         var args_struct: ArgsStruct = undefined;
 
         // Marshal arguments into a contiguous struct matching the RocCall ABI
-        // For now, we support single-argument functions (like put_stdout! : Str => {})
-        if (args.len == 1) {
+        // For now, we support zero-argument and single-argument functions
+        if (args.len == 0) {
+            // Zero argument case - pass dummy pointer for args
+            const ret_ptr = if (result_value.ptr) |p| p else blk: {
+                // Zero-sized return - pass stack address
+                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
+            };
+
+            // For zero-argument functions, we still need to pass a valid args pointer
+            // Use the address of args_struct even though it won't be read
+            const arg_ptr = @as(*anyopaque, @ptrCast(&args_struct));
+
+            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
+            std.debug.print("TRACE callHostedFunction: About to call hosted_fn (0 args)\n", .{});
+            std.debug.print("TRACE callHostedFunction: ret_ptr={any}, arg_ptr={any}\n", .{ret_ptr, arg_ptr});
+            hosted_fn(roc_ops, ret_ptr, arg_ptr);
+            std.debug.print("TRACE callHostedFunction: hosted_fn returned, result_value still valid?\n", .{});
+            std.debug.print("TRACE callHostedFunction: result_value.is_initialized={}\n", .{result_value.is_initialized});
+        } else if (args.len == 1) {
             // Single argument case - we need to marshal it properly
             // For strings, we need to pass a RocStr struct wrapped in Args
             const arg_ptr = blk: {
@@ -2413,6 +2445,7 @@ pub const Interpreter = struct {
             return error.Crash;
         }
 
+        std.debug.print("TRACE callHostedFunction: About to return, result_value.layout.tag={s}\n", .{@tagName(result_value.layout.tag)});
         return result_value;
     }
 
@@ -4561,21 +4594,41 @@ pub const Interpreter = struct {
             },
             else => &[_]types.Var{},
         };
-        if (params.len != args.len) return error.TypeMismatch;
 
-        var i: usize = 0;
-        while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithContext(
-                self.env,
-                self.runtime_types,
-                &self.problems,
-                &self.snapshots,
-                &self.unify_scratch,
-                &self.unify_scratch.occurs_scratch,
-                params[i],
-                args[i],
-                false,
-            );
+        // Special case: if func has 1 param that is empty tuple () and call has 0 args, that's valid
+        const is_unit_arg_call = unit_check: {
+            if (params.len == 1 and args.len == 0) {
+                const param_resolved = self.runtime_types.resolveVar(params[0]);
+                if (param_resolved.desc.content == .structure) {
+                    const struct_flat = param_resolved.desc.content.structure;
+                    // Empty tuple has 0 fields
+                    if (struct_flat == .tuple and struct_flat.tuple.elems.len() == 0) {
+                        std.debug.print("TRACE prepareCallWithFuncVar: Detected unit () parameter - treating call with 0 args as valid\n", .{});
+                        break :unit_check true;
+                    }
+                }
+            }
+            break :unit_check false;
+        };
+
+        if (params.len != args.len and !is_unit_arg_call) return error.TypeMismatch;
+
+        // Skip unification if this is a unit arg call (0 args to unify)
+        if (!is_unit_arg_call) {
+            var i: usize = 0;
+            while (i < params.len) : (i += 1) {
+                _ = try unify.unifyWithContext(
+                    self.env,
+                    self.runtime_types,
+                    &self.problems,
+                    &self.snapshots,
+                    &self.unify_scratch,
+                    &self.unify_scratch.occurs_scratch,
+                    params[i],
+                    args[i],
+                    false,
+                );
+            }
         }
         // ret_var may now be constrained
 

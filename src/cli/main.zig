@@ -1090,7 +1090,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     std.debug.print("Is app with platform: {}\n", .{is_app_with_platform});
 
     // TEMP: Force multi-module for fx test
-    const force_multi = std.mem.indexOf(u8, roc_file_path, "test/fx/app.roc") != null or
+    const force_multi = std.mem.indexOf(u8, roc_file_path, "test/fx/") != null or
         std.mem.indexOf(u8, roc_file_path, "minimal_fx.roc") != null or
         std.mem.indexOf(u8, roc_file_path, "simple_fx_test") != null;
     if (force_multi) {
@@ -1300,7 +1300,7 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
 
     const app_dir = std.fs.path.dirname(app_file_path) orelse ".";
 
-    // For now, assume the platform modules are Stdout and Stderr in test/fx/platform/
+    // For now, assume the platform modules are Stdout, Stderr, and Stdin in test/fx/platform/
     // This is sufficient for the fx_platform_test
     const platform_dir = try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, "platform" });
     defer allocs.gpa.free(platform_dir);
@@ -1310,6 +1310,9 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
 
     const stderr_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Stderr.roc" });
     defer allocs.gpa.free(stderr_path);
+
+    const stdin_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Stdin.roc" });
+    defer allocs.gpa.free(stdin_path);
 
     // Create header
     const Header = struct {
@@ -1324,11 +1327,11 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // We'll compile 3 modules: app, Stdout, Stderr
-    header_ptr.module_count = 3;
+    // We'll compile 4 modules: app, Stdout, Stderr, Stdin
+    header_ptr.module_count = 4;
 
     // Allocate array for module env offsets
-    const module_env_offsets_ptr = try shm_allocator.alloc(u64, 3);
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, 4);
     const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_envs_offset = module_envs_offset_location;
 
@@ -1358,6 +1361,17 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     );
     module_env_offsets_ptr[2] = @intFromPtr(stderr_env_ptr) - @intFromPtr(shm.base_ptr);
 
+    // Compile Stdin module (index 3)
+    const stdin_env_ptr = try compileModuleToSharedMemory(
+        allocs,
+        stdin_path,
+        "Stdin.roc",
+        shm_allocator,
+        &builtin_modules,
+        true, // building_platform_modules
+    );
+    module_env_offsets_ptr[3] = @intFromPtr(stdin_env_ptr) - @intFromPtr(shm.base_ptr);
+
     // Now that all platform modules are compiled, collect ALL hosted functions
     // from all modules and sort them globally to assign correct indices
     const HostedCompiler = can.HostedCompiler;
@@ -1370,8 +1384,8 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     }
 
     // Collect from platform modules that are actually used by the app
-    // (Stdout and Stderr, but not Host which is internal)
-    const platform_envs = [_]*ModuleEnv{ stdout_env_ptr, stderr_env_ptr };
+    // (Stdout, Stderr, and Stdin, but not Host which is internal)
+    const platform_envs = [_]*ModuleEnv{ stdout_env_ptr, stderr_env_ptr, stdin_env_ptr };
     for (platform_envs) |platform_env| {
         var module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
         defer module_fns.deinit(platform_env.gpa);
@@ -1442,7 +1456,7 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
         app_file_path,
         shm_allocator,
         &builtin_modules,
-        &[_]*const ModuleEnv{ stdout_env_ptr, stderr_env_ptr },
+        &[_]*const ModuleEnv{ stdout_env_ptr, stderr_env_ptr, stdin_env_ptr },
     );
     module_env_offsets_ptr[0] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
 
@@ -1519,6 +1533,30 @@ fn compileModuleToSharedMemory(
     env.building_platform_modules = building_platform_modules;
 
     try canonicalizer.canonicalizeFile();
+
+    // Type check if this is a platform module
+    if (building_platform_modules) {
+        // Create module_envs_map for type checking (use same type as in canonicalization)
+        var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+        defer check_module_envs_map.deinit();
+
+        // Get common idents for type checker
+        const common_idents: Check.CommonIdents = .{
+            .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
+            .list = try env.insertIdent(base.Ident.for_text("List")),
+            .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = builtin_modules.builtin_indices.bool_type,
+            .try_stmt = builtin_modules.builtin_indices.try_type,
+            .builtin_module = builtin_modules.builtin_module.env,
+        };
+
+        // Type check with just Builtin as import
+        const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+        var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
+        defer checker.deinit();
+
+        try checker.checkFile();
+    }
 
     // Allocate and return
     const env_ptr = try shm_allocator.create(ModuleEnv);
@@ -1615,7 +1653,7 @@ fn compileAppModuleToSharedMemory(
     // Type check with platform modules as imports
 
     // Build imported_modules array that matches the imports
-    // The imports are: Builtin (0), pf.Stdout (1), pf.Stderr (2), Stdout.roc (3 - duplicate of 1)
+    // The imports are: Builtin (0), then platform modules like pf.Stdout, pf.Stderr, pf.Stdin
     // We need an array where index matches import index
     const import_count = env.imports.imports.items.items.len;
     const imported_modules_slice = try shm_allocator.alloc(*const ModuleEnv, import_count);
@@ -1626,17 +1664,26 @@ fn compileAppModuleToSharedMemory(
     // For each remaining import, find the matching platform module
     for (env.imports.imports.items.items[1..], 1..) |import_str_idx, i| {
         const import_name = env.common.getString(import_str_idx);
+        std.debug.print("DEBUG: Resolving import[{}]: \"{s}\"\n", .{i, import_name});
 
         // Match to one of the platform modules
         var found_match = false;
         for (platform_envs) |platform_env| {
             const platform_module_name = platform_env.module_name;
-            // Match "pf.Stdout" to "Stdout.roc", or "Stdout.roc" to "Stdout.roc"
+            std.debug.print("  Checking against platform module: \"{s}\"\n", .{platform_module_name});
+            // Match "pf.Stdout" to "Stdout.roc", "pf.Stderr" to "Stderr.roc", "pf.Stdin" to "Stdin.roc", etc.
             if (std.mem.indexOf(u8, import_name, "Stdout") != null and std.mem.indexOf(u8, platform_module_name, "Stdout") != null) {
+                std.debug.print("  MATCHED! Stdout\n", .{});
                 imported_modules_slice[i] = platform_env;
                 found_match = true;
                 break;
             } else if (std.mem.indexOf(u8, import_name, "Stderr") != null and std.mem.indexOf(u8, platform_module_name, "Stderr") != null) {
+                std.debug.print("  MATCHED! Stderr\n", .{});
+                imported_modules_slice[i] = platform_env;
+                found_match = true;
+                break;
+            } else if (std.mem.indexOf(u8, import_name, "Stdin") != null and std.mem.indexOf(u8, platform_module_name, "Stdin") != null) {
+                std.debug.print("  MATCHED! Stdin\n", .{});
                 imported_modules_slice[i] = platform_env;
                 found_match = true;
                 break;
@@ -1644,6 +1691,7 @@ fn compileAppModuleToSharedMemory(
         }
 
         if (!found_match) {
+            std.debug.print("  NO MATCH - using fallback platform_envs[0]\n", .{});
             imported_modules_slice[i] = platform_envs[0];
         }
     }

@@ -12,6 +12,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     var modified_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
     std.debug.print("=== REPLACE ANNO ONLY WITH HOSTED START ===\n", .{});
+    std.debug.print("Total defs in module: {}\n", .{env.all_defs.span.len});
 
     // Ensure types array has entries for all existing nodes
     // This is necessary because varFrom(node_idx) assumes type_var index == node index
@@ -37,16 +38,48 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {
                 const ident = pattern.assign.ident;
+                const ident_name = env.getIdent(ident);
+                std.debug.print("DEBUG: Processing anno-only def: {s}, has annotation: {}\n", .{ident_name, def.annotation != null});
 
-                // Create a dummy parameter pattern for the lambda
-                // Use the identifier "_arg" for the parameter
-                const arg_ident = env.common.findIdent("_arg") orelse try env.common.insertIdent(gpa, base.Ident.for_text("_arg"));
-                const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                // Extract the number of arguments from the annotation
+                const annotation = env.store.getAnnotation(def.annotation.?);
+                const type_anno = env.store.getTypeAnno(annotation.anno);
 
-                // Create a pattern span containing just this one parameter
+                const num_args: usize = if (type_anno == .@"fn") blk: {
+                    const func_type = type_anno.@"fn";
+                    const args_slice = env.store.sliceTypeAnnos(func_type.args);
+
+                    std.debug.print("  func has {} type args\n", .{args_slice.len});
+
+                    // Check if single argument is empty tuple () - if so, create 0 params
+                    if (args_slice.len == 1) {
+                        const first_arg = env.store.getTypeAnno(args_slice[0]);
+                        std.debug.print("  first arg type: {s}\n", .{@tagName(first_arg)});
+                        if (first_arg == .tuple) {
+                            std.debug.print("  tuple.elems.len = {}\n", .{first_arg.tuple.elems.span.len});
+                            if (first_arg.tuple.elems.span.len == 0) {
+                                std.debug.print("  Detected () - creating 0 params\n", .{});
+                                break :blk 0; // () means 0 parameters
+                            }
+                        }
+                    }
+
+                    break :blk args_slice.len;
+                } else 0;
+
+                std.debug.print("  Creating hosted lambda with {} args\n", .{num_args});
+
+                // Create dummy parameter patterns for the lambda (one for each argument)
                 const patterns_start = env.store.scratchTop("patterns");
-                try env.store.scratch.?.patterns.append(arg_pattern_idx);
-                const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+                var arg_i: usize = 0;
+                while (arg_i < num_args) : (arg_i += 1) {
+                    const arg_name = try std.fmt.allocPrint(gpa, "_arg{}", .{arg_i});
+                    defer gpa.free(arg_name);
+                    const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
+                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
+                }
+                const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
 
                 // Create an e_runtime_error body that crashes when the function is called in the interpreter
                 const error_msg_lit = try env.insertString("Hosted functions cannot be called in the interpreter");
@@ -84,6 +117,10 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 const extra_start = def_node.data_1;
 
                 env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+
+                // Verify the def still has its annotation after modification
+                const modified_def = env.store.getDef(def_idx);
+                std.debug.print("DEBUG: After modification - def still has annotation: {}\n", .{modified_def.annotation != null});
 
                 // Track this modified def index
                 try modified_def_indices.append(gpa, def_idx);

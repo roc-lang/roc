@@ -107,7 +107,46 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     std.fs.File.stderr().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
 
-/// Hosted function: Stdout.line! (index 1 - sorted alphabetically)
+/// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
+/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+/// Returns Str and takes {} as argument
+fn hostedStdinLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+    _ = args_ptr; // Argument is {} which is zero-sized
+
+    // Get allocator from environment
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    const allocator = host.arena.allocator();
+
+    // Read a line from stdin
+    var buffer: [4096]u8 = undefined;
+    const stdin_file = std.fs.File.stdin();
+    const bytes_read = stdin_file.read(&buffer) catch {
+        // Return empty string on error
+        const result: *RocStr = @ptrCast(@alignCast(ret_ptr));
+        result.* = RocStr.empty();
+        return;
+    };
+
+    // Find newline and trim it
+    const line_with_newline = buffer[0..bytes_read];
+    const line = if (std.mem.indexOfScalar(u8, line_with_newline, '\n')) |newline_idx|
+        line_with_newline[0..newline_idx]
+    else
+        line_with_newline;
+
+    // Allocate and copy the line
+    const line_copy = allocator.dupe(u8, line) catch {
+        const result: *RocStr = @ptrCast(@alignCast(ret_ptr));
+        result.* = RocStr.empty();
+        return;
+    };
+
+    // Create RocStr from the read line and return it
+    const result: *RocStr = @ptrCast(@alignCast(ret_ptr));
+    result.* = RocStr.init(line_copy.ptr, line_copy.len, ops);
+}
+
+/// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
@@ -127,10 +166,11 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr and Stdout Type Modules
+/// These correspond to the hosted functions defined in Stderr, Stdin, and Stdout Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     hostedStderrLine, // Stderr.line! (index 0)
-    hostedStdoutLine, // Stdout.line! (index 1)
+    hostedStdinLine,  // Stdin.line! (index 1)
+    hostedStdoutLine, // Stdout.line! (index 2)
 };
 
 /// Platform host entrypoint

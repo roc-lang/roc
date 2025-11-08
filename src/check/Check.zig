@@ -616,6 +616,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    std.debug.print("DEBUG: checkFile called for module: {s}\n", .{self.cir.module_name});
 
     try ensureTypeStoreIsFilled(self);
 
@@ -2462,14 +2463,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // Unify this expression with the referenced pattern
         },
         .e_lookup_external => |ext| {
+            std.debug.print("DEBUG Check: e_lookup_external module_idx={} node_idx={}\n", .{@intFromEnum(ext.module_idx), ext.target_node_idx});
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                // Check what type was resolved
+                const resolved = self.types.resolveVar(ext_ref.local_var);
+                std.debug.print("  Resolved type: content={s}\n", .{@tagName(resolved.desc.content)});
+
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     Rank.generalized,
                     .{ .explicit = expr_region },
                 );
+                std.debug.print("  Instantiated var: {}\n", .{@intFromEnum(ext_instantiated_var)});
                 try self.types.setVarRedirect(expr_var, ext_instantiated_var);
             } else {
+                std.debug.print("  FAILED to resolve external!\n", .{});
                 try self.updateVar(expr_var, .err, rank);
             }
         },
@@ -2718,10 +2726,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         };
 
                         // Now, check the call args against the type of function
+                        std.debug.print("DEBUG Check e_call: mb_func is_null={}\n", .{mb_func == null});
                         if (mb_func) |func| {
+                            std.debug.print("  func.args.len={} call_args.len={}\n", .{self.types.sliceVars(func.args).len, call_arg_expr_idxs.len});
                             const func_args = self.types.sliceVars(func.args);
 
-                            if (func_args.len == call_arg_expr_idxs.len) {
+                            // Special case: if func has 1 arg that is empty tuple () and call has 0 args, that's valid
+                            const is_unit_arg_call = unit_check: {
+                                if (func_args.len == 1 and call_arg_expr_idxs.len == 0) {
+                                    const arg_resolved = self.types.resolveVar(func_args[0]);
+                                    if (arg_resolved.desc.content == .structure) {
+                                        const struct_flat = arg_resolved.desc.content.structure;
+                                        // Empty tuple has 0 fields
+                                        if (struct_flat == .tuple and struct_flat.tuple.elems.len() == 0) {
+                                            std.debug.print("  Detected unit () argument - treating call with 0 args as valid\n", .{});
+                                            break :unit_check true;
+                                        }
+                                    }
+                                }
+                                break :unit_check false;
+                            };
+
+                            if (func_args.len == call_arg_expr_idxs.len or is_unit_arg_call) {
                                 // First, find all the "rigid" variables in a the function's type
                                 // and unify the matching corresponding call arguments together.
                                 //
@@ -2777,26 +2803,32 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
                                 // Check the function's arguments against the actual
                                 // called arguments, unifying each one
-                                for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
-                                    const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), rank);
-                                    if (unify_result.isProblem()) {
-                                        // Use the new error detail for bound type variable incompatibility
-                                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                            .incompatible_fn_call_arg = .{
-                                                .fn_name = func_name,
-                                                .arg_var = ModuleEnv.varFrom(call_expr_idx),
-                                                .incompatible_arg_index = @intCast(arg_index),
-                                                .num_args = @intCast(call_arg_expr_idxs.len),
-                                            },
-                                        });
+                                // Skip if this is a unit argument call (0 call args to match against)
+                                if (!is_unit_arg_call) {
+                                    for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
+                                        const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), rank);
+                                        if (unify_result.isProblem()) {
+                                            // Use the new error detail for bound type variable incompatibility
+                                            self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                                                .incompatible_fn_call_arg = .{
+                                                    .fn_name = func_name,
+                                                    .arg_var = ModuleEnv.varFrom(call_expr_idx),
+                                                    .incompatible_arg_index = @intCast(arg_index),
+                                                    .num_args = @intCast(call_arg_expr_idxs.len),
+                                                },
+                                            });
 
-                                        // Stop execution
-                                        _ = try self.updateVar(expr_var, .err, rank);
-                                        break :blk;
+                                            // Stop execution
+                                            _ = try self.updateVar(expr_var, .err, rank);
+                                            break :blk;
+                                        }
                                     }
                                 }
 
                                 // Redirect the expr to the function's return type
+                                std.debug.print("DEBUG Check e_call: Setting call expr type to func.ret={}\n", .{@intFromEnum(func.ret)});
+                                const ret_resolved = self.types.resolveVar(func.ret);
+                                std.debug.print("  func.ret resolved content={s}\n", .{@tagName(ret_resolved.desc.content)});
                                 _ = try self.types.setVarRedirect(expr_var, func.ret);
                             } else {
                                 // TODO(jared): Better arity difference error message
@@ -3007,6 +3039,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
         },
         .e_hosted_lambda => |hosted| {
+            std.debug.print("DEBUG Check: e_hosted_lambda index={}, has expected={}\n", .{hosted.index, expected == .expected});
+            if (expected == .expected) {
+                std.debug.print("  Expected type from_annotation={}\n", .{expected.expected.from_annotation});
+            }
+
             // For hosted lambda expressions, treat like a lambda with a crash body.
             // Check the body (which will be e_runtime_error or similar)
             does_fx = try self.checkExpr(hosted.body, rank, .no_expectation) or does_fx;
