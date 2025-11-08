@@ -269,6 +269,7 @@ DOES NOT EXIST - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
+UNUSED VARIABLE - fuzz_crash_023.md:178:47:178:71
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
@@ -844,6 +845,18 @@ The unused variable is declared here:
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
 	^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `qux` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_qux` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:178:47:178:71:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -2212,6 +2225,11 @@ expect {
 								(value
 									(e-num (value "1000"))))))))))
 	(d-let
+		(p-assign (ident "qux"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed)))
+	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
@@ -2310,6 +2328,9 @@ expect {
 							(p-assign (ident "tag"))))
 					(s-expr
 						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-let
+						(p-assign (ident "qux"))
+						(e-anno-only))
 					(s-let
 						(p-assign (ident "tuple"))
 						(e-tuple
@@ -2554,6 +2575,7 @@ expect {
 		(patt (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt (type "Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2600,6 +2622,7 @@ expect {
 		(expr (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr (type "Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
