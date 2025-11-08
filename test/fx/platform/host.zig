@@ -145,10 +145,10 @@ const RocStr = extern struct {
     }
 };
 
-/// Hosted function: put_stderr! (index 0 - sorted alphabetically)
+/// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedPutStderr(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
     _ = ops;
     _ = ret_ptr; // Return value is {} which is zero-sized
 
@@ -160,10 +160,10 @@ fn hostedPutStderr(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr
     std.fs.File.stderr().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
 
-/// Hosted function: put_stdout! (index 1 - sorted alphabetically)
+/// Hosted function: Stdout.line! (index 1 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedPutStdout(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
     _ = ops;
     _ = ret_ptr; // Return value is {} which is zero-sized
 
@@ -175,11 +175,11 @@ fn hostedPutStdout(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr
     std.fs.File.stdout().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
 
-/// Array of hosted function pointers, sorted alphabetically by name
-/// These correspond to the hosted functions defined in Host.roc Type Module
+/// Array of hosted function pointers, sorted alphabetically by fully-qualified name
+/// These correspond to the hosted functions defined in Stderr and Stdout Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    hostedPutStderr, // put_stderr! (index 0)
-    hostedPutStdout, // put_stdout! (index 1)
+    hostedStderrLine, // Stderr.line! (index 0)
+    hostedStdoutLine, // Stdout.line! (index 1)
 };
 
 /// Platform host entrypoint

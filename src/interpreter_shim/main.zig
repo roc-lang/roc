@@ -30,6 +30,7 @@ fn stderrTraceWriter() *std.Io.Writer {
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
 var global_env_ptr: ?*ModuleEnv = null;
+var global_module_envs: ?[]const *ModuleEnv = null;  // All loaded module envs
 var shm_mutex: std.Thread.Mutex = .{};
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -45,10 +46,10 @@ const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes pad
 // Header structure that matches the one in main.zig
 const Header = struct {
     parent_base_addr: u64,
-    entry_count: u32,
-    _padding: u32, // Ensure 8-byte alignment
+    module_count: u32,  // Number of ModuleEnvs stored
+    entry_count: u32,   // Number of entry points
     def_indices_offset: u64,
-    module_env_offset: u64,
+    module_envs_offset: u64,  // Offset to array of module env offsets
 };
 
 /// Comprehensive error handling for the shim
@@ -75,8 +76,8 @@ const ShimError = error{
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
+        var buf: [512]u8 = undefined;
+        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s} (entry_idx={})", .{@errorName(err), entry_idx}) catch "Error evaluating from shared memory";
         ops.crash(msg2);
     };
 }
@@ -160,11 +161,17 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
 
+    std.debug.print("DEBUG SHIM: About to evaluate expr_idx={}, def_idx={}\n", .{expr_idx, def_idx});
+
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
+        std.debug.print("DEBUG SHIM: evaluateExpression failed with error: {s}\n", .{@errorName(err)});
+        return err;
+    };
 }
 
-/// Set up ModuleEnv from shared memory with proper relocation
+/// Set up ModuleEnvs from shared memory with proper relocation
+/// Returns the primary (root) module env and stores all envs in global_module_envs
 fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*ModuleEnv {
 
     // Validate memory layout - we need at least space for the header
@@ -196,40 +203,102 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         return error.ModuleEnvSetupFailed;
     }
 
-    // Get ModuleEnv.Serialized pointer from the offset stored in the header
-    const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
-    const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
+    // Get the array of module env offsets
+    const module_envs_array_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_envs_offset));
+    const module_env_offsets: [*]const u64 = @ptrFromInt(module_envs_array_addr);
 
-    // Deserialize the ModuleEnv, which properly reconstructs runtime fields
-    // Empty strings are used for source and module_name since they're not needed in the interpreter
-    const env_ptr = serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
+    if (header_ptr.module_count == 0) {
+        roc_ops.crash("No module environments found in shared memory");
+        return error.ModuleEnvSetupFailed;
+    }
 
-    return env_ptr;
+    // Allocate array to store all deserialized module envs
+    const module_envs = std.heap.page_allocator.alloc(*ModuleEnv, header_ptr.module_count) catch {
+        roc_ops.crash("Failed to allocate module_envs array");
+        return error.ModuleEnvSetupFailed;
+    };
+
+    std.debug.print("=== SHIM: Loading modules from shared memory ===\n", .{});
+    std.debug.print("Module count: {}\n", .{header_ptr.module_count});
+
+    // Deserialize ALL module environments
+    for (0..header_ptr.module_count) |i| {
+        const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_env_offsets[i]));
+        const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
+
+        std.debug.print("  Loading module {}: offset=0x{x}\n", .{i, module_env_offsets[i]});
+
+        // Deserialize the ModuleEnv, which properly reconstructs runtime fields
+        // Empty strings are used for source and module_name since they're not needed in the interpreter
+        module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
+
+        std.debug.print("    Module name: {s}\n", .{module_envs[i].module_name});
+    }
+
+    // Store all module envs globally
+    global_module_envs = module_envs;
+
+    std.debug.print("Stored {} module envs globally\n", .{module_envs.len});
+
+    // Return the first (primary/root) module
+    return module_envs[0];
 }
 
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
-    // Extract builtin statement indices from the builtin_statements span
-    // The span contains Bool, Result, and Str statements
-    const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
-    const try_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 1);
-    const str_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 2);
-
-    // In the shim context, builtins are embedded in the main module_env
-    const builtin_types = eval.BuiltinTypes{
-        .bool_stmt = bool_stmt,
-        .try_stmt = try_stmt,
-        .str_stmt = str_stmt,
-        .bool_env = env_ptr,
-        .try_env = env_ptr,
-        .str_env = env_ptr,
+    // Load builtin modules (same as CLI does)
+    const builtin_modules = eval.BuiltinModules.init(allocator) catch {
+        roc_ops.crash("Failed to initialize builtin modules");
+        return error.InterpreterSetupFailed;
     };
+    // Note: We intentionally don't deinit builtin_modules because the interpreter needs them
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch {
+    const builtin_types = eval.BuiltinTypes.init(
+        builtin_modules.builtin_indices,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_module.env,
+    );
+
+    // Build other_envs array: [Builtin, ...platform modules]
+    // The app's imports are [Builtin, Stdout, Stderr], so other_envs must match
+    const other_envs: []const *const can.ModuleEnv = if (global_module_envs) |envs| blk: {
+        std.debug.print("DEBUG: global_module_envs.len = {}\n", .{envs.len});
+        if (envs.len > 1) {
+            // Create array with Builtin first, then platform modules (excluding the app itself)
+            var envs_with_builtin = allocator.alloc(*const can.ModuleEnv, envs.len) catch {
+                roc_ops.crash("Failed to allocate other_envs");
+                return error.InterpreterSetupFailed;
+            };
+            std.debug.print("DEBUG: Allocated envs_with_builtin.len = {}\n", .{envs_with_builtin.len});
+            envs_with_builtin[0] = builtin_modules.builtin_module.env;
+            // Copy platform modules (skip app at index 0, include Stdout and Stderr)
+            for (1..envs.len) |i| {
+                std.debug.print("DEBUG: Copying envs[{}] to envs_with_builtin[{}]\n", .{i, i});
+                envs_with_builtin[i] = envs[i];
+            }
+            std.debug.print("DEBUG: Final envs_with_builtin.len = {}\n", .{envs_with_builtin.len});
+            break :blk envs_with_builtin;
+        } else {
+            // No platform modules, just Builtin
+            break :blk &[_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
+        }
+    } else &[_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
+
+    std.debug.print("=== SHIM: Creating interpreter ===\n", .{});
+    std.debug.print("Primary env: {*} (module: {s})\n", .{env_ptr, env_ptr.module_name});
+    std.debug.print("Other envs count: {}\n", .{other_envs.len});
+    for (other_envs, 0..) |other_env, i| {
+        std.debug.print("  Other env {}: {*} (module: {s})\n", .{i, other_env, other_env.module_name});
+    }
+
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, other_envs) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
+
+    std.debug.print("Interpreter created successfully\n", .{});
     return interpreter;
 }

@@ -616,6 +616,9 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    std.debug.print("DEBUG checkFile: Starting type checking for module: {s}\n", .{self.cir.module_name});
+    std.debug.print("DEBUG checkFile: all_defs.len={}\n", .{self.cir.store.sliceDefs(self.cir.all_defs).len});
+
     try ensureTypeStoreIsFilled(self);
 
     // Copy builtin types (Bool, Result) into this module's type store
@@ -2461,7 +2464,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // Unify this expression with the referenced pattern
         },
         .e_lookup_external => |ext| {
+            std.debug.print("DEBUG e_lookup_external: module_idx={}, target_node_idx={}\n", .{@intFromEnum(ext.module_idx), ext.target_node_idx});
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                std.debug.print("DEBUG e_lookup_external: resolveVarFromExternal succeeded\n", .{});
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     Rank.generalized,
@@ -2469,6 +2474,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 );
                 try self.types.setVarRedirect(expr_var, ext_instantiated_var);
             } else {
+                std.debug.print("DEBUG e_lookup_external: resolveVarFromExternal returned null, setting to .err\n", .{});
                 try self.updateVar(expr_var, .err, rank);
             }
         },
@@ -3700,6 +3706,7 @@ fn resolveVarFromExternal(
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
     const module_idx_int = @intFromEnum(module_idx);
+    std.debug.print("DEBUG resolveVarFromExternal: module_idx={}, node_idx={}, imported_modules.len={}\n", .{module_idx_int, node_idx, self.imported_modules.len});
     if (module_idx_int < self.imported_modules.len) {
         const other_module_cir = self.imported_modules[module_idx_int];
         const other_module_env = other_module_cir;
@@ -3721,6 +3728,7 @@ fn resolveVarFromExternal(
             const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
 
             // Every node should have a corresponding type entry
+            std.debug.print("DEBUG resolveVarFromExternal: imported_var={}, other_module types.len={}\n", .{@intFromEnum(imported_var), other_module_env.types.len()});
             std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
 
             const new_copy = try self.copyVar(imported_var, other_module_env, null);

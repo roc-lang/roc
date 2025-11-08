@@ -11,16 +11,20 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
     var modified_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
+    std.debug.print("=== REPLACE ANNO ONLY WITH HOSTED START ===\n", .{});
+
     // Ensure types array has entries for all existing nodes
     // This is necessary because varFrom(node_idx) assumes type_var index == node index
     const current_nodes = env.store.nodes.len();
     const current_types = env.types.len();
+    std.debug.print("DEBUG replaceAnnoOnlyWithHosted: current_nodes={}, current_types={}\n", .{current_nodes, current_types});
     if (current_types < current_nodes) {
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
             _ = env.types.fresh() catch unreachable;
         }
+        std.debug.print("DEBUG replaceAnnoOnlyWithHosted: filled types array to {}\n", .{env.types.len()});
     }
 
     // Iterate through all defs and replace ALL anno-only defs with hosted implementations
@@ -54,6 +58,12 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 } });
                 const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, base.Region.zero());
 
+                // Ensure types array has entries for all new expressions
+                const body_int = @intFromEnum(body_idx);
+                while (env.types.len() <= body_int) {
+                    _ = try env.types.fresh();
+                }
+
                 // Create e_hosted_lambda expression
                 const expr_idx = try env.addExpr(.{ .e_hosted_lambda = .{
                     .symbol_name = ident,
@@ -62,13 +72,28 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     .body = body_idx,
                 } }, base.Region.zero());
 
+                // Ensure types array has an entry for this new expression
+                const expr_int = @intFromEnum(expr_idx);
+                while (env.types.len() <= expr_int) {
+                    _ = try env.types.fresh();
+                }
+
                 // Now replace the e_anno_only expression with the e_hosted_lambda
-                // We need to modify the def's expr field to point to our new expression
-                // CIR.Def.Idx and Node.Idx have the same underlying representation
+                // We need to modify the def's expr field in extra_data (NOT data_2!)
+                // The expr is stored in extra_data[extra_start + 1]
                 const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
-                var def_node = env.store.nodes.get(def_node_idx);
-                def_node.data_2 = @intFromEnum(expr_idx);
-                env.store.nodes.set(def_node_idx, def_node);
+                const def_node = env.store.nodes.get(def_node_idx);
+                const extra_start = def_node.data_1;
+
+                const old_expr = env.store.extra_data.items.items[extra_start + 1];
+                env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+
+                std.debug.print("DEBUG HostedCompiler: Updated def_idx={}, old_expr={}, new_expr={}\n", .{def_idx, old_expr, @intFromEnum(expr_idx)});
+
+                // Verify the update by reading it back via getDef
+                const verify_def = env.store.getDef(def_idx);
+                const verify_expr = env.store.getExpr(verify_def.expr);
+                std.debug.print("DEBUG HostedCompiler: Verification - def_idx={}, expr type={s}\n", .{def_idx, @tagName(verify_expr)});
 
                 // Track this modified def index
                 try modified_def_indices.append(gpa, def_idx);
@@ -87,7 +112,7 @@ pub const HostedFunctionInfo = struct {
 };
 
 /// Collect all hosted functions from the module (transitively through imports)
-/// and sort them alphabetically by name (with `!` stripped).
+/// and sort them alphabetically by fully-qualified name (with `!` stripped).
 pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunctionInfo) {
     var hosted_fns = std.ArrayList(HostedFunctionInfo).empty;
 
@@ -99,29 +124,48 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
 
         if (expr == .e_hosted_lambda) {
             const hosted = expr.e_hosted_lambda;
-            const name_text = env.getIdent(hosted.symbol_name);
+            const local_name = env.getIdent(hosted.symbol_name);
 
-            // Strip the `!` suffix for sorting (e.g., "put_stdout!" -> "put_stdout")
-            const stripped_name = if (std.mem.endsWith(u8, name_text, "!"))
-                name_text[0 .. name_text.len - 1]
+            // Build fully-qualified name: "ModuleName.functionName"
+            // Strip the .roc extension from module name (e.g., "Stdout.roc" -> "Stdout")
+            var module_name = env.module_name;
+            if (std.mem.endsWith(u8, module_name, ".roc")) {
+                module_name = module_name[0 .. module_name.len - 4];
+            }
+            const qualified_name = try std.fmt.allocPrint(env.gpa, "{s}.{s}", .{module_name, local_name});
+            defer env.gpa.free(qualified_name);
+
+            // Strip the `!` suffix for sorting (e.g., "Stdout.line!" -> "Stdout.line")
+            const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                qualified_name[0 .. qualified_name.len - 1]
             else
-                name_text;
+                qualified_name;
+
+            // Allocate a copy for storage
+            const name_copy = try env.gpa.dupe(u8, stripped_name);
+
+            std.debug.print("DEBUG collectAndSortHostedFunctions: module={s}, local={s}, qualified={s}, stripped={s}\n", .{module_name, local_name, qualified_name, stripped_name});
 
             try hosted_fns.append(env.gpa, .{
                 .symbol_name = hosted.symbol_name,
                 .expr_idx = def.expr,
-                .name_text = stripped_name,
+                .name_text = name_copy,
             });
         }
     }
 
-    // Sort alphabetically by stripped name
+    // Sort alphabetically by stripped qualified name
     const SortContext = struct {
         pub fn lessThan(_: void, a: HostedFunctionInfo, b: HostedFunctionInfo) bool {
             return std.mem.order(u8, a.name_text, b.name_text) == .lt;
         }
     };
     std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
+
+    std.debug.print("DEBUG collectAndSortHostedFunctions: Sorted {} functions:\n", .{hosted_fns.items.len});
+    for (hosted_fns.items, 0..) |fn_info, i| {
+        std.debug.print("  [{d}] {s}\n", .{i, fn_info.name_text});
+    }
 
     return hosted_fns;
 }

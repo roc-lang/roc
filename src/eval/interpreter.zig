@@ -157,28 +157,91 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
-        if (other_envs.len > 0) {
+        std.debug.print("DEBUG Interpreter.init: ENTRY - other_envs.len={}\n", .{other_envs.len});
+        std.debug.print("DEBUG Interpreter.init: About to access env.imports...\n", .{});
+
+        // Safely access import count
+        const import_count = if (env.imports.imports.items.items.len > 0)
+            env.imports.imports.items.items.len
+        else
+            0;
+        std.debug.print("DEBUG Interpreter.init: import_count={}\n", .{import_count});
+
+        if (other_envs.len > 0 and import_count > 0) {
+            std.debug.print("DEBUG Interpreter.init: Inside other_envs.len > 0 && import_count > 0 block\n", .{});
+            // Allocate capacity for all imports (even if some are duplicates)
             try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-            try import_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+            try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
 
-            // Match imports in order with other_envs
-            const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
+            // Process ALL imports, matching each to the appropriate module from other_envs
+            std.debug.print("DEBUG Interpreter.init: Processing {} imports against {} other_envs\n", .{import_count, other_envs.len});
             for (0..import_count) |i| {
-                const module_env = other_envs[i];
                 const str_idx = env.imports.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
+                std.debug.print("DEBUG Interpreter.init: Import {}: {s}\n", .{i, import_name});
 
-                // Find or create the Ident.Idx for this import name
-                const ident_idx = env.common.findIdent(import_name) orelse continue;
+                // Find matching module in other_envs
+                // Since modules loaded from shared memory may have empty names, we match based on:
+                // 1. "Builtin" imports match the module with module_name="Builtin"
+                // 2. Imports containing "Stdout" match other_env[1] (first platform module)
+                // 3. Imports containing "Stderr" match other_env[2] (second platform module)
+                var matched_module: ?*const can.ModuleEnv = null;
 
-                // Store in all three maps
-                module_envs.putAssumeCapacity(ident_idx, module_env);
-                module_ids.putAssumeCapacity(ident_idx, next_id);
+                if (std.mem.indexOf(u8, import_name, "Builtin") != null) {
+                    // Match Builtin
+                    for (other_envs) |module_env| {
+                        if (std.mem.indexOf(u8, module_env.module_name, "Builtin") != null) {
+                            matched_module = module_env;
+                            std.debug.print("DEBUG Interpreter.init:   Matched Builtin\n", .{});
+                            break;
+                        }
+                    }
+                } else if (std.mem.indexOf(u8, import_name, "Stdout") != null) {
+                    // Match Stdout - should be other_env[1]
+                    if (other_envs.len > 1) {
+                        matched_module = other_envs[1];
+                        std.debug.print("DEBUG Interpreter.init:   Matched Stdout (other_env[1])\n", .{});
+                    }
+                } else if (std.mem.indexOf(u8, import_name, "Stderr") != null) {
+                    // Match Stderr - should be other_env[2]
+                    if (other_envs.len > 2) {
+                        matched_module = other_envs[2];
+                        std.debug.print("DEBUG Interpreter.init:   Matched Stderr (other_env[2])\n", .{});
+                    }
+                } else if (std.mem.indexOf(u8, import_name, "Host") != null) {
+                    // Match Host - should be other_env[3]
+                    if (other_envs.len > 3) {
+                        matched_module = other_envs[3];
+                        std.debug.print("DEBUG Interpreter.init:   Matched Host (other_env[3])\n", .{});
+                    }
+                }
+
+                const module_env = matched_module orelse {
+                    std.debug.print("DEBUG Interpreter.init:   No match found, skipping\n", .{});
+                    continue; // Skip if no match found
+                };
+
+                std.debug.print("DEBUG Interpreter.init:   Matched to module: {s}\n", .{module_env.module_name});
+
+                // Store in import_envs (always, for every import)
+                // This is the critical mapping that e_lookup_external needs!
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                 import_envs.putAssumeCapacity(import_idx, module_env);
+                std.debug.print("DEBUG Interpreter.init:   Added to import_envs[{}]\n", .{i});
 
-                next_id += 1;
+                // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
+                const ident_idx = env.common.findIdent(import_name);
+                if (ident_idx) |idx| {
+                    // Only add to module_envs/module_ids if not already present (to avoid duplicates)
+                    if (!module_envs.contains(idx)) {
+                        module_envs.putAssumeCapacity(idx, module_env);
+                        module_ids.putAssumeCapacity(idx, next_id);
+                        next_id += 1;
+                    }
+                } else {
+                    std.debug.print("DEBUG Interpreter.init:   findIdent('{s}') returned null, skipping module_envs/module_ids\n", .{import_name});
+                }
             }
         }
 
@@ -354,6 +417,7 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
+        std.debug.print("EVAL: expr_idx={}, tag={s}\n", .{expr_idx, @tagName(expr)});
         switch (expr) {
             .e_block => |blk| {
                 // New scope for bindings
@@ -1357,9 +1421,13 @@ pub const Interpreter = struct {
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {
                 // Build a closure value with empty captures using the runtime layout for the lambda's type
+                std.debug.print("EVAL e_lambda: lam.body={}, lam.args.len={}\n", .{lam.body, self.env.store.slicePatterns(lam.args).len});
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                std.debug.print("EVAL e_lambda: ct_var={}\n", .{ct_var});
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
+                std.debug.print("EVAL e_lambda: rt_var={}\n", .{rt_var});
                 const closure_layout = try self.getRuntimeLayout(rt_var);
+                std.debug.print("EVAL e_lambda: closure_layout.tag={s}\n", .{@tagName(closure_layout.tag)});
                 // Expect a closure layout from type-to-layout translation
                 if (closure_layout.tag != .closure) return error.NotImplemented;
                 const value = try self.pushRaw(closure_layout, 0);
@@ -1408,10 +1476,21 @@ pub const Interpreter = struct {
             },
             .e_hosted_lambda => |hosted| {
                 // Build a closure for a hosted function that will dispatch to the host via RocOps
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const closure_layout = try self.getRuntimeLayout(rt_var);
+                // We MUST create a closure layout manually since the type might be flex/unknown
+
+                // Manually create a closure layout instead of using getRuntimeLayout
+                // because hosted functions might have flex types
+                const closure_layout = Layout{
+                    .tag = .closure,
+                    .data = .{
+                        .closure = .{
+                            .captures_layout_idx = @enumFromInt(0), // No captures for hosted functions
+                        },
+                    },
+                };
+                std.debug.print("DEBUG e_hosted_lambda: closure_layout.tag={s}, hosted.index={}\n", .{@tagName(closure_layout.tag), hosted.index});
                 const value = try self.pushRaw(closure_layout, 0);
+                std.debug.print("DEBUG e_hosted_lambda: value.layout.tag={s}\n", .{@tagName(value.layout.tag)});
                 self.registerDefValue(expr_idx, value);
 
                 if (value.ptr) |ptr| {
@@ -1641,8 +1720,10 @@ pub const Interpreter = struct {
                     }
 
                     // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
+                    std.debug.print("DEBUG e_call: Checking lambda type: {s}\n", .{@tagName(lambda_expr)});
                     if (lambda_expr == .e_hosted_lambda) {
                         const hosted = lambda_expr.e_hosted_lambda;
+                        std.debug.print("DEBUG e_call: It's a hosted lambda! index={}\n", .{hosted.index});
                         const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, call_ret_rt_var);
 
                         // Decref all args
@@ -1654,7 +1735,10 @@ pub const Interpreter = struct {
                     }
 
                     const params = self.env.store.slicePatterns(header.params);
-                    if (params.len != arg_indices.len) return error.TypeMismatch;
+                    if (params.len != arg_indices.len) {
+                        std.debug.print("ERROR: TypeMismatch at line 1658 - params.len={} != arg_indices.len={}\n", .{params.len, arg_indices.len});
+                        return error.TypeMismatch;
+                    }
                     // Provide closure context for capture lookup during body eval
                     try self.active_closures.append(func_val);
                     defer _ = self.active_closures.pop();
@@ -1679,7 +1763,10 @@ pub const Interpreter = struct {
                 if (func_expr == .e_lambda) {
                     const lambda = func_expr.e_lambda;
                     const params = self.env.store.slicePatterns(lambda.args);
-                    if (params.len != arg_indices.len) return error.TypeMismatch;
+                    if (params.len != arg_indices.len) {
+                        std.debug.print("ERROR: TypeMismatch at line 1686 - params.len={} != arg_indices.len={}\n", .{params.len, arg_indices.len});
+                        return error.TypeMismatch;
+                    }
                     var bind_count: usize = 0;
                     while (bind_count < params.len) : (bind_count += 1) {
                         try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0) });
@@ -2012,10 +2099,24 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_lookup_external => |lookup| {
+                std.debug.print("=== INTERPRETER: e_lookup_external ===\n", .{});
+                std.debug.print("module_idx: {}\n", .{lookup.module_idx});
+                std.debug.print("target_node_idx: {}\n", .{lookup.target_node_idx});
+                std.debug.print("import_envs count: {}\n", .{self.import_envs.count()});
+
+                // Print all keys in import_envs
+                var iter = self.import_envs.iterator();
+                while (iter.next()) |entry| {
+                    std.debug.print("  import_envs key: {} -> env {*}\n", .{entry.key_ptr.*, entry.value_ptr.*});
+                }
+
                 // Cross-module reference - look up in imported module
                 const other_env = self.import_envs.get(lookup.module_idx) orelse {
+                    std.debug.print("ERROR: module_idx={} NOT FOUND in import_envs\n", .{lookup.module_idx});
                     return error.NotImplemented;
                 };
+
+                std.debug.print("Found module env: {*} (module: {s})\n", .{other_env, other_env.module_name});
 
                 // Check what type of node this is by using the store's method
                 const is_def = other_env.store.isDefNode(lookup.target_node_idx);
@@ -2234,8 +2335,10 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         return_rt_var: types.Var,
     ) !StackValue {
+        std.debug.print("DEBUG callHostedFunction: CALLED with index={}, hosted_fns.count={}\n", .{hosted_fn_index, roc_ops.hosted_fns.count});
         // Validate index is within bounds
         if (hosted_fn_index >= roc_ops.hosted_fns.count) {
+            std.debug.print("DEBUG callHostedFunction: Index out of bounds!\n", .{});
             self.triggerCrash("Hosted function index out of bounds", false, roc_ops);
             return error.Crash;
         }
@@ -4016,7 +4119,9 @@ pub const Interpreter = struct {
 
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
+        std.debug.print("translateTypeVar: compile_var={}\n", .{compile_var});
         const resolved = module.types.resolveVar(compile_var);
+        std.debug.print("translateTypeVar: resolved.desc.content={s}\n", .{@tagName(resolved.desc.content)});
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
         if (self.translate_cache.get(key)) |found| return found;
@@ -4288,6 +4393,7 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
+                    std.debug.print("ERROR: translateTypeVar - type is .err, returning TypeMismatch\n", .{});
                     return error.TypeMismatch;
                 },
             }

@@ -485,10 +485,68 @@ fn processTypeDeclFirstPass(
 
     // For type modules, associate the node index with the exposed type
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.module_name_idx) {
+        const qualified_name_text = self.env.getIdent(qualified_name_idx);
+        const module_name_text = self.env.getIdent(self.env.module_name_idx);
+        // Check if the qualified name matches the module name (with or without .roc extension)
+        const is_main_type = std.mem.eql(u8, qualified_name_text, module_name_text) or
+            (std.mem.endsWith(u8, module_name_text, ".roc") and std.mem.eql(u8, qualified_name_text, module_name_text[0..module_name_text.len-4]));
+        if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+            std.debug.print("DEBUG: Type Module qualified_name={s}, module_name={s}, is_main_type={}\n", .{qualified_name_text, module_name_text, is_main_type});
+        }
+        if (is_main_type) {
             // This is the main type of the type module - set its node index
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
+
+            // Extract and expose functions from the associated block
+            // For Type Modules like `Stdout := [].{ line! : Str => {} }`, the associated block
+            // contains type annotation statements for the effectful functions
+            if (type_decl.associated) |assoc| {
+                const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
+                if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+                    std.debug.print("DEBUG: Type Module has {} associated statements\n", .{assoc_statements.len});
+                }
+
+                for (assoc_statements) |stmt_idx| {
+                    const stmt = self.parse_ir.store.getStatement(stmt_idx);
+                    if (stmt == .type_anno) {
+                        // This is a type annotation like `line! : Str => {}`
+                        const name_tok = stmt.type_anno.name;
+                        if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |func_name_idx| {
+                            const func_name_text = self.env.getIdent(func_name_idx);
+                            if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+                                std.debug.print("DEBUG: Type Module function: {s}\n", .{func_name_text});
+                            }
+
+                            // Canonicalize the type annotation
+                            // Use type_decl_anno since this is in a declaration context (associated block)
+                            const func_anno_idx = try self.canonicalizeTypeAnno(stmt.type_anno.anno, .type_decl_anno);
+
+                            // Create an annotation structure from the function type
+                            const anno_struct = CIR.Annotation{ .anno = func_anno_idx, .where = null };
+                            const annotation_idx = try self.env.addAnnotation(anno_struct, base.Region.zero());
+
+                            // Create a definition for this function with e_anno_only expression
+                            const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = func_name_idx } }, base.Region.zero());
+                            const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+
+                            const def_idx = try self.env.addDef(.{
+                                .pattern = pattern_idx,
+                                .expr = expr_idx,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            }, base.Region.zero());
+
+                            try self.env.store.addScratchDef(def_idx);
+
+                            // Add the function to exposed_items with the def index as its node_idx
+                            // (following the same pattern as normal defs)
+                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                            try self.env.setExposedNodeIndexById(func_name_idx, def_idx_u16);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -828,6 +886,7 @@ fn processAssociatedItemsFirstPass(
 pub fn canonicalizeFile(
     self: *Self,
 ) std.mem.Allocator.Error!void {
+    std.debug.print("DEBUG: Entered canonicalizeFile for module: {s}\n", .{self.env.module_name});
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1257,17 +1316,109 @@ pub fn canonicalizeFile(
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
 
+    if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+        const all_defs_count = self.env.store.sliceDefs(self.env.all_defs).len;
+        std.debug.print("DEBUG: [{s}] Created all_defs span, count={}\n", .{self.env.module_name, all_defs_count});
+    }
+
     // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
     // Only do this when building platform modules (i.e., when root module is a platform)
+    if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+        std.debug.print("DEBUG: module_kind={}, building_platform_modules={}\n", .{self.env.module_kind, self.env.building_platform_modules});
+    }
     if (self.env.module_kind == .type_module and self.env.building_platform_modules) {
+        if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+            std.debug.print("DEBUG: Entering Type Module hosted transformation for {s}\n", .{self.env.module_name});
+            std.debug.print("DEBUG: exposed_items count: {}\n", .{self.env.common.exposed_items.count()});
+        }
+        // First, create definitions for Type Module annotations (like `line! : Str => {}`)
+        // These annotations are exposed but don't have actual definitions yet
+        // We need to create e_anno_only defs for them so replaceAnnoOnlyWithHosted can transform them
+        const type_module_defs_start = self.env.store.scratchDefTop();
+        var exposed_iter = self.env.common.exposed_items.iterator();
+        while (exposed_iter.next()) |entry| {
+            const ident_idx = entry.ident_idx;
+            _ = entry.node_idx;
+
+            // Check if this is an annotation (has a type) but no implementation (not in all_defs)
+            // by checking if a def with this pattern already exists
+            // The ident_idx from the iterator is already a packed u32 with attributes, just cast it
+            const ident_idx_struct: base.Ident.Idx = @bitCast(ident_idx);
+            const all_defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+            var already_has_def = false;
+            for (all_defs_slice) |existing_def_idx| {
+                const existing_def = self.env.store.getDef(existing_def_idx);
+                const existing_pattern = self.env.store.getPattern(existing_def.pattern);
+                // Compare the full Ident.Idx structures (including attributes)
+                if (existing_pattern == .assign and @as(u32, @bitCast(existing_pattern.assign.ident)) == ident_idx) {
+                    already_has_def = true;
+                    break;
+                }
+            }
+
+            if (!already_has_def) {
+                // This is an exposed annotation without a definition - create an e_anno_only def
+                const ident_text = self.env.getIdent(ident_idx_struct);
+                if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+                    std.debug.print("DEBUG: Creating e_anno_only def for Type Module annotation: {s}\n", .{ident_text});
+                }
+
+                // Create the pattern
+                const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = ident_idx_struct } }, base.Region.zero());
+
+                // Create the e_anno_only expression
+                const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+
+                // Create the def (no annotation structure for now - it will be added by type checking)
+                const def_idx = try self.env.addDef(.{
+                    .pattern = pattern_idx,
+                    .expr = expr_idx,
+                    .annotation = null,  // Type annotations on Type Module items aren't stored as CIR annotations
+                    .kind = .let,
+                }, base.Region.zero());
+
+                try self.env.store.addScratchDef(def_idx);
+            }
+        }
+
+        // Add the new defs to all_defs
+        const new_defs_span = try self.env.store.defSpanFrom(type_module_defs_start);
+        const new_defs_slice = self.env.store.sliceDefs(new_defs_span);
+        if (new_defs_slice.len > 0) {
+            // Append new defs to all_defs by creating a new span
+            const old_defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+            const combined_start = self.env.store.scratchDefTop();
+            for (old_defs_slice) |def_idx| {
+                try self.env.store.addScratchDef(def_idx);
+            }
+            for (new_defs_slice) |def_idx| {
+                try self.env.store.addScratchDef(def_idx);
+            }
+            self.env.all_defs = try self.env.store.defSpanFrom(combined_start);
+
+            if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+                std.debug.print("DEBUG: Added {} new defs to all_defs, total now: {}\n", .{new_defs_slice.len, self.env.store.sliceDefs(self.env.all_defs).len});
+            }
+        }
+
         var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
         defer modified_def_indices.deinit(self.env.gpa);
+
+        if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+            std.debug.print("DEBUG: replaceAnnoOnlyWithHosted transformed {} defs\n", .{modified_def_indices.items.len});
+        }
 
         // If we transformed any annotation-only defs, collect and sort them to assign indices
         if (modified_def_indices.items.len > 0) {
             var sorted_fns = try HostedCompiler.collectAndSortHostedFunctions(self.env);
-            defer sorted_fns.deinit(self.env.gpa);
+            defer {
+                // Free allocated name strings
+                for (sorted_fns.items) |fn_info| {
+                    self.env.gpa.free(fn_info.name_text);
+                }
+                sorted_fns.deinit(self.env.gpa);
+            }
             try HostedCompiler.assignHostedIndices(self.env, sorted_fns.items);
         }
         // Note: The transformation is done in-place, so all_defs span remains valid
@@ -1643,15 +1794,28 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Use the already-created all_defs span
     const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
 
+    if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+        std.debug.print("DEBUG populateExports [{s}]: checking {} defs\n", .{self.env.module_name, defs_slice.len});
+    }
+
     // Check each definition to see if it corresponds to an exposed item
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
+            const ident_text = self.env.getIdent(pattern.assign.ident);
+            const is_exposed = self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident));
+            if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+                std.debug.print("DEBUG populateExports [{s}]: def '{s}', exposed={}\n", .{self.env.module_name, ident_text, is_exposed});
+            }
             // Check if this definition's identifier is in the exposed items
-            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
+            if (is_exposed) {
                 // Add this definition to the exports scratch space
+                if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+                    const expr = self.env.store.getExpr(def.expr);
+                    std.debug.print("DEBUG populateExports [{s}]: adding def_idx={}, expr type={s}\n", .{self.env.module_name, def_idx, @tagName(expr)});
+                }
                 try self.env.store.addScratchDef(def_idx);
             }
         }
@@ -1659,6 +1823,10 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
 
     // Create the exports span from the scratch space
     self.env.exports = try self.env.store.defSpanFrom(scratch_exports_start);
+    const exports_slice = self.env.store.sliceDefs(self.env.exports);
+    if (std.mem.indexOf(u8, self.env.module_name, "Stdout") != null or std.mem.indexOf(u8, self.env.module_name, "Stderr") != null) {
+        std.debug.print("DEBUG populateExports [{s}]: created {} exports\n", .{self.env.module_name, exports_slice.len});
+    }
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
@@ -2165,10 +2333,19 @@ fn introduceItemsAliased(
     module_import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+        std.debug.print("DEBUG: [{s}] introduceItemsAliased for module {s}, {} items\n", .{self.env.module_name, self.env.getIdent(module_name), exposed_items_slice.len});
+    }
     const current_scope = self.currentScope();
 
     if (self.module_envs) |envs_map| {
+        if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+            std.debug.print("DEBUG: [{s}] Looking up module {s} with ident_idx={}\n", .{self.env.module_name, self.env.getIdent(module_name), module_name});
+        }
         const module_entry = envs_map.get(module_name) orelse {
+            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                std.debug.print("DEBUG: [{s}] Module {s} NOT found in envs_map!\n", .{self.env.module_name, self.env.getIdent(module_name)});
+            }
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -2242,10 +2419,21 @@ fn introduceItemsAliased(
             // Check if the item is exposed by the module
             // We need to look up by string because the identifiers are from different modules
             // First, try to find this identifier in the target module's ident store
-            const is_exposed = if (module_env.common.findIdent(item_name_text)) |target_ident|
-                module_env.containsExposedById(target_ident)
-            else
-                false;
+            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                std.debug.print("DEBUG: [{s}] Checking if '{s}' is exposed from module {s}\n", .{self.env.module_name, item_name_text, self.env.getIdent(module_name)});
+            }
+            const is_exposed = if (module_env.common.findIdent(item_name_text)) |target_ident| blk: {
+                const exposed = module_env.containsExposedById(target_ident);
+                if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                    std.debug.print("DEBUG: [{s}]   Found in module, exposed={}\n", .{self.env.module_name, exposed});
+                }
+                break :blk exposed;
+            } else blk: {
+                if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                    std.debug.print("DEBUG: [{s}]   NOT found in module's ident store\n", .{self.env.module_name});
+                }
+                break :blk false;
+            };
 
             if (!is_exposed) {
                 // Determine if it's a type or value based on capitalization
@@ -2664,12 +2852,27 @@ pub fn canonicalizeExpr(
     self.env.debugAssertArraysInSync();
 
     const expr = self.parse_ir.store.getExpr(ast_expr_idx);
+    // Debug all expression types for fx test apps
+    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+        std.debug.print("DEBUG: [{s}] canonicalizeExpr type: {s}\n", .{self.env.module_name, @tagName(expr)});
+    }
     switch (expr) {
         .apply => |e| {
+            std.debug.print("DEBUG: [{s}] Canonicalizing apply expression\n", .{self.env.module_name});
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Check if the function being applied is a tag
             const ast_fn = self.parse_ir.store.getExpr(e.@"fn");
+            std.debug.print("DEBUG: [{s}] apply fn type: {s}\n", .{self.env.module_name, @tagName(ast_fn)});
+            if (ast_fn == .ident) {
+                const ident_data = ast_fn.ident;
+                const ident_name_opt = self.parse_ir.tokens.resolveIdentifier(ident_data.token);
+                if (ident_name_opt) |ident_name| {
+                    const ident_text = self.env.getIdent(ident_name);
+                    std.debug.print("DEBUG: [{s}] apply fn ident: {s}, args.len: {}\n", .{self.env.module_name, ident_text, self.parse_ir.store.exprSlice(e.args).len});
+                }
+            }
+
             if (ast_fn == .tag) {
                 // This is a tag application, not a function call
                 const tag_expr = ast_fn.tag;
@@ -2712,6 +2915,11 @@ pub fn canonicalizeExpr(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
+                const ident_text = self.env.getIdent(ident);
+                if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                    const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
+                    std.debug.print("DEBUG: [{s}] .ident case: {s}, qualifiers.len={}\n", .{self.env.module_name, ident_text, qualifier_tokens.len});
+                }
                 // Check if this is a module-qualified identifier
                 const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
                 blk_qualified: {
@@ -2723,11 +2931,17 @@ pub fn canonicalizeExpr(
                         e.token,
                         &strip_tokens,
                     );
+                    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                        std.debug.print("DEBUG: [{s}] qualified lookup: qualified_name={s}\n", .{self.env.module_name, qualified_name_text});
+                    }
                     const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
 
                     // Try local lookup first
                     switch (self.scopeLookup(.ident, qualified_ident)) {
                         .found => |found_pattern_idx| {
+                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                std.debug.print("DEBUG: [{s}] qualified ident found in local scope\n", .{self.env.module_name});
+                            }
                             // Mark this pattern as used for unused variable checking
                             try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
@@ -2741,21 +2955,43 @@ pub fn canonicalizeExpr(
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
                         },
                         .not_found => {
+                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                std.debug.print("DEBUG: [{s}] qualified ident NOT found in local scope, trying module lookup\n", .{self.env.module_name});
+                            }
                             // Not a local qualified identifier, try module-qualified lookup
                         },
                     }
 
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
+                        const module_alias_text = self.env.getIdent(module_alias);
+                        if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                            std.debug.print("DEBUG: [{s}] module_alias={s}\n", .{self.env.module_name, module_alias_text});
+                        }
                         // Check if this is a module alias, or an auto-imported module
-                        const module_name = self.scopeLookupModule(module_alias) orelse blk: {
+                        const scope_result = self.scopeLookupModule(module_alias);
+                        if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                            if (scope_result) |found_name| {
+                                const found_text = self.env.getIdent(found_name);
+                                std.debug.print("DEBUG: [{s}] scopeLookupModule({s}) = {s}\n", .{self.env.module_name, module_alias_text, found_text});
+                            } else {
+                                std.debug.print("DEBUG: [{s}] scopeLookupModule({s}) = null\n", .{self.env.module_name, module_alias_text});
+                            }
+                        }
+                        const module_name = scope_result orelse blk: {
                             // Not in scope, check if it's an auto-imported module
                             if (self.module_envs) |envs_map| {
                                 if (envs_map.contains(module_alias)) {
+                                    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                        std.debug.print("DEBUG: [{s}] Found in auto-imported modules\n", .{self.env.module_name});
+                                    }
                                     // This is an auto-imported module like Bool or Result
                                     // Use the module_alias directly as the module_name
                                     break :blk module_alias;
                                 }
+                            }
+                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                std.debug.print("DEBUG: [{s}] NOT found in auto-imported modules\n", .{self.env.module_name});
                             }
                             break :blk null;
                         } orelse {
@@ -2820,10 +3056,16 @@ pub fn canonicalizeExpr(
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
+                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                std.debug.print("DEBUG: [{s}] Looking up field '{s}' in module '{s}'\n", .{self.env.module_name, field_text, self.env.getIdent(module_name)});
+                            }
 
                             const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
+                                    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                        std.debug.print("DEBUG: [{s}] Found module_env for '{s}', statement_idx={?}\n", .{self.env.module_name, self.env.getIdent(module_name), auto_imported_type.statement_idx});
+                                    }
 
                                     // For nested types (e.g., Bool inside Builtin), build the full qualified name
                                     // For regular module imports (e.g., A), just use the field name directly
@@ -2837,12 +3079,25 @@ pub fn canonicalizeExpr(
                                     } else field_text;
 
                                     // Look up the associated item by its qualified name
+                                    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                        std.debug.print("DEBUG: [{s}] Looking up '{s}' in module_env\n", .{self.env.module_name, lookup_name});
+                                    }
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
+                                        if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                            std.debug.print("DEBUG: [{s}] findIdent('{s}') returned null\n", .{self.env.module_name, lookup_name});
+                                        }
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
                                         break :blk null;
                                     };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
+                                    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                        std.debug.print("DEBUG: [{s}] findIdent('{s}') found it, calling getExposedNodeIndexById\n", .{self.env.module_name, lookup_name});
+                                    }
+                                    const node_idx = module_env.getExposedNodeIndexById(qname_ident);
+                                    if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                        std.debug.print("DEBUG: [{s}] getExposedNodeIndexById returned {?}\n", .{self.env.module_name, node_idx});
+                                    }
+                                    break :blk node_idx;
                                 } else {
                                     break :blk null;
                                 }
@@ -2878,6 +3133,9 @@ pub fn canonicalizeExpr(
                                 .target_node_idx = target_node_idx,
                                 .region = region,
                             } }, region);
+                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                                std.debug.print("DEBUG: [{s}] Created e_lookup_external: module_idx={}, target_node_idx={}, expr_idx={}\n", .{self.env.module_name, @intFromEnum(import_idx), target_node_idx, @intFromEnum(expr_idx)});
+                            }
                             return CanonicalizedExpr{
                                 .idx = expr_idx,
                                 .free_vars = null,
@@ -2889,6 +3147,10 @@ pub fn canonicalizeExpr(
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
                     .found => |found_pattern_idx| {
+                        const found_ident_text = self.env.getIdent(ident);
+                        if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null or std.mem.indexOf(u8, self.env.module_name, "app") != null) {
+                            std.debug.print("DEBUG: [{s}] ident FOUND in scope: {s} (pattern_idx={})\n", .{self.env.module_name, found_ident_text, found_pattern_idx});
+                        }
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
@@ -2907,8 +3169,15 @@ pub fn canonicalizeExpr(
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
                     },
                     .not_found => {
+                        const notfound_ident_text = self.env.getIdent(ident);
+                        if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                            std.debug.print("DEBUG: [{s}] ident not found in scope: {s}\n", .{self.env.module_name, notfound_ident_text});
+                        }
                         // Check if this identifier is an exposed item from an import
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
+                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                                std.debug.print("DEBUG: [{s}] Found exposed item: {s} from module: {s}\n", .{self.env.module_name, notfound_ident_text, self.env.getIdent(exposed_info.module_name)});
+                            }
 
                             // Get the Import.Idx for the module this item comes from
                             const module_text = self.env.getIdent(exposed_info.module_name);
@@ -2969,6 +3238,40 @@ pub fn canonicalizeExpr(
                                     };
                                 }
                                 // Module doesn't exist, fall through to ident_not_in_scope error below
+                            }
+                        }
+
+                        // WORKAROUND: Before giving up, check if this might be a qualified access
+                        // where the parser dropped the module qualifier (parser limitation for Module.func! syntax)
+                        // Look for imported modules that might contain this identifier
+                        if (self.module_envs) |envs_map| {
+                            // Iterate through all imported modules to find one that has this identifier
+                            var envs_iter = envs_map.iterator();
+                            const lookup_ident_text = self.env.getIdent(ident);
+                            while (envs_iter.next()) |entry| {
+                                const candidate_module_name = entry.key_ptr.*;
+                                const candidate_module_entry = entry.value_ptr.*;
+                                const candidate_module_env = candidate_module_entry.env;
+
+                                // Check if this identifier exists in this module
+                                if (candidate_module_env.common.findIdent(lookup_ident_text)) |target_ident| {
+                                    if (candidate_module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                        // Found it! Get the import idx for this module
+                                        const module_text = self.env.getIdent(candidate_module_name);
+                                        if (self.scopeLookupImportedModule(module_text)) |import_idx| {
+                                            if (std.mem.indexOf(u8, self.env.module_name, "fx") != null or std.mem.indexOf(u8, self.env.module_name, "simple") != null) {
+                                                std.debug.print("DEBUG: [{s}] WORKAROUND: Found '{s}' in module {s}, creating e_lookup_external\n", .{self.env.module_name, lookup_ident_text, module_text});
+                                            }
+                                            // Create e_lookup_external
+                                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                                .module_idx = import_idx,
+                                                .target_node_idx = target_node_idx,
+                                                .region = region,
+                                            } }, region);
+                                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -3501,6 +3804,9 @@ pub fn canonicalizeExpr(
                 const body_free_vars_start = self.scratch_free_vars.top();
                 defer self.scratch_free_vars.clearFrom(body_free_vars_start);
 
+                const ast_body_expr = self.parse_ir.store.getExpr(e.body);
+                std.debug.print("DEBUG: [{s}] Lambda body expression type: {s}\n", .{self.env.module_name, @tagName(ast_body_expr)});
+
                 const can_body = try self.canonicalizeExpr(e.body) orelse {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
                     const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
@@ -3598,6 +3904,7 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         },
         .field_access => |field_access| {
+            std.debug.print("DEBUG: Canonicalizing field_access\n", .{});
             // Try module-qualified lookup first (e.g., Json.utf8)
             if (try self.tryModuleQualifiedLookup(field_access)) |expr_idx| {
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
@@ -3606,10 +3913,19 @@ pub fn canonicalizeExpr(
             // Regular field access canonicalization
             return CanonicalizedExpr{
                 .idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null,
-                .free_vars = null,
-            };
+                .free_vars = null };
         },
-        .local_dispatch => |_| {
+        .local_dispatch => |local_dispatch| {
+            std.debug.print("DEBUG: [{s}] Canonicalizing local_dispatch\n", .{self.env.module_name});
+            // local_dispatch is structurally identical to field_access (both are BinOp)
+            // Try module-qualified lookup first (e.g., Stdout.line!)
+            if (try self.tryModuleQualifiedLookup(local_dispatch)) |expr_idx| {
+                std.debug.print("DEBUG: [{s}] local_dispatch resolved via tryModuleQualifiedLookup\n", .{self.env.module_name});
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+            }
+
+            // If not a cross-module dispatch, fall back to not_implemented for now
+            std.debug.print("DEBUG: [{s}] local_dispatch NOT resolved, creating malformed\n", .{self.env.module_name});
             const feature = try self.env.insertString("canonicalize local_dispatch expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
@@ -8467,15 +8783,26 @@ fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx
 ///
 /// Returns `null` if this is not a module-qualified lookup (e.g., regular field access like `user.name`)
 fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!?Expr.Idx {
+    std.debug.print("DEBUG: tryModuleQualifiedLookup CALLED\n", .{});
     const left_expr = self.parse_ir.store.getExpr(field_access.left);
+    std.debug.print("DEBUG: left_expr tag: {s}\n", .{@tagName(left_expr)});
     if (left_expr != .ident) return null;
 
     const left_ident = left_expr.ident;
-    const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
+    const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse {
+        std.debug.print("DEBUG: Could not resolve left identifier token\n", .{});
+        return null;
+    };
+    const module_alias_text = self.env.getIdent(module_alias);
+    std.debug.print("DEBUG: module_alias: {s}\n", .{module_alias_text});
 
     // Check if this is a module alias
-    const module_name = self.scopeLookupModule(module_alias) orelse return null;
+    const module_name = self.scopeLookupModule(module_alias) orelse {
+        std.debug.print("DEBUG: scopeLookupModule returned null for {s}\n", .{module_alias_text});
+        return null;
+    };
     const module_text = self.env.getIdent(module_name);
+    std.debug.print("DEBUG: Found module_text: {s}\n", .{module_text});
 
     // Check if this module is imported in the current scope
     const import_idx = self.scopeLookupImportedModule(module_text) orelse blk: {
@@ -8545,23 +8872,33 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     // Regular module-qualified lookup for definitions (not tags)
     // Look up the target node index in the module's exposed_items
     const field_text = self.env.getIdent(field_name);
+    std.debug.print("DEBUG: tryModuleQualifiedLookup - module={s}, field={s}\n", .{module_text, field_text});
     const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_name)) |auto_imported_type| {
             const module_env = auto_imported_type.env;
+            std.debug.print("DEBUG: Found module env for {s}\n", .{module_text});
             if (module_env.common.findIdent(field_text)) |target_ident| {
+                std.debug.print("DEBUG: Found ident {s} in module\n", .{field_text});
                 // Found the identifier in the module - check if it's exposed
-                break :blk module_env.getExposedNodeIndexById(target_ident);
+                const node_idx = module_env.getExposedNodeIndexById(target_ident);
+                std.debug.print("DEBUG: getExposedNodeIndexById returned: {?}\n", .{node_idx});
+                break :blk node_idx;
             } else {
                 // The identifier doesn't exist in the module at all
+                std.debug.print("DEBUG: Identifier {s} NOT found in module {s}\n", .{field_text, module_text});
                 break :blk null;
             }
         } else {
             // Module not found in envs (shouldn't happen since we checked import_idx exists)
+            std.debug.print("DEBUG: Module {s} NOT found in envs_map\n", .{module_text});
             break :blk null;
         }
     } else null;
 
     // If we didn't find a valid node index, return null to fall through to error handling
+    if (target_node_idx_opt == null) {
+        std.debug.print("DEBUG: target_node_idx is null, returning null from tryModuleQualifiedLookup\n", .{});
+    }
     const target_node_idx = target_node_idx_opt orelse return null;
 
     // Create the e_lookup_external expression with Import.Idx
