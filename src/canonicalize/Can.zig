@@ -447,7 +447,7 @@ fn processTypeDeclFirstPass(
     const type_decl_stmt_idx = try self.env.addStatement(placeholder_cir_type_decl, region);
 
     // Introduce the type name into scope early to support recursive references
-    try self.scopeIntroduceTypeDecl(qualified_name_idx, type_decl_stmt_idx, region);
+    try self.introduceType(qualified_name_idx, type_decl_stmt_idx, region);
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
@@ -565,14 +565,18 @@ fn processTypeDeclFirstPass(
                                         // Look up the fully qualified pattern (from parent scope via nesting)
                                         switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
                                             .found => |pattern_idx| {
-                                                const decl_region = self.parse_ir.tokenizedRegionToRegion(nested_decl.region);
+                                                const scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                                // NOTE: Normally we would use introduceValue() to check for shadowing, but here
+                                                // we are creating aliases to make parent scope definitions accessible with shorter
+                                                // names in the associated block scope. We use direct .put() to avoid false shadowing warnings.
 
                                                 // Add unqualified name (e.g., "my_not")
-                                                try self.scopeIntroduceWithDiagnostics(nested_decl_ident, pattern_idx, decl_region);
+                                                try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
 
                                                 // Add type-qualified name (e.g., "MyBool.my_not")
                                                 const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
-                                                try self.scopeIntroduceWithDiagnostics(type_qualified_ident_idx, pattern_idx, decl_region);
+                                                try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                                             },
                                             .not_found => {},
                                         }
@@ -595,14 +599,18 @@ fn processTypeDeclFirstPass(
                             // Look up the fully qualified pattern (from parent scope via nesting)
                             switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                                 .found => |pattern_idx| {
-                                    const decl_region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                    // NOTE: Normally we would use introduceValue() to check for shadowing, but here
+                                    // we are creating aliases to make parent scope definitions accessible with shorter
+                                    // names in the associated block scope. We use direct .put() to avoid false shadowing warnings.
 
                                     // Add unqualified name (e.g., "my_not")
-                                    try self.scopeIntroduceWithDiagnostics(decl_ident, pattern_idx, decl_region);
+                                    try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
                                     // Add type-qualified name (e.g., "MyBool.my_not")
                                     const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
-                                    try self.scopeIntroduceWithDiagnostics(type_qualified_ident_idx, pattern_idx, decl_region);
+                                    try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                                 },
                                 .not_found => {},
                             }
@@ -636,14 +644,18 @@ fn processTypeDeclFirstPass(
                         // Look up the fully qualified pattern (from parent scope via nesting)
                         switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                             .found => |pattern_idx| {
-                                const anno_region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
+                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                // NOTE: Normally we would use introduceValue() to check for shadowing, but here
+                                // we are creating aliases to make parent scope definitions accessible with shorter
+                                // names in the associated block scope. We use direct .put() to avoid false shadowing warnings.
 
                                 // Add unqualified name (e.g., "len")
-                                try self.scopeIntroduceWithDiagnostics(anno_ident, pattern_idx, anno_region);
+                                try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
 
                                 // Add type-qualified name (e.g., "List.len")
                                 const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
-                                try self.scopeIntroduceWithDiagnostics(type_qualified_ident_idx, pattern_idx, anno_region);
+                                try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                             },
                             .not_found => {
                                 // This can happen if the type_anno was followed by a matching decl
@@ -842,17 +854,21 @@ fn processAssociatedItemsSecondPass(
                                         // but need to update them to point to the real pattern instead of placeholder.
                                         const def_cir = self.env.store.getDef(def_idx);
                                         const pattern_idx = def_cir.pattern;
-                                        const decl_region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                        // Add unqualified name (e.g., "my_not")
-                                        try self.scopeIntroduceWithDiagnostics(decl_ident, pattern_idx, decl_region);
+                                        // NOTE: Normally we would use introduceValue() to check for shadowing, but here
+                                        // we are updating existing placeholder entries (not introducing new names), so we
+                                        // use direct .put() to avoid false duplicate definition diagnostics.
 
-                                        // Add type-qualified name (e.g., "MyBool.my_not")
+                                        // Update unqualified name (e.g., "my_not")
+                                        try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+
+                                        // Update type-qualified name (e.g., "MyBool.my_not")
                                         const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                        try self.scopeIntroduceWithDiagnostics(type_qualified_idx, pattern_idx, decl_region);
+                                        try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
 
-                                        // Add fully qualified name (e.g., "Test.MyBool.my_not")
-                                        try self.scopeIntroduceWithDiagnostics(qualified_idx, pattern_idx, decl_region);
+                                        // Update fully qualified name (e.g., "Test.MyBool.my_not")
+                                        try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
                                     }
                                 }
                             }
@@ -878,16 +894,21 @@ fn processAssociatedItemsSecondPass(
                             // Make the real pattern available in current scope (replaces placeholder)
                             const def_cir = self.env.store.getDef(def_idx);
                             const pattern_idx = def_cir.pattern;
+                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                            // Add unqualified name (e.g., "is_empty")
-                            try self.scopeIntroduceWithDiagnostics(name_ident, pattern_idx, region);
+                            // NOTE: Normally we would use introduceValue() to check for shadowing, but here
+                            // we are updating existing placeholder entries (not introducing new names), so we
+                            // use direct .put() to avoid false duplicate definition diagnostics.
 
-                            // Add type-qualified name (e.g., "List.is_empty")
+                            // Update unqualified name (e.g., "is_empty")
+                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+
+                            // Update type-qualified name (e.g., "List.is_empty")
                             const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                            try self.scopeIntroduceWithDiagnostics(type_qualified_idx, pattern_idx, region);
+                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
 
-                            // Add fully qualified name (e.g., "Builtin.List.is_empty")
-                            try self.scopeIntroduceWithDiagnostics(qualified_idx, pattern_idx, region);
+                            // Update fully qualified name (e.g., "Builtin.List.is_empty")
+                            try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
 
                             try self.env.store.addScratchDef(def_idx);
                         },
@@ -7768,8 +7789,8 @@ pub fn scopeIntroduceInternal(
     return Scope.IntroduceResult{ .success = {} };
 }
 
-/// Introduce an identifier to scope and report shadowing diagnostics if needed
-fn scopeIntroduceWithDiagnostics(
+/// Introduce a value identifier to scope and report shadowing diagnostics if needed
+fn introduceValue(
     self: *Self,
     ident_idx: base.Ident.Idx,
     pattern_idx: Pattern.Idx,
@@ -7886,7 +7907,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
 }
 
 /// Introduce a type declaration into the current scope
-fn scopeIntroduceTypeDecl(
+fn introduceType(
     self: *Self,
     name_ident: Ident.Idx,
     type_decl_stmt: Statement.Idx,
