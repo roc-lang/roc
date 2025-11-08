@@ -68,9 +68,6 @@ Foo := [Whatever].{
 		(p-assign (ident "Foo.Bar.baz"))
 		(e-num (value "5")))
 	(d-let
-		(p-assign (ident "Foo.Bar.baz"))
-		(e-num (value "5")))
-	(d-let
 		(p-assign (ident "Foo.blah"))
 		(e-num (value "6")))
 	(s-nominal-decl
@@ -87,7 +84,6 @@ Foo := [Whatever].{
 (inferred-types
 	(defs
 		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
 	(type_decls
 		(nominal (type "Foo")
@@ -95,7 +91,6 @@ Foo := [Whatever].{
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
 ~~~

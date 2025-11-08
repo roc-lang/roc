@@ -45,6 +45,7 @@ exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track which identifiers in the current scope are placeholders (not yet replaced with real definitions)
+/// This is empty for 99% of files; only used during multi-phase canonicalization (mainly Builtin.roc)
 placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
@@ -510,154 +511,172 @@ fn processAssociatedBlock(
     type_name: Ident.Idx,
     assoc: anytype,
 ) std.mem.Allocator.Error!void {
-        // First, introduce placeholder patterns for all associated items
-        try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
+    // First, introduce placeholder patterns for all associated items
+    try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
 
-        // Now enter a new scope for the associated block where both qualified and unqualified names work
-        try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
-        defer self.scopeExit(self.env.gpa) catch unreachable;
+    // Now enter a new scope for the associated block where both qualified and unqualified names work
+    try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
+    defer self.scopeExit(self.env.gpa) catch unreachable;
 
-        // Introduce the parent type itself into this scope so it can be referenced by its unqualified name
-        // For example, if we're processing MyBool's associated items, we need "MyBool" to resolve to "Test.MyBool"
-        if (self.scopeLookupTypeDecl(qualified_name_idx)) |parent_type_decl_idx| {
-            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-            try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
-        }
+    // Introduce the parent type itself into this scope so it can be referenced by its unqualified name
+    // For example, if we're processing MyBool's associated items, we need "MyBool" to resolve to "Test.MyBool"
+    if (self.scopeLookupTypeDecl(qualified_name_idx)) |parent_type_decl_idx| {
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
+    }
 
-        // Note: Sibling types and ancestor types are accessible via parent scope lookup.
-        // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
-        // were added in their declaration scope, making them visible to all child scopes.
+    // Note: Sibling types and ancestor types are accessible via parent scope lookup.
+    // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
+    // were added in their declaration scope, making them visible to all child scopes.
 
-        // Introduce aliases into this scope so associated items can reference each other
-        // We only add unqualified and type-qualified names; fully qualified names are
-        // already in the parent scope and accessible via scope nesting
-        const parent_type_text = self.env.getIdent(type_name);
-        for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
-            const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
-            switch (assoc_stmt) {
-                .type_decl => |nested_type_decl| {
-                    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
-                    const unqualified_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+    // Introduce aliases into this scope so associated items can reference each other
+    // We only add unqualified and type-qualified names; fully qualified names are
+    // already in the parent scope and accessible via scope nesting
+    const parent_type_text = self.env.getIdent(type_name);
+    for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
+        const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
+        switch (assoc_stmt) {
+            .type_decl => |nested_type_decl| {
+                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                const unqualified_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
 
-                    // Build fully qualified name (e.g., "Test.MyBool")
-                    const parent_text = self.env.getIdent(qualified_name_idx);
-                    const nested_type_text = self.env.getIdent(unqualified_ident);
-                    const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
+                // Build fully qualified name (e.g., "Test.MyBool")
+                const parent_text = self.env.getIdent(qualified_name_idx);
+                const nested_type_text = self.env.getIdent(unqualified_ident);
+                const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
 
-                    // Introduce unqualified type alias (fully qualified is already in parent scope)
-                    if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
-                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                        try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
-                    }
+                // Introduce unqualified type alias (fully qualified is already in parent scope)
+                if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
+                }
 
-                    // Introduce associated items of nested types
-                    if (nested_type_decl.associated) |nested_assoc| {
-                        for (self.parse_ir.store.statementSlice(nested_assoc.statements)) |nested_assoc_stmt_idx| {
-                            const nested_assoc_stmt = self.parse_ir.store.getStatement(nested_assoc_stmt_idx);
-                            if (nested_assoc_stmt == .decl) {
-                                const nested_decl = nested_assoc_stmt.decl;
-                                const nested_pattern = self.parse_ir.store.getPattern(nested_decl.pattern);
-                                if (nested_pattern == .ident) {
-                                    const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
-                                    if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
-                                        // Build fully qualified name (e.g., "Test.MyBool.my_not")
-                                        const qualified_text = self.env.getIdent(qualified_ident_idx);
-                                        const nested_decl_text = self.env.getIdent(nested_decl_ident);
-                                        const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
+                // Introduce associated items of nested types
+                if (nested_type_decl.associated) |nested_assoc| {
+                    for (self.parse_ir.store.statementSlice(nested_assoc.statements)) |nested_assoc_stmt_idx| {
+                        const nested_assoc_stmt = self.parse_ir.store.getStatement(nested_assoc_stmt_idx);
+                        if (nested_assoc_stmt == .decl) {
+                            const nested_decl = nested_assoc_stmt.decl;
+                            const nested_pattern = self.parse_ir.store.getPattern(nested_decl.pattern);
+                            if (nested_pattern == .ident) {
+                                const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
+                                if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
+                                    // Build fully qualified name (e.g., "Test.MyBool.my_not")
+                                    const qualified_text = self.env.getIdent(qualified_ident_idx);
+                                    const nested_decl_text = self.env.getIdent(nested_decl_ident);
+                                    const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
 
-                                        // Look up the fully qualified pattern (from parent scope via nesting)
-                                        switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
-                                            .found => |pattern_idx| {
-                                                const scope = &self.scopes.items[self.scopes.items.len - 1];
+                                    // Look up the fully qualified pattern (from parent scope via nesting)
+                                    switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
+                                        .found => |pattern_idx| {
+                                            const scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                                // Add unqualified name (e.g., "my_not")
-                                                try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
+                                            // Check if this is a placeholder
+                                            const is_placeholder = self.isPlaceholder(full_qualified_ident_idx);
 
-                                                // Add type-qualified name (e.g., "MyBool.my_not")
-                                                const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
-                                                try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                                            },
-                                            .not_found => {},
-                                        }
+                                            // Add unqualified name (e.g., "my_not")
+                                            try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
+                                            if (is_placeholder) {
+                                                try self.placeholder_idents.put(self.env.gpa, nested_decl_ident, {});
+                                            }
+
+                                            // Add type-qualified name (e.g., "MyBool.my_not")
+                                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
+                                            try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                                            if (is_placeholder) {
+                                                try self.placeholder_idents.put(self.env.gpa, type_qualified_ident_idx, {});
+                                            }
+                                        },
+                                        .not_found => {},
                                     }
                                 }
                             }
                         }
                     }
-                },
-                .decl => |decl| {
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const pattern_ident_tok = pattern.ident.ident_tok;
-                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            // Build fully qualified name (e.g., "Test.MyBool.my_not")
-                            const parent_text = self.env.getIdent(qualified_name_idx);
-                            const decl_text = self.env.getIdent(decl_ident);
-                            const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
-
-                            // Look up the fully qualified pattern (from parent scope via nesting)
-                            switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
-                                .found => |pattern_idx| {
-                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                                    // Add unqualified name (e.g., "my_not")
-                                    try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
-
-                                    // Add type-qualified name (e.g., "MyBool.my_not")
-                                    const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
-                                    try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                                },
-                                .not_found => {},
-                            }
-                        }
-                    }
-                },
-                else => {
-                    // Note: .type_anno is not handled here because anno-only patterns
-                    // are created during processAssociatedItemsSecondPass, so they need
-                    // to be re-introduced AFTER that call completes
-                },
-            }
-        }
-
-        // Process the associated items (canonicalize their bodies)
-        try self.processAssociatedItemsSecondPass(qualified_name_idx, type_name, assoc.statements);
-
-        // After processing, introduce anno-only defs into the associated block scope
-        // (They were just created by processAssociatedItemsSecondPass)
-        // We only add unqualified and type-qualified names; fully qualified is in parent scope
-        for (self.parse_ir.store.statementSlice(assoc.statements)) |anno_stmt_idx| {
-            const anno_stmt = self.parse_ir.store.getStatement(anno_stmt_idx);
-            switch (anno_stmt) {
-                .type_anno => |type_anno| {
-                    if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build fully qualified name (e.g., "Test.MyBool.len")
+                }
+            },
+            .decl => |decl| {
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        // Build fully qualified name (e.g., "Test.MyBool.my_not")
                         const parent_text = self.env.getIdent(qualified_name_idx);
-                        const anno_text = self.env.getIdent(anno_ident);
-                        const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+                        const decl_text = self.env.getIdent(decl_ident);
+                        const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                         // Look up the fully qualified pattern (from parent scope via nesting)
                         switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                             .found => |pattern_idx| {
                                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                // Add unqualified name (e.g., "len")
-                                try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
+                                // Check if this is a placeholder by checking if the identifier is tracked
+                                const is_placeholder = self.isPlaceholder(fully_qualified_ident_idx);
 
-                                // Add type-qualified name (e.g., "List.len")
-                                const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
+                                // Add unqualified name (e.g., "my_not")
+                                try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                if (is_placeholder) {
+                                    try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
+                                }
+
+                                // Add type-qualified name (e.g., "MyBool.my_not")
+                                const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
                                 try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                                if (is_placeholder) {
+                                    try self.placeholder_idents.put(self.env.gpa, type_qualified_ident_idx, {});
+                                }
                             },
-                            .not_found => {
-                                // This can happen if the type_anno was followed by a matching decl
-                                // (in which case it's not an anno-only def)
-                            },
+                            .not_found => {},
                         }
                     }
-                },
-                else => {},
-            }
+                }
+            },
+            else => {
+                // Note: .type_anno is not handled here because anno-only patterns
+                // are created during processAssociatedItemsSecondPass, so they need
+                // to be re-introduced AFTER that call completes
+            },
         }
+    }
+
+    // Process the associated items (canonicalize their bodies)
+    try self.processAssociatedItemsSecondPass(qualified_name_idx, type_name, assoc.statements);
+
+    // After processing, introduce anno-only defs into the associated block scope
+    // (They were just created by processAssociatedItemsSecondPass)
+    // We only add unqualified and type-qualified names; fully qualified is in parent scope
+    for (self.parse_ir.store.statementSlice(assoc.statements)) |anno_stmt_idx| {
+        const anno_stmt = self.parse_ir.store.getStatement(anno_stmt_idx);
+        switch (anno_stmt) {
+            .type_anno => |type_anno| {
+                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                    // Build fully qualified name (e.g., "Test.MyBool.len")
+                    const parent_text = self.env.getIdent(qualified_name_idx);
+                    const anno_text = self.env.getIdent(anno_ident);
+                    const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+
+                    // Look up the fully qualified pattern (from parent scope via nesting)
+                    switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
+                        .found => |pattern_idx| {
+                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                            // Add unqualified name (e.g., "len")
+                            try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
+
+                            // Add type-qualified name (e.g., "List.len")
+                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
+                            try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                        },
+                        .not_found => {
+                            // This can happen if the type_anno was followed by a matching decl
+                            // (in which case it's not an anno-only def)
+                        },
+                    }
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 /// Canonicalize an associated item declaration with a qualified name
@@ -745,7 +764,7 @@ fn processAssociatedItemsSecondPass(
     parent_name: Ident.Idx,
     parent_type_name: Ident.Idx,
     statements: AST.Statement.Span,
-)  std.mem.Allocator.Error!void {
+) std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
     var i: usize = 0;
     while (i < stmt_idxs.len) : (i += 1) {
@@ -837,10 +856,14 @@ fn processAssociatedItemsSecondPass(
 
                                     // Update type-qualified name (e.g., "MyBool.my_not")
                                     const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                    try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                                    if (type_qualified_idx.idx != decl_ident.idx) {
+                                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                                    }
 
                                     // Update fully qualified name (e.g., "Test.MyBool.my_not")
-                                    try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
+                                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                    }
 
                                     break :blk true; // Found and processed matching decl
                                 }
@@ -876,10 +899,14 @@ fn processAssociatedItemsSecondPass(
 
                     // Update type-qualified name (e.g., "List.is_empty")
                     const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                    try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                    if (type_qualified_idx.idx != name_ident.idx) {
+                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                    }
 
                     // Update fully qualified name (e.g., "Builtin.List.is_empty")
-                    try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != name_ident.idx) {
+                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                    }
 
                     try self.env.store.addScratchDef(def_idx);
                 }
@@ -980,6 +1007,10 @@ fn processAssociatedItemsFirstPass(
                         };
                         const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
 
+                        // Track both identifiers as placeholders
+                        try self.placeholder_idents.put(self.env.gpa, qualified_idx, {});
+                        try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
+
                         // Directly put placeholder in scope (no conflict checking)
                         // updatePlaceholder will verify it's replacing a placeholder later
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -996,7 +1027,6 @@ fn processAssociatedItemsFirstPass(
                     const anno_text = self.env.getIdent(anno_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
 
-
                     const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
                     const placeholder_pattern = Pattern{
                         .assign = .{
@@ -1004,6 +1034,10 @@ fn processAssociatedItemsFirstPass(
                         },
                     };
                     const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+
+                    // Track both identifiers as placeholders
+                    try self.placeholder_idents.put(self.env.gpa, qualified_idx, {});
+                    try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
 
                     // Directly put placeholder in scope (no conflict checking)
                     // updatePlaceholder will verify it's replacing a placeholder later
@@ -1113,13 +1147,15 @@ pub fn canonicalizeFile(
     const scratch_defs_start = self.env.store.scratchDefTop();
     const scratch_statements_start = self.env.store.scratch.?.statements.top();
 
-    // First pass: Process all type declarations to introduce them into scope
-    // Defer associated blocks until after we've created placeholders for top-level items
+    // First pass (1a): Process type declarations WITH associated blocks to introduce them into scope
+    // Defer associated blocks themselves until after we've created placeholders for top-level items
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .type_decl => |type_decl| {
-                try self.processTypeDeclFirstPass(type_decl, null, true); // defer associated blocks
+                if (type_decl.associated) |_| {
+                    try self.processTypeDeclFirstPass(type_decl, null, true); // defer associated blocks
+                }
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -1127,59 +1163,9 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Phase 1.5: Create placeholders for top-level declarations and type annotations
-    // This ensures sibling items (like list_get_unsafe) are available during associated block processing
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        switch (stmt) {
-            .decl => |decl| {
-                const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                if (pattern == .ident) {
-                    const pattern_ident_tok = pattern.ident.ident_tok;
-                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                        const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
-                        const placeholder_pattern = Pattern{
-                            .assign = .{
-                                .ident = decl_ident,
-                            },
-                        };
-                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-
-
-                        // Directly put placeholder in current scope
-                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                        try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
-                        // Track that this is a placeholder
-                        try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
-                    }
-                }
-            },
-            .type_anno => |type_anno| {
-                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                    const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
-                    const placeholder_pattern = Pattern{
-                        .assign = .{
-                            .ident = anno_ident,
-                        },
-                    };
-                    const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-
-
-                    // Directly put placeholder in current scope
-                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                    try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
-                    // Track that this is a placeholder
-                    try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
-                }
-            },
-            else => {
-                // Skip other statement types
-            },
-        }
-    }
-
-    // For type modules, expose the main type and all associated items BEFORE processing associated blocks
-    // This ensures unused variable checking (which happens during scope exit) doesn't flag exposed items
+    // For type modules, mark the main type and all associated items as exposed
+    // This must happen BEFORE processing to avoid unused variable warnings
+    // Note: addExposedById just marks items as exposed; node indices are set later when defs are created
     if (self.env.module_kind == .type_module) {
         const module_name_text = self.env.module_name;
         for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -1202,8 +1188,8 @@ pub fn canonicalizeFile(
     }
 
     // Phase 1.6: Now process all deferred type declaration associated blocks
-    // All top-level placeholders are now in scope, and for type modules, all items are marked as exposed
-    var assoc_blocks_found: usize = 0;
+    // processAssociatedBlock creates placeholders for associated items via processAssociatedItemsFirstPass
+    // This introduces nested types (like Foo.Bar) that other type declarations may reference
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .type_decl) {
@@ -1211,10 +1197,25 @@ pub fn canonicalizeFile(
             if (type_decl.associated) |assoc| {
                 const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                 const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
-                assoc_blocks_found += 1;
 
                 try self.processAssociatedBlock(type_ident, type_ident, assoc);
             }
+        }
+    }
+
+    // Phase 1.7: Process type declarations WITHOUT associated blocks
+    // These can now reference nested types that were introduced in Phase 1.6
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                if (type_decl.associated == null) {
+                    try self.processTypeDeclFirstPass(type_decl, null, false); // no associated block to defer
+                }
+            },
+            else => {
+                // Skip non-type-declaration statements
+            },
         }
     }
 
@@ -4654,13 +4655,13 @@ fn canonicalizePattern(
                     .ident = ident_idx,
                 } }, region);
 
-                // Check if a placeholder exists for this identifier
-                // Placeholders are tracked in placeholder_idents and exist only until replaced
-                const placeholder_exists = self.placeholder_idents.contains(ident_idx);
+                // Check if a placeholder exists for this identifier in the current scope
+                // Placeholders are tracked in the placeholder_idents hash map
+                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                const placeholder_exists = self.isPlaceholder(ident_idx);
 
                 if (placeholder_exists) {
                     // Replace the placeholder in the current scope
-                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                     try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
                 } else {
                     // Introduce the identifier into scope mapping to this pattern node
@@ -8150,8 +8151,16 @@ fn introduceType(
     }
 }
 
+/// Check if an identifier is a placeholder, with fast path for empty map (99% of files).
+/// Returns true if the identifier is tracked as a placeholder.
+fn isPlaceholder(self: *const Self, ident_idx: Ident.Idx) bool {
+    // Fast path: if map is empty, no placeholders exist
+    if (self.placeholder_idents.count() == 0) return false;
+    return self.placeholder_idents.contains(ident_idx);
+}
+
 /// Update a placeholder pattern in scope with the actual pattern.
-/// In debug builds, asserts that the old value was actually a placeholder (.assign pattern).
+/// In debug builds, asserts that the identifier was tracked as a placeholder.
 fn updatePlaceholder(
     self: *Self,
     scope: *Scope,
@@ -8159,14 +8168,13 @@ fn updatePlaceholder(
     pattern_idx: Pattern.Idx,
 ) std.mem.Allocator.Error!void {
     if (builtin.mode == .Debug) {
-        if (scope.idents.get(ident_idx)) |old_pattern_idx| {
-            const old_pattern = self.env.store.getPattern(old_pattern_idx);
-            std.debug.assert(old_pattern == .assign);
-        }
+        std.debug.assert(self.isPlaceholder(ident_idx));
+    }
+    // Remove from placeholder tracking since it's now a real definition
+    if (self.placeholder_idents.count() > 0) {
+        _ = self.placeholder_idents.remove(ident_idx);
     }
     try scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
-    // Remove from placeholder set since it's now a real definition
-    _ = self.placeholder_idents.remove(ident_idx);
 }
 
 fn scopeUpdateTypeDecl(

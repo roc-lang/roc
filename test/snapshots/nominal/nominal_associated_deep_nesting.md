@@ -114,15 +114,6 @@ deepType = C
 		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
 		(e-num (value "42")))
 	(d-let
-		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
-		(e-num (value "42")))
-	(d-let
-		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
-		(e-num (value "42")))
-	(d-let
-		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
-		(e-num (value "42")))
-	(d-let
 		(p-assign (ident "deepValue"))
 		(e-lookup-local
 			(p-assign (ident "Foo.Level1.Level2.Level3.value")))
@@ -156,9 +147,6 @@ deepType = C
 	(defs
 		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
@@ -170,9 +158,6 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
