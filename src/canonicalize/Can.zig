@@ -1359,7 +1359,6 @@ pub fn canonicalizeFile(
                         }
                     }
                 },
-                // .type_anno handling removed - will add back with better solution
                 else => {},
             }
         }
