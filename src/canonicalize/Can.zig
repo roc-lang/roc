@@ -155,41 +155,6 @@ const TypeBindingLocationConst = struct {
     binding: *const Scope.TypeBinding,
 };
 
-/// Add all qualified variants of a name to the current scope.
-/// For a name like "Builtin.List.get", this adds:
-/// - "get" (unqualified)
-/// - "List.get" (1 level of qualification)
-/// - "Builtin.List.get" (full qualification)
-/// Works for any depth of nesting.
-fn addAllQualifiedVariants(
-    self: *Self,
-    parent_full_text: []const u8,
-    name_text: []const u8,
-    pattern_idx: Pattern.Idx,
-) !void {
-    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-    // Add unqualified name (e.g., "get")
-    // Use findIdent first to reuse existing ident if present, otherwise insert
-    const name_ident = self.env.common.findIdent(name_text) orelse
-        try self.env.insertIdent(base.Ident.for_text(name_text));
-    try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
-
-    // Add all qualified variants by iterating through dots
-    // For "Builtin.List", add "List.get" and "Builtin.List.get"
-    var start: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, parent_full_text, start, '.')) |dot_pos| {
-        const prefix = parent_full_text[dot_pos + 1 ..];
-        const qualified_idx = try self.env.insertQualifiedIdent(prefix, name_text);
-        try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
-        start = dot_pos + 1;
-    }
-
-    // Add the full qualified name (e.g., "Builtin.List.get")
-    const full_qualified_idx = try self.env.insertQualifiedIdent(parent_full_text, name_text);
-    try current_scope.idents.put(self.env.gpa, full_qualified_idx, pattern_idx);
-}
-
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,
@@ -649,7 +614,7 @@ fn processTypeDeclFirstPass(
         }
 
         // Process the associated items (canonicalize their bodies)
-        try self.processAssociatedItemsSecondPass(qualified_name_idx, assoc.statements);
+        try self.processAssociatedItemsSecondPass(qualified_name_idx, type_header.name, assoc.statements);
 
         // After processing, introduce anno-only defs into the associated block scope
         // (They were just created by processAssociatedItemsSecondPass)
@@ -770,6 +735,7 @@ fn canonicalizeAssociatedDeclWithAnno(
 fn processAssociatedItemsSecondPass(
     self: *Self,
     parent_name: Ident.Idx,
+    parent_type_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
@@ -793,7 +759,7 @@ fn processAssociatedItemsSecondPass(
                     try self.scopeEnter(self.env.gpa, false);
                     defer self.scopeExit(self.env.gpa) catch unreachable;
 
-                    try self.processAssociatedItemsSecondPass(qualified_idx, assoc.statements);
+                    try self.processAssociatedItemsSecondPass(qualified_idx, type_ident, assoc.statements);
                 }
             },
             .type_anno => |ta| {
@@ -865,13 +831,25 @@ fn processAssociatedItemsSecondPass(
                                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                                        // Also make all qualified variants available in the current scope
-                                        // (This allows `get`, `List.get`, `Builtin.List.get`, etc. to all work)
+                                        // Make the real pattern available in current scope (replaces placeholder)
+                                        // We already added unqualified and type-qualified names earlier,
+                                        // but need to update them to point to the real pattern instead of placeholder.
                                         const def_cir = self.env.store.getDef(def_idx);
                                         const pattern_idx = def_cir.pattern;
-                                        const parent_full_text = self.env.getIdent(parent_name);
-                                        try self.addAllQualifiedVariants(parent_full_text, decl_text, pattern_idx);
-                                    } else {}
+                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                        // Add unqualified name (e.g., "my_not") - overwrites placeholder alias
+                                        try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+
+                                        // Add type-qualified name (e.g., "MyBool.my_not") - overwrites placeholder alias
+                                        // Use parent_type_name directly (no string parsing needed!)
+                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+                                        try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+
+                                        // Add fully qualified name (e.g., "Test.MyBool.my_not") - shadows placeholder in parent scope
+                                        // We already have qualified_idx = insertQualifiedIdent(parent_text, decl_text)
+                                        try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                                    }
                                 }
                             }
                         },
@@ -893,12 +871,22 @@ fn processAssociatedItemsSecondPass(
                             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                             try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                            // Also make all qualified variants available in the current scope
-                            // (This allows `is_empty`, `List.is_empty`, `Builtin.List.is_empty`, etc. to all work)
+                            // Make the real pattern available in current scope (replaces placeholder)
                             const def_cir = self.env.store.getDef(def_idx);
                             const pattern_idx = def_cir.pattern;
-                            const parent_full_text = self.env.getIdent(parent_name);
-                            try self.addAllQualifiedVariants(parent_full_text, name_text, pattern_idx);
+                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                            // Add unqualified name (e.g., "is_empty") - overwrites placeholder alias
+                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+
+                            // Add type-qualified name (e.g., "List.is_empty") - overwrites placeholder alias
+                            // Use parent_type_name directly (no string parsing needed!)
+                            const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+
+                            // Add fully qualified name (e.g., "Builtin.List.is_empty") - shadows placeholder in parent scope
+                            // We already have qualified_idx = insertQualifiedIdent(parent_text, name_text)
+                            try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
 
                             try self.env.store.addScratchDef(def_idx);
                         },
