@@ -148,7 +148,7 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
-      # 1) debug-ish test build
+      # 1) in debug mode
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
@@ -156,7 +156,7 @@ jobs:
           error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
-      # 2) release test build (applies CPU_FLAG automatically)
+      # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
         uses: ./.github/actions/flaky-retry
         with:
