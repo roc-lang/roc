@@ -189,25 +189,23 @@ pub const Interpreter = struct {
                             break;
                         }
                     }
-                } else if (std.mem.indexOf(u8, import_name, "Stdout") != null) {
-                    // Match Stdout - should be other_env[1]
-                    if (other_envs.len > 1) {
-                        matched_module = other_envs[1];
-                    }
-                } else if (std.mem.indexOf(u8, import_name, "Stderr") != null) {
-                    // Match Stderr - should be other_env[2]
-                    if (other_envs.len > 2) {
-                        matched_module = other_envs[2];
-                    }
-                } else if (std.mem.indexOf(u8, import_name, "Stdin") != null) {
-                    // Match Stdin - should be other_env[3]
-                    if (other_envs.len > 3) {
-                        matched_module = other_envs[3];
-                    }
-                } else if (std.mem.indexOf(u8, import_name, "Host") != null) {
-                    // Match Host - should be other_env[4]
-                    if (other_envs.len > 4) {
-                        matched_module = other_envs[4];
+                } else {
+                    // Dynamically match any platform module
+                    // Extract module name from import (e.g., "pf.Stdout" -> "Stdout")
+                    const module_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx|
+                        import_name[dot_idx + 1..]
+                    else
+                        import_name;
+
+                    // Find matching platform module by searching through all other_envs
+                    for (other_envs) |platform_env| {
+                        const platform_module_name = platform_env.module_name;
+
+                        // Match "Stdout" to "Stdout.roc", etc.
+                        if (std.mem.indexOf(u8, platform_module_name, module_name) != null) {
+                            matched_module = platform_env;
+                            break;
+                        }
                     }
                 }
 

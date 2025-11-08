@@ -1086,22 +1086,14 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // If so, we need multi-module compilation
     const is_app_with_platform = try isAppWithPlatform(allocs.gpa, roc_file_path);
 
-    std.debug.print("=== SETUP SHARED MEMORY: {s} ===\n", .{roc_file_path});
-    std.debug.print("Is app with platform: {}\n", .{is_app_with_platform});
-
     // TEMP: Force multi-module for fx test
     const force_multi = std.mem.indexOf(u8, roc_file_path, "test/fx/") != null or
         std.mem.indexOf(u8, roc_file_path, "minimal_fx.roc") != null or
         std.mem.indexOf(u8, roc_file_path, "simple_fx_test") != null;
-    if (force_multi) {
-        std.debug.print("FORCING MULTI-MODULE for fx test\n", .{});
-    }
 
     if (is_app_with_platform or force_multi) {
-        std.debug.print("Using MULTI-MODULE compilation path\n", .{});
         return try setupSharedMemoryMultiModule(allocs, roc_file_path, &shm, shm_allocator);
     } else {
-        std.debug.print("Using SINGLE-MODULE compilation path\n", .{});
         return try setupSharedMemorySingleModule(allocs, roc_file_path, &shm, shm_allocator);
     }
 }
@@ -1300,19 +1292,18 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
 
     const app_dir = std.fs.path.dirname(app_file_path) orelse ".";
 
-    // For now, assume the platform modules are Stdout, Stderr, and Stdin in test/fx/platform/
-    // This is sufficient for the fx_platform_test
+    // Find the platform directory
     const platform_dir = try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, "platform" });
     defer allocs.gpa.free(platform_dir);
 
-    const stdout_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Stdout.roc" });
-    defer allocs.gpa.free(stdout_path);
+    // Find the platform's main.roc file
+    const platform_main_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "main.roc" });
+    defer allocs.gpa.free(platform_main_path);
 
-    const stderr_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Stderr.roc" });
-    defer allocs.gpa.free(stderr_path);
-
-    const stdin_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Stdin.roc" });
-    defer allocs.gpa.free(stdin_path);
+    // Extract exposed modules from the platform header
+    var exposed_modules = std.array_list.Managed([]const u8).init(allocs.arena);
+    defer exposed_modules.deinit();
+    try extractExposedModulesFromPlatform(allocs, platform_main_path, &exposed_modules);
 
     // Create header
     const Header = struct {
@@ -1327,11 +1318,12 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // We'll compile 4 modules: app, Stdout, Stderr, Stdin
-    header_ptr.module_count = 4;
+    // Module count = 1 (app) + number of exposed platform modules
+    const total_module_count: u32 = 1 + @as(u32, @intCast(exposed_modules.items.len));
+    header_ptr.module_count = total_module_count;
 
     // Allocate array for module env offsets
-    const module_env_offsets_ptr = try shm_allocator.alloc(u64, 4);
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, total_module_count);
     const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_envs_offset = module_envs_offset_location;
 
@@ -1339,38 +1331,28 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
     defer builtin_modules.deinit();
 
-    // Compile Stdout module (index 1)
-    const stdout_env_ptr = try compileModuleToSharedMemory(
-        allocs,
-        stdout_path,
-        "Stdout.roc",
-        shm_allocator,
-        &builtin_modules,
-        true, // building_platform_modules
-    );
-    module_env_offsets_ptr[1] = @intFromPtr(stdout_env_ptr) - @intFromPtr(shm.base_ptr);
+    // Dynamically compile all exposed platform modules (starting at index 1)
+    // Store pointers to use later for import resolution
+    var platform_env_ptrs = try allocs.arena.alloc(*ModuleEnv, exposed_modules.items.len);
 
-    // Compile Stderr module (index 2)
-    const stderr_env_ptr = try compileModuleToSharedMemory(
-        allocs,
-        stderr_path,
-        "Stderr.roc",
-        shm_allocator,
-        &builtin_modules,
-        true, // building_platform_modules
-    );
-    module_env_offsets_ptr[2] = @intFromPtr(stderr_env_ptr) - @intFromPtr(shm.base_ptr);
+    for (exposed_modules.items, 0..) |module_name, i| {
+        const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
+        defer allocs.gpa.free(module_filename);
 
-    // Compile Stdin module (index 3)
-    const stdin_env_ptr = try compileModuleToSharedMemory(
-        allocs,
-        stdin_path,
-        "Stdin.roc",
-        shm_allocator,
-        &builtin_modules,
-        true, // building_platform_modules
-    );
-    module_env_offsets_ptr[3] = @intFromPtr(stdin_env_ptr) - @intFromPtr(shm.base_ptr);
+        const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, module_filename });
+        defer allocs.gpa.free(module_path);
+
+        const module_env_ptr = try compileModuleToSharedMemory(
+            allocs,
+            module_path,
+            module_filename,
+            shm_allocator,
+            &builtin_modules,
+            true, // building_platform_modules
+        );
+        module_env_offsets_ptr[i + 1] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
+        platform_env_ptrs[i] = module_env_ptr;
+    }
 
     // Now that all platform modules are compiled, collect ALL hosted functions
     // from all modules and sort them globally to assign correct indices
@@ -1383,10 +1365,8 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
         all_hosted_fns.deinit(allocs.gpa);
     }
 
-    // Collect from platform modules that are actually used by the app
-    // (Stdout, Stderr, and Stdin, but not Host which is internal)
-    const platform_envs = [_]*ModuleEnv{ stdout_env_ptr, stderr_env_ptr, stdin_env_ptr };
-    for (platform_envs) |platform_env| {
+    // Collect from all dynamically compiled platform modules
+    for (platform_env_ptrs) |platform_env| {
         var module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
         defer module_fns.deinit(platform_env.gpa);
 
@@ -1406,7 +1386,7 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
 
     // Now reassign indices globally across all modules
     // We need to track which module each function belongs to
-    for (platform_envs) |platform_env| {
+    for (platform_env_ptrs) |platform_env| {
         // For each hosted function in this module, find its global index
         const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
         for (all_defs) |def_idx| {
@@ -1450,13 +1430,19 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
         }
     }
 
-    // Compile app module (index 0) with references to platform modules
+    // Compile app module (index 0) with references to all dynamically compiled platform modules
+    // Convert platform_env_ptrs to const pointers for the function signature
+    const platform_envs_const = try allocs.arena.alloc(*const ModuleEnv, platform_env_ptrs.len);
+    for (platform_env_ptrs, 0..) |ptr, i| {
+        platform_envs_const[i] = ptr;
+    }
+
     const app_env_ptr = try compileAppModuleToSharedMemory(
         allocs,
         app_file_path,
         shm_allocator,
         &builtin_modules,
-        &[_]*const ModuleEnv{ stdout_env_ptr, stderr_env_ptr, stdin_env_ptr },
+        platform_envs_const,
     );
     module_env_offsets_ptr[0] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
 
@@ -1664,26 +1650,20 @@ fn compileAppModuleToSharedMemory(
     // For each remaining import, find the matching platform module
     for (env.imports.imports.items.items[1..], 1..) |import_str_idx, i| {
         const import_name = env.common.getString(import_str_idx);
-        std.debug.print("DEBUG: Resolving import[{}]: \"{s}\"\n", .{i, import_name});
+        // Match to one of the platform modules dynamically
+        // Extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
+        const import_module_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx|
+            import_name[dot_idx + 1..]
+        else
+            import_name;
 
-        // Match to one of the platform modules
+        // Find matching platform module
         var found_match = false;
         for (platform_envs) |platform_env| {
             const platform_module_name = platform_env.module_name;
-            std.debug.print("  Checking against platform module: \"{s}\"\n", .{platform_module_name});
-            // Match "pf.Stdout" to "Stdout.roc", "pf.Stderr" to "Stderr.roc", "pf.Stdin" to "Stdin.roc", etc.
-            if (std.mem.indexOf(u8, import_name, "Stdout") != null and std.mem.indexOf(u8, platform_module_name, "Stdout") != null) {
-                std.debug.print("  MATCHED! Stdout\n", .{});
-                imported_modules_slice[i] = platform_env;
-                found_match = true;
-                break;
-            } else if (std.mem.indexOf(u8, import_name, "Stderr") != null and std.mem.indexOf(u8, platform_module_name, "Stderr") != null) {
-                std.debug.print("  MATCHED! Stderr\n", .{});
-                imported_modules_slice[i] = platform_env;
-                found_match = true;
-                break;
-            } else if (std.mem.indexOf(u8, import_name, "Stdin") != null and std.mem.indexOf(u8, platform_module_name, "Stdin") != null) {
-                std.debug.print("  MATCHED! Stdin\n", .{});
+
+            // Match "Stdout" to "Stdout.roc", etc.
+            if (std.mem.indexOf(u8, platform_module_name, import_module_name) != null) {
                 imported_modules_slice[i] = platform_env;
                 found_match = true;
                 break;
@@ -1691,8 +1671,11 @@ fn compileAppModuleToSharedMemory(
         }
 
         if (!found_match) {
-            std.debug.print("  NO MATCH - using fallback platform_envs[0]\n", .{});
-            imported_modules_slice[i] = platform_envs[0];
+            if (platform_envs.len > 0) {
+                imported_modules_slice[i] = platform_envs[0];
+            } else {
+                return error.NoPlatformModuleFound;
+            }
         }
     }
 
@@ -2049,6 +2032,58 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
 
             if (provides_fields.len == 0) {
                 return error.NoEntrypointFound;
+            }
+        },
+        else => {
+            return error.NotPlatformFile;
+        },
+    }
+}
+
+/// Extract all exposed module names from platform header exposes list into ArrayList
+fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const u8, exposed_modules: *std.array_list.Managed([]const u8)) !void {
+    // Read the Roc file
+    const source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    defer allocs.gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try allocs.arena.dupe(u8, basename);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(allocs.gpa);
+
+    // Parse the source code as a full module
+    var parse_ast = parse.parse(&env.common, allocs.gpa) catch return error.ParseFailed;
+    defer parse_ast.deinit(allocs.gpa);
+
+    // Look for platform header in the AST
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file with a platform header
+    switch (header) {
+        .platform => |platform_header| {
+            // Get the exposes collection
+            const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
+            const exposes_items = parse_ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
+
+            // Extract all exposed module names
+            for (exposes_items) |item_idx| {
+                const item = parse_ast.store.getExposedItem(item_idx);
+                const token_idx = switch (item) {
+                    .upper_ident => |ui| ui.ident,
+                    .upper_ident_star => |uis| uis.ident,
+                    .lower_ident => |li| li.ident,
+                    .malformed => continue, // Skip malformed items
+                };
+                const item_name = parse_ast.resolve(token_idx);
+                try exposed_modules.append(try allocs.arena.dupe(u8, item_name));
             }
         },
         else => {

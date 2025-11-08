@@ -229,9 +229,25 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 
         std.debug.print("  Loading module {}: offset=0x{x}\n", .{i, module_env_offsets[i]});
 
-        // Deserialize the ModuleEnv, which properly reconstructs runtime fields
-        // Empty strings are used for source and module_name since they're not needed in the interpreter
-        module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
+        // Extract and relocate module_name from serialized data
+        const module_name_slice_parts = serialized_ptr.module_name;
+        const module_name_ptr = @as(usize, @intCast(module_name_slice_parts[0]));
+        const module_name_len = @as(usize, @intCast(module_name_slice_parts[1]));
+        std.debug.print("    Raw module_name_ptr: 0x{x}, len: {}\n", .{module_name_ptr, module_name_len});
+
+        const relocated_module_name_ptr = if (module_name_ptr > 0)
+            @as([*]const u8, @ptrFromInt(@as(usize, @intCast(@as(isize, @intCast(module_name_ptr)) + offset))))
+        else
+            @as([*]const u8, @ptrFromInt(@as(usize, 0)));
+
+        const module_name = if (module_name_len > 0 and module_name_ptr > 0)
+            relocated_module_name_ptr[0..module_name_len]
+        else
+            "";
+
+        // Deserialize the ModuleEnv with the relocated module_name
+        // Empty string is used for source since it's not needed in the interpreter
+        module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", module_name);
 
         std.debug.print("    Module name: {s}\n", .{module_envs[i].module_name});
     }
