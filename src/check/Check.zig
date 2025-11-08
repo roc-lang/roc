@@ -591,7 +591,7 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 // file //
 
 /// Check the types for all defs
-/// Copy builtin types (Bool, Result) from their modules into the current module's type store
+/// Copy builtin types from their modules into the current module's type store
 /// This is necessary because type variables are module-specific - we can't use Vars from
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
@@ -645,7 +645,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.generateStmtTypeDeclType(stmt_idx);
     }
 
-    // Copy builtin types (Bool, Result) into this module's type store
+    // Copy builtin types into this module's type store
     // This must happen AFTER type declarations are generated so that when compiling
     // Builtin itself, the Bool and Try types have already been created
     try self.copyBuiltinTypes();
@@ -701,7 +701,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try ensureTypeStoreIsFilled(self);
 
-    // Copy builtin types (Bool, Result) into this module's type store
+    // Copy builtin types into this module's type store
     try self.copyBuiltinTypes();
 
     // First, iterate over the statements, generating types for each type declaration
