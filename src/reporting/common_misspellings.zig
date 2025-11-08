@@ -6,17 +6,12 @@ const std = @import("std");
 pub const CommonMisspellings = struct {
     /// Token misspellings - mistakes that appear during tokenization
     pub const tokens = std.StaticStringMap([]const u8).initComptime(.{
-        // Boolean operators
         .{ "&&", "Roc uses the keyword `and` instead of `&&`, and the keyword `or` instead of `||`." },
         .{ "||", "Roc uses the keyword `and` instead of `&&`, and the keyword `or` instead of `||`." },
         .{ "\\", "Roc syntax does not use single backslashes. Roc lambda syntax is `|arg1, arg2| body`, and double backslash (`\\\\`) begins a line in a multiline string." },
-
-        // Comparison operators
         .{ "/=", "Roc uses `!=` for inequality, not `/=`." },
         .{ "===", "Roc uses `==` for equality comparison, not `===`." },
         .{ "!==", "Roc uses `!=` for inequality comparison, not `!==`." },
-
-        // Other common syntax
         .{ "++", "Roc doesn't have a `++` operator. Use `x + 1` for incrementing, or `List.concat` for concatenating lists." },
         .{ "--", "Roc doesn't have a `--` operator. Use `x - 1` for decrementing." },
     });
