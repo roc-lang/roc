@@ -18,19 +18,11 @@ Builtin := [].{
 		first = |list| List.get(list, 0)
 
 		get : List(elem), U64 -> Try(elem, [ListWasEmpty])
-		get = |list, index|
-			if List.is_empty(list) {
-				Try.Err(ListWasEmpty)
-			} else {
-				# list_get_unsafe is a top-level low-level function
-				# It returns the element if in bounds, or crashes if out of bounds
-				# We need to check bounds first
-				if index >= List.len(list) {
-					Try.Err(ListWasEmpty)
-				} else {
-					Try.Ok(list_get_unsafe(list, index))
-				}
-			}
+		get = |list, index| if index < List.len(list) {
+			Try.Ok(list_get_unsafe(list, index))
+		} else {
+			Try.Err(ListWasEmpty)
+		}
 
 		map : List(a), (a -> b) -> List(b)
 		map = |_, _| []
