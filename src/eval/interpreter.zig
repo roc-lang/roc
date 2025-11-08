@@ -2109,10 +2109,10 @@ pub const Interpreter = struct {
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .str_is_empty expects 1 argument
 
                 const str_arg = args[0];
-                if (str_arg.ptr == null) return error.TypeMismatch;
+                std.debug.assert(str_arg.ptr != null); // low-level .str_is_empty expects non-null string pointer
 
                 const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
                 const result = builtins.str.isEmpty(roc_str.*);
@@ -2123,10 +2123,10 @@ pub const Interpreter = struct {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
                 // We need to cast usize -> u64 for 32-bit targets (e.g. wasm32).
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .list_len expects 1 argument
 
                 const list_arg = args[0];
-                if (list_arg.ptr == null) return error.TypeMismatch;
+                std.debug.assert(list_arg.ptr != null); // low-level .list_len expects non-null list pointer
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const len_usize = builtins.list.listLen(roc_list.*);
@@ -2141,10 +2141,10 @@ pub const Interpreter = struct {
             },
             .list_is_empty => {
                 // List.is_empty : List(a) -> Bool
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .list_is_empty expects 1 argument
 
                 const list_arg = args[0];
-                if (list_arg.ptr == null) return error.TypeMismatch;
+                std.debug.assert(list_arg.ptr != null); // low-level .list_is_empty expects non-null list pointer
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const result = builtins.list.listIsEmpty(roc_list.*);
@@ -2155,17 +2155,15 @@ pub const Interpreter = struct {
                 // Internal operation: Get element at index without bounds checking
                 // Args: List(a), U64 (index)
                 // Returns: a (the element)
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .list_get_unsafe expects 2 arguments
 
                 const list_arg = args[0];
                 const index_arg = args[1];
 
-                if (list_arg.ptr == null) return error.TypeMismatch;
+                std.debug.assert(list_arg.ptr != null); // low-level .list_get_unsafe expects non-null list pointer
 
                 // Extract element layout from List(a)
-                if (list_arg.layout.tag != .list and list_arg.layout.tag != .list_of_zst) {
-                    return error.TypeMismatch;
-                }
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const index = index_arg.asI128(); // U64 stored as i128
@@ -2211,7 +2209,7 @@ pub const Interpreter = struct {
             // Bool operations
             .bool_is_eq => {
                 // Bool.is_eq : Bool, Bool -> Bool
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .bool_is_eq expects 2 arguments
                 const lhs = args[0].asBool();
                 const rhs = args[1].asBool();
                 const result = lhs == rhs;
@@ -2219,7 +2217,7 @@ pub const Interpreter = struct {
             },
             .bool_is_ne => {
                 // Bool.is_ne : Bool, Bool -> Bool
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .bool_is_ne expects 2 arguments
                 const lhs = args[0].asBool();
                 const rhs = args[1].asBool();
                 const result = lhs != rhs;
@@ -2229,7 +2227,7 @@ pub const Interpreter = struct {
             // Numeric type checking operations
             .num_is_zero => {
                 // num.is_zero : num -> Bool
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .num_is_zero expects 1 argument
                 const num_val = try self.extractNumericValue(args[0]);
                 const result = switch (num_val) {
                     .int => |i| i == 0,
@@ -2241,7 +2239,7 @@ pub const Interpreter = struct {
             },
             .num_is_negative => {
                 // num.is_negative : num -> Bool (signed types only)
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .num_is_negative expects 1 argument
                 const num_val = try self.extractNumericValue(args[0]);
                 const result = switch (num_val) {
                     .int => |i| i < 0,
@@ -2253,7 +2251,7 @@ pub const Interpreter = struct {
             },
             .num_is_positive => {
                 // num.is_positive : num -> Bool (signed types only)
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .num_is_positive expects 1 argument
                 const num_val = try self.extractNumericValue(args[0]);
                 const result = switch (num_val) {
                     .int => |i| i > 0,
@@ -2267,7 +2265,7 @@ pub const Interpreter = struct {
             // Numeric comparison operations
             .num_is_eq => {
                 // num.is_eq : num, num -> Bool (all integer types + Dec, NOT F32/F64)
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_is_eq expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result = switch (lhs) {
@@ -2282,7 +2280,7 @@ pub const Interpreter = struct {
             },
             .num_is_ne => {
                 // num.is_ne : num, num -> Bool (Dec only)
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_is_ne expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result = switch (lhs) {
@@ -2296,7 +2294,7 @@ pub const Interpreter = struct {
             },
             .num_is_gt => {
                 // num.is_gt : num, num -> Bool
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_is_gt expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result = switch (lhs) {
@@ -2309,7 +2307,7 @@ pub const Interpreter = struct {
             },
             .num_is_gte => {
                 // num.is_gte : num, num -> Bool
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_is_gte expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result = switch (lhs) {
@@ -2322,7 +2320,7 @@ pub const Interpreter = struct {
             },
             .num_is_lt => {
                 // num.is_lt : num, num -> Bool
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_is_lt expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result = switch (lhs) {
@@ -2335,7 +2333,7 @@ pub const Interpreter = struct {
             },
             .num_is_lte => {
                 // num.is_lte : num, num -> Bool
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_is_lte expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result = switch (lhs) {
@@ -2350,7 +2348,7 @@ pub const Interpreter = struct {
             // Numeric arithmetic operations
             .num_negate => {
                 // num.negate : num -> num (signed types only)
-                if (args.len != 1) return error.TypeMismatch;
+                std.debug.assert(args.len == 1); // low-level .num_negate expects 1 argument
                 const num_val = try self.extractNumericValue(args[0]);
                 const result_layout = args[0].layout;
 
@@ -2367,7 +2365,7 @@ pub const Interpreter = struct {
                 return out;
             },
             .num_plus => {
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_plus expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result_layout = args[0].layout;
@@ -2385,7 +2383,7 @@ pub const Interpreter = struct {
                 return out;
             },
             .num_minus => {
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_minus expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result_layout = args[0].layout;
@@ -2403,7 +2401,7 @@ pub const Interpreter = struct {
                 return out;
             },
             .num_times => {
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_times expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result_layout = args[0].layout;
@@ -2421,7 +2419,7 @@ pub const Interpreter = struct {
                 return out;
             },
             .num_div_by => {
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_div_by expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result_layout = args[0].layout;
@@ -2452,7 +2450,7 @@ pub const Interpreter = struct {
                 return out;
             },
             .num_rem_by => {
-                if (args.len != 2) return error.TypeMismatch;
+                std.debug.assert(args.len == 2); // low-level .num_rem_by expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
                 const result_layout = args[0].layout;
