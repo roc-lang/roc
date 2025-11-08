@@ -2463,7 +2463,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // Unify this expression with the referenced pattern
         },
         .e_lookup_external => |ext| {
-            std.debug.print("DEBUG Check: e_lookup_external module_idx={} node_idx={}\n", .{@intFromEnum(ext.module_idx), ext.target_node_idx});
+            std.debug.print("DEBUG Check: e_lookup_external module_idx={} node_idx={}\n", .{ @intFromEnum(ext.module_idx), ext.target_node_idx });
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
                 // Check what type was resolved
                 const resolved = self.types.resolveVar(ext_ref.local_var);
@@ -2728,7 +2728,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         // Now, check the call args against the type of function
                         std.debug.print("DEBUG Check e_call: mb_func is_null={}\n", .{mb_func == null});
                         if (mb_func) |func| {
-                            std.debug.print("  func.args.len={} call_args.len={}\n", .{self.types.sliceVars(func.args).len, call_arg_expr_idxs.len});
+                            std.debug.print("  func.args.len={} call_args.len={}\n", .{ self.types.sliceVars(func.args).len, call_arg_expr_idxs.len });
                             const func_args = self.types.sliceVars(func.args);
 
                             // Special case: if func has 1 arg that is empty tuple () and call has 0 args, that's valid
@@ -3039,7 +3039,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
         },
         .e_hosted_lambda => |hosted| {
-            std.debug.print("DEBUG Check: e_hosted_lambda index={}, has expected={}\n", .{hosted.index, expected == .expected});
+            std.debug.print("DEBUG Check: e_hosted_lambda index={}, has expected={}\n", .{ hosted.index, expected == .expected });
             if (expected == .expected) {
                 std.debug.print("  Expected type from_annotation={}\n", .{expected.expected.from_annotation});
             }

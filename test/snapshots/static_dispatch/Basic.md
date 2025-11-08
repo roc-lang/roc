@@ -168,6 +168,20 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "to_str"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Basic") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "to_str2"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Basic") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
 		(p-assign (ident "helper1"))
 		(e-lambda
 			(args
@@ -271,6 +285,8 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
@@ -281,6 +297,8 @@ main = (helper1(val), helper2(val))
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))

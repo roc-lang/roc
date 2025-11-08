@@ -1135,10 +1135,10 @@ fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8,
     // Create a properly aligned header structure
     const Header = struct {
         parent_base_addr: u64,
-        module_count: u32,  // Number of ModuleEnvs stored
-        entry_count: u32,   // Number of entry points
+        module_count: u32, // Number of ModuleEnvs stored
+        entry_count: u32, // Number of entry points
         def_indices_offset: u64,
-        module_envs_offset: u64,  // Offset to array of module env offsets
+        module_envs_offset: u64, // Offset to array of module env offsets
     };
 
     const header_ptr = try shm_allocator.create(Header);
@@ -1402,7 +1402,7 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
                 if (std.mem.endsWith(u8, module_name, ".roc")) {
                     module_name = module_name[0 .. module_name.len - 4];
                 }
-                const qualified_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}", .{module_name, local_name});
+                const qualified_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}", .{ module_name, local_name });
                 defer allocs.gpa.free(qualified_name);
 
                 const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
@@ -1651,19 +1651,31 @@ fn compileAppModuleToSharedMemory(
     for (env.imports.imports.items.items[1..], 1..) |import_str_idx, i| {
         const import_name = env.common.getString(import_str_idx);
         // Match to one of the platform modules dynamically
-        // Extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
-        const import_module_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx|
-            import_name[dot_idx + 1..]
+        // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
+        const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
+            import_name[0 .. import_name.len - 4]
         else
             import_name;
+
+        // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
+        const import_module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
+            without_ext[dot_idx + 1 ..]
+        else
+            without_ext;
 
         // Find matching platform module
         var found_match = false;
         for (platform_envs) |platform_env| {
             const platform_module_name = platform_env.module_name;
 
-            // Match "Stdout" to "Stdout.roc", etc.
-            if (std.mem.indexOf(u8, platform_module_name, import_module_name) != null) {
+            // Strip .roc extension if present for exact matching
+            const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
+                platform_module_name[0 .. platform_module_name.len - 4]
+            else
+                platform_module_name;
+
+            // Match "Stdout" to "Stdout.roc" via exact match, not substring
+            if (std.mem.eql(u8, name_without_ext, import_module_name)) {
                 imported_modules_slice[i] = platform_env;
                 found_match = true;
                 break;

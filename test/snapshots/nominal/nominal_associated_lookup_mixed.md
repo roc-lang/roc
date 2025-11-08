@@ -20,7 +20,28 @@ result = Foo.transform(Foo.defaultBar)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**MISSING NESTED TYPE**
+`Foo` is in scope, but it doesn't have a nested type named `Bar`.
+
+It's referenced here:
+**nominal_associated_lookup_mixed.md:6:17:6:24:**
+```roc
+    transform : Foo.Bar -> Foo.Bar
+```
+                ^^^^^^^
+
+
+**MISSING NESTED TYPE**
+`Foo` is in scope, but it doesn't have a nested type named `Bar`.
+
+It's referenced here:
+**nominal_associated_lookup_mixed.md:6:28:6:35:**
+```roc
+    transform : Foo.Bar -> Foo.Bar
+```
+                           ^^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -90,6 +111,13 @@ result = Foo.transform(Foo.defaultBar)
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "transform"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-malformed))))
+	(d-let
 		(p-assign (ident "result"))
 		(e-call
 			(e-lookup-local
@@ -128,6 +156,7 @@ result = Foo.transform(Foo.defaultBar)
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar -> Foo.Bar")))
@@ -137,6 +166,7 @@ result = Foo.transform(Foo.defaultBar)
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))))

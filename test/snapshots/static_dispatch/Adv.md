@@ -318,6 +318,36 @@ main = {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "to_str"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "to_u64"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "U64") (builtin)))))
+	(d-let
+		(p-assign (ident "update_str"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Adv") (local)))))
+	(d-let
+		(p-assign (ident "update_u64"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "Adv") (local)))))
+	(d-let
 		(p-assign (ident "mismatch"))
 		(e-block
 			(s-let
@@ -496,6 +526,10 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "_a"))
@@ -508,6 +542,10 @@ main = {
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
 	(expressions
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "_a"))

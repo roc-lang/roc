@@ -30,7 +30,7 @@ fn stderrTraceWriter() *std.Io.Writer {
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
 var global_env_ptr: ?*ModuleEnv = null;
-var global_module_envs: ?[]const *ModuleEnv = null;  // All loaded module envs
+var global_module_envs: ?[]const *ModuleEnv = null; // All loaded module envs
 var shm_mutex: std.Thread.Mutex = .{};
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -46,10 +46,10 @@ const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes pad
 // Header structure that matches the one in main.zig
 const Header = struct {
     parent_base_addr: u64,
-    module_count: u32,  // Number of ModuleEnvs stored
-    entry_count: u32,   // Number of entry points
+    module_count: u32, // Number of ModuleEnvs stored
+    entry_count: u32, // Number of entry points
     def_indices_offset: u64,
-    module_envs_offset: u64,  // Offset to array of module env offsets
+    module_envs_offset: u64, // Offset to array of module env offsets
 };
 
 /// Comprehensive error handling for the shim
@@ -77,7 +77,7 @@ const ShimError = error{
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         var buf: [512]u8 = undefined;
-        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s} (entry_idx={})", .{@errorName(err), entry_idx}) catch "Error evaluating from shared memory";
+        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s} (entry_idx={})", .{ @errorName(err), entry_idx }) catch "Error evaluating from shared memory";
         ops.crash(msg2);
     };
 }
@@ -161,7 +161,6 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
 
-
     // Evaluate the expression (with optional arguments)
     std.debug.print("TRACE roc_entrypoint: About to evaluate expression\n", .{});
     interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
@@ -227,23 +226,18 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_env_offsets[i]));
         const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
 
-        std.debug.print("  Loading module {}: offset=0x{x}\n", .{i, module_env_offsets[i]});
+        std.debug.print("  Loading module {}: offset=0x{x}\n", .{ i, module_env_offsets[i] });
 
         // Extract and relocate module_name from serialized data
         const module_name_slice_parts = serialized_ptr.module_name;
         const module_name_ptr = @as(usize, @intCast(module_name_slice_parts[0]));
         const module_name_len = @as(usize, @intCast(module_name_slice_parts[1]));
-        std.debug.print("    Raw module_name_ptr: 0x{x}, len: {}\n", .{module_name_ptr, module_name_len});
+        std.debug.print("    Raw module_name_ptr: 0x{x}, len: {}\n", .{ module_name_ptr, module_name_len });
 
-        const relocated_module_name_ptr = if (module_name_ptr > 0)
-            @as([*]const u8, @ptrFromInt(@as(usize, @intCast(@as(isize, @intCast(module_name_ptr)) + offset))))
-        else
-            @as([*]const u8, @ptrFromInt(@as(usize, 0)));
-
-        const module_name = if (module_name_len > 0 and module_name_ptr > 0)
-            relocated_module_name_ptr[0..module_name_len]
-        else
-            "";
+        const module_name = if (module_name_len > 0 and module_name_ptr > 0) blk: {
+            const relocated_module_name_ptr = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(@as(isize, @intCast(module_name_ptr)) + offset))));
+            break :blk relocated_module_name_ptr[0..module_name_len];
+        } else "";
 
         // Deserialize the ModuleEnv with the relocated module_name
         // Empty string is used for source since it's not needed in the interpreter
@@ -301,10 +295,10 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
     } else &[_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
 
     std.debug.print("=== SHIM: Creating interpreter ===\n", .{});
-    std.debug.print("Primary env: {*} (module: {s})\n", .{env_ptr, env_ptr.module_name});
+    std.debug.print("Primary env: {*} (module: {s})\n", .{ env_ptr, env_ptr.module_name });
     std.debug.print("Other envs count: {}\n", .{other_envs.len});
     for (other_envs, 0..) |other_env, i| {
-        std.debug.print("  Other env {}: {*} (module: {s})\n", .{i, other_env, other_env.module_name});
+        std.debug.print("  Other env {}: {*} (module: {s})\n", .{ i, other_env, other_env.module_name });
     }
 
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, other_envs) catch {

@@ -39,7 +39,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             if (pattern == .assign) {
                 const ident = pattern.assign.ident;
                 const ident_name = env.getIdent(ident);
-                std.debug.print("DEBUG: Processing anno-only def: {s}, has annotation: {}\n", .{ident_name, def.annotation != null});
+                std.debug.print("DEBUG: Processing anno-only def: {s}, has annotation: {}\n", .{ ident_name, def.annotation != null });
 
                 // Extract the number of arguments from the annotation
                 const annotation = env.store.getAnnotation(def.annotation.?);
@@ -96,12 +96,14 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 }
 
                 // Create e_hosted_lambda expression
-                const expr_idx = try env.addExpr(.{ .e_hosted_lambda = .{
-                    .symbol_name = ident,
-                    .index = 0,  // Placeholder; will be assigned during sorting pass
-                    .args = args_span,
-                    .body = body_idx,
-                } }, base.Region.zero());
+                const expr_idx = try env.addExpr(.{
+                    .e_hosted_lambda = .{
+                        .symbol_name = ident,
+                        .index = 0, // Placeholder; will be assigned during sorting pass
+                        .args = args_span,
+                        .body = body_idx,
+                    },
+                }, base.Region.zero());
 
                 // Ensure types array has an entry for this new expression
                 const expr_int = @intFromEnum(expr_idx);
@@ -135,7 +137,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 pub const HostedFunctionInfo = struct {
     symbol_name: base.Ident.Idx,
     expr_idx: CIR.Expr.Idx,
-    name_text: []const u8,  // For sorting
+    name_text: []const u8, // For sorting
 };
 
 /// Collect all hosted functions from the module (transitively through imports)
@@ -159,7 +161,7 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
             if (std.mem.endsWith(u8, module_name, ".roc")) {
                 module_name = module_name[0 .. module_name.len - 4];
             }
-            const qualified_name = try std.fmt.allocPrint(env.gpa, "{s}.{s}", .{module_name, local_name});
+            const qualified_name = try std.fmt.allocPrint(env.gpa, "{s}.{s}", .{ module_name, local_name });
             defer env.gpa.free(qualified_name);
 
             // Strip the `!` suffix for sorting (e.g., "Stdout.line!" -> "Stdout.line")
@@ -170,7 +172,6 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
 
             // Allocate a copy for storage
             const name_copy = try env.gpa.dupe(u8, stripped_name);
-
 
             try hosted_fns.append(env.gpa, .{
                 .symbol_name = hosted.symbol_name,
@@ -189,7 +190,7 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
     std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
 
     for (hosted_fns.items, 0..) |fn_info, i| {
-        std.debug.print("  [{d}] {s}\n", .{i, fn_info.name_text});
+        std.debug.print("  [{d}] {s}\n", .{ i, fn_info.name_text });
     }
 
     return hosted_fns;

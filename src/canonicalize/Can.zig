@@ -489,7 +489,7 @@ fn processTypeDeclFirstPass(
         const module_name_text = self.env.getIdent(self.env.module_name_idx);
         // Check if the qualified name matches the module name (with or without .roc extension)
         const is_main_type = std.mem.eql(u8, qualified_name_text, module_name_text) or
-            (std.mem.endsWith(u8, module_name_text, ".roc") and std.mem.eql(u8, qualified_name_text, module_name_text[0..module_name_text.len-4]));
+            (std.mem.endsWith(u8, module_name_text, ".roc") and std.mem.eql(u8, qualified_name_text, module_name_text[0 .. module_name_text.len - 4]));
         if (is_main_type) {
             // This is the main type of the type module - set its node index
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
@@ -1304,12 +1304,12 @@ pub fn canonicalizeFile(
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
 
-        _ = self.env.store.sliceDefs(self.env.all_defs).len;
+    _ = self.env.store.sliceDefs(self.env.all_defs).len;
 
     // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
     // Only do this when building platform modules (i.e., when root module is a platform)
-    std.debug.print("DEBUG: canDefinitions called for module: {s}, kind={s}, building_platform={}\n", .{self.env.module_name, @tagName(self.env.module_kind), self.env.building_platform_modules});
+    std.debug.print("DEBUG: canDefinitions called for module: {s}, kind={s}, building_platform={}\n", .{ self.env.module_name, @tagName(self.env.module_kind), self.env.building_platform_modules });
 
     // Debug: Print all defs for app modules
     const is_test_module = std.mem.eql(u8, self.env.module_name, "stdin_simple.roc") or std.mem.eql(u8, self.env.module_name, "app.roc");
@@ -1319,18 +1319,18 @@ pub fn canonicalizeFile(
         for (all_defs, 0..) |def_idx, def_i| {
             const def = self.env.store.getDef(def_idx);
             const expr = self.env.store.getExpr(def.expr);
-            std.debug.print("  def[{}] expr_idx={} expr_tag={s}\n", .{def_i, @intFromEnum(def.expr), @tagName(expr)});
+            std.debug.print("  def[{}] expr_idx={} expr_tag={s}\n", .{ def_i, @intFromEnum(def.expr), @tagName(expr) });
 
             // If it's a lambda, show its body
             if (expr == .e_lambda) {
                 const body_expr = self.env.store.getExpr(expr.e_lambda.body);
-                std.debug.print("    lambda body: expr_idx={} expr_tag={s}\n", .{@intFromEnum(expr.e_lambda.body), @tagName(body_expr)});
+                std.debug.print("    lambda body: expr_idx={} expr_tag={s}\n", .{ @intFromEnum(expr.e_lambda.body), @tagName(body_expr) });
 
                 // If the body is a call, show what it's calling
                 if (body_expr == .e_call) {
                     const func_expr = self.env.store.getExpr(body_expr.e_call.func);
                     const call_args = self.env.store.sliceExpr(body_expr.e_call.args);
-                    std.debug.print("      call func: expr_idx={} expr_tag={s} num_args={}\n", .{@intFromEnum(body_expr.e_call.func), @tagName(func_expr), call_args.len});
+                    std.debug.print("      call func: expr_idx={} expr_tag={s} num_args={}\n", .{ @intFromEnum(body_expr.e_call.func), @tagName(func_expr), call_args.len });
                 }
             }
         }
@@ -1381,7 +1381,7 @@ pub fn canonicalizeFile(
                 const def_idx = try self.env.addDef(.{
                     .pattern = pattern_idx,
                     .expr = expr_idx,
-                    .annotation = null,  // Type annotations on Type Module items aren't stored as CIR annotations
+                    .annotation = null, // Type annotations on Type Module items aren't stored as CIR annotations
                     .kind = .let,
                 }, base.Region.zero());
 
@@ -1403,12 +1403,10 @@ pub fn canonicalizeFile(
                 try self.env.store.addScratchDef(def_idx);
             }
             self.env.all_defs = try self.env.store.defSpanFrom(combined_start);
-
         }
 
         var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
         defer modified_def_indices.deinit(self.env.gpa);
-
 
         // If we transformed any annotation-only defs, collect and sort them to assign indices
         if (modified_def_indices.items.len > 0) {
@@ -3801,9 +3799,7 @@ pub fn canonicalizeExpr(
             }
 
             // Regular field access canonicalization
-            return CanonicalizedExpr{
-                .idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null,
-                .free_vars = null };
+            return CanonicalizedExpr{ .idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null, .free_vars = null };
         },
         .local_dispatch => |local_dispatch| {
             // local_dispatch is structurally identical to field_access (both are BinOp)
@@ -8770,8 +8766,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     } else null;
 
     // If we didn't find a valid node index, return null to fall through to error handling
-    if (target_node_idx_opt == null) {
-    }
+    if (target_node_idx_opt == null) {}
     const target_node_idx = target_node_idx_opt orelse return null;
 
     // Create the e_lookup_external expression with Import.Idx

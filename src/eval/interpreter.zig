@@ -191,18 +191,30 @@ pub const Interpreter = struct {
                     }
                 } else {
                     // Dynamically match any platform module
-                    // Extract module name from import (e.g., "pf.Stdout" -> "Stdout")
-                    const module_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx|
-                        import_name[dot_idx + 1..]
+                    // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
+                    const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
+                        import_name[0 .. import_name.len - 4]
                     else
                         import_name;
+
+                    // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
+                    const module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
+                        without_ext[dot_idx + 1 ..]
+                    else
+                        without_ext;
 
                     // Find matching platform module by searching through all other_envs
                     for (other_envs) |platform_env| {
                         const platform_module_name = platform_env.module_name;
 
-                        // Match "Stdout" to "Stdout.roc", etc.
-                        if (std.mem.indexOf(u8, platform_module_name, module_name) != null) {
+                        // Strip .roc extension if present for exact matching
+                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
+                            platform_module_name[0 .. platform_module_name.len - 4]
+                        else
+                            platform_module_name;
+
+                        // Match "Stdout" to "Stdout.roc" via exact match, not substring
+                        if (std.mem.eql(u8, name_without_ext, module_name)) {
                             matched_module = platform_env;
                             break;
                         }
@@ -384,10 +396,9 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
-            // TEMPORARY: Comment out decref to debug
-            // defer result_value.decref(&self.runtime_layout_store, roc_ops);
+            defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
-            _ = result_value;
+            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
 
             return;
         }
@@ -1724,7 +1735,7 @@ pub const Interpreter = struct {
 
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != arg_indices.len) {
-                        std.debug.print("ERROR: TypeMismatch at line 1658 - params.len={} != arg_indices.len={}\n", .{params.len, arg_indices.len});
+                        std.debug.print("ERROR: TypeMismatch at line 1658 - params.len={} != arg_indices.len={}\n", .{ params.len, arg_indices.len });
                         return error.TypeMismatch;
                     }
                     // Provide closure context for capture lookup during body eval
@@ -1752,7 +1763,7 @@ pub const Interpreter = struct {
                     const lambda = func_expr.e_lambda;
                     const params = self.env.store.slicePatterns(lambda.args);
                     if (params.len != arg_indices.len) {
-                        std.debug.print("ERROR: TypeMismatch at line 1686 - params.len={} != arg_indices.len={}\n", .{params.len, arg_indices.len});
+                        std.debug.print("ERROR: TypeMismatch at line 1686 - params.len={} != arg_indices.len={}\n", .{ params.len, arg_indices.len });
                         return error.TypeMismatch;
                     }
                     var bind_count: usize = 0;
@@ -2095,7 +2106,7 @@ pub const Interpreter = struct {
                 // Print all keys in import_envs
                 var iter = self.import_envs.iterator();
                 while (iter.next()) |entry| {
-                    std.debug.print("  import_envs key: {} -> env {*}\n", .{entry.key_ptr.*, entry.value_ptr.*});
+                    std.debug.print("  import_envs key: {} -> env {*}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
                 }
 
                 // Cross-module reference - look up in imported module
@@ -2104,7 +2115,7 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
-                std.debug.print("Found module env: {*} (module: {s})\n", .{other_env, other_env.module_name});
+                std.debug.print("Found module env: {*} (module: {s})\n", .{ other_env, other_env.module_name });
 
                 // Check what type of node this is by using the store's method
                 const is_def = other_env.store.isDefNode(lookup.target_node_idx);

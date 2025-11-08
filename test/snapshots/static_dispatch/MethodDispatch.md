@@ -232,6 +232,24 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "get_value"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Container") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "transform"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Container") (local))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (builtin))))
+				(ty-lookup (name "Container") (local)))))
+	(d-let
 		(p-assign (ident "extract"))
 		(e-lambda
 			(args
@@ -402,6 +420,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "a -> Str where [a.get_value : a -> Str]"))
 		(patt (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
 		(patt (type "Container"))
@@ -416,6 +436,8 @@ NO CHANGE
 		(nominal (type "Container")
 			(ty-header (name "Container"))))
 	(expressions
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "a -> Str where [a.get_value : a -> Str]"))
 		(expr (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
 		(expr (type "Container"))
