@@ -88,62 +88,8 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     return 0;
 }
 
-/// RocStr type matching Roc's internal string representation
-const RocStr = extern struct {
-    bytes: ?[*]u8,
-    len: usize,
-    capacity: isize,
-
-    /// Create a RocStr from a Zig slice (small string optimization aware)
-    fn fromSlice(slice: []const u8, ops: *builtins.host_abi.RocOps) RocStr {
-        const len = slice.len;
-
-        // Small string optimization: strings <= 23 bytes are stored inline
-        if (len <= 23) {
-            var result = RocStr{
-                .bytes = null,
-                .len = len,
-                .capacity = -1, // Negative capacity indicates small string
-            };
-
-            // Copy bytes into the inline storage (stored in the bytes pointer space)
-            const dest: [*]u8 = @ptrCast(&result.bytes);
-            @memcpy(dest[0..len], slice);
-
-            return result;
-        }
-
-        // Large string: allocate on heap
-        var roc_alloc = builtins.host_abi.RocAlloc{
-            .length = len,
-            .alignment = @alignOf(u8),
-            .answer = undefined,
-        };
-
-        ops.roc_alloc(&roc_alloc, ops.env);
-
-        const bytes: [*]u8 = @ptrCast(@alignCast(roc_alloc.answer));
-        @memcpy(bytes[0..len], slice);
-
-        return RocStr{
-            .bytes = bytes,
-            .len = len,
-            .capacity = @intCast(len),
-        };
-    }
-
-    /// Get the bytes as a Zig slice
-    fn asSlice(self: *const RocStr) []const u8 {
-        if (self.capacity < 0) {
-            // Small string: bytes are stored inline
-            const inline_bytes: [*]const u8 = @ptrCast(&self.bytes);
-            return inline_bytes[0..self.len];
-        } else {
-            // Large string: bytes are on heap
-            return if (self.bytes) |ptr| ptr[0..self.len] else &[_]u8{};
-        }
-    }
-};
+// Use the actual RocStr from builtins instead of defining our own
+const RocStr = builtins.str.RocStr;
 
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
@@ -156,6 +102,7 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     const Args = extern struct { str: RocStr };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
 
+    std.debug.print("HOST: hostedStderrLine called\n", .{});
     const message = args.str.asSlice();
     std.fs.File.stderr().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
@@ -171,7 +118,11 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     const Args = extern struct { str: RocStr };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
 
+    std.debug.print("HOST: hostedStdoutLine called\n", .{});
+    std.debug.print("HOST: args.str.bytes={any}, length={}, capacity_or_alloc_ptr={}\n", .{args.str.bytes, args.str.length, args.str.capacity_or_alloc_ptr});
+
     const message = args.str.asSlice();
+    std.debug.print("HOST: message.len={}, message.ptr={*}\n", .{message.len, message.ptr});
     std.fs.File.stdout().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
 

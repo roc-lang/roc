@@ -17,14 +17,12 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // This is necessary because varFrom(node_idx) assumes type_var index == node index
     const current_nodes = env.store.nodes.len();
     const current_types = env.types.len();
-    std.debug.print("DEBUG replaceAnnoOnlyWithHosted: current_nodes={}, current_types={}\n", .{current_nodes, current_types});
     if (current_types < current_nodes) {
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
             _ = env.types.fresh() catch unreachable;
         }
-        std.debug.print("DEBUG replaceAnnoOnlyWithHosted: filled types array to {}\n", .{env.types.len()});
     }
 
     // Iterate through all defs and replace ALL anno-only defs with hosted implementations
@@ -85,15 +83,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 const def_node = env.store.nodes.get(def_node_idx);
                 const extra_start = def_node.data_1;
 
-                const old_expr = env.store.extra_data.items.items[extra_start + 1];
                 env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
-
-                std.debug.print("DEBUG HostedCompiler: Updated def_idx={}, old_expr={}, new_expr={}\n", .{def_idx, old_expr, @intFromEnum(expr_idx)});
-
-                // Verify the update by reading it back via getDef
-                const verify_def = env.store.getDef(def_idx);
-                const verify_expr = env.store.getExpr(verify_def.expr);
-                std.debug.print("DEBUG HostedCompiler: Verification - def_idx={}, expr type={s}\n", .{def_idx, @tagName(verify_expr)});
 
                 // Track this modified def index
                 try modified_def_indices.append(gpa, def_idx);
@@ -144,7 +134,6 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
             // Allocate a copy for storage
             const name_copy = try env.gpa.dupe(u8, stripped_name);
 
-            std.debug.print("DEBUG collectAndSortHostedFunctions: module={s}, local={s}, qualified={s}, stripped={s}\n", .{module_name, local_name, qualified_name, stripped_name});
 
             try hosted_fns.append(env.gpa, .{
                 .symbol_name = hosted.symbol_name,
@@ -162,7 +151,6 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
     };
     std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
 
-    std.debug.print("DEBUG collectAndSortHostedFunctions: Sorted {} functions:\n", .{hosted_fns.items.len});
     for (hosted_fns.items, 0..) |fn_info, i| {
         std.debug.print("  [{d}] {s}\n", .{i, fn_info.name_text});
     }

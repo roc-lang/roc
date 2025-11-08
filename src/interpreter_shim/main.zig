@@ -161,13 +161,14 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
 
-    std.debug.print("DEBUG SHIM: About to evaluate expr_idx={}, def_idx={}\n", .{expr_idx, def_idx});
 
     // Evaluate the expression (with optional arguments)
+    std.debug.print("TRACE roc_entrypoint: About to evaluate expression\n", .{});
     interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
-        std.debug.print("DEBUG SHIM: evaluateExpression failed with error: {s}\n", .{@errorName(err)});
+        std.debug.print("TRACE roc_entrypoint: Evaluation failed: {}\n", .{err});
         return err;
     };
+    std.debug.print("TRACE roc_entrypoint: Evaluation completed\n", .{});
 }
 
 /// Set up ModuleEnvs from shared memory with proper relocation
@@ -265,21 +266,17 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
     // Build other_envs array: [Builtin, ...platform modules]
     // The app's imports are [Builtin, Stdout, Stderr], so other_envs must match
     const other_envs: []const *const can.ModuleEnv = if (global_module_envs) |envs| blk: {
-        std.debug.print("DEBUG: global_module_envs.len = {}\n", .{envs.len});
         if (envs.len > 1) {
             // Create array with Builtin first, then platform modules (excluding the app itself)
             var envs_with_builtin = allocator.alloc(*const can.ModuleEnv, envs.len) catch {
                 roc_ops.crash("Failed to allocate other_envs");
                 return error.InterpreterSetupFailed;
             };
-            std.debug.print("DEBUG: Allocated envs_with_builtin.len = {}\n", .{envs_with_builtin.len});
             envs_with_builtin[0] = builtin_modules.builtin_module.env;
             // Copy platform modules (skip app at index 0, include Stdout and Stderr)
             for (1..envs.len) |i| {
-                std.debug.print("DEBUG: Copying envs[{}] to envs_with_builtin[{}]\n", .{i, i});
                 envs_with_builtin[i] = envs[i];
             }
-            std.debug.print("DEBUG: Final envs_with_builtin.len = {}\n", .{envs_with_builtin.len});
             break :blk envs_with_builtin;
         } else {
             // No platform modules, just Builtin

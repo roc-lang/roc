@@ -1121,24 +1121,19 @@ fn isAppWithPlatform(allocator: std.mem.Allocator, file_path: []const u8) !bool 
 
     env.common.source = source;
 
-    var ast = parse.parse(&env.common, allocator) catch |err| {
-        std.debug.print("DEBUG isAppWithPlatform: parse error: {}\n", .{err});
+    var ast = parse.parse(&env.common, allocator) catch {
         return false;
     };
     defer ast.deinit(allocator);
 
     // Check if it's an app header
-    std.debug.print("DEBUG isAppWithPlatform: root_node_idx={}\n", .{ast.root_node_idx});
     if (ast.root_node_idx != 0) {
         const root_idx: parse.AST.Header.Idx = @enumFromInt(ast.root_node_idx);
         const root_data = ast.store.getHeader(root_idx);
-        std.debug.print("DEBUG isAppWithPlatform: root_data={}\n", .{root_data});
         const is_app = root_data == .app;
-        std.debug.print("DEBUG isAppWithPlatform: is_app={}\n", .{is_app});
         return is_app;
     }
 
-    std.debug.print("DEBUG isAppWithPlatform: root_node_idx is 0, returning false\n", .{});
     return false;
 }
 
@@ -1316,9 +1311,6 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     const stderr_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Stderr.roc" });
     defer allocs.gpa.free(stderr_path);
 
-    const host_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "Host.roc" });
-    defer allocs.gpa.free(host_path);
-
     // Create header
     const Header = struct {
         parent_base_addr: u64,
@@ -1332,11 +1324,11 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // We'll compile 4 modules: app, Stdout, Stderr, Host
-    header_ptr.module_count = 4;
+    // We'll compile 3 modules: app, Stdout, Stderr
+    header_ptr.module_count = 3;
 
     // Allocate array for module env offsets
-    const module_env_offsets_ptr = try shm_allocator.alloc(u64, 4);
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, 3);
     const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_envs_offset = module_envs_offset_location;
 
@@ -1366,27 +1358,14 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     );
     module_env_offsets_ptr[2] = @intFromPtr(stderr_env_ptr) - @intFromPtr(shm.base_ptr);
 
-    // Compile Host module (index 3)
-    const host_env_ptr = try compileModuleToSharedMemory(
-        allocs,
-        host_path,
-        "Host.roc",
-        shm_allocator,
-        &builtin_modules,
-        true, // building_platform_modules
-    );
-    module_env_offsets_ptr[3] = @intFromPtr(host_env_ptr) - @intFromPtr(shm.base_ptr);
-
     // Now that all platform modules are compiled, collect ALL hosted functions
     // from all modules and sort them globally to assign correct indices
-    std.debug.print("DEBUG: Collecting all hosted functions for global sorting\n", .{});
     const HostedCompiler = can.HostedCompiler;
     var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
     defer {
-        // TODO: Fix allocator mismatch - strings were allocated with env.gpa, need to free with same allocator
-        // for (all_hosted_fns.items) |fn_info| {
-        //     allocs.gpa.free(fn_info.name_text);
-        // }
+        // Note: name_text strings are allocated in shared memory (platform_env.gpa)
+        // and will be cleaned up when shared memory is released.
+        // We only need to clean up the ArrayList itself.
         all_hosted_fns.deinit(allocs.gpa);
     }
 
@@ -1394,9 +1373,8 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     // (Stdout and Stderr, but not Host which is internal)
     const platform_envs = [_]*ModuleEnv{ stdout_env_ptr, stderr_env_ptr };
     for (platform_envs) |platform_env| {
-        const module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
-        // Note: We don't deinit module_fns because we're transferring ownership of items to all_hosted_fns
-        // The ArrayList buffer itself will leak but it's a small one-time allocation
+        var module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
+        defer module_fns.deinit(platform_env.gpa);
 
         // Move to global list (transfer ownership of allocated strings)
         for (module_fns.items) |fn_info| {
@@ -1411,11 +1389,6 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
         }
     };
     std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-    std.debug.print("DEBUG: Global sorted hosted functions ({} total):\n", .{all_hosted_fns.items.len});
-    for (all_hosted_fns.items, 0..) |fn_info, i| {
-        std.debug.print("  [{d}] {s}\n", .{i, fn_info.name_text});
-    }
 
     // Now reassign indices globally across all modules
     // We need to track which module each function belongs to
@@ -1458,7 +1431,6 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
                     var expr_node = platform_env.store.nodes.get(expr_node_idx);
                     expr_node.data_2 = idx;
                     platform_env.store.nodes.set(expr_node_idx, expr_node);
-                    std.debug.print("DEBUG: Assigned global index {} to {s}\n", .{idx, stripped_name});
                 }
             }
         }
@@ -1470,17 +1442,9 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
         app_file_path,
         shm_allocator,
         &builtin_modules,
-        &[_]*const ModuleEnv{ stdout_env_ptr, stderr_env_ptr, host_env_ptr },
+        &[_]*const ModuleEnv{ stdout_env_ptr, stderr_env_ptr },
     );
     module_env_offsets_ptr[0] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
-
-    // Debug: print app imports
-    std.debug.print("=== APP IMPORTS ===\n", .{});
-    std.debug.print("App has {} imports\n", .{app_env_ptr.imports.imports.items.items.len});
-    for (app_env_ptr.imports.imports.items.items, 0..) |str_idx, i| {
-        const import_name = app_env_ptr.common.getString(str_idx);
-        std.debug.print("  Import {}: {s}\n", .{i, import_name});
-    }
 
     // Set up entry points from app module exports
     const exports_slice = app_env_ptr.store.sliceDefs(app_env_ptr.exports);
@@ -1631,11 +1595,8 @@ fn compileAppModuleToSharedMemory(
         const qualified_name = try std.fmt.allocPrint(allocs.gpa, "pf.{s}", .{name_without_ext});
         defer allocs.gpa.free(qualified_name);
 
-        std.debug.print("DEBUG: Adding platform module to module_envs_map: {s}\n", .{qualified_name});
-
         // Find or create the ident for the qualified module name
         const ident_idx = try env.insertIdent(base.Ident.for_text(qualified_name));
-        std.debug.print("DEBUG:   Stored with ident_idx={}\n", .{ident_idx});
 
         // Add to module_envs_map
         try module_envs_map.put(ident_idx, .{
@@ -1651,15 +1612,7 @@ fn compileAppModuleToSharedMemory(
     try canonicalizer.canonicalizeFile();
     try canonicalizer.validateForExecution();
 
-    // Check for canonicalization diagnostics
-    if (env.diagnostics.span.len > 0) {
-        std.debug.print("WARNING: {} canonicalization diagnostics generated!\n", .{env.diagnostics.span.len});
-    }
-
     // Type check with platform modules as imports
-    std.debug.print("DEBUG: About to create type checker for app module\n", .{});
-    std.debug.print("DEBUG: env.imports.imports.items.items.len = {}\n", .{env.imports.imports.items.items.len});
-    std.debug.print("DEBUG: platform_envs.len = {}\n", .{platform_envs.len});
 
     // Build imported_modules array that matches the imports
     // The imports are: Builtin (0), pf.Stdout (1), pf.Stderr (2), Stdout.roc (3 - duplicate of 1)
@@ -1673,7 +1626,6 @@ fn compileAppModuleToSharedMemory(
     // For each remaining import, find the matching platform module
     for (env.imports.imports.items.items[1..], 1..) |import_str_idx, i| {
         const import_name = env.common.getString(import_str_idx);
-        std.debug.print("DEBUG: Import {}: {s}\n", .{i, import_name});
 
         // Match to one of the platform modules
         var found_match = false;
@@ -1682,36 +1634,24 @@ fn compileAppModuleToSharedMemory(
             // Match "pf.Stdout" to "Stdout.roc", or "Stdout.roc" to "Stdout.roc"
             if (std.mem.indexOf(u8, import_name, "Stdout") != null and std.mem.indexOf(u8, platform_module_name, "Stdout") != null) {
                 imported_modules_slice[i] = platform_env;
-                std.debug.print("DEBUG:   -> Matched to Stdout module\n", .{});
                 found_match = true;
                 break;
             } else if (std.mem.indexOf(u8, import_name, "Stderr") != null and std.mem.indexOf(u8, platform_module_name, "Stderr") != null) {
                 imported_modules_slice[i] = platform_env;
-                std.debug.print("DEBUG:   -> Matched to Stderr module\n", .{});
                 found_match = true;
                 break;
             }
         }
 
         if (!found_match) {
-            std.debug.print("DEBUG:   -> WARNING: No match found, using first platform module as fallback\n", .{});
             imported_modules_slice[i] = platform_envs[0];
         }
     }
 
-    std.debug.print("DEBUG: Built imported_modules array with {} entries\n", .{imported_modules_slice.len});
-
     var checker = try Check.init(shm_allocator, &env.types, &env, imported_modules_slice, &module_envs_map, &env.store.regions, common_idents);
     defer checker.deinit();
 
-    std.debug.print("DEBUG: About to call checkFile() for app module\n", .{});
     try checker.checkFile();
-    std.debug.print("DEBUG: checkFile() completed for app module\n", .{});
-
-    // Check for type checking diagnostics
-    if (env.diagnostics.span.len > 0) {
-        std.debug.print("WARNING: {} total diagnostics after type checking!\n", .{env.diagnostics.span.len});
-    }
 
     // Allocate and return
     const env_ptr = try shm_allocator.create(ModuleEnv);
