@@ -616,12 +616,14 @@ fn processTypeDeclFirstPass(
                                         // Look up the fully qualified pattern (from parent scope via nesting)
                                         switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
                                             .found => |pattern_idx| {
-                                                const scope = &self.scopes.items[self.scopes.items.len - 1];
+                                                const decl_region = self.parse_ir.tokenizedRegionToRegion(nested_decl.region);
+
                                                 // Add unqualified name (e.g., "my_not")
-                                                try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
+                                                try self.scopeIntroduceWithDiagnostics(nested_decl_ident, pattern_idx, decl_region);
+
                                                 // Add type-qualified name (e.g., "MyBool.my_not")
                                                 const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
-                                                try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                                                try self.scopeIntroduceWithDiagnostics(type_qualified_ident_idx, pattern_idx, decl_region);
                                             },
                                             .not_found => {},
                                         }
@@ -644,12 +646,14 @@ fn processTypeDeclFirstPass(
                             // Look up the fully qualified pattern (from parent scope via nesting)
                             switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                                 .found => |pattern_idx| {
-                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                    const decl_region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+
                                     // Add unqualified name (e.g., "my_not")
-                                    try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                    try self.scopeIntroduceWithDiagnostics(decl_ident, pattern_idx, decl_region);
+
                                     // Add type-qualified name (e.g., "MyBool.my_not")
                                     const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
-                                    try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                                    try self.scopeIntroduceWithDiagnostics(type_qualified_ident_idx, pattern_idx, decl_region);
                                 },
                                 .not_found => {},
                             }
@@ -683,12 +687,14 @@ fn processTypeDeclFirstPass(
                         // Look up the fully qualified pattern (from parent scope via nesting)
                         switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                             .found => |pattern_idx| {
-                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                const anno_region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
+
                                 // Add unqualified name (e.g., "len")
-                                try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
+                                try self.scopeIntroduceWithDiagnostics(anno_ident, pattern_idx, anno_region);
+
                                 // Add type-qualified name (e.g., "List.len")
                                 const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
-                                try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                                try self.scopeIntroduceWithDiagnostics(type_qualified_ident_idx, pattern_idx, anno_region);
                             },
                             .not_found => {
                                 // This can happen if the type_anno was followed by a matching decl
@@ -887,17 +893,17 @@ fn processAssociatedItemsSecondPass(
                                         // but need to update them to point to the real pattern instead of placeholder.
                                         const def_cir = self.env.store.getDef(def_idx);
                                         const pattern_idx = def_cir.pattern;
-                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                        const decl_region = self.parse_ir.tokenizedRegionToRegion(decl.region);
 
                                         // Add unqualified name (e.g., "my_not")
-                                        try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                        try self.scopeIntroduceWithDiagnostics(decl_ident, pattern_idx, decl_region);
 
                                         // Add type-qualified name (e.g., "MyBool.my_not")
                                         const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                        try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+                                        try self.scopeIntroduceWithDiagnostics(type_qualified_idx, pattern_idx, decl_region);
 
                                         // Add fully qualified name (e.g., "Test.MyBool.my_not")
-                                        try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                                        try self.scopeIntroduceWithDiagnostics(qualified_idx, pattern_idx, decl_region);
                                     }
                                 }
                             }
@@ -923,17 +929,16 @@ fn processAssociatedItemsSecondPass(
                             // Make the real pattern available in current scope (replaces placeholder)
                             const def_cir = self.env.store.getDef(def_idx);
                             const pattern_idx = def_cir.pattern;
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                             // Add unqualified name (e.g., "is_empty")
-                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+                            try self.scopeIntroduceWithDiagnostics(name_ident, pattern_idx, region);
 
                             // Add type-qualified name (e.g., "List.is_empty")
                             const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+                            try self.scopeIntroduceWithDiagnostics(type_qualified_idx, pattern_idx, region);
 
                             // Add fully qualified name (e.g., "Builtin.List.is_empty")
-                            try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                            try self.scopeIntroduceWithDiagnostics(qualified_idx, pattern_idx, region);
 
                             try self.env.store.addScratchDef(def_idx);
                         },
@@ -7949,6 +7954,27 @@ pub fn scopeIntroduceInternal(
     // No conflicts, introduce successfully
     try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
     return Scope.IntroduceResult{ .success = {} };
+}
+
+/// Introduce an identifier to scope and report shadowing diagnostics if needed
+fn scopeIntroduceWithDiagnostics(
+    self: *Self,
+    ident_idx: base.Ident.Idx,
+    pattern_idx: Pattern.Idx,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident_idx,
+                .region = region,
+                .original_region = original_region,
+            } });
+        },
+        .top_level_var_error, .var_across_function_boundary => {},
+    }
 }
 
 /// Check if an identifier is marked as ignored (underscore prefix)
