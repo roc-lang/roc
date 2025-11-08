@@ -88,9 +88,6 @@ myNum = Foo.Bar.baz
 		(p-assign (ident "Foo.Bar.baz"))
 		(e-num (value "5")))
 	(d-let
-		(p-assign (ident "Foo.Bar.baz"))
-		(e-num (value "5")))
-	(d-let
 		(p-assign (ident "myType"))
 		(e-tag (name "Something"))
 		(annotation
@@ -115,7 +112,6 @@ myNum = Foo.Bar.baz
 (inferred-types
 	(defs
 		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Foo.Bar"))
 		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
@@ -124,7 +120,6 @@ myNum = Foo.Bar.baz
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Foo.Bar"))
 		(expr (type "Num(Int(Unsigned64))"))))
