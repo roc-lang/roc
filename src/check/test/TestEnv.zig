@@ -340,7 +340,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Add builtin module unconditionally (needed for auto-imported types)
     try imported_envs.append(gpa, builtin_module.env);
 
-
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
         gpa,
