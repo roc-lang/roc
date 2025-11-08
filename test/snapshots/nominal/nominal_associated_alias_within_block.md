@@ -85,15 +85,15 @@ external = Foo.defaultBaz
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "external"))
-		(e-lookup-local
-			(p-assign (ident "Foo.defaultBaz")))
-		(annotation
-			(ty-lookup (name "Foo.Baz") (local))))
-	(d-let
 		(p-assign (ident "Foo.defaultBaz"))
 		(e-nominal (nominal "Foo.Bar")
 			(e-tag (name "X")))
+		(annotation
+			(ty-lookup (name "Foo.Baz") (local))))
+	(d-let
+		(p-assign (ident "external"))
+		(e-lookup-local
+			(p-assign (ident "Foo.defaultBaz")))
 		(annotation
 			(ty-lookup (name "Foo.Baz") (local))))
 	(s-nominal-decl

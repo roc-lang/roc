@@ -67,6 +67,9 @@ Foo := [Blah].{
 		(p-assign (ident "Foo.Bar.baz"))
 		(e-empty_record))
 	(d-let
+		(p-assign (ident "Foo.Bar.baz"))
+		(e-empty_record))
+	(d-let
 		(p-assign (ident "Foo.stuff"))
 		(e-empty_record))
 	(s-nominal-decl
@@ -82,6 +85,7 @@ Foo := [Blah].{
 (inferred-types
 	(defs
 		(patt (type "{}"))
+		(patt (type "{}"))
 		(patt (type "{}")))
 	(type_decls
 		(nominal (type "Foo")
@@ -89,6 +93,7 @@ Foo := [Blah].{
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
+		(expr (type "{}"))
 		(expr (type "{}"))
 		(expr (type "{}"))))
 ~~~

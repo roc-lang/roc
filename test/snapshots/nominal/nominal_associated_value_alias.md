@@ -74,6 +74,9 @@ result = myBar
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Foo.bar"))
+		(e-num (value "42")))
+	(d-let
 		(p-assign (ident "myBar"))
 		(e-lookup-local
 			(p-assign (ident "Foo.bar")))
@@ -85,9 +88,6 @@ result = myBar
 			(p-assign (ident "myBar")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "Foo.bar"))
-		(e-num (value "42")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
