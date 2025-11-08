@@ -306,8 +306,8 @@ pub fn setupAutoImportedBuiltinTypes(
                 const module_env = type_entry.env;
 
                 // Create an import entry for the parent Builtin module
-                // This is needed for type bindings to reference, but we do NOT add it to
-                // import_indices or scope - "Builtin" should not be directly importable!
+                // Add to import_indices (needed for type resolution) but NOT to scope
+                // (so "Builtin" is not directly importable)
                 const builtin_module_name = module_env.module_name;
 
                 const module_import_idx = try self.env.imports.getOrPut(
@@ -315,6 +315,11 @@ pub fn setupAutoImportedBuiltinTypes(
                     self.env.common.getStringStore(),
                     builtin_module_name,
                 );
+
+                const is_new_import = !self.import_indices.contains(builtin_module_name);
+                if (is_new_import) {
+                    try self.import_indices.put(gpa, builtin_module_name, module_import_idx);
+                }
 
                 // Get target_node_idx from statement_idx
                 const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
