@@ -3528,17 +3528,8 @@ fn checkBinopExpr(
                 // If either operand errored, propagate the error
                 try self.updateVar(expr_var, .err, rank);
             } else {
-                // Get the method name "plus" from the ident store
-                // It should already exist since it's used in Builtin.roc
-                const method_name = blk: {
-                    if (self.cir.common.findIdent("plus")) |existing| {
-                        break :blk existing;
-                    } else {
-                        // If "plus" is not in the ident store yet, insert it
-                        const plus_ident = base.Ident.for_text("plus");
-                        break :blk try self.cir.common.insertIdent(self.gpa, plus_ident);
-                    }
-                };
+                // Get the pre-cached "plus" identifier from the ModuleEnv
+                const method_name = self.cir.plus_ident;
 
                 // Create the function type: lhs_type, rhs_type -> ret_type
                 // The first argument is the receiver (lhs), the second is the rhs

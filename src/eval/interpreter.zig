@@ -662,10 +662,8 @@ pub const Interpreter = struct {
                         else => return error.InvalidMethodReceiver,
                     };
 
-                    // Get the "plus" method identifier
-                    const method_name = self.env.common.findIdent("plus") orelse {
-                        return error.MethodNotFound;
-                    };
+                    // Get the pre-cached "plus" identifier from the ModuleEnv
+                    const method_name = self.env.plus_ident;
 
                     // Resolve the plus method function
                     const method_func = try self.resolveMethodFunction(

@@ -20,6 +20,8 @@ const Ident = @This();
 pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
 /// Method name for parsing decimals from digit lists - used by numeric literal type checking
 pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
+/// Method name for addition - used by + operator desugaring
+pub const PLUS_METHOD_NAME = "plus";
 
 /// The original text of the identifier.
 raw_text: []const u8,
