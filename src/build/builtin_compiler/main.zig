@@ -372,26 +372,24 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
     // Verify all low-level operations were found in the builtins
     if (low_level_map.count() > 0) {
-        const stderr = std.io.getStdErr().writer();
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Low-level operations not found in Builtin.roc\n", .{});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("ERROR: Low-level operations not found in Builtin.roc\n", .{}) catch {};
-        stderr.print("=" ** 80 ++ "\n\n", .{}) catch {};
-
-        stderr.print("The following low-level operations were not found:\n", .{}) catch {};
+        std.debug.print("The following low-level operations were not found:\n", .{});
         var iter = low_level_map.iterator();
         while (iter.next()) |entry| {
             const ident_text = env.getIdentText(entry.key_ptr.*);
             const op_name = @tagName(entry.value_ptr.*);
-            stderr.print("  - {s} (mapped to .{s})\n", .{ ident_text, op_name }) catch {};
+            std.debug.print("  - {s} (mapped to .{s})\n", .{ ident_text, op_name });
         }
-        stderr.print("\nEither:\n", .{}) catch {};
-        stderr.print("  1. Remove the obsolete entry from the low_level_map in builtin_compiler/main.zig, OR\n", .{}) catch {};
-        stderr.print("  2. Add a standalone type annotation to Builtin.roc for it to match\n", .{}) catch {};
+        std.debug.print("\nEither:\n", .{});
+        std.debug.print("  1. Remove the obsolete entry from the low_level_map in builtin_compiler/main.zig, OR\n", .{});
+        std.debug.print("  2. Add a standalone type annotation to Builtin.roc for it to match\n", .{});
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("Builtin compiler exiting with error code due to {d} missing operation(s)\n", .{low_level_map.count()}) catch {};
-        stderr.print("=" ** 80 ++ "\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} missing operation(s)\n", .{low_level_map.count()});
+        std.debug.print("=" ** 80 ++ "\n", .{});
 
         return error.LowLevelOperationsNotFound;
     }
@@ -671,23 +669,22 @@ fn compileModule(
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
-        const stderr = std.io.getStdErr().writer();
         const total_errors = parse_ast.tokenize_diagnostics.items.len + parse_ast.parse_diagnostics.items.len;
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("ERROR: Parse failed for {s}\n", .{module_name}) catch {};
-        stderr.print("=" ** 80 ++ "\n\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Parse failed for {s}\n", .{module_name});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (parse_ast.tokenize_diagnostics.items) |diag| {
-            stderr.print("  Tokenize error: {any}\n", .{diag}) catch {};
+            std.debug.print("  Tokenize error: {any}\n", .{diag});
         }
         for (parse_ast.parse_diagnostics.items) |diag| {
-            stderr.print("  Parse error: {any}\n", .{diag}) catch {};
+            std.debug.print("  Parse error: {any}\n", .{diag});
         }
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("Builtin compiler exiting with error code due to {d} parse error(s)\n", .{total_errors}) catch {};
-        stderr.print("=" ** 80 ++ "\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} parse error(s)\n", .{total_errors});
+        std.debug.print("=" ** 80 ++ "\n", .{});
         return error.ParseError;
     }
 
@@ -710,35 +707,34 @@ fn compileModule(
     const can_diagnostics = try module_env.getDiagnostics();
     defer gpa.free(can_diagnostics);
     if (can_diagnostics.len > 0) {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("ERROR: Canonicalization failed for {s}\n", .{module_name}) catch {};
-        stderr.print("=" ** 80 ++ "\n\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Canonicalization failed for {s}\n", .{module_name});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (can_diagnostics) |diag| {
             switch (diag) {
                 .undeclared_type => |d| {
                     const type_name = module_env.getIdentText(d.name);
-                    stderr.print("  - Undeclared type: {s}\n", .{type_name}) catch {};
+                    std.debug.print("  - Undeclared type: {s}\n", .{type_name});
                 },
                 .ident_not_in_scope => |d| {
                     const ident_name = module_env.getIdentText(d.ident);
-                    stderr.print("  - Ident not in scope: {s}\n", .{ident_name}) catch {};
+                    std.debug.print("  - Ident not in scope: {s}\n", .{ident_name});
                 },
                 .nested_value_not_found => |d| {
                     const parent = module_env.getIdentText(d.parent_name);
                     const nested = module_env.getIdentText(d.nested_name);
-                    stderr.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested }) catch {};
+                    std.debug.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested });
                 },
                 else => {
-                    stderr.print("  - Diagnostic: {any}\n", .{diag}) catch {};
+                    std.debug.print("  - Diagnostic: {any}\n", .{diag});
                 },
             }
         }
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("Builtin compiler exiting with error code due to {d} diagnostic(s)\n", .{can_diagnostics.len}) catch {};
-        stderr.print("=" ** 80 ++ "\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} diagnostic(s)\n", .{can_diagnostics.len});
+        std.debug.print("=" ** 80 ++ "\n", .{});
         return error.CanonicalizeError;
     }
 
@@ -799,21 +795,19 @@ fn compileModule(
         // When compiling Builtin, bool_stmt and try_stmt are initially undefined,
         // but they must be set before type checking begins
         const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
-            const stderr = std.io.getStdErr().writer();
-            stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-            stderr.print("ERROR: Could not find Bool type in Builtin module\n", .{}) catch {};
-            stderr.print("=" ** 80 ++ "\n", .{}) catch {};
-            stderr.print("The Bool type declaration is required for type checking.\n", .{}) catch {};
-            stderr.print("=" ** 80 ++ "\n", .{}) catch {};
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("ERROR: Could not find Bool type in Builtin module\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("The Bool type declaration is required for type checking.\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
             return error.TypeDeclarationNotFound;
         };
         const found_try_stmt = findTypeDeclaration(module_env, "Try") catch {
-            const stderr = std.io.getStdErr().writer();
-            stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-            stderr.print("ERROR: Could not find Try type in Builtin module\n", .{}) catch {};
-            stderr.print("=" ** 80 ++ "\n", .{}) catch {};
-            stderr.print("The Try type declaration is required for type checking.\n", .{}) catch {};
-            stderr.print("=" ** 80 ++ "\n", .{}) catch {};
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("ERROR: Could not find Try type in Builtin module\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("The Try type declaration is required for type checking.\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
             return error.TypeDeclarationNotFound;
         };
 
@@ -850,20 +844,19 @@ fn compileModule(
 
     // Check for type errors
     if (checker.problems.problems.items.len > 0) {
-        const stderr = std.io.getStdErr().writer();
         const total_errors = checker.problems.problems.items.len;
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("ERROR: Type checking failed for {s}\n", .{module_name}) catch {};
-        stderr.print("=" ** 80 ++ "\n\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Type checking failed for {s}\n", .{module_name});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (checker.problems.problems.items) |prob| {
-            stderr.print("  - Problem: {any}\n", .{prob}) catch {};
+            std.debug.print("  - Problem: {any}\n", .{prob});
         }
 
-        stderr.print("\n" ++ "=" ** 80 ++ "\n", .{}) catch {};
-        stderr.print("Builtin compiler exiting with error code due to {d} type error(s)\n", .{total_errors}) catch {};
-        stderr.print("=" ** 80 ++ "\n", .{}) catch {};
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} type error(s)\n", .{total_errors});
+        std.debug.print("=" ** 80 ++ "\n", .{});
 
         return error.TypeCheckError;
     }
