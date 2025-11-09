@@ -141,3 +141,4 @@ src/snapshots/**/*.html
 
 # Local claude-code settings
 .claude/settings.local.json
+/tracy
