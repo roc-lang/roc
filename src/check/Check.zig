@@ -3517,22 +3517,22 @@ fn checkBinopExpr(
 
     switch (binop.op) {
         .add => {
-            // Desugar `a + b` to `a.plus(b)` using static dispatch
+            // For built-in numeric types, use the old numeric constraint logic
+            // For user-defined nominal types, desugar `a + b` to `a.plus(b)` using static dispatch
 
-            // Check if either operand is an error
+            // Check if lhs is a nominal type
             const lhs_resolved = self.types.resolveVar(lhs_var).desc.content;
-            const rhs_resolved = self.types.resolveVar(rhs_var).desc.content;
-            const did_err = lhs_resolved == .err or rhs_resolved == .err;
+            const is_nominal = switch (lhs_resolved) {
+                .structure => |s| s == .nominal_type,
+                else => false,
+            };
 
-            if (did_err) {
-                // If either operand errored, propagate the error
-                try self.updateVar(expr_var, .err, rank);
-            } else {
+            if (is_nominal) {
+                // User-defined nominal type: use static dispatch to call the plus method
                 // Get the pre-cached "plus" identifier from the ModuleEnv
                 const method_name = self.cir.plus_ident;
 
                 // Create the function type: lhs_type, rhs_type -> ret_type
-                // The first argument is the receiver (lhs), the second is the rhs
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
                 // The return type is unknown, so create a fresh variable
@@ -3566,6 +3566,45 @@ fn checkBinopExpr(
 
                 // Set the expression to redirect to the return type
                 try self.types.setVarRedirect(expr_var, ret_var);
+            } else {
+                // Built-in numeric type or other: use standard numeric constraints
+                // This is the same as the other arithmetic operators
+                switch (expected) {
+                    .expected => |expectation| {
+                        const lhs_instantiated = try self.instantiateVar(expectation.var_, rank, .{ .explicit = expr_region });
+                        const rhs_instantiated = try self.instantiateVar(expectation.var_, rank, .{ .explicit = expr_region });
+
+                        if (expectation.from_annotation) {
+                            _ = try self.unifyFromAnno(lhs_instantiated, lhs_var, rank);
+                            _ = try self.unifyFromAnno(rhs_instantiated, rhs_var, rank);
+                        } else {
+                            _ = try self.unify(lhs_instantiated, lhs_var, rank);
+                            _ = try self.unify(rhs_instantiated, rhs_var, rank);
+                        }
+                    },
+                    .no_expectation => {
+                        // Start with empty requirements that can be constrained by operands
+                        const num_content = Content{ .structure = .{ .num = .{
+                            .num_unbound = .{
+                                .int_requirements = Num.IntRequirements.init(),
+                                .frac_requirements = Num.FracRequirements.init(),
+                            },
+                        } } };
+                        const lhs_num_var = try self.freshFromContent(num_content, rank, expr_region);
+                        const rhs_num_var = try self.freshFromContent(num_content, rank, expr_region);
+
+                        // Unify left and right operands with num
+                        _ = try self.unify(lhs_num_var, lhs_var, rank);
+                        _ = try self.unify(rhs_num_var, rhs_var, rank);
+                    },
+                }
+
+                // Unify left and right together
+                _ = try self.unify(lhs_var, rhs_var, rank);
+
+                // Set root expr. If unifications succeeded this will the the
+                // num, otherwise the propgate error
+                try self.types.setVarRedirect(expr_var, lhs_var);
             }
         },
         .sub, .mul, .div, .rem, .pow, .div_trunc => {

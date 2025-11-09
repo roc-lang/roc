@@ -630,15 +630,17 @@ pub const Interpreter = struct {
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
-                    // Check if lhs is a built-in numeric type (compact representation)
+                    // Check if lhs is a numeric type (could be .num structure or flex/rigid with numeric content)
+                    // For built-in numeric types, use direct arithmetic; for user nominal types, use method dispatch
                     const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-                    const is_builtin_num = switch (lhs_resolved.desc.content) {
-                        .structure => |s| s == .num,
+                    const is_user_nominal = switch (lhs_resolved.desc.content) {
+                        .structure => |s| s == .nominal_type,
                         else => false,
                     };
 
-                    if (is_builtin_num) {
-                        // For built-in numeric types, use direct arithmetic evaluation
+                    if (!is_user_nominal) {
+                        // For built-in numeric types (or any non-nominal type), use direct arithmetic evaluation
+                        // This includes .num, flex vars, rigid vars, etc.
                         const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                         const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
                         return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);

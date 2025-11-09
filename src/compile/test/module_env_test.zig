@@ -115,8 +115,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 5 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin
-    try testing.expectEqual(@as(u32, 8), original.common.idents.interner.entry_count);
+    // ModuleEnv.init() also interns 6 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus
+    try testing.expectEqual(@as(u32, 9), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -125,8 +125,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 8 identifiers as original: hello, world, TestModule + 5 well-known identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 8), env.common.idents.interner.entry_count);
+    // Should have same 9 identifiers as original: hello, world, TestModule + 6 well-known identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 9), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
