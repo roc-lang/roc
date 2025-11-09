@@ -197,11 +197,11 @@ PARSE ERROR - everything.md:56:37:56:38
 PARSE ERROR - everything.md:56:38:56:39
 PARSE ERROR - everything.md:56:39:56:40
 PARSE ERROR - everything.md:56:40:56:42
+MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:13:7
 UNDECLARED TYPE - everything.md:43:5:43:6
 MODULE NOT FOUND - everything.md:2:1:5:2
 MODULE NOT FOUND - everything.md:6:1:9:2
-MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
 UNUSED VARIABLE - everything.md:88:5:88:6
 UNUSED VARIABLE - everything.md:93:4:93:5
 UNUSED VARIABLE - everything.md:98:5:98:6
