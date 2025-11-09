@@ -99,7 +99,12 @@ test "fx platform stdin to stdout" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
     try testing.expect(std.mem.indexOf(u8, result.stdout, "test input") != null);
 }
 
@@ -110,7 +115,12 @@ test "fx platform stdin echo" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
     try testing.expect(std.mem.indexOf(u8, result.stdout, "hello world") != null);
 }
 
@@ -121,7 +131,12 @@ test "fx platform stdin test with output" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
     try testing.expect(std.mem.indexOf(u8, result.stdout, "Before stdin") != null);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "After stdin") != null);
 }
@@ -133,7 +148,12 @@ test "fx platform stdin simple" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
     // stdin_simple reads from stdin and prints to stderr
     try testing.expect(std.mem.indexOf(u8, result.stderr, "simple test") != null);
 }

@@ -1738,11 +1738,10 @@ pub fn canonicalizeFile(
         while (exposed_iter.next()) |entry| {
             const ident_idx = entry.ident_idx;
             _ = entry.node_idx;
+            const ident_idx_struct: base.Ident.Idx = @bitCast(ident_idx);
 
             // Check if this is an annotation (has a type) but no implementation (not in all_defs)
             // by checking if a def with this pattern already exists
-            // The ident_idx from the iterator is already a packed u32 with attributes, just cast it
-            const ident_idx_struct: base.Ident.Idx = @bitCast(ident_idx);
             const all_defs_slice = self.env.store.sliceDefs(self.env.all_defs);
             var already_has_def = false;
             for (all_defs_slice) |existing_def_idx| {

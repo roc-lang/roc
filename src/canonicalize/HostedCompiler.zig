@@ -138,6 +138,10 @@ pub const HostedFunctionInfo = struct {
 pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunctionInfo) {
     var hosted_fns = std.ArrayList(HostedFunctionInfo).empty;
 
+    // Use a hash set to deduplicate by symbol identifier (not string comparison)
+    var seen_symbols = std.AutoHashMap(base.Ident.Idx, void).init(env.gpa);
+    defer seen_symbols.deinit();
+
     // Iterate through all defs to find e_hosted_lambda expressions
     const all_defs = env.store.sliceDefs(env.all_defs);
     for (all_defs) |def_idx| {
@@ -148,9 +152,22 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
             const hosted = expr.e_hosted_lambda;
             const local_name = env.getIdent(hosted.symbol_name);
 
+            // Skip malformed qualified names (contains '.') - only keep simple unqualified names
+            // e.g., skip "Stdout.roc.Stdout.line!" and only keep "line!"
+            if (std.mem.indexOfScalar(u8, local_name, '.') != null) {
+                continue;
+            }
+
+            // Deduplicate based on symbol identifier
+            const gop = try seen_symbols.getOrPut(hosted.symbol_name);
+            if (gop.found_existing) {
+                continue; // Skip duplicate
+            }
+
             // Build fully-qualified name: "ModuleName.functionName"
             // Strip the .roc extension from module name (e.g., "Stdout.roc" -> "Stdout")
             var module_name = env.module_name;
+
             if (std.mem.endsWith(u8, module_name, ".roc")) {
                 module_name = module_name[0 .. module_name.len - 4];
             }
