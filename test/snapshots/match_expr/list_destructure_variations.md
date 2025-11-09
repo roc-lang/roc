@@ -212,5 +212,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+(expr (type "Num(_size)"))
 ~~~

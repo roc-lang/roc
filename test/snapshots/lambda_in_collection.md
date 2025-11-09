@@ -89,5 +89,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])"))
+(expr (type "(Num(_size), Num(_size2) -> Num(_size3), Num(_size4), Num(_size5) -> Num(_size6))"))
 ~~~

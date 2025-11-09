@@ -336,10 +336,10 @@ olor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error")))
+		(patt (type "Error -> Error")))
 	(type_decls
 		(alias (type "LocalStatus")
 			(ty-header (name "LocalStatus"))))
 	(expressions
-		(expr (type "_arg -> Error"))))
+		(expr (type "Error -> Error"))))
 ~~~

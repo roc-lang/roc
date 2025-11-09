@@ -15,14 +15,17 @@ type=expr
 TYPE DOES NOT HAVE METHODS - can_dot_access_with_vars.md:4:5:4:17
 # PROBLEMS
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `map` method on a `List(Num(_size))`:
+You're calling the method `map` on a type that doesn't support methods:
 **can_dot_access_with_vars.md:4:5:4:17:**
 ```roc
     list.map(fn)
 ```
     ^^^^^^^^^^^^
 
-But `List(Num(_size))` doesn't support methods.
+This type doesn't support methods:
+    _List(Num(_size))_
+
+
 
 # TOKENS
 ~~~zig

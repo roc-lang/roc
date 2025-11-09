@@ -158,7 +158,6 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
-UNDEFINED VARIABLE - fuzz_crash_020.md:75:11:75:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
@@ -537,17 +536,6 @@ This type is referenced here:
 main! : Listlt({}, _)
 ```
         ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `e` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_020.md:75:11:75:12:**
-```roc
-ma= |_| { e
-```
-          ^
 
 
 **UNDEFINED VARIABLE**
@@ -1743,6 +1731,7 @@ expect {
 		(p-assign (ident "ma"))
 		(e-closure
 			(captures
+				(capture (ident "e"))
 				(capture (ident "me"))
 				(capture (ident "one")))
 			(e-lambda
@@ -1750,7 +1739,8 @@ expect {
 					(p-underscore))
 				(e-block
 					(s-expr
-						(e-runtime-error (tag "ident_not_in_scope")))
+						(e-lookup-local
+							(p-assign (ident "e"))))
 					(s-let
 						(p-assign (ident "w"))
 						(e-string
@@ -1987,7 +1977,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Error"))
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue]_others -> Error"))
@@ -2024,7 +2014,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Error"))
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue]_others -> Error"))
