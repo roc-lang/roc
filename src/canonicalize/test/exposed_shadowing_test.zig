@@ -339,15 +339,15 @@ test "exposed_items is populated correctly" {
         .canonicalizeFile();
     // Check that exposed_items contains the correct number of items
     // The exposed items were added during canonicalization
-    // Should have exactly 3 entries (duplicates not stored)
-    try testing.expectEqual(@as(usize, 3), env.common.exposed_items.count());
-    // Check that exposed_items contains all exposed items
+    // Should have exactly 2 value entries (duplicates not stored, types not included)
+    // Types are not stored in exposed_items - they are handled by the type system
+    try testing.expectEqual(@as(usize, 2), env.common.exposed_items.count());
+    // Check that exposed_items contains all exposed values (not types)
     const foo_idx = env.common.idents.findByString("foo").?;
     const bar_idx = env.common.idents.findByString("bar").?;
-    const mytype_idx = env.common.idents.findByString("MyType").?;
     try testing.expect(env.common.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
     try testing.expect(env.common.exposed_items.containsById(env.gpa, @bitCast(bar_idx)));
-    try testing.expect(env.common.exposed_items.containsById(env.gpa, @bitCast(mytype_idx)));
+    // MyType is not in exposed_items because it's a type, not a value
 }
 
 test "exposed_items persists after canonicalization" {

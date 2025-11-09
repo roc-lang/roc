@@ -1587,9 +1587,12 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
+        // Deserialize common env first so we can look up identifiers
+        const common = self.common.deserialize(offset, source).*;
+
         env.* = Self{
             .gpa = gpa,
-            .common = self.common.deserialize(offset, source).*,
+            .common = common,
             .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
             .all_defs = self.all_defs,
@@ -1604,11 +1607,11 @@ pub const Serialized = struct {
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             // Well-known identifiers for type checking - look them up in the deserialized common env
-            .from_int_digits_ident = env.common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits_ident = env.common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-            .try_ident = env.common.findIdent("Try") orelse unreachable,
-            .out_of_range_ident = env.common.findIdent("OutOfRange") orelse unreachable,
-            .builtin_module_ident = env.common.findIdent("Builtin") orelse unreachable,
+            .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
+            .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
+            .try_ident = common.findIdent("Try") orelse unreachable,
+            .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
+            .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         };
 
         return env;

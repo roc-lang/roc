@@ -641,7 +641,7 @@ h = |
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "e -> e"))
 		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
 		(alias (type "A(a)")
@@ -667,6 +667,6 @@ h = |
 		(alias (type "F")
 			(ty-header (name "F"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "e -> e"))
 		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
 ~~~

@@ -111,6 +111,9 @@ deepType = C
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
+		(e-num (value "42")))
+	(d-let
 		(p-assign (ident "deepValue"))
 		(e-lookup-local
 			(p-assign (ident "Foo.Level1.Level2.Level3.value")))
@@ -121,9 +124,6 @@ deepType = C
 		(e-tag (name "C"))
 		(annotation
 			(ty-lookup (name "Foo.Level1.Level2.Level3") (local))))
-	(d-let
-		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
-		(e-num (value "42")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -146,8 +146,8 @@ deepType = C
 (inferred-types
 	(defs
 		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Foo.Level1.Level2.Level3"))
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -159,6 +159,6 @@ deepType = C
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
 		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Foo.Level1.Level2.Level3"))
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

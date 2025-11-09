@@ -245,7 +245,7 @@ ain! = |_| getUser(900)
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "UserId -> Str"))
 		(patt (type "_arg -> Error"))
 		(patt (type "_arg -> Error")))
 	(type_decls
@@ -253,7 +253,7 @@ ain! = |_| getUser(900)
 			(ty-header (name "UserId"))))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "UserId -> Str"))
 		(expr (type "_arg -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

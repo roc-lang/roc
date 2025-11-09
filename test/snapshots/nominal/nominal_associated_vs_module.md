@@ -93,7 +93,7 @@ useBar = Something
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "Foo.Bar"))
+		(ty-header (name "nominal_associated_vs_module.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "Something")))))
 ~~~
@@ -101,12 +101,12 @@ useBar = Something
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Foo.Bar")))
+		(patt (type "nominal_associated_vs_module.Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar"))))
+		(nominal (type "nominal_associated_vs_module.Foo.Bar")
+			(ty-header (name "nominal_associated_vs_module.Foo.Bar"))))
 	(expressions
-		(expr (type "Foo.Bar"))))
+		(expr (type "nominal_associated_vs_module.Foo.Bar"))))
 ~~~

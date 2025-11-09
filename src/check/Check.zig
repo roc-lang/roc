@@ -591,7 +591,7 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 // file //
 
 /// Check the types for all defs
-/// Copy builtin types (Bool, Result) from their modules into the current module's type store
+/// Copy builtin types from their modules into the current module's type store
 /// This is necessary because type variables are module-specific - we can't use Vars from
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
@@ -618,9 +618,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     try ensureTypeStoreIsFilled(self);
 
-    // Copy builtin types (Bool, Result) into this module's type store
-    try self.copyBuiltinTypes();
-
     // First, iterate over the builtin statements, generating types for each type declaration
     const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (builtin_stmts_slice) |builtin_stmt_idx| {
@@ -637,6 +634,11 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(stmt_idx);
     }
+
+    // Copy builtin types into this module's type store
+    // This must happen AFTER type declarations are generated so that when compiling
+    // Builtin itself, the Bool and Try types have already been created
+    try self.copyBuiltinTypes();
 
     // First pass: assign placeholder type vars
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
@@ -689,7 +691,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try ensureTypeStoreIsFilled(self);
 
-    // Copy builtin types (Bool, Result) into this module's type store
+    // Copy builtin types into this module's type store
     try self.copyBuiltinTypes();
 
     // First, iterate over the statements, generating types for each type declaration
@@ -948,7 +950,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     try self.generateAnnoTypeInPlace(annotation.anno, .annotation);
 
     // Redirect the root annotation to inner annotation
-    _ = try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
+    try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
 }
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
@@ -2453,9 +2455,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // We never instantiate rigid variables
             if (resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid) {
                 const instantiated = try self.instantiateVar(pat_var, rank, .use_last_var);
-                _ = try self.types.setVarRedirect(expr_var, instantiated);
+                try self.types.setVarRedirect(expr_var, instantiated);
             } else {
-                _ = try self.types.setVarRedirect(expr_var, pat_var);
+                try self.types.setVarRedirect(expr_var, pat_var);
             }
 
             // Unify this expression with the referenced pattern
@@ -2647,7 +2649,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         .e_closure => |closure| {
             does_fx = try self.checkExpr(closure.lambda_idx, rank, expected) or does_fx;
-            _ = try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
+            try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
         },
         // function calling //
         .e_call => |call| {
@@ -2796,7 +2798,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 }
 
                                 // Redirect the expr to the function's return type
-                                _ = try self.types.setVarRedirect(expr_var, func.ret);
+                                try self.types.setVarRedirect(expr_var, func.ret);
                             } else {
                                 // TODO(jared): Better arity difference error message
 
@@ -2813,7 +2815,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 try self.var_pool.addVarToRank(call_func_var, rank);
 
                                 _ = try self.unify(func_var, call_func_var, rank);
-                                _ = try self.types.setVarRedirect(expr_var, call_func_ret);
+                                try self.types.setVarRedirect(expr_var, call_func_ret);
                             }
                         } else {
                             // We get here if the type of expr being called
@@ -2841,7 +2843,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                             // Then, we set the root expr to redirect to the return
                             // type of that function, since a call expr ultimate
                             // resolve to the  returned type
-                            _ = try self.types.setVarRedirect(expr_var, call_func_ret);
+                            try self.types.setVarRedirect(expr_var, call_func_ret);
                         }
                     }
                 },
@@ -2966,7 +2968,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         .e_dbg => |dbg| {
             does_fx = try self.checkExpr(dbg.expr, rank, expected) or does_fx;
-            _ = try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(dbg.expr));
+            try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(dbg.expr));
         },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, rank, expected) or does_fx;
@@ -2979,14 +2981,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // For annotation-only expressions, the type comes from the annotation.
             // This case should only occur when the expression has an annotation (which is
             // enforced during canonicalization), so the expected type should be set.
-            // The type will be unified with the expected type in the code below.
             switch (expected) {
                 .no_expectation => {
                     // This shouldn't happen since we always create e_anno_only with an annotation
                     try self.updateVar(expr_var, .err, rank);
                 },
-                .expected => {
-                    // The expr_var will be unified with the annotation var below
+                .expected => |expected_type| {
+                    // Redirect expr_var to the annotation var so that lookups get the correct type
+                    try self.types.setVarRedirect(expr_var, expected_type.var_);
                 },
             }
         },

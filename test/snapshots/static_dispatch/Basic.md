@@ -168,6 +168,35 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Basic.to_str"))
+		(e-closure
+			(captures
+				(capture (ident "s")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag)))
+				(e-lookup-local
+					(p-assign (ident "s")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Basic") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "Basic.to_str2"))
+		(e-lambda
+			(args
+				(p-assign (ident "test")))
+			(e-dot-access (field "to_str")
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "test"))))
+				(args)))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Basic") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
 		(p-assign (ident "helper1"))
 		(e-lambda
 			(args
@@ -232,35 +261,6 @@ main = (helper1(val), helper2(val))
 			(ty-tuple
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
-	(d-let
-		(p-assign (ident "Basic.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Basic") (local))
-				(ty-lookup (name "Str") (builtin)))))
-	(d-let
-		(p-assign (ident "Basic.to_str2"))
-		(e-lambda
-			(args
-				(p-assign (ident "test")))
-			(e-dot-access (field "to_str")
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "test"))))
-				(args)))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Basic") (local))
-				(ty-lookup (name "Str") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "Basic"))
 		(ty-tag-union
@@ -271,20 +271,20 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Basic -> Str"))
+		(patt (type "Basic -> Str"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
-		(patt (type "(Str, Str)"))
-		(patt (type "Basic -> Str"))
-		(patt (type "Basic -> Str")))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
+		(expr (type "Basic -> Str"))
+		(expr (type "Basic -> Str"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))
-		(expr (type "(Str, Str)"))
-		(expr (type "Basic -> Str"))
-		(expr (type "Basic -> Str"))))
+		(expr (type "(Str, Str)"))))
 ~~~

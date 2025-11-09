@@ -85,15 +85,15 @@ external = Foo.defaultBaz
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "external"))
-		(e-lookup-local
-			(p-assign (ident "Foo.defaultBaz")))
+		(p-assign (ident "nominal_associated_alias_within_block.Foo.defaultBaz"))
+		(e-nominal (nominal "nominal_associated_alias_within_block.Foo.Bar")
+			(e-tag (name "X")))
 		(annotation
 			(ty-lookup (name "Foo.Baz") (local))))
 	(d-let
-		(p-assign (ident "Foo.defaultBaz"))
-		(e-nominal (nominal "Foo.Bar")
-			(e-tag (name "X")))
+		(p-assign (ident "external"))
+		(e-lookup-local
+			(p-assign (ident "nominal_associated_alias_within_block.Foo.defaultBaz")))
 		(annotation
 			(ty-lookup (name "Foo.Baz") (local))))
 	(s-nominal-decl
@@ -101,29 +101,29 @@ external = Foo.defaultBaz
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "Foo.Bar"))
+		(ty-header (name "nominal_associated_alias_within_block.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
 			(ty-tag-name (name "Z"))))
 	(s-alias-decl
-		(ty-header (name "Foo.Baz"))
+		(ty-header (name "nominal_associated_alias_within_block.Foo.Baz"))
 		(ty-lookup (name "Foo.Bar") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Foo.Baz"))
-		(patt (type "Foo.Baz")))
+		(patt (type "nominal_associated_alias_within_block.Foo.Baz"))
+		(patt (type "nominal_associated_alias_within_block.Foo.Baz")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar")))
-		(alias (type "Foo.Baz")
-			(ty-header (name "Foo.Baz"))))
+		(nominal (type "nominal_associated_alias_within_block.Foo.Bar")
+			(ty-header (name "nominal_associated_alias_within_block.Foo.Bar")))
+		(alias (type "nominal_associated_alias_within_block.Foo.Baz")
+			(ty-header (name "nominal_associated_alias_within_block.Foo.Baz"))))
 	(expressions
-		(expr (type "Foo.Baz"))
-		(expr (type "Foo.Baz"))))
+		(expr (type "nominal_associated_alias_within_block.Foo.Baz"))
+		(expr (type "nominal_associated_alias_within_block.Foo.Baz"))))
 ~~~

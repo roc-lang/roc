@@ -125,6 +125,27 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "BasicNoAnno.to_str"))
+		(e-closure
+			(captures
+				(capture (ident "s")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag)))
+				(e-lookup-local
+					(p-assign (ident "s"))))))
+	(d-let
+		(p-assign (ident "BasicNoAnno.to_str2"))
+		(e-lambda
+			(args
+				(p-assign (ident "test")))
+			(e-dot-access (field "to_str")
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "test"))))
+				(args))))
+	(d-let
 		(p-assign (ident "helper1"))
 		(e-lambda
 			(args
@@ -169,27 +190,6 @@ main = (helper1(val), helper2(val))
 			(ty-tuple
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
-	(d-let
-		(p-assign (ident "BasicNoAnno.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s"))))))
-	(d-let
-		(p-assign (ident "BasicNoAnno.to_str2"))
-		(e-lambda
-			(args
-				(p-assign (ident "test")))
-			(e-dot-access (field "to_str")
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "test"))))
-				(args))))
 	(s-nominal-decl
 		(ty-header (name "BasicNoAnno"))
 		(ty-tag-union
@@ -200,20 +200,20 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "BasicNoAnno -> Str"))
+		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "BasicNoAnno"))
-		(patt (type "(Str, Str)"))
-		(patt (type "BasicNoAnno -> Str"))
-		(patt (type "a -> b where [a.to_str : a -> b]")))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "BasicNoAnno")
 			(ty-header (name "BasicNoAnno"))))
 	(expressions
+		(expr (type "BasicNoAnno -> Str"))
+		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "BasicNoAnno"))
-		(expr (type "(Str, Str)"))
-		(expr (type "BasicNoAnno -> Str"))
-		(expr (type "a -> b where [a.to_str : a -> b]"))))
+		(expr (type "(Str, Str)"))))
 ~~~

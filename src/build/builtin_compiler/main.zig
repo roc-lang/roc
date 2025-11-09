@@ -149,11 +149,18 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
     }
+    if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
+        try low_level_map.put(list_len_ident, .list_len);
+    }
+    if (env.common.findIdent("Builtin.List.is_empty")) |list_is_empty_ident| {
+        try low_level_map.put(list_is_empty_ident, .list_is_empty);
+    }
+    if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
+        try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
+    }
     if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
         try low_level_map.put(set_is_empty_ident, .set_is_empty);
     }
-
-    // Bool operations
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
     }
@@ -637,7 +644,8 @@ fn compileModule(
     const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
     // Use provided bool_stmt and try_stmt if available, otherwise use undefined
-    const common_idents: Check.CommonIdents = .{
+    // For Builtin module, these will be found after canonicalization and updated before type checking
+    var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
@@ -668,19 +676,7 @@ fn compileModule(
         return error.ParseError;
     }
 
-    // 4. Create module imports map (for cross-module references)
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    defer module_envs.deinit();
-
-    // Add dependencies (e.g., Dict for Set, Bool for Str)
-    // IMPORTANT: Use the module's own ident store, not a temporary one,
-    // because auto-import lookups will use the module's ident store
-    for (deps) |dep| {
-        const dep_ident = try module_env.insertIdent(base.Ident.for_text(dep.name));
-        try module_envs.put(dep_ident, .{ .env = dep.env });
-    }
-
-    // 5. Canonicalize
+    // 4. Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
     var can_result = try gpa.create(Can);
@@ -689,7 +685,8 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.init(module_env, parse_ast, &module_envs);
+    // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
+    can_result.* = try Can.init(module_env, parse_ast, null);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
@@ -704,6 +701,10 @@ fn compileModule(
                 .undeclared_type => |d| {
                     const type_name = module_env.getIdentText(d.name);
                     std.debug.print("  - Undeclared type: {s}\n", .{type_name});
+                },
+                .ident_not_in_scope => |d| {
+                    const ident_name = module_env.getIdentText(d.ident);
+                    std.debug.print("  - Ident not in scope: {s}\n", .{ident_name});
                 },
                 .nested_value_not_found => |d| {
                     const parent = module_env.getIdentText(d.parent_name);
@@ -770,6 +771,22 @@ fn compileModule(
             eval_order_ptr.* = eval_order;
             module_env.evaluation_order = eval_order_ptr;
         }
+
+        // Find Bool and Try statements before type checking
+        // When compiling Builtin, bool_stmt and try_stmt are initially undefined,
+        // but they must be set before type checking begins
+        const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
+            std.debug.print("Error: Could not find Bool type in Builtin module\n", .{});
+            return error.TypeDeclarationNotFound;
+        };
+        const found_try_stmt = findTypeDeclaration(module_env, "Try") catch {
+            std.debug.print("Error: Could not find Try type in Builtin module\n", .{});
+            return error.TypeDeclarationNotFound;
+        };
+
+        // Update common_idents with the found statement indices
+        common_idents.bool_stmt = found_bool_stmt;
+        common_idents.try_stmt = found_try_stmt;
     }
 
     // 6. Type check
@@ -781,6 +798,9 @@ fn compileModule(
     for (deps) |dep| {
         try imported_envs.append(gpa, dep.env);
     }
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
 
     var checker = try Check.init(
         gpa,

@@ -9,6 +9,7 @@ nums : List U8
 ~~~
 # EXPECTED
 PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
+TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -33,6 +34,16 @@ Other valid examples:
 ^
 
 
+**TOO FEW ARGS**
+The type _List_ expects  argument, but got  instead.
+**type_annotation_missing_parens.md:1:8:1:12:**
+```roc
+nums : List U8
+```
+       ^^^^
+
+
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,UpperIdent,
@@ -53,11 +64,18 @@ nums : List
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign (ident "nums"))
+		(e-anno-only)
+		(annotation
+			(ty-lookup (name "List") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~

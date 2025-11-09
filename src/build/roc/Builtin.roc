@@ -7,14 +7,18 @@ Builtin := [].{
 	}
 
 	List := [ProvidedByCompiler].{
-		len : List(a) -> U64
-		len = |_| 0
+		len : List(_elem) -> U64
+		is_empty : List(_elem) -> Bool
 
-		is_empty : List(a) -> Bool
-		is_empty = |_| True
+		first : List(elem) -> Try(elem, [ListWasEmpty])
+		first = |list| List.get(list, 0)
 
-		first : List(a) -> Try(a, [ListWasEmpty])
-		first = |_| Err(ListWasEmpty)
+		get : List(elem), U64 -> Try(elem, [ListWasEmpty])
+		get = |list, index| if index < List.len(list) {
+			Try.Ok(list_get_unsafe(list, index))
+		} else {
+			Try.Err(ListWasEmpty)
+		}
 
 		map : List(a), (a -> b) -> List(b)
 		map = |_, _| []
@@ -335,3 +339,7 @@ Builtin := [].{
 		}
 	}
 }
+
+# Private top-level function for unsafe list access
+# This is a low-level operation that gets replaced by the compiler
+list_get_unsafe : List(elem), U64 -> elem

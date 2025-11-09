@@ -19,13 +19,19 @@ const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
-/// Helper to parse, canonicalize, type-check, and run comptime evaluation on a full module
-fn parseCheckAndEvalModule(src: []const u8) !struct {
+const EvalModuleResult = struct {
     module_env: *ModuleEnv,
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
-} {
+};
+
+/// Helper to parse, canonicalize, type-check, and run comptime evaluation on a full module
+fn parseCheckAndEvalModule(src: []const u8) !EvalModuleResult {
+    return parseCheckAndEvalModuleWithName(src, "TestModule");
+}
+
+fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !EvalModuleResult {
     const gpa = test_allocator;
 
     const module_env = try gpa.create(ModuleEnv);
@@ -34,7 +40,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     errdefer module_env.deinit();
 
     module_env.common.source = src;
-    module_env.module_name = "TestModule";
+    module_env.module_name = module_name;
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code
@@ -51,9 +57,9 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     errdefer builtin_module.deinit();
 
     // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields(gpa, module_name);
     const common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_indices.bool_type,
@@ -91,14 +97,16 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     };
 }
 
-/// Helper to parse, canonicalize, type-check, and run comptime evaluation with imported modules
-fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, imported_module: *const ModuleEnv) !struct {
+const EvalModuleWithImportResult = struct {
     module_env: *ModuleEnv,
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     other_envs: []const *const ModuleEnv,
     builtin_module: builtin_loading.LoadedModule,
-} {
+};
+
+/// Helper to parse, canonicalize, type-check, and run comptime evaluation with imported modules
+fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, imported_module: *const ModuleEnv) !EvalModuleWithImportResult {
     const gpa = test_allocator;
 
     const module_env = try gpa.create(ModuleEnv);
@@ -137,6 +145,9 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // Set up imports with correct type (AutoHashMap with Ident.Idx keys)
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
+
+    // Populate module_envs with builtin types (like production does)
+    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
 
     // Convert import name to Ident.Idx using the MODULE's ident store (not a temporary one!)
     // This is important because the canonicalizer will look up identifiers in this same store
@@ -382,7 +393,7 @@ test "comptime eval - cross-module crash is detected" {
         \\}
     ;
 
-    var result_a = try parseCheckAndEvalModule(src_a);
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
     defer cleanupEvalModule(&result_a);
 
     const summary_a = try result_a.evaluator.evalAll();

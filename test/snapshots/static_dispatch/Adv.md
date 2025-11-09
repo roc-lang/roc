@@ -318,6 +318,80 @@ main = {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "Adv.to_str"))
+		(e-closure
+			(captures
+				(capture (ident "s")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag)))
+				(e-lookup-local
+					(p-assign (ident "s")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "Adv.to_u64"))
+		(e-closure
+			(captures
+				(capture (ident "u")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag)))
+				(e-lookup-local
+					(p-assign (ident "u")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "U64") (builtin)))))
+	(d-let
+		(p-assign (ident "Adv.update_str"))
+		(e-closure
+			(captures
+				(capture (ident "u64")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag))
+					(p-assign (ident "next_str")))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-lookup-local
+								(p-assign (ident "u64")))
+							(e-lookup-local
+								(p-assign (ident "next_str"))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Adv") (local)))))
+	(d-let
+		(p-assign (ident "Adv.update_u64"))
+		(e-closure
+			(captures
+				(capture (ident "str")))
+			(e-lambda
+				(args
+					(p-nominal
+						(p-applied-tag))
+					(p-assign (ident "next_u64")))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-lookup-local
+								(p-assign (ident "next_u64")))
+							(e-lookup-local
+								(p-assign (ident "str"))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Adv") (local))
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "Adv") (local)))))
+	(d-let
 		(p-assign (ident "mismatch"))
 		(e-block
 			(s-let
@@ -411,80 +485,6 @@ main = {
 			(ty-tuple
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "U64") (builtin)))))
-	(d-let
-		(p-assign (ident "Adv.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "Str") (builtin)))))
-	(d-let
-		(p-assign (ident "Adv.to_u64"))
-		(e-closure
-			(captures
-				(capture (ident "u")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "u")))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "U64") (builtin)))))
-	(d-let
-		(p-assign (ident "Adv.update_str"))
-		(e-closure
-			(captures
-				(capture (ident "u64")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "next_str")))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-lookup-local
-								(p-assign (ident "u64")))
-							(e-lookup-local
-								(p-assign (ident "next_str"))))))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Adv") (local)))))
-	(d-let
-		(p-assign (ident "Adv.update_u64"))
-		(e-closure
-			(captures
-				(capture (ident "str")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "next_u64")))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-lookup-local
-								(p-assign (ident "next_u64")))
-							(e-lookup-local
-								(p-assign (ident "str"))))))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "U64") (builtin))
-				(ty-lookup (name "Adv") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Adv"))
 		(ty-tag-union
@@ -496,24 +496,24 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "(Str, Num(Int(Unsigned64)))"))
 		(patt (type "Adv -> Str"))
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
 		(patt (type "Adv, Str -> Adv"))
-		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv")))
+		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "(Str, Num(Int(Unsigned64)))")))
 	(type_decls
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
 	(expressions
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "(Str, Num(Int(Unsigned64)))"))
 		(expr (type "Adv -> Str"))
 		(expr (type "Adv -> Num(Int(Unsigned64))"))
 		(expr (type "Adv, Str -> Adv"))
-		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))))
+		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "(Str, Num(Int(Unsigned64)))"))))
 ~~~

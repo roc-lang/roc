@@ -387,6 +387,11 @@ pub const Expr = union(enum) {
         // String operations
         str_is_empty,
 
+        // List operations
+        list_len,
+        list_is_empty,
+        list_get_unsafe,
+
         // Set operations
         set_is_empty,
 
