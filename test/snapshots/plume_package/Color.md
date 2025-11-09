@@ -88,7 +88,6 @@ DOES NOT EXIST - Color.md:51:57:51:67
 DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:32:5:45:6
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
 TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
@@ -97,6 +96,7 @@ TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
 TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
 TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
 TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
+TYPE MISMATCH - Color.md:32:5:45:6
 TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
@@ -210,6 +210,110 @@ The unused variable is declared here:
              ^^^^^^^^^^^^^
 
 
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `to_frac` on a type that doesn't support methods:
+**Color.md:22:15:22:26:**
+```roc
+    rounded = a.to_frac() / 255.0
+```
+              ^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(Unsigned8))_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `to_utf8` on a type that doesn't support methods:
+**Color.md:29:13:29:26:**
+```roc
+    bytes = str.to_utf8()
+```
+            ^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Str_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
+**Color.md:35:17:35:41:**
+```roc
+                a.is_char_in_hex_range()
+```
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(_size))_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
+**Color.md:36:21:36:45:**
+```roc
+                and b.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(_size))_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
+**Color.md:37:21:37:45:**
+```roc
+                and c.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(_size))_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
+**Color.md:38:21:38:45:**
+```roc
+                and d.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(_size))_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
+**Color.md:39:21:39:45:**
+```roc
+                and e.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(_size))_
+
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
+**Color.md:40:21:40:45:**
+```roc
+                and f.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+This type doesn't support methods:
+    _Num(Int(_size))_
+
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **Color.md:32:5:45:6:**
@@ -237,94 +341,17 @@ But the type annotation says it should have the type:
     _Try(Color, [InvalidHex(Str)])_
 
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
-**Color.md:22:15:22:26:**
-```roc
-    rounded = a.to_frac() / 255.0
-```
-              ^^^^^^^^^^^
-
-But `Num(Int(Unsigned8))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `to_utf8` method on a `Str`:
-**Color.md:29:13:29:26:**
-```roc
-    bytes = str.to_utf8()
-```
-            ^^^^^^^^^^^^^
-
-But `Str` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:35:17:35:41:**
-```roc
-                a.is_char_in_hex_range()
-```
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:36:21:36:45:**
-```roc
-                and b.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:37:21:37:45:**
-```roc
-                and c.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:38:21:38:45:**
-```roc
-                and d.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:39:21:39:45:**
-```roc
-                and e.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:40:21:40:45:**
-```roc
-                and f.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_named_color` method on a `Str`:
+You're calling the method `is_named_color` on a type that doesn't support methods:
 **Color.md:62:8:62:28:**
 ```roc
     if str.is_named_color()
 ```
        ^^^^^^^^^^^^^^^^^^^^
 
-But `Str` doesn't support methods.
+This type doesn't support methods:
+    _Str_
+
+
 
 # TOKENS
 ~~~zig

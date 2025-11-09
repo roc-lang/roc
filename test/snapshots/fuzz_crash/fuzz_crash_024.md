@@ -15,8 +15,8 @@ var t= 0
 PARSE ERROR - fuzz_crash_024.md:2:1:2:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:2:8:2:9
 PARSE ERROR - fuzz_crash_024.md:5:1:5:4
-UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
+UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`
@@ -51,17 +51,6 @@ var t= 0
 ^^^
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**fuzz_crash_024.md:2:8:2:9:**
-```roc
-var t= ]
-```
-       ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
 **DUPLICATE DEFINITION**
 The name `t` is being redeclared in this scope.
 
@@ -79,6 +68,17 @@ var t= ]
 ```
     ^
 
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_024.md:2:8:2:9:**
+```roc
+var t= ]
+```
+       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -123,8 +123,8 @@ t = 0
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
+		(expr (type "_a"))))
 ~~~

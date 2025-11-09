@@ -9,6 +9,7 @@ const base = @import("base");
 const collections = @import("collections");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
+const TypeWriter = @import("TypeWriter.zig");
 
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
@@ -118,8 +119,12 @@ pub const Instantiator = struct {
 
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
-                const fresh_var = try self.store.fresh();
+                const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
                 try self.var_map.put(resolved_var, fresh_var);
+
+                // TODO: DELETE
+                var tw = try TypeWriter.initFromParts(self.store.gpa, self.store, self.idents);
+                defer tw.deinit();
 
                 // Copy the rigid var's constraints
                 const fresh_constraints = try self.instantiateStaticDispatchConstraints(rigid.constraints);

@@ -23,11 +23,14 @@ str_container = make_container(str)
 list_container = make_container(my_empty_list)
 
 # Polymorphic record update
-update_data = |container, new_value| { container & data: new_value }
+# TODO: 11/06/2025 currently record ext syntax is not parsable
+# update_data : { ..a, data: b }, b -> { ..a, data: b }
+update_data = |container, new_value| { ..container, data: new_value }
 
 # Used with different record types
 updated_int = update_data(int_container, 100)
 updated_str = update_data(str_container, "world")
+updated_mismatch = update_data(str_container, 99)
 
 # Function returning polymorphic record
 identity_record = |x| { value: x }
@@ -38,73 +41,44 @@ str_record = identity_record("test")
 list_record = identity_record([1, 2, 3])
 
 main = |_| {
-    # Access polymorphic fields
-    int_container.count + str_container.count
+	# Mismatch to snapshot infererd type of update_data
+	1 + update_data
+
+	# Access polymorphic fields
+	int_container.count + str_container.count
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
-UNRECOGNIZED SYNTAX - let_polymorphism_records.md:19:50:19:51
-UNUSED VARIABLE - let_polymorphism_records.md:19:52:19:67
-UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
-UNUSED VALUE - let_polymorphism_records.md:19:40:19:49
+TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
+TYPE MISMATCH - let_polymorphism_records.md:38:6:38:17
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **&** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**let_polymorphism_records.md:19:50:19:51:**
+**TYPE MISMATCH**
+The second argument being passed to this function has the wrong type:
+**let_polymorphism_records.md:26:47:26:49:**
 ```roc
-update_data = |container, new_value| { container & data: new_value }
+updated_mismatch = update_data(str_container, 99)
 ```
-                                                 ^
+                                              ^^
 
+This argument has the type:
+    _Num(_size)_
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+But `update_data` needs the second argument to be:
+    _Str_
 
-**let_polymorphism_records.md:19:50:19:51:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_records.md:38:6:38:17:**
 ```roc
-update_data = |container, new_value| { container & data: new_value }
+	1 + update_data
 ```
-                                                 ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNUSED VARIABLE**
-Variable `data` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**let_polymorphism_records.md:19:52:19:67:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                                   ^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `new_value` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_new_value` to suppress this warning.
-The unused variable is declared here:
-**let_polymorphism_records.md:19:27:19:36:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                          ^^^^^^^^^
-
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**let_polymorphism_records.md:19:40:19:49:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                       ^^^^^^^^^
+	    ^^^^^^^^^^^
 
 It has the type:
-    __a_
+    _{ ..a, data: b }, b -> { ..a, data: b }_
+
+But I expected it to be:
+    _Num(_size)_
 
 # TOKENS
 ~~~zig
@@ -118,14 +92,16 @@ LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIde
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
-LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,LowerIdent,CloseCurly,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,DoubleDot,LowerIdent,Comma,LowerIdent,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,Int,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,StringStart,StringPart,StringEnd,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,Int,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
+Int,OpPlus,LowerIdent,
 LowerIdent,NoSpaceDotLowerIdent,OpPlus,LowerIdent,NoSpaceDotLowerIdent,
 CloseCurly,
 EndOfFile,
@@ -194,12 +170,11 @@ EndOfFile,
 				(args
 					(p-ident (raw "container"))
 					(p-ident (raw "new_value")))
-				(e-block
-					(statements
-						(e-ident (raw "container"))
-						(e-malformed (reason "expr_unexpected_token"))
-						(s-type-anno (name "data")
-							(ty-var (raw "new_value")))))))
+				(e-record
+					(ext
+						(e-ident (raw "container")))
+					(field (field "data")
+						(e-ident (raw "new_value"))))))
 		(s-decl
 			(p-ident (raw "updated_int"))
 			(e-apply
@@ -213,6 +188,12 @@ EndOfFile,
 				(e-ident (raw "str_container"))
 				(e-string
 					(e-string-part (raw "world")))))
+		(s-decl
+			(p-ident (raw "updated_mismatch"))
+			(e-apply
+				(e-ident (raw "update_data"))
+				(e-ident (raw "str_container"))
+				(e-int (raw "99"))))
 		(s-decl
 			(p-ident (raw "identity_record"))
 			(e-lambda
@@ -248,6 +229,9 @@ EndOfFile,
 				(e-block
 					(statements
 						(e-binop (op "+")
+							(e-int (raw "1"))
+							(e-ident (raw "update_data")))
+						(e-binop (op "+")
 							(e-field-access
 								(e-ident (raw "int_container"))
 								(e-ident (raw "count")))
@@ -257,45 +241,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
-
-# Basic values for polymorphism testing
-num = 42
-frac = 4.2
-str = "hello"
-my_empty_list = []
-my_nonempty_list = [num, frac]
-
-# Record with polymorphic field
-make_container = |value| { data: value, count: 1 }
-
-# Used with different types
-int_container = make_container(num)
-str_container = make_container(str)
-list_container = make_container(my_empty_list)
-
-# Polymorphic record update
-update_data = |container, new_value| {
-	container
-		data : new_value
-}
-
-# Used with different record types
-updated_int = update_data(int_container, 100)
-updated_str = update_data(str_container, "world")
-
-# Function returning polymorphic record
-identity_record = |x| { value: x }
-
-# Used at different types
-int_record = identity_record(42)
-str_record = identity_record("test")
-list_record = identity_record([1, 2, 3])
-
-main = |_| {
-	# Access polymorphic fields
-	int_container.count + str_container.count
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -355,26 +301,19 @@ main = |_| {
 			(e-lookup-local
 				(p-assign (ident "my_empty_list")))))
 	(d-let
-		(p-assign (ident "data"))
-		(e-anno-only)
-		(annotation
-			(ty-rigid-var (name "new_value"))))
-	(d-let
 		(p-assign (ident "update_data"))
 		(e-lambda
 			(args
 				(p-assign (ident "container"))
 				(p-assign (ident "new_value")))
-			(e-block
-				(s-expr
+			(e-record
+				(ext
 					(e-lookup-local
 						(p-assign (ident "container"))))
-				(s-expr
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-let
-					(p-assign (ident "data"))
-					(e-anno-only))
-				(e-empty_record))))
+				(fields
+					(field (name "data")
+						(e-lookup-local
+							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
 		(e-call
@@ -392,6 +331,14 @@ main = |_| {
 				(p-assign (ident "str_container")))
 			(e-string
 				(e-literal (string "world")))))
+	(d-let
+		(p-assign (ident "updated_mismatch"))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "update_data")))
+			(e-lookup-local
+				(p-assign (ident "str_container")))
+			(e-num (value "99"))))
 	(d-let
 		(p-assign (ident "identity_record"))
 		(e-lambda
@@ -429,12 +376,18 @@ main = |_| {
 		(p-assign (ident "main"))
 		(e-closure
 			(captures
+				(capture (ident "update_data"))
 				(capture (ident "int_container"))
 				(capture (ident "str_container")))
 			(e-lambda
 				(args
 					(p-underscore))
 				(e-block
+					(s-expr
+						(e-binop (op "add")
+							(e-num (value "1"))
+							(e-lookup-local
+								(p-assign (ident "update_data")))))
 					(e-binop (op "add")
 						(e-dot-access (field "count")
 							(receiver
@@ -449,41 +402,41 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(Frac(_size))"))
 		(patt (type "Str"))
 		(patt (type "List(_elem)"))
-		(patt (type "List(Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]))"))
-		(patt (type "a -> { count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: a }"))
-		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]) }"))
-		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
-		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
-		(patt (type "new_value"))
-		(patt (type "_arg, _arg2 -> {}"))
-		(patt (type "{}"))
-		(patt (type "{}"))
+		(patt (type "List(Num(Frac(_size)))"))
+		(patt (type "a -> { count: Num(_size), data: a }"))
+		(patt (type "{ count: Num(_size), data: Num(_size2) }"))
+		(patt (type "{ count: Num(_size), data: Str }"))
+		(patt (type "{ count: Num(_size), data: List(_elem) }"))
+		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
+		(patt (type "{ count: Num(_size), data: Num(_size2) }"))
+		(patt (type "{ count: Num(_size), data: Str }"))
+		(patt (type "Error"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
+		(patt (type "{ value: Num(_size) }"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]) }"))
-		(patt (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
+		(patt (type "{ value: List(Num(_size)) }"))
+		(patt (type "_arg -> Num(_size)")))
 	(expressions
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(Frac(_size))"))
 		(expr (type "Str"))
 		(expr (type "List(_elem)"))
-		(expr (type "List(Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]))"))
-		(expr (type "a -> { count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: a }"))
-		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]) }"))
-		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
-		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
-		(expr (type "new_value"))
-		(expr (type "_arg, _arg2 -> {}"))
-		(expr (type "{}"))
-		(expr (type "{}"))
+		(expr (type "List(Num(Frac(_size)))"))
+		(expr (type "a -> { count: Num(_size), data: a }"))
+		(expr (type "{ count: Num(_size), data: Num(_size2) }"))
+		(expr (type "{ count: Num(_size), data: Str }"))
+		(expr (type "{ count: Num(_size), data: List(_elem) }"))
+		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
+		(expr (type "{ count: Num(_size), data: Num(_size2) }"))
+		(expr (type "{ count: Num(_size), data: Str }"))
+		(expr (type "Error"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
+		(expr (type "{ value: Num(_size) }"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]) }"))
-		(expr (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
+		(expr (type "{ value: List(Num(_size)) }"))
+		(expr (type "_arg -> Num(_size)"))))
 ~~~

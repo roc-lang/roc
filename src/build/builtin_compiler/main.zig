@@ -86,7 +86,7 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
         const var_idx = @as(Var, @enumFromInt(i));
 
         // Skip redirects, only process roots
-        if (env.types.isRedirect(var_idx)) {
+        if (!env.types.resolveVar(var_idx).is_root) {
             continue;
         }
 
@@ -414,7 +414,7 @@ fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
         const var_idx = @as(Var, @enumFromInt(i));
 
         // Skip redirects, only process roots
-        if (env.types.isRedirect(var_idx)) {
+        if (!env.types.resolveVar(var_idx).is_root) {
             continue;
         }
 

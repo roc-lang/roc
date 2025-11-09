@@ -1645,11 +1645,9 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("You're trying to call the ");
+        try report.document.addReflowingText("You're calling the method ");
         try report.document.addAnnotated(method_name_str, .inline_code);
-        try report.document.addReflowingText(" method on a ");
-        try report.document.addAnnotated(snapshot_str, .inline_code);
-        try report.document.addReflowingText(":");
+        try report.document.addReflowingText(" on a type that doesn't support methods:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -1661,9 +1659,12 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try report.document.addReflowingText("But ");
-        try report.document.addAnnotated(snapshot_str, .inline_code);
-        try report.document.addReflowingText(" doesn't support methods.");
+        try report.document.addReflowingText("This type doesn't support methods:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(snapshot_str, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
 
         return report;
     }

@@ -57,10 +57,10 @@ This expression is used in an unexpected way:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Num(_size), Num(_size2), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> _ret_
+    _Num(_size), Num(_size2), (Num(_size3) -> Num(_size4)), (Num(_size5) -> Num(_size6)) -> _ret_
 
 But I expected it to be:
-    _Pair(a, b), a -> c, b -> d -> Pair(c, d)_
+    _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_
 
 # TOKENS
 ~~~zig
@@ -326,7 +326,7 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "Pair(a, b) -> Pair(b, a)"))
-		(patt (type "Pair(a, b), a -> c, b -> d -> Pair(c, d)"))
+		(patt (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
 		(patt (type "_e")))
 	(type_decls
 		(alias (type "Pair(a, b)")
@@ -336,6 +336,6 @@ main = {
 					(ty-rigid-var (name "b"))))))
 	(expressions
 		(expr (type "Pair(a, b) -> Pair(b, a)"))
-		(expr (type "Pair(a, b), a -> c, b -> d -> Pair(c, d)"))
+		(expr (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
 		(expr (type "_e"))))
 ~~~

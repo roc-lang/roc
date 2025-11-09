@@ -1674,7 +1674,7 @@ pub const Interpreter = struct {
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
-                _ = try unify.unifyWithContext(
+                _ = try unify.unifyWithConf(
                     self.env,
                     self.runtime_types,
                     &self.problems,
@@ -1683,7 +1683,7 @@ pub const Interpreter = struct {
                     &self.unify_scratch.occurs_scratch,
                     call_ret_rt_var,
                     poly_entry.return_var,
-                    false,
+                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                 );
 
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
@@ -4784,7 +4784,7 @@ pub const Interpreter = struct {
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithContext(
+            _ = try unify.unifyWithConf(
                 self.env,
                 self.runtime_types,
                 &self.problems,
@@ -4793,7 +4793,7 @@ pub const Interpreter = struct {
                 &self.unify_scratch.occurs_scratch,
                 params[i],
                 args[i],
-                false,
+                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
             );
         }
         // ret_var may now be constrained

@@ -62,6 +62,7 @@ name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
+scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
@@ -88,6 +89,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(types_mod.StaticDispatchConstraint).initCapacity(gpa, 32),
+        .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
     };
 }
@@ -100,6 +102,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
+    self.scratch_record_fields.deinit();
     self.import_mapping.deinit();
 }
 
@@ -111,6 +114,7 @@ pub fn reset(self: *TypeWriter) void {
     self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
+    self.scratch_record_fields.clearRetainingCapacity();
 
     self.next_name_index = 0;
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
@@ -136,7 +140,11 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
 
     if (self.static_dispatch_constraints.items.len > 0) {
         _ = try self.buf.writer().write(" where [");
-        for (self.static_dispatch_constraints.items) |constraint| {
+        for (self.static_dispatch_constraints.items, 0..) |constraint, i| {
+            if (i > 0) {
+                _ = try self.buf.writer().write(", ");
+            }
+
             // TODO: Find a better way to do this
             const dispatcher_var = blk: {
                 const fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
@@ -332,7 +340,7 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
     if (self.hasSeenVar(resolved.var_)) {
         _ = try self.buf.writer().write("...");
     } else {
-        try self.seen.append(var_);
+        try self.seen.append(resolved.var_);
         defer _ = self.seen.pop();
 
         switch (resolved.desc.content) {
@@ -344,23 +352,33 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                 }
 
                 for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.getIdent(rigid.name));
+
                 // Useful in debugging to see if a var is rigid or not
                 // _ = try self.buf.writer().write("[r]");
 
                 for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_var);
             },
             .structure => |flat_type| {
+                const should_wrap_in_parens = ((context == .FunctionArgument or context == .FunctionReturn) and (flat_type == .fn_effectful or flat_type == .fn_pure or flat_type == .fn_unbound));
+                if (should_wrap_in_parens) {
+                    _ = try self.buf.writer().write("(");
+                }
+
                 try self.writeFlatType(flat_type, root_var);
+
+                if (should_wrap_in_parens) {
+                    _ = try self.buf.writer().write(")");
+                }
             },
             .err => {
                 _ = try self.buf.writer().write("Error");
@@ -536,70 +554,113 @@ fn writeFuncWithArrow(self: *TypeWriter, func: Func, arrow: []const u8, root_var
 
 /// Write a record type
 fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocator.Error!void {
-    const fields = self.types.getRecordFieldsSlice(record.fields);
+    const scratch_fields_top = self.scratch_record_fields.items.len;
+    defer self.scratch_record_fields.shrinkRetainingCapacity(scratch_fields_top);
+
+    const ext = try self.gatherRecordFields(record.fields, record.ext);
+    const gathered_fields = self.scratch_record_fields.items[scratch_fields_top..];
+    const num_fields = gathered_fields.len;
+
+    std.mem.sort(types_mod.RecordField, gathered_fields, self.idents, comptime types_mod.RecordField.sortByNameAsc);
 
     _ = try self.buf.writer().write("{ ");
-    for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
-        if (i > 0) _ = try self.buf.writer().write(", ");
-        _ = try self.buf.writer().write(self.getIdent(field_name));
-        _ = try self.buf.writer().write(": ");
-        try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
+
+    switch (ext) {
+        .flex => |flex| {
+            if (flex.payload.name) |ident_idx| {
+                _ = try self.buf.writer().write("..");
+                _ = try self.buf.writer().write(self.getIdent(ident_idx));
+                if (num_fields > 0) _ = try self.buf.writer().write(", ");
+            } else if (true) {
+                // TODO: ^ here, we should consider polarity
+
+                _ = try self.buf.writer().write("..");
+                try self.writeFlexVarName(flex.var_, .RecordExtension, root_var);
+                if (num_fields > 0) _ = try self.buf.writer().write(", ");
+            }
+
+            // Since don't recurse above, we must capture the static dispatch
+            // constraints directly
+            for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                try self.appendStaticDispatchConstraint(constraint);
+            }
+        },
+        .rigid => |rigid| {
+            _ = try self.buf.writer().write("..");
+            _ = try self.buf.writer().write(self.getIdent(rigid.name));
+            if (num_fields > 0) _ = try self.buf.writer().write(", ");
+
+            // Since don't recurse above, we must capture the static dispatch
+            // constraints directly
+            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                try self.appendStaticDispatchConstraint(constraint);
+            }
+        },
+        .unbound, .invalid, .empty_record => {},
     }
 
-    try self.writeRecordExtension(record.ext, fields.len, root_var);
+    for (gathered_fields, 0..) |field, i| {
+        _ = try self.buf.writer().write(self.getIdent(field.name));
+        _ = try self.buf.writer().write(": ");
+        try self.writeVarWithContext(field.var_, .RecordFieldContent, root_var);
+
+        if (i != gathered_fields.len - 1) _ = try self.buf.writer().write(", ");
+    }
 
     _ = try self.buf.writer().write(" }");
 }
 
-/// Helper to write record extension, handling nested records
-fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root_var: Var) std.mem.Allocator.Error!void {
-    const ext_resolved = self.types.resolveVar(ext_var);
-    switch (ext_resolved.desc.content) {
-        .structure => |flat_type| switch (flat_type) {
-            .empty_record => {}, // Don't show empty extension
-            .record => |ext_record| {
-                // Flatten nested record extensions
-                const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
-                for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
-                    _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write(self.getIdent(field_name));
-                    _ = try self.buf.writer().write(": ");
-                    try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
+/// Recursively unwrap all record fields
+fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range, initial_ext: Var) std.mem.Allocator.Error!union(enum) {
+    flex: struct { var_: Var, payload: types_mod.Flex },
+    rigid: types_mod.Rigid,
+    empty_record,
+    unbound,
+    invalid,
+} {
+    const slice = self.types.getRecordFieldsSlice(fields);
+    try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
+    for (slice.items(.name), slice.items(.var_)) |name, var_| {
+        self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+    }
+
+    var ext = initial_ext;
+    while (true) {
+        const resolved = self.types.resolveVar(ext);
+        switch (resolved.desc.content) {
+            .flex => |flex| {
+                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
+            },
+            .rigid => |rigid| {
+                return .{ .rigid = rigid };
+            },
+            .alias => |alias| {
+                ext = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .record => |ext_record| {
+                        const ext_slice = self.types.getRecordFieldsSlice(ext_record.fields);
+                        try self.scratch_record_fields.ensureUnusedCapacity(ext_record.fields.len());
+                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
+                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+                        }
+                        ext = ext_record.ext;
+                    },
+                    .record_unbound => |ext_fields| {
+                        const ext_slice = self.types.getRecordFieldsSlice(ext_fields);
+                        try self.scratch_record_fields.ensureUnusedCapacity(ext_fields.len());
+                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
+                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+                        }
+                        return .unbound;
+                    },
+                    .empty_record => return .empty_record,
+                    else => return .invalid,
                 }
-                // Recursively handle the extension's extension
-                try self.writeRecordExtension(ext_record.ext, num_fields + ext_fields.len, root_var);
             },
-            else => {
-                if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
-            },
-        },
-        .flex => |flex| {
-            // Only show flex vars if they have a name or if there are constraints
-            if (flex.name != null or flex.constraints.len() > 0) {
-                if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
-            }
-
-            for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                try self.static_dispatch_constraints.append(constraint);
-            }
-        },
-        .rigid => |rigid| {
-            // Show rigid vars with .. syntax
-            if (num_fields > 0) _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.getIdent(rigid.name));
-
-            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try self.static_dispatch_constraints.append(constraint);
-            }
-        },
-        else => {
-            // Show other types (aliases, errors, etc)
-            if (num_fields > 0) _ = try self.buf.writer().write(", ");
-            try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
-        },
+            else => return .invalid,
+        }
     }
 }
 
@@ -635,12 +696,14 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         .flex => |flex| {
             if (flex.name) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
-            } else {
+            } else if (true) {
+                // TODO: ^ here, we should consider polarity
+
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
 
             for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                try self.static_dispatch_constraints.append(constraint);
+                try self.appendStaticDispatchConstraint(constraint);
             }
         },
         .structure => |flat_type| switch (flat_type) {
@@ -654,7 +717,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
             // _ = try self.buf.writer().write("[r]");
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try self.static_dispatch_constraints.append(constraint);
+                try self.appendStaticDispatchConstraint(constraint);
             }
         },
         .err => {
@@ -700,13 +763,19 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             _ = try self.buf.writer().write(")");
         },
         .num_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("Num(_");
+            try self.generateContextualName(.NumContent);
+            _ = try self.buf.writer().write(")");
         },
         .int_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("Int(_");
+            try self.generateContextualName(.NumContent);
+            _ = try self.buf.writer().write(")");
         },
         .frac_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("Frac(_");
+            try self.generateContextualName(.NumContent);
+            _ = try self.buf.writer().write(")");
         },
         .int_precision => |prec| {
             try self.writeIntType(prec, .precision);
@@ -779,6 +848,16 @@ fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecT
             };
         },
     }
+}
+
+/// Append a constraint to the list, if it doesn't already exist
+fn appendStaticDispatchConstraint(self: *TypeWriter, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
+    for (self.static_dispatch_constraints.items) |constraint| {
+        if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_var == constraint_to_add.fn_var) {
+            return;
+        }
+    }
+    _ = try self.static_dispatch_constraints.append(constraint_to_add);
 }
 
 /// Generate a name for a flex var that may appear multiple times in the type

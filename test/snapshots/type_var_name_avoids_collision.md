@@ -11,7 +11,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 a = 42
 
 # This should get type 'b -> b' since 'a' is taken
-identity = |x| x
+identity = |xx| xx
 
 # Use more names to test the sequence
 b = "hello"
@@ -20,7 +20,7 @@ d = True
 e = False
 
 # This should get type 'f -> f' since a,b,c,d,e are taken
-anotherIdentity = |y| y
+anotherIdentity = |yy| yy
 
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
@@ -180,8 +180,8 @@ EndOfFile,
 			(p-ident (raw "identity"))
 			(e-lambda
 				(args
-					(p-ident (raw "x")))
-				(e-ident (raw "x"))))
+					(p-ident (raw "xx")))
+				(e-ident (raw "xx"))))
 		(s-decl
 			(p-ident (raw "b"))
 			(e-string
@@ -199,8 +199,8 @@ EndOfFile,
 			(p-ident (raw "anotherIdentity"))
 			(e-lambda
 				(args
-					(p-ident (raw "y")))
-				(e-ident (raw "y"))))
+					(p-ident (raw "yy")))
+				(e-ident (raw "yy"))))
 		(s-decl
 			(p-ident (raw "combine"))
 			(e-lambda
@@ -337,7 +337,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 a = 42
 
 # This should get type 'b -> b' since 'a' is taken
-identity = |x| x
+identity = |xx| xx
 
 # Use more names to test the sequence
 b = "hello"
@@ -346,7 +346,7 @@ d = True
 e = False
 
 # This should get type 'f -> f' since a,b,c,d,e are taken
-anotherIdentity = |y| y
+anotherIdentity = |yy| yy
 
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
@@ -407,9 +407,9 @@ main! = |_| {
 		(p-assign (ident "identity"))
 		(e-lambda
 			(args
-				(p-assign (ident "x")))
+				(p-assign (ident "xx")))
 			(e-lookup-local
-				(p-assign (ident "x")))))
+				(p-assign (ident "xx")))))
 	(d-let
 		(p-assign (ident "b"))
 		(e-string
@@ -427,9 +427,9 @@ main! = |_| {
 		(p-assign (ident "anotherIdentity"))
 		(e-lambda
 			(args
-				(p-assign (ident "y")))
+				(p-assign (ident "yy")))
 			(e-lookup-local
-				(p-assign (ident "y")))))
+				(p-assign (ident "yy")))))
 	(d-let
 		(p-assign (ident "combine"))
 		(e-lambda
@@ -584,73 +584,73 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Num(_size)"))
 		(patt (type "ac -> ac"))
 		(patt (type "Str"))
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
+		(patt (type "Num(Frac(_size))"))
 		(patt (type "[True]_others"))
 		(patt (type "[False]_others"))
 		(patt (type "ac -> ac"))
 		(patt (type "ac, ad -> (ac, ad)"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
 		(patt (type "ac -> ac"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
 		(patt (type "ac -> ac"))
-		(patt (type "_arg2 -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
+		(patt (type "_arg2 -> Num(_size)")))
 	(expressions
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Num(_size)"))
 		(expr (type "ac -> ac"))
 		(expr (type "Str"))
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
+		(expr (type "Num(Frac(_size))"))
 		(expr (type "[True]_others"))
 		(expr (type "[False]_others"))
 		(expr (type "ac -> ac"))
 		(expr (type "ac, ad -> (ac, ad)"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
 		(expr (type "ac -> ac"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
 		(expr (type "ac -> ac"))
-		(expr (type "_arg2 -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
+		(expr (type "_arg2 -> Num(_size)"))))
 ~~~

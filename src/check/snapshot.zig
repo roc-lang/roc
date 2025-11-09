@@ -543,6 +543,20 @@ pub const SnapshotRecord = struct {
 pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx, // Instead of var_
+
+    const Self = @This();
+
+    /// A function to be passed into std.mem.sort to sort fields by name
+    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
+        return Self.orderByName(ident_store, a, b) == .lt;
+    }
+
+    /// Get the ordering of how a compares to b
+    pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
+        const a_text = store.getText(a.name);
+        const b_text = store.getText(b.name);
+        return std.mem.order(u8, a_text, b_text);
+    }
 };
 
 /// TODO
@@ -592,6 +606,7 @@ pub const SnapshotWriter = struct {
     flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
     flex_var_names: std.array_list.Managed(u8),
     static_dispatch_constraints: std.array_list.Managed(SnapshotStaticDispatchConstraint),
+    scratch_record_fields: std.array_list.Managed(SnapshotRecordField),
     count_seen_idxs: std.array_list.Managed(SnapshotContentIdx),
 
     const FlexVarNameRange = struct { start: usize, end: usize };
@@ -610,6 +625,7 @@ pub const SnapshotWriter = struct {
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
             .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
+            .scratch_record_fields = std.array_list.Managed(SnapshotRecordField).init(gpa),
             .count_seen_idxs = std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
@@ -634,6 +650,7 @@ pub const SnapshotWriter = struct {
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
             .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
+            .scratch_record_fields = std.array_list.Managed(SnapshotRecordField).init(gpa),
             .count_seen_idxs = try std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
@@ -643,6 +660,7 @@ pub const SnapshotWriter = struct {
         self.flex_var_names_map.deinit();
         self.flex_var_names.deinit();
         self.static_dispatch_constraints.deinit();
+        self.scratch_record_fields.deinit();
         self.count_seen_idxs.deinit();
     }
 
@@ -653,6 +671,7 @@ pub const SnapshotWriter = struct {
         self.flex_var_names_map.clearRetainingCapacity();
         self.flex_var_names.clearRetainingCapacity();
         self.static_dispatch_constraints.clearRetainingCapacity();
+        self.scratch_record_fields.clearRetainingCapacity();
         self.count_seen_idxs.clearRetainingCapacity();
     }
 
@@ -779,10 +798,20 @@ pub const SnapshotWriter = struct {
 
         if (self.static_dispatch_constraints.items.len > 0) {
             _ = try self.buf.writer().write(" where [");
-            for (self.static_dispatch_constraints.items) |constraint| {
+            for (self.static_dispatch_constraints.items, 0..) |constraint, i| {
+                if (i > 0) {
+                    _ = try self.buf.writer().write(", ");
+                }
+
+                const fn_resolved = self.snapshots.getContent(constraint.fn_content);
+
+                if (fn_resolved != .structure) {
+                    _ = try self.buf.writer().write("dispach_fn_error");
+                    continue;
+                }
+
                 // TODO: Find a better way to do this
                 const dispatcher = blk: {
-                    const fn_resolved = self.snapshots.getContent(constraint.fn_content);
                     std.debug.assert(fn_resolved == .structure);
 
                     const fn_args = switch (fn_resolved.structure) {
@@ -827,21 +856,33 @@ pub const SnapshotWriter = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
+
+                // Useful in debugging to see if a var is rigid or not
+                // _ = try self.buf.writer().write("[r]");
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_idx);
             },
             .structure => |flat_type| {
+                const should_wrap_in_parens = ((context == .FunctionArgument or context == .FunctionReturn) and (flat_type == .fn_effectful or flat_type == .fn_pure or flat_type == .fn_unbound));
+                if (should_wrap_in_parens) {
+                    _ = try self.buf.writer().write("(");
+                }
+
                 try self.writeFlatType(flat_type, root_idx);
+
+                if (should_wrap_in_parens) {
+                    _ = try self.buf.writer().write(")");
+                }
             },
             .recursive => {
                 _ = try self.buf.writer().write("RecursiveType");
@@ -991,41 +1032,112 @@ pub const SnapshotWriter = struct {
 
     /// Write a record type
     fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
+        const scratch_fields_top = self.scratch_record_fields.items.len;
+        defer self.scratch_record_fields.shrinkRetainingCapacity(scratch_fields_top);
+
+        const ext = try self.gatherRecordFields(record.fields, record.ext);
+        const gathered_fields = self.scratch_record_fields.items[scratch_fields_top..];
+        const num_fields = gathered_fields.len;
+
+        std.mem.sort(SnapshotRecordField, gathered_fields, self.idents, comptime SnapshotRecordField.sortByNameAsc);
+
         _ = try self.buf.writer().write("{ ");
 
-        const fields_slice = self.snapshots.record_fields.sliceRange(record.fields);
+        switch (ext) {
+            .flex => |flex| {
+                if (flex.payload.name) |ident_idx| {
+                    _ = try self.buf.writer().write("..");
+                    _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+                    if (num_fields > 0) _ = try self.buf.writer().write(", ");
+                } else if (true) {
+                    // TODO: ^ here, we should consider polarity
 
-        if (fields_slice.len > 0) {
-            // Write first field
-            _ = try self.buf.writer().write(self.idents.getText(fields_slice.items(.name)[0]));
-            _ = try self.buf.writer().write(": ");
-            try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent, root_idx);
+                    _ = try self.buf.writer().write("..");
+                    try self.writeFlexVarName(flex.payload.var_, flex.idx, .RecordExtension, root_idx);
+                    if (num_fields > 0) _ = try self.buf.writer().write(", ");
+                }
 
-            // Write remaining fields
-            for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
-                _ = try self.buf.writer().write(", ");
-                _ = try self.buf.writer().write(self.idents.getText(name));
-                _ = try self.buf.writer().write(": ");
-                try self.writeWithContext(content, .RecordFieldContent, root_idx);
-            }
+                // Since don't recurse above, we must capture the static dispatch
+                // constraints directly
+                for (self.snapshots.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                    try self.appendStaticDispatchConstraint(constraint);
+                }
+            },
+            .rigid => |rigid| {
+                _ = try self.buf.writer().write("..");
+                _ = try self.buf.writer().write(self.idents.getText(rigid.name));
+                if (num_fields > 0) _ = try self.buf.writer().write(", ");
+
+                // Since don't recurse above, we must capture the static dispatch
+                // constraints directly
+                for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                    try self.appendStaticDispatchConstraint(constraint);
+                }
+            },
+            .unbound, .invalid => {},
         }
 
-        // Show extension variable if it's not empty
-        switch (self.snapshots.contents.get(record.ext).*) {
-            .structure => |flat_type| switch (flat_type) {
-                .empty_record => {}, // Don't show empty extension
-                else => {
-                    if (fields_slice.len > 0) _ = try self.buf.writer().write(", ");
-                    try self.writeWithContext(record.ext, .RecordExtension, root_idx);
-                },
-            },
-            else => {
-                if (fields_slice.len > 0) _ = try self.buf.writer().write(", ");
-                try self.writeWithContext(record.ext, .RecordExtension, root_idx);
-            },
+        for (gathered_fields, 0..) |field, i| {
+            _ = try self.buf.writer().write(self.idents.getText(field.name));
+            _ = try self.buf.writer().write(": ");
+            try self.writeWithContext(field.content, .RecordFieldContent, root_idx);
+
+            if (i != gathered_fields.len - 1) _ = try self.buf.writer().write(", ");
         }
 
         _ = try self.buf.writer().write(" }");
+    }
+
+    /// Recursively unwrap all record fields
+    fn gatherRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range, ext_var: SnapshotContentIdx) std.mem.Allocator.Error!union(enum) {
+        flex: struct { idx: SnapshotContentIdx, payload: SnapshotFlex },
+        rigid: SnapshotRigid,
+        unbound,
+        invalid,
+    } {
+        const slice = self.snapshots.sliceRecordFields(fields);
+        try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
+        for (slice.items(.name), slice.items(.content)) |name, content| {
+            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .content = content });
+        }
+
+        var ext = ext_var;
+        while (true) {
+            const resolved = self.snapshots.contents.get(ext);
+            switch (resolved.*) {
+                .flex => |flex| {
+                    return .{ .flex = .{ .idx = ext, .payload = flex } };
+                },
+                .rigid => |rigid| {
+                    return .{ .rigid = rigid };
+                },
+                .alias => |alias| {
+                    ext = alias.backing;
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |ext_record| {
+                            const ext_slice = self.snapshots.sliceRecordFields(ext_record.fields);
+                            try self.scratch_record_fields.ensureUnusedCapacity(ext_record.fields.len());
+                            for (ext_slice.items(.name), ext_slice.items(.content)) |name, content| {
+                                self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .content = content });
+                            }
+                            ext = ext_record.ext;
+                        },
+                        .record_unbound => |ext_fields| {
+                            const ext_slice = self.snapshots.sliceRecordFields(ext_fields);
+                            try self.scratch_record_fields.ensureUnusedCapacity(ext_fields.len());
+                            for (ext_slice.items(.name), ext_slice.items(.content)) |name, content| {
+                                self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .content = content });
+                            }
+                            return .unbound;
+                        },
+                        else => return .invalid,
+                    }
+                },
+                else => return .invalid,
+            }
+        }
     }
 
     /// Write record fields without extension
@@ -1075,12 +1187,14 @@ pub const SnapshotWriter = struct {
             .flex => |flex| {
                 if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
-                } else {
+                } else if (true) {
+                    // TODO: ^ here, we should consider polarity
+
                     _ = try self.writeFlexVarName(flex.var_, tag_union.ext, .TagUnionExtension, root_idx);
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1093,7 +1207,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             else => {
@@ -1220,6 +1334,16 @@ pub const SnapshotWriter = struct {
                 };
             },
         }
+    }
+
+    /// Append a constraint to the list, if it doesn't already exist
+    fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
+        for (self.static_dispatch_constraints.items) |constraint| {
+            if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_content == constraint_to_add.fn_content) {
+                return;
+            }
+        }
+        _ = try self.static_dispatch_constraints.append(constraint_to_add);
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type

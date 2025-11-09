@@ -164,13 +164,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Num(_size), Num(_size2) -> Num(_size3)"))
 		(patt (type "_arg -> Error"))
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> Error"))
+		(patt (type "Num(_size) -> Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Num(_size), Num(_size2) -> Num(_size3)"))
 		(expr (type "_arg -> Error"))
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> Error"))
+		(expr (type "Num(_size) -> Error"))
 		(expr (type "Error"))))
 ~~~

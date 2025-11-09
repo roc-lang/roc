@@ -99,5 +99,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error -> { full_record: Error, greeting: Str, is_adult: Bool }"))
+(expr (type "{ a: b, age: Num(_size), name: c } -> { full_record: { a: b, age: Num(_size2), name: c }, greeting: Str, is_adult: Bool }"))
 ~~~
