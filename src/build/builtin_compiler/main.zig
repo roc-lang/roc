@@ -644,7 +644,8 @@ fn compileModule(
     const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
     // Use provided bool_stmt and try_stmt if available, otherwise use undefined
-    const common_idents: Check.CommonIdents = .{
+    // For Builtin module, these will be found after canonicalization and updated before type checking
+    var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
@@ -770,6 +771,22 @@ fn compileModule(
             eval_order_ptr.* = eval_order;
             module_env.evaluation_order = eval_order_ptr;
         }
+
+        // Find Bool and Try statements before type checking
+        // When compiling Builtin, bool_stmt and try_stmt are initially undefined,
+        // but they must be set before type checking begins
+        const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
+            std.debug.print("Error: Could not find Bool type in Builtin module\n", .{});
+            return error.TypeDeclarationNotFound;
+        };
+        const found_try_stmt = findTypeDeclaration(module_env, "Try") catch {
+            std.debug.print("Error: Could not find Try type in Builtin module\n", .{});
+            return error.TypeDeclarationNotFound;
+        };
+
+        // Update common_idents with the found statement indices
+        common_idents.bool_stmt = found_bool_stmt;
+        common_idents.try_stmt = found_try_stmt;
     }
 
     // 6. Type check
