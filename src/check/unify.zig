@@ -120,19 +120,25 @@ pub const Result = union(enum) {
     }
 };
 
-/// Unify two type variables with context about whether this is from an annotation
-pub fn unifyWithContext(
+/// Unify two type variables
+///
+/// This function
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+pub fn unify(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
+    /// The "expected" variable
     a: Var,
+    /// The "actual" variable
     b: Var,
-    from_annotation: bool,
 ) std.mem.Allocator.Error!Result {
-    return unifyWithConstraintOrigin(
+    return unifyWithConf(
         module_env,
         types,
         problems,
@@ -141,23 +147,39 @@ pub fn unifyWithContext(
         occurs_scratch,
         a,
         b,
-        from_annotation,
-        null,
+        Conf{ .ctx = .anon, .constraint_origin_var = null },
     );
 }
 
-/// Unify two types, tracking the origin of the constraint for better error reporting
-pub fn unifyWithConstraintOrigin(
+/// Conf about a unification, used to improve error messages
+pub const Conf = struct {
+    ctx: Ctx,
+    constraint_origin_var: ?Var,
+
+    /// If the "expect" var comes fro an annotation, or if it's anonymous
+    pub const Ctx = enum { anon, anno };
+};
+
+/// Unify two type variables
+///
+/// This function
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+///
+/// This function accepts a context and optional constraint origin var (for better error reporting)
+pub fn unifyWithConf(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
+    /// The "expected" variable
     a: Var,
+    /// The "actual" variable
     b: Var,
-    from_annotation: bool,
-    constraint_origin_var: ?Var,
+    conf: Conf,
 ) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -183,8 +205,8 @@ pub fn unifyWithConstraintOrigin(
                             .expected_snapshot = expected_snapshot,
                             .actual_var = b,
                             .actual_snapshot = actual_snapshot,
-                            .from_annotation = from_annotation,
-                            .constraint_origin_var = constraint_origin_var,
+                            .from_annotation = conf.ctx == .anno,
+                            .constraint_origin_var = conf.constraint_origin_var,
                         },
                         .detail = null,
                     } };
@@ -317,36 +339,6 @@ pub fn unifyWithConstraintOrigin(
     };
 
     return .ok;
-}
-
-/// Unify two type variables
-///
-/// This function
-/// * Resolves type variables & compresses paths
-/// * Compares variable contents for equality
-/// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(
-    module_env: *ModuleEnv,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-) std.mem.Allocator.Error!Result {
-    // Default to not from annotation for backward compatibility
-    return unifyWithContext(
-        module_env,
-        types,
-        problems,
-        snapshots,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        false, // from_annotation = false by default
-    );
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -2548,6 +2540,9 @@ const Unifier = struct {
             record_fields,
         ) catch return Error.AllocatorError;
 
+        // TODO: Below if we run into a record with the same field, then we
+        // prefer the leftmost field. But we should probably unify the dups
+
         // then recursiv
         var ext = record_ext;
         while (true) {
@@ -2569,20 +2564,43 @@ const Unifier = struct {
                         .structure => |flat_type| {
                             switch (flat_type) {
                                 .record => |ext_record| {
-                                    const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                        &self.types_store.record_fields,
-                                        ext_record.fields,
-                                    ) catch return Error.AllocatorError;
-                                    range.count += next_range.count;
+                                    const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
+                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
+
+                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
+                                        // Check if field name already exists (O(n) but fields are small)
+                                        const already_exists = for (already_gathered) |existing| {
+                                            if (existing.name == name) break true;
+                                        } else false;
+
+                                        // Only append if NOT already present (Map.union left-bias)
+                                        if (!already_exists) {
+                                            _ = self.scratch.gathered_fields.append(
+                                                self.scratch.gpa,
+                                                RecordField{ .name = name, .var_ = var_ },
+                                            ) catch return Error.AllocatorError;
+                                            range.count += 1;
+                                        }
+                                    }
                                     ext = .{ .ext = ext_record.ext };
                                 },
                                 .record_unbound => |fields| {
-                                    const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                        &self.types_store.record_fields,
-                                        fields,
-                                    ) catch return Error.AllocatorError;
-                                    range.count += next_range.count;
-                                    // record_unbound has no extension, so we're done
+                                    const next_fields = self.types_store.record_fields.sliceRange(fields);
+                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
+
+                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
+                                        const already_exists = for (already_gathered) |existing| {
+                                            if (existing.name == name) break true;
+                                        } else false;
+
+                                        if (!already_exists) {
+                                            _ = self.scratch.gathered_fields.append(
+                                                self.scratch.gpa,
+                                                RecordField{ .name = name, .var_ = var_ },
+                                            ) catch return Error.AllocatorError;
+                                            range.count += 1;
+                                        }
+                                    }
                                     return .{ .ext = ext, .range = range };
                                 },
                                 .empty_record => {

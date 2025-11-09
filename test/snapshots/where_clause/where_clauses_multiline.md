@@ -72,7 +72,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, b -> c where [a.convert : a -> cb.transform : b -> c]")))
+		(patt (type "a, b -> c where [a.convert : a -> c, b.transform : b -> c]")))
 	(expressions
-		(expr (type "a, b -> c where [a.convert : a -> cb.transform : b -> c]"))))
+		(expr (type "a, b -> c where [a.convert : a -> c, b.transform : b -> c]"))))
 ~~~

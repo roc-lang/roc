@@ -426,10 +426,8 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
             .assign => |assign| {
                 const def_name = idents.getText(assign.ident);
                 if (std.mem.eql(u8, target_def_name, def_name)) {
-                    try testing.expectEqualStrings(
-                        expected,
-                        try self.type_writer.writeGet(ModuleEnv.varFrom(def_idx)),
-                    );
+                    try self.type_writer.write(ModuleEnv.varFrom(def_idx));
+                    try testing.expectEqualStrings(expected, self.type_writer.get());
                     return;
                 }
             },
@@ -453,8 +451,10 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     try testing.expect(self.module_env.all_defs.span.len > 0);
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
     const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
 
-    try testing.expectEqualStrings(expected, try self.type_writer.writeGet(ModuleEnv.varFrom(last_def_idx)));
+    try self.type_writer.write(last_def_var);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
 /// Get the inferred type descriptor of the last declaration

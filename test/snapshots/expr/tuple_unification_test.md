@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List((Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]), Str))"))
+(expr (type "List((Num(Frac(_size)), Str))"))
 ~~~

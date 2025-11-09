@@ -22,7 +22,7 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try checkTypesExpr(source, .pass, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesExpr(source, .pass, "Num(_size)");
 }
 
 test "check type - num - int suffix 1" {
@@ -55,7 +55,7 @@ test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try checkTypesExpr(source, .pass, "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])");
+    try checkTypesExpr(source, .pass, "Num(Frac(_size))");
 }
 
 test "check type - num - float suffix 1" {
@@ -108,7 +108,7 @@ test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try checkTypesExpr(source, .pass, "List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])");
+    try checkTypesExpr(source, .pass, "List(Num(_size))");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
@@ -150,7 +150,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass, "{ hello: Str, world: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }");
+    try checkTypesExpr(source, .pass, "{ hello: Str, world: Num(_size) }");
 }
 
 // tags //
@@ -166,7 +166,7 @@ test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])]_others");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, Num(_size))]_others");
 }
 
 // blocks //
@@ -213,7 +213,7 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Num(_size)");
 }
 
 test "check type - def - id without annotation" {
@@ -240,23 +240,56 @@ test "check type - def - func with annotation 1" {
 }
 
 // TODO: This test is currently failing because annotation parsing doesn't correctly handle
-// constraint syntax like `num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]`
-// It's getting truncated to `num where [num.from_int_digits : num]`
+// constraint syntax like `Num(_size)`
+// It's getting truncated to `Num(_size)`
 // This needs to be fixed in the annotation parser, but is separate from the numeric literal work.
 test "check type - def - func with annotation 2" {
     if (true) return error.SkipZigTest;
     const source =
-        \\id : x -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]
+        \\id : x -> Num(_size)
         \\id = |_| 15
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "x -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x -> Num(_size)");
 }
 
 test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+}
+
+test "check type - def - forward ref" {
+    const source =
+        \\run = id1("howdy")
+        \\
+        \\id1 : x -> x
+        \\id1 = |x| id2(x)
+        \\
+        \\id2 : x -> x
+        \\id2 = |x| id3(x)
+        \\
+        \\id3 : x -> x
+        \\id3 = |x| id4(x)
+        \\
+        \\id4 : x -> x
+        \\id4 = |x| x
+        \\
+        \\id5 : x -> x
+        \\id5 = |x| x
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "run" } }, "Str");
+}
+
+test "check type - def - nested lambda with wrong annotation" {
+    if (true) return error.SkipZigTest;
+
+    // Currently the below produces two errors instead of just one.
+    const source =
+        \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
+        \\curried_add = |a| |b| |c| |d| a + b + c + d
+    ;
+    try checkTypesModule(source, .fail, "Num(_size)");
 }
 
 // calling functions
@@ -278,7 +311,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -288,14 +321,30 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(Num(_size), Str)");
+}
+
+test "check type - def - out of order" {
+    // Currently errors out in czer
+    if (true) return error.SkipZigTest;
+
+    const source =
+        \\id_1 : x -> x
+        \\id_1 = |x| id_2(x)
+        \\
+        \\id_2 : x -> x
+        \\id_2 = |x| x
+        \\
+        \\test = id_1("Hellor")
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "test" } }, "Str");
 }
 
 test "check type - def - polymorphic higher order 1" {
     const source =
         \\f = |g, v| g(v)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a -> b, a -> b");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(a -> b), a -> b");
 }
 
 test "check type - top level polymorphic function is generalized" {
@@ -308,7 +357,7 @@ test "check type - top level polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - let-def polymorphic function is generalized" {
@@ -320,7 +369,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -509,9 +558,9 @@ test "check type - nominal w/ polymorphic function" {
         \\swapPair : Pair(a, b) -> Pair(b, a)
         \\swapPair = |(x, y)| (y, x)
         \\
-        \\test = |_| swapPair((1, "test"))
+        \\test = swapPair((1, "test"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Pair(Str, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, Num(_size))");
 }
 
 // bool
@@ -549,12 +598,12 @@ test "check type - if else" {
 }
 
 test "check type - if else - qualified bool" {
-    return error.SkipZigTest; // Qualified tags from other modules don't work yet.
-    // const source =
-    //     \\x : Str
-    //     \\x = if Bool.True "true" else "false"
-    // ;
-    // try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+    if (true) return error.SkipZigTest;
+    const source =
+        \\x : Str
+        \\x = if Bool.True "true" else "false"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - if else - invalid condition 1" {
@@ -659,7 +708,7 @@ test "check type - unary minus" {
     const source =
         \\x = -10
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - unary minus mismatch" {
@@ -684,7 +733,7 @@ test "check type - binops math sub" {
     const source =
         \\x = 1 - 0.2
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(Frac(_size))");
 }
 
 test "check type - binops ord" {
@@ -724,7 +773,7 @@ test "check type - binops or mismatch" {
 
 // record access
 
-test "check type - record access" {
+test "check type - record - access" {
     const source =
         \\r =
         \\  {
@@ -737,20 +786,63 @@ test "check type - record access" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
-test "check type - record access func polymorphic" {
+test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a } -> a");
 }
 
-test "check type - record access - not a record" {
+test "check type - record - access - not a record" {
     const source =
         \\r = "hello"
         \\
         \\x = r.my_field
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// record update
+
+test "check type - record - update 1" {
+    const source =
+        \\update_data = |container, new_value| { ..container, data: new_value }
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "update_data" } },
+        "{ ..a, data: b }, b -> { ..a, data: b }",
+    );
+}
+
+test "check type - record - update 2" {
+    const source =
+        \\set_data = |container, new_value| { ..container, data: new_value }
+        \\
+        \\updated1 = set_data({ data: 10 }, 100) # Updates field
+        \\updated2 = set_data({ data: 10, other: "hello" }, 100) # Updates with extra fields
+        \\updated3 = set_data({ data: "hello" }, "world") # Polymorphic
+        \\
+        \\final = (updated1, updated2, updated3)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "final" } },
+        "({ data: Num(_size) }, { data: Num(_size2), other: Str }, { data: Str })",
+    );
+}
+
+test "check type - record - update fail" {
+    const source =
+        \\set_data = |container, new_value| { ..container, data: new_value }
+        \\
+        \\updated = set_data({ data: "hello" }, 10)
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
 }
 
 // tags //
@@ -855,10 +947,8 @@ test "check type - patterns int mismatch" {
 test "check type - patterns frac 1" {
     const source =
         \\{
-        \\  x = 10.0dec
-        \\
-        \\  match(x) {
-        \\    10 => x,
+        \\  match(20) {
+        \\    10dec as x => x,
         \\    _ => 15,
         \\  }
         \\}
@@ -869,10 +959,8 @@ test "check type - patterns frac 1" {
 test "check type - patterns frac 2" {
     const source =
         \\{
-        \\  x = 10.0
-        \\
-        \\  match(x) {
-        \\    10f32 => x,
+        \\  match(10) {
+        \\    10f32 as x => x,
         \\    _ => 15,
         \\  }
         \\}
@@ -883,11 +971,9 @@ test "check type - patterns frac 2" {
 test "check type - patterns frac 3" {
     const source =
         \\{
-        \\  x = 10.0
-        \\
-        \\  match(x) {
-        \\    10 => x,
-        \\    15f64 => x,
+        \\  match(50) {
+        \\    10 as x => x,
+        \\    15f64 as x => x,
         \\    _ => 20,
         \\  }
         \\}
@@ -935,7 +1021,7 @@ test "check type - patterns record 2" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesExpr(source, .pass, "Num(_size)");
 }
 
 test "check type - patterns record field mismatch" {
@@ -962,7 +1048,7 @@ test "check type - var ressignment" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 // expect //
@@ -975,7 +1061,7 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - expect not bool" {
@@ -1046,7 +1132,7 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]",
+        "Num(_size)",
     );
 }
 
@@ -1185,26 +1271,29 @@ test "check type - static dispatch - concrete - indirection 1" {
 
 test "check type - static dispatch - concrete - indirection 2" {
     const source =
+        \\main! = |_| {}
+        \\
         \\Test := [Val(Str)].{
         \\  to_str = |Test.Val(s)| s
         \\  to_str2 = |test| test.to_str()
         \\}
         \\
-        \\main = Test.Val("hello").to_str2()
+        \\
+        \\func = Test.Val("hello").to_str2()
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "main" } },
+        .{ .pass = .{ .def = "func" } },
         "Str",
     );
 }
 
 test "check type - static dispatch - fail if not in type signature" {
     const source =
-        \\module []
+        \\main! = |_| {}
         \\
-        \\main : a -> a
-        \\main = |a| {
+        \\func : a -> a
+        \\func = |a| {
         \\  _val = a.method()
         \\  a
         \\}
@@ -1216,80 +1305,467 @@ test "check type - static dispatch - fail if not in type signature" {
     );
 }
 
-// helpers - module //
-
-const ModuleExpectation = union(enum) {
-    pass: DefExpectation,
-    fail,
-};
-
-const DefExpectation = union(enum) {
-    last_def,
-    def: []const u8,
-};
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
-/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
-fn checkTypesModule(
-    comptime source_expr: []const u8,
-    comptime expectation: ModuleExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.init("Test", source_expr);
-    defer test_env.deinit();
-
-    switch (expectation) {
-        .pass => |def_expectation| {
-            switch (def_expectation) {
-                .last_def => {
-                    return test_env.assertLastDefType(expected);
-                },
-                .def => |def_name| {
-                    return test_env.assertDefType(def_name, expected);
-                },
-            }
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-    }
-
-    return test_env.assertLastDefType(expected);
+test "check type - static dispatch - let poly" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\process_container : a -> Str where [a.get_or : a, Str -> Str]
+        \\process_container = |container| {
+        \\  result = container.get_or("empty")
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "process_container" } },
+        "a -> Str where [a.get_or : a, Str -> Str]",
+    );
 }
 
-// helpers - expr //
+test "check type - static dispatch - let poly 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Define a Container type with methods
+        \\Container(a) := [Empty, Value(a)].{
+        \\
+        \\  # Method to get value or provide default
+        \\  get_or : Container(a), a -> a
+        \\  get_or = |container, default| {
+        \\    match container {
+        \\      Value(val) => val
+        \\      Empty => default
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\process_container : a -> Str where [a.get_or : a, Str -> Str]
+        \\process_container = |container| {
+        \\  result = container.get_or("empty")
+        \\  result
+        \\}
+        \\
+        \\func = {
+        \\  c = Container.Empty
+        \\  process_container(c)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Str",
+    );
+}
 
-const ExprExpectation = union(enum) {
-    pass,
-    fail,
-};
+test "check type - static dispatch - polymorphic type" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Container(a) := [Value(a)].{
+        \\  # Method to map over the contained value
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |Value(val), f| {
+        \\      Value(f(val))
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Container.map" } },
+        "Container(a), (a -> b) -> Container(b)",
+    );
+}
 
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts expr type checks, and asserts that the expr's type match the expected type string
-/// Fail: Asserts that there is exactly 1 type error and it's title matches the expected string
-fn checkTypesExpr(
-    comptime source_expr: []const u8,
-    comptime expectation: ExprExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.initExpr("Test", source_expr);
-    defer test_env.deinit();
+test "check type - static dispatch - polymorphic type 2" {
+    const source =
+        \\Container(a) := [Value(a)].{
+        \\  # Method to map over the contained value
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |c, f| {
+        \\    match c {
+        \\      Value(val) => Value(f(val))
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main! = |_| {}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Container.map" } },
+        "Container(a), (a -> b) -> Container(b)",
+    );
+}
 
-    switch (expectation) {
-        .pass => {
-            return test_env.assertLastDefType(expected);
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-    }
+test "check type - static dispatch - polymorphic type 3" {
+    const source =
+        \\Container(a) := [Empty, Value(a)].{
+        \\  # Method to map over the contained value
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main! = |_| {}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Container.map" } },
+        "Container(a), (a -> b) -> Container(b)",
+    );
+}
 
-    return test_env.assertLastDefType(expected);
+// comprehensive //
+
+test "check type - comprehensive - multiple layers of let-polymorphism" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# First layer: polymorphic identity
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\# Second layer: uses id polymorphically multiple times
+        \\apply_twice : (a -> a), a -> a
+        \\apply_twice = |f, x| {
+        \\  first = f(x)
+        \\  second = f(first)
+        \\  second
+        \\}
+        \\
+        \\# Third layer: uses apply_twice with different types
+        \\func = {
+        \\  num_result = apply_twice(id, 42)
+        \\  str_result = apply_twice(id, "hello")
+        \\  bool_result = apply_twice(id, Bool.True)
+        \\  (num_result, str_result, bool_result)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "(Num(_size), Str, Bool)",
+    );
+}
+
+test "check type - comprehensive - multiple layers of lambdas" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Four layers of nested lambdas
+        \\curried_add : Num(a) -> (Num(a) -> (Num(a) -> (Num(a) -> Num(a))))
+        \\curried_add = |a| |b| |c| |d| a + b + c + d
+        \\
+        \\func = {
+        \\  step1 = curried_add(1)
+        \\  step2 = step1(2)
+        \\  step3 = step2(3)
+        \\  result = step3(4)
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Num(_size)",
+    );
+}
+
+test "check type - comprehensive - static dispatch with multiple methods" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Define a polymorphic container with static dispatch
+        \\Container(a) := [Empty, Value(a)].{
+        \\  # Method with annotation
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\
+        \\  # Method without annotation (inferred)
+        \\  get_or = |container, default| {
+        \\    match container {
+        \\      Container.Value(val) => val
+        \\      Empty => default
+        \\    }
+        \\  }
+        \\
+        \\  # Chained method dispatch
+        \\  flat_map : Container(a), (a -> Container(b)) -> Container(b)
+        \\  flat_map = |container, f| {
+        \\    match container {
+        \\      Value(val) => f(val)
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\func = {
+        \\  num_container = Container.Value(100)
+        \\
+        \\  chained = num_container
+        \\    .map(|x| x + 1)
+        \\    .flat_map(|x| Container.Value(x + 2))
+        \\    .get_or(0)
+        \\
+        \\  chained
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Num(_size)",
+    );
+}
+
+test "check type - comprehensive - static dispatch with multiple methods 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Container(a) := [Empty, Value(a)].{
+        \\  mapAdd5 = |container| {
+        \\    container
+        \\      .mapAdd4()
+        \\      .mapAdd1()
+        \\  }
+        \\
+        \\  mapAdd4 = |container| {
+        \\    container
+        \\      .mapAdd2()
+        \\      .mapAdd2()
+        \\  }
+        \\
+        \\  mapAdd3 = |container| {
+        \\    container
+        \\      .mapAdd2()
+        \\      .mapAdd1()
+        \\  }
+        \\
+        \\  mapAdd2 = |container| {
+        \\    container
+        \\      .mapAdd1()
+        \\      .mapAdd1()
+        \\  }
+        \\
+        \\  mapAdd1 = |container| {
+        \\    container.map(|val| val + 1)
+        \\  }
+        \\
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\func = {
+        \\  num_container = Container.Value(100)
+        \\  num_container.mapAdd5()
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Container(Num(_size))",
+    );
+}
+
+test "check type - comprehensive - annotations with inferred types" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Annotated function
+        \\add : Num(a), Num(a) -> Num(a)
+        \\add = |x, y| x + y
+        \\
+        \\# Inferred function that uses annotated one
+        \\add_three = |a, b, c| add(add(a, b), c)
+        \\
+        \\# Annotated function using inferred one
+        \\compute : U32 -> U32
+        \\compute = |x| add_three(x, 1u32, 2u32)
+        \\
+        \\func = compute(10u32)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Num(Int(Unsigned32))",
+    );
+}
+
+test "check type - comprehensive: polymorphism + lambdas + dispatch + annotations" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Define a polymorphic container with static dispatch
+        \\Container(a) := [Empty, Value(a)].{
+        \\  # Method with annotation
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\
+        \\  # Method without annotation (inferred)
+        \\  get_or = |container, default| {
+        \\    match container {
+        \\      Value(val) => val
+        \\      Empty => default
+        \\    }
+        \\  }
+        \\
+        \\  # Chained method dispatch
+        \\  flat_map : Container(a), (a -> Container(b)) -> Container(b)
+        \\  flat_map = |container, f| {
+        \\    match container {
+        \\      Value(val) => f(val)
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\# First layer: polymorphic helper with annotation
+        \\compose : (b -> c), (a -> b), a -> c
+        \\compose = |g, f, x| g(f(x))
+        \\
+        \\# Second layer: inferred polymorphic function using compose
+        \\transform_twice = |f, x| {
+        \\  first = compose(f, f, x)
+        \\  second = compose(f, f, first)
+        \\  second
+        \\}
+        \\
+        \\# Third layer: curried function (multiple lambda layers)
+        \\make_processor : (a -> b) -> ((b -> c) -> (a -> c))
+        \\make_processor = |f1| |f2| |x| {
+        \\  step1 = f1(x)
+        \\  step2 = f2(step1)
+        \\  step2
+        \\}
+        \\
+        \\# Fourth layer: polymorphic function using static dispatch
+        \\process_with_method : a, c -> d where [a.map : a, (b -> c) -> d]
+        \\process_with_method = |container, value| {
+        \\  # Multiple nested lambdas with let-polymorphism
+        \\  id = |x| x
+        \\
+        \\  result = container.map(|_| id(value))
+        \\  result
+        \\}
+        \\
+        \\# Fifth layer: combine everything
+        \\main = {
+        \\  # Let-polymorphism layer 1
+        \\  # TODO INLINE ANNOS
+        \\  # id : a -> a
+        \\  id = |x| x
+        \\
+        \\  # Let-polymorphism layer 2 with nested lambdas
+        \\  _apply_to_container = |f| |container| |default| {
+        \\    mapped = container.map(f)
+        \\    mapped.get_or(default)
+        \\  }
+        \\
+        \\  # Create containers
+        \\  num_container = Container.Value(100)
+        \\  str_container = Container.Value("hello")
+        \\  _empty_container = Container.Empty
+        \\
+        \\  # Use id polymorphically on different types
+        \\  id_num = id(42)
+        \\  id_str = id("world")
+        \\  id_bool = id(Bool.True)
+        \\
+        \\  # Multiple layers of curried application
+        \\  add_ten = |x| x + 10
+        \\  processor = make_processor(add_ten)(add_ten)
+        \\  processed = processor(5)
+        \\
+        \\  # Static dispatch with polymorphic methods
+        \\  num_result = num_container.map(|x| x + 1)
+        \\  _str_result = str_container.map(|s| s)
+        \\
+        \\  # Chain method calls with static dispatch
+        \\  chained = num_container
+        \\    .map(|x| x + 1)
+        \\    .flat_map(|x| Container.Value(x + 2))
+        \\    .get_or(0)
+        \\
+        \\  # Use transform_twice with let-polymorphism
+        \\  double_fn = |x| x + x
+        \\  transformed = transform_twice(double_fn, 3)
+        \\
+        \\  # Final result combining all techniques
+        \\  {
+        \\    id_results: (id_num, id_str, id_bool),
+        \\    processed: processed,
+        \\    chained: chained,
+        \\    transformed: transformed,
+        \\    final: num_result.get_or(0),
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: Num(_size5) }",
+    );
+}
+
+// scoped type variables
+
+test "check type - scoped type variables - pass" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\pass : a -> a
+        \\pass = |x| {
+        \\  inner : a -> a
+        \\  inner = |y| y
+        \\  
+        \\  inner(x)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "pass" } },
+        "a -> a",
+    );
+}
+
+test "check type - scoped type variables - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\fail : a -> a
+        \\fail = |x| {
+        \\  g : b -> b
+        \\  g = |z| z
+        \\
+        \\  result : c
+        \\  result = g(x)
+        \\
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
 }
 
 // Associated items referencing each other
@@ -1367,10 +1843,11 @@ test "associated item: type annotation followed by body should not create duplic
     try testing.expectEqual(@as(usize, 0), type_problems.len);
 
     // Verify the types
-    try test_env.assertDefType("Test.apply", "a -> b, a -> b");
-    try test_env.assertDefType("result", "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
+    try test_env.assertDefType("result", "Num(_size)");
 }
 
+// TODO: Move this test to can
 test "top-level: type annotation followed by body should not create duplicate definition - REGRESSION TEST" {
     // This reproduces the bug seen in test/snapshots/pass/underscore_in_regular_annotations.md
     // and test/snapshots/type_function_simple.md where a type annotation followed by its body
@@ -1411,4 +1888,80 @@ test "top-level: type annotation followed by body should not create duplicate de
     if (duplicate_def_found) {
         return error.TestUnexpectedResult;
     }
+}
+
+// helpers - module //
+
+const ModuleExpectation = union(enum) {
+    pass: DefExpectation,
+    fail,
+};
+
+const DefExpectation = union(enum) {
+    last_def,
+    def: []const u8,
+};
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
+/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
+fn checkTypesModule(
+    comptime source_expr: []const u8,
+    comptime expectation: ModuleExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.init("Test", source_expr);
+    defer test_env.deinit();
+
+    switch (expectation) {
+        .pass => |def_expectation| {
+            switch (def_expectation) {
+                .last_def => {
+                    return test_env.assertLastDefType(expected);
+                },
+                .def => |def_name| {
+                    return test_env.assertDefType(def_name, expected);
+                },
+            }
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+    }
+
+    return test_env.assertLastDefType(expected);
+}
+
+// helpers - expr //
+
+const ExprExpectation = union(enum) {
+    pass,
+    fail,
+};
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts expr type checks, and asserts that the expr's type match the expected type string
+/// Fail: Asserts that there is exactly 1 type error and it's title matches the expected string
+fn checkTypesExpr(
+    comptime source_expr: []const u8,
+    comptime expectation: ExprExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.initExpr("Test", source_expr);
+    defer test_env.deinit();
+
+    switch (expectation) {
+        .pass => {
+            return test_env.assertLastDefType(expected);
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+    }
+
+    return test_env.assertLastDefType(expected);
 }

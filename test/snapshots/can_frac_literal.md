@@ -56,11 +56,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])")))
+		(patt (type "Num(Frac(_size))"))
+		(patt (type "Num(Frac(_size))"))
+		(patt (type "Num(Frac(_size))")))
 	(expressions
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))))
+		(expr (type "Num(Frac(_size))"))
+		(expr (type "Num(Frac(_size))"))
+		(expr (type "Num(Frac(_size))"))))
 ~~~

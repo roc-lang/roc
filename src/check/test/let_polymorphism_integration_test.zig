@@ -23,7 +23,7 @@ test "direct polymorphic identity usage" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], b: Str }");
+    try typeCheck(source, "{ a: Num(_size), b: Str }");
 }
 
 test "higher-order function with polymorphic identity" {
@@ -36,7 +36,7 @@ test "higher-order function with polymorphic identity" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], b: Str }");
+    try typeCheck(source, "{ a: Num(_size), b: Str }");
 }
 
 test "let-polymorphism with function composition" {
@@ -50,7 +50,7 @@ test "let-polymorphism with function composition" {
         \\    { result1 }
         \\}
     ;
-    try typeCheck(source, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try typeCheck(source, "Num(_size)");
 }
 
 test "polymorphic empty list" {
@@ -62,7 +62,7 @@ test "polymorphic empty list" {
         \\    { empty, nums, strs }
         \\}
     ;
-    try typeCheck(source, "{ empty: List(_elem), nums: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), strs: List(Str) }");
+    try typeCheck(source, "{ empty: List(_elem), nums: List(Num(_size)), strs: List(Str) }");
 }
 
 test "polymorphic cons function" {
@@ -113,12 +113,12 @@ test "polymorphic record constructor" {
         \\{
         \\    make_pair = |x, y| { first: x, second: y }
         \\    pair1 = make_pair(1, "a")
-        \\    pair2 = make_pair("hello", 42)
+        \\    pair2 = make_pair("b", 42)
         \\    pair3 = make_pair(True, False)
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], second: Str }, pair2: { first: Str, second: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }, pair3: { first: [True]_others, second: [False]_others2 } }");
+    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -131,7 +131,7 @@ test "polymorphic identity with various numeric types" {
         \\    { int_val, float_val, bool_val }
         \\}
     ;
-    try typeCheck(source, "{ bool_val: [True]_others, float_val: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]), int_val: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }");
+    try typeCheck(source, "{ bool_val: [True]_others, float_val: Num(Frac(_size)), int_val: Num(_size2) }");
 }
 
 test "nested polymorphic data structures" {
@@ -144,7 +144,7 @@ test "nested polymorphic data structures" {
         \\    { box1, box2, nested }
         \\}
     ;
-    try typeCheck(source, "{ box1: { value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }, box2: { value: Str }, nested: { value: { value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] } } }");
+    try typeCheck(source, "{ box1: { value: Num(_size) }, box2: { value: Str }, nested: { value: { value: Num(_size2) } } }");
 }
 
 test "polymorphic function in let binding" {
@@ -159,7 +159,7 @@ test "polymorphic function in let binding" {
         \\    result
         \\}
     ;
-    try typeCheck(source, "{ a: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], b: Str }");
+    try typeCheck(source, "{ a: Num(_size), b: Str }");
 }
 
 test "polymorphic swap function" {
@@ -173,7 +173,7 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }, swapped2: { first: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], second: [True]_others } }");
+    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: [True]_others } }");
 }
 
 test "polymorphic fold function" {
@@ -214,7 +214,7 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try typeCheck(source, "{ opt1: { tag: Str, value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }");
+    try typeCheck(source, "{ opt1: { tag: Str, value: Num(_size) }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }");
 }
 
 test "polymorphic const function" {
@@ -228,7 +228,7 @@ test "polymorphic const function" {
         \\    { num, str }
         \\}
     ;
-    try typeCheck(source, "{ num: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], str: Str }");
+    try typeCheck(source, "{ num: Num(_size), str: Str }");
 }
 
 test "shadowing of polymorphic values" {
@@ -270,7 +270,7 @@ test "polymorphic pipe function" {
         \\    { num_result, str_result }
         \\}
     ;
-    try typeCheck(source, "{ num_result: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], str_result: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }");
+    try typeCheck(source, "{ num_result: Num(_size), str_result: Num(_size2) }");
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.

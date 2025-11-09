@@ -40,7 +40,7 @@ main : (Str, U64)
 main = {
 	val = Adv.Val(10, "hello")
 	next_val = val.update_str("world").update_u64(20)
-	(next_val.to_str(), next_val.to_u64)
+	(next_val.to_str(), next_val.to_u64())
 }
 ~~~
 # EXPECTED
@@ -74,14 +74,17 @@ The **Adv** type does not have a **update_strr** method:
 **Hint:** Did you forget to define **update_strr** in the type's method block?
 
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `update` method on a `Str`:
+You're calling the method `update` on a type that doesn't support methods:
 **Adv.md:28:13:28:32:**
 ```roc
 	next_val = "Hello".update(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
-But `Str` doesn't support methods.
+This type doesn't support methods:
+    _Str_
+
+
 
 # TOKENS
 ~~~zig
@@ -113,7 +116,7 @@ LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,
 LowerIdent,OpAssign,OpenCurly,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,CloseRound,
-OpenRound,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,NoSpaceDotLowerIdent,CloseRound,
+OpenRound,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseRound,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -275,7 +278,8 @@ EndOfFile,
 								(e-ident (raw "to_str"))))
 						(e-field-access
 							(e-ident (raw "next_val"))
-							(e-ident (raw "to_u64")))))))))
+							(e-apply
+								(e-ident (raw "to_u64"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -311,7 +315,7 @@ main : (Str, U64)
 main = {
 	val = Adv.Val(10, "hello")
 	next_val = val.update_str("world").update_u64(20)
-	(next_val.to_str(), next_val.to_u64)
+	(next_val.to_str(), next_val.to_u64())
 }
 ~~~
 # CANONICALIZE
@@ -480,7 +484,8 @@ main = {
 					(e-dot-access (field "to_u64")
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "next_val"))))))))
+								(p-assign (ident "next_val"))))
+						(args)))))
 		(annotation
 			(ty-tuple
 				(ty-lookup (name "Str") (builtin))
@@ -500,9 +505,9 @@ main = {
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "(Str, Num(Int(Unsigned64)))")))
 	(type_decls
 		(nominal (type "Adv")
@@ -512,8 +517,8 @@ main = {
 		(expr (type "Adv -> Num(Int(Unsigned64))"))
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "(Str, Num(Int(Unsigned64)))"))))
 ~~~

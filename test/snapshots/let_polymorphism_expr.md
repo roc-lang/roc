@@ -85,5 +85,5 @@ match [] {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ empty: List(_elem), ints: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), strs: List(Str) }"))
+(expr (type "{ empty: List(_elem), ints: List(Num(_size)), strs: List(Str) }"))
 ~~~

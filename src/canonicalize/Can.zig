@@ -251,7 +251,7 @@ pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
+    builtin_indices: CIR.BuiltinIndices, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
 ) !void {
     const types_to_add = .{
         .{ "Bool", builtin_indices.bool_type },
@@ -369,7 +369,7 @@ const Self = @This();
 /// If parent_name is provided, creates a qualified name (e.g., "Foo.Bar")
 fn processTypeDeclFirstPass(
     self: *Self,
-    type_decl: anytype,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
     parent_name: ?Ident.Idx,
     defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
@@ -924,6 +924,7 @@ fn processAssociatedItemsSecondPass(
             .decl => |decl| {
                 // Canonicalize the declaration with qualified name
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                 if (pattern == .ident) {
                     const pattern_ident_tok = pattern.ident.ident_tok;
                     if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
@@ -942,12 +943,11 @@ fn processAssociatedItemsSecondPass(
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
-                    const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
                     const feature = try self.env.insertString("non-identifier patterns in associated blocks");
                     try self.env.pushDiagnostic(Diagnostic{
                         .not_implemented = .{
                             .feature = feature,
-                            .region = region,
+                            .region = pattern_region,
                         },
                     });
                 }
@@ -1100,19 +1100,19 @@ fn processAssociatedItemsFirstPass(
                 // processAssociatedItemsSecondPass will later use updatePlaceholder to replace these
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
                 if (pattern == .ident) {
+                    const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                     const pattern_ident_tok = pattern.ident.ident_tok;
                     if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
                         // Build qualified name (e.g., "Foo.Bar.baz")
                         const qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_name), self.env.getIdent(decl_ident));
 
                         // Create placeholder pattern with qualified name
-                        const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
                         const placeholder_pattern = Pattern{
                             .assign = .{
                                 .ident = qualified_idx,
                             },
                         };
-                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
 
                         // Also compute type-qualified name (e.g., "List.map")
                         // Re-fetch identifiers since insertQualifiedIdent may have reallocated the identifier table
@@ -1272,6 +1272,40 @@ pub fn canonicalizeFile(
             .type_decl => |type_decl| {
                 if (type_decl.associated) |_| {
                     try self.processTypeDeclFirstPass(type_decl, null, true); // defer associated blocks
+                }
+            },
+            .decl => |decl| {
+                // Introduce declarations for forawrd/recursive references
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        // Create placeholder pattern with qualified name
+                        const placeholder_pattern = Pattern{
+                            .assign = .{ .ident = decl_ident },
+                        };
+                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
+
+                        // Introduce the qualified name to scope
+                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, decl_ident, placeholder_pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                    .ident = decl_ident,
+                                    .region = pattern_region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            .top_level_var_error => {
+                                // This shouldn't happen for declarations in associated blocks
+                            },
+                            .var_across_function_boundary => {
+                                // This shouldn't happen for declarations in associated blocks
+                            },
+                        }
+                    }
                 }
             },
             else => {
@@ -2872,23 +2906,29 @@ fn canonicalizeDeclWithAnnotation(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const pattern_idx = try self.canonicalizePatternOrMalformed(decl.pattern);
+    // Either find the placeholder pattern insert in the first past if ident,
+    // otherwise canonicalize the pattern
+    const pattern = self.parse_ir.store.getPattern(decl.pattern);
+    const pattern_idx = blk: {
+        if (pattern == .ident) {
+            const pattern_ident_tok = pattern.ident.ident_tok;
+            if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                // Look up the placeholder pattern that was created in the first pass
+                const lookup_result = self.scopeLookup(.ident, decl_ident);
+                switch (lookup_result) {
+                    .found => |pattern_idx| break :blk pattern_idx,
+                    .not_found => unreachable, // Pattern should have been created in first pass
+                }
+            } else {
+                break :blk try self.canonicalizePatternOrMalformed(decl.pattern);
+            }
+        } else {
+            break :blk try self.canonicalizePatternOrMalformed(decl.pattern);
+        }
+    };
+
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
-    // Create the def entry and set def type variable to a flex var
-    //
-    // We always use a flex variable for the definition, regardless of whether there's
-    // an annotation. This is because:
-    // 1. If there's no annotation, we need a flex var for normal type inference
-    // 2. If there IS an annotation, we still use a flex var to avoid copying the
-    //    annotation's type content. This is necessary because if the annotation contains
-    //    an alias (e.g., `empty : ConsList(a)`), that alias expects its type arguments
-    //    to live at specific memory offsets relative to the alias's own type variable.
-    //    Copying the alias content to a different type variable would break this assumption.
-    // 3. During type checking, the definition's flex var will be unified with the
-    //    annotation's type (if present) or with the inferred type from the expression
-    // 4. Type errors will be caught during unification if the implementation doesn't
-    //    match the annotation
     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
     const def_idx = self.env.addDef(.{
         .pattern = pattern_idx,
@@ -2957,7 +2997,7 @@ fn parseSingleQuoteCodepoint(
 
 fn canonicalizeStringLike(
     self: *Self,
-    e: anytype,
+    e: AST.Expr.StringLike,
     is_multiline: bool,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     // Get all the string parts
@@ -8346,6 +8386,9 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
 
     // Report unused variables in sorted order
     for (unused_vars.items) |unused| {
+        // TODO: Currently, static dispatch functions are marked as "unused"
+        // even if they are used. As a tmp workaround, this is commented out
+
         try self.env.pushDiagnostic(Diagnostic{ .unused_variable = .{
             .ident = unused.ident,
             .region = unused.region,
@@ -9372,7 +9415,7 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
 
 /// Expose all associated items of a type declaration (recursively for nested types)
 /// This is used for type modules where all associated items are implicitly exposed
-fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype) std.mem.Allocator.Error!void {
+fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type) std.mem.Allocator.Error!void {
     if (type_decl.associated) |assoc| {
         for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
             const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);

@@ -403,9 +403,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Container -> Str"))
-		(patt (type "Container, Str -> Str -> Container"))
+		(patt (type "Container, (Str -> Str) -> Container"))
 		(patt (type "a -> Str where [a.get_value : a -> Str]"))
-		(patt (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
+		(patt (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
 		(patt (type "Container"))
 		(patt (type "Container"))
 		(patt (type "Str"))
@@ -417,9 +417,9 @@ NO CHANGE
 			(ty-header (name "Container"))))
 	(expressions
 		(expr (type "Container -> Str"))
-		(expr (type "Container, Str -> Str -> Container"))
+		(expr (type "Container, (Str -> Str) -> Container"))
 		(expr (type "a -> Str where [a.get_value : a -> Str]"))
-		(expr (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
+		(expr (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
 		(expr (type "Container"))
 		(expr (type "Container"))
 		(expr (type "Str"))

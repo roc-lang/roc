@@ -123,9 +123,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
-		(patt (type "Num(Int(Signed64)) -> Error")))
+		(patt (type "Error -> Error"))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Str -> Error"))
-		(expr (type "Num(Int(Signed64)) -> Error"))))
+		(expr (type "Error -> Error"))
+		(expr (type "Error -> Error"))))
 ~~~

@@ -53,5 +53,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: [True]_others, age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Error }"))
+(expr (type "Error"))
 ~~~

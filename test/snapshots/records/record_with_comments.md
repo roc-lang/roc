@@ -152,5 +152,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ address: { city: Str, coordinates: { lat: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]), lng: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]) }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }, Error }"))
+(expr (type "Error"))
 ~~~
