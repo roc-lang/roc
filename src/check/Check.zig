@@ -3516,7 +3516,68 @@ fn checkBinopExpr(
     does_fx = try self.checkExpr(binop.rhs, rank, .no_expectation) or does_fx;
 
     switch (binop.op) {
-        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
+        .add => {
+            // Desugar `a + b` to `a.plus(b)` using static dispatch
+
+            // Check if either operand is an error
+            const lhs_resolved = self.types.resolveVar(lhs_var).desc.content;
+            const rhs_resolved = self.types.resolveVar(rhs_var).desc.content;
+            const did_err = lhs_resolved == .err or rhs_resolved == .err;
+
+            if (did_err) {
+                // If either operand errored, propagate the error
+                try self.updateVar(expr_var, .err, rank);
+            } else {
+                // Get the method name "plus" from the ident store
+                // It should already exist since it's used in Builtin.roc
+                const method_name = blk: {
+                    if (self.cir.common.findIdent("plus")) |existing| {
+                        break :blk existing;
+                    } else {
+                        // If "plus" is not in the ident store yet, insert it
+                        const plus_ident = base.Ident.for_text("plus");
+                        break :blk try self.cir.common.insertIdent(self.gpa, plus_ident);
+                    }
+                };
+
+                // Create the function type: lhs_type, rhs_type -> ret_type
+                // The first argument is the receiver (lhs), the second is the rhs
+                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+
+                // The return type is unknown, so create a fresh variable
+                const ret_var = try self.fresh(rank, expr_region);
+                try self.var_pool.addVarToRank(ret_var, rank);
+
+                // Create the constraint function type
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
+                    .needs_instantiation = false,
+                } } }, rank, expr_region);
+                try self.var_pool.addVarToRank(constraint_fn_var, rank);
+
+                // Create the static dispatch constraint
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = method_name,
+                    .fn_var = constraint_fn_var,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                // Create a constrained flex and unify it with the lhs (receiver)
+                const constrained_var = try self.freshFromContent(
+                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                    rank,
+                    expr_region,
+                );
+                try self.var_pool.addVarToRank(constrained_var, rank);
+
+                _ = try self.unify(constrained_var, lhs_var, rank);
+
+                // Set the expression to redirect to the return type
+                try self.types.setVarRedirect(expr_var, ret_var);
+            }
+        },
+        .sub, .mul, .div, .rem, .pow, .div_trunc => {
             // For now, we'll constrain both operands to be numbers
             // In the future, this will use static dispatch based on the lhs type
 

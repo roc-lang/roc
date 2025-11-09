@@ -1688,11 +1688,22 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("The ");
-        try report.document.addAnnotated(snapshot_str, .emphasized);
-        try report.document.addReflowingText(" type does not have a ");
-        try report.document.addAnnotated(method_name_str, .emphasized);
-        try report.document.addReflowingText(" method:");
+        // Check if this is the "plus" method (from the + operator)
+        const is_plus_operator = std.mem.eql(u8, method_name_str, "plus");
+
+        if (is_plus_operator) {
+            try report.document.addReflowingText("Cannot use the ");
+            try report.document.addAnnotated("+", .emphasized);
+            try report.document.addReflowingText(" operator with type ");
+            try report.document.addAnnotated(snapshot_str, .emphasized);
+            try report.document.addReflowingText(":");
+        } else {
+            try report.document.addReflowingText("The ");
+            try report.document.addAnnotated(snapshot_str, .emphasized);
+            try report.document.addReflowingText(" type does not have a ");
+            try report.document.addAnnotated(method_name_str, .emphasized);
+            try report.document.addReflowingText(" method:");
+        }
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -1711,14 +1722,30 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("Hint:", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
-                try report.document.addReflowingText(" Did you forget to define ");
-                try report.document.addAnnotated(method_name_str, .emphasized);
-                try report.document.addReflowingText(" in the type's method block?");
+                if (is_plus_operator) {
+                    try report.document.addReflowingText(" The ");
+                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addReflowingText(" operator requires the type to have a ");
+                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addReflowingText(" method. Did you forget to define it in the type's method block?");
+                } else {
+                    try report.document.addReflowingText(" Did you forget to define ");
+                    try report.document.addAnnotated(method_name_str, .emphasized);
+                    try report.document.addReflowingText(" in the type's method block?");
+                }
             },
             .rigid => {
-                try report.document.addReflowingText(" Did you forget to specify ");
-                try report.document.addAnnotated(method_name_str, .emphasized);
-                try report.document.addReflowingText(" in the type annotation?");
+                if (is_plus_operator) {
+                    try report.document.addReflowingText(" The ");
+                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addReflowingText(" operator requires the type to have a ");
+                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
+                } else {
+                    try report.document.addReflowingText(" Did you forget to specify ");
+                    try report.document.addAnnotated(method_name_str, .emphasized);
+                    try report.document.addReflowingText(" in the type annotation?");
+                }
             },
         }
 
