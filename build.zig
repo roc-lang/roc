@@ -637,6 +637,8 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_fx_platform_test.addArgs(run_args);
         }
+        // Ensure host library is copied before running the test
+        run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
         tests_summary.addRun(&run_fx_platform_test.step);
     }
 
