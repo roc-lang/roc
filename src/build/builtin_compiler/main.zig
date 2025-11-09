@@ -372,22 +372,25 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
     // Verify all low-level operations were found in the builtins
     if (low_level_map.count() > 0) {
-        var missing_buf = try std.ArrayList(u8).initCapacity(gpa, 512);
-        defer missing_buf.deinit(gpa);
-        const writer = missing_buf.writer(gpa);
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Low-level operations not found in Builtin.roc\n", .{});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
 
-        try writer.writeAll("\n\nError: The following low-level operations were not found in Builtin.roc:\n");
+        std.debug.print("The following low-level operations were not found:\n", .{});
         var iter = low_level_map.iterator();
         while (iter.next()) |entry| {
             const ident_text = env.getIdentText(entry.key_ptr.*);
             const op_name = @tagName(entry.value_ptr.*);
-            try writer.print("  - {s} (mapped to .{s})\n", .{ ident_text, op_name });
+            std.debug.print("  - {s} (mapped to .{s})\n", .{ ident_text, op_name });
         }
-        try writer.writeAll("\nEither:\n");
-        try writer.writeAll("  1. Remove the obsolete entry from the low_level_map in builtin_compiler/main.zig, OR\n");
-        try writer.writeAll("  2. Add a standalone type annotation to Builtin.roc for it to match\n\n");
+        std.debug.print("\nEither:\n", .{});
+        std.debug.print("  1. Remove the obsolete entry from the low_level_map in builtin_compiler/main.zig, OR\n", .{});
+        std.debug.print("  2. Add a standalone type annotation to Builtin.roc for it to match\n", .{});
 
-        std.debug.print("{s}", .{missing_buf.items});
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} missing operation(s)\n", .{low_level_map.count()});
+        std.debug.print("=" ** 80 ++ "\n", .{});
+
         return error.LowLevelOperationsNotFound;
     }
 
@@ -666,13 +669,22 @@ fn compileModule(
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
-        std.debug.print("Parse errors in {s}:\n", .{module_name});
+        const total_errors = parse_ast.tokenize_diagnostics.items.len + parse_ast.parse_diagnostics.items.len;
+
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Parse failed for {s}\n", .{module_name});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
+
         for (parse_ast.tokenize_diagnostics.items) |diag| {
             std.debug.print("  Tokenize error: {any}\n", .{diag});
         }
         for (parse_ast.parse_diagnostics.items) |diag| {
             std.debug.print("  Parse error: {any}\n", .{diag});
         }
+
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} parse error(s)\n", .{total_errors});
+        std.debug.print("=" ** 80 ++ "\n", .{});
         return error.ParseError;
     }
 
@@ -695,7 +707,10 @@ fn compileModule(
     const can_diagnostics = try module_env.getDiagnostics();
     defer gpa.free(can_diagnostics);
     if (can_diagnostics.len > 0) {
-        std.debug.print("Canonicalization errors in {s}:\n", .{module_name});
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Canonicalization failed for {s}\n", .{module_name});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
+
         for (can_diagnostics) |diag| {
             switch (diag) {
                 .undeclared_type => |d| {
@@ -716,6 +731,10 @@ fn compileModule(
                 },
             }
         }
+
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} diagnostic(s)\n", .{can_diagnostics.len});
+        std.debug.print("=" ** 80 ++ "\n", .{});
         return error.CanonicalizeError;
     }
 
@@ -776,11 +795,19 @@ fn compileModule(
         // When compiling Builtin, bool_stmt and try_stmt are initially undefined,
         // but they must be set before type checking begins
         const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
-            std.debug.print("Error: Could not find Bool type in Builtin module\n", .{});
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("ERROR: Could not find Bool type in Builtin module\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("The Bool type declaration is required for type checking.\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
             return error.TypeDeclarationNotFound;
         };
         const found_try_stmt = findTypeDeclaration(module_env, "Try") catch {
-            std.debug.print("Error: Could not find Try type in Builtin module\n", .{});
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("ERROR: Could not find Try type in Builtin module\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("The Try type declaration is required for type checking.\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
             return error.TypeDeclarationNotFound;
         };
 
@@ -817,10 +844,20 @@ fn compileModule(
 
     // Check for type errors
     if (checker.problems.problems.items.len > 0) {
-        std.debug.print("Type errors found in {s}:\n", .{module_name});
+        const total_errors = checker.problems.problems.items.len;
+
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("ERROR: Type checking failed for {s}\n", .{module_name});
+        std.debug.print("=" ** 80 ++ "\n\n", .{});
+
         for (checker.problems.problems.items) |prob| {
             std.debug.print("  - Problem: {any}\n", .{prob});
         }
+
+        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+        std.debug.print("Builtin compiler exiting with error code due to {d} type error(s)\n", .{total_errors});
+        std.debug.print("=" ** 80 ++ "\n", .{});
+
         return error.TypeCheckError;
     }
 
