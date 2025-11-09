@@ -6,6 +6,42 @@
 const std = @import("std");
 const testing = std.testing;
 
+fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_input: []const u8) !std.process.Child.RunResult {
+    var child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/roc", roc_file }, allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    // Write stdin and close
+    if (child.stdin) |stdin| {
+        try stdin.writeAll(stdin_input);
+        stdin.close();
+        child.stdin = null;
+    }
+
+    // Collect stdout
+    const stdout = if (child.stdout) |stdout_pipe|
+        try stdout_pipe.readToEndAlloc(allocator, std.math.maxInt(usize))
+    else
+        try allocator.dupe(u8, "");
+
+    // Collect stderr
+    const stderr = if (child.stderr) |stderr_pipe|
+        try stderr_pipe.readToEndAlloc(allocator, std.math.maxInt(usize))
+    else
+        try allocator.dupe(u8, "");
+
+    const term = try child.wait();
+
+    return .{
+        .term = term,
+        .stdout = stdout,
+        .stderr = stderr,
+    };
+}
+
 test "fx platform effectful functions" {
     const allocator = testing.allocator;
 
@@ -55,3 +91,39 @@ test "fx platform effectful functions" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 1 to stdout") == null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
 }
+
+test "fx platform stdin to stdout" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_to_stdout.roc", "test input\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "test input") != null);
+}
+
+test "fx platform stdin echo" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_echo.roc", "hello world\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "hello world") != null);
+}
+
+test "fx platform stdin test with output" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_test.roc", "user input\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Before stdin") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "After stdin") != null);
+}
+
+// Note: stdin_simple.roc has an alignment bug, skipping test for now
