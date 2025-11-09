@@ -110,7 +110,7 @@ pub const ModuleType = enum {
             .eval => &.{ .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .parse, .types, .can, .check, .builtins, .layout, .eval },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58 },
@@ -230,6 +230,7 @@ pub const RocModules = struct {
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
         step.root_module.addImport("types", self.types);
+        step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
@@ -240,14 +241,13 @@ pub const RocModules = struct {
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("eval", self.eval);
+        step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
+        step.root_module.addImport("watch", self.watch);
 
-        // Don't add modules that use std.Thread or std.posix for WASM targets (not available on freestanding)
+        // Don't add bundle module for WASM targets (zstd C library not available)
         if (step.rootModuleTarget().cpu.arch != .wasm32) {
-            step.root_module.addImport("ipc", self.ipc);
-            step.root_module.addImport("compile", self.compile);
-            step.root_module.addImport("watch", self.watch);
             step.root_module.addImport("bundle", self.bundle);
         }
 
