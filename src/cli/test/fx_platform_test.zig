@@ -126,4 +126,14 @@ test "fx platform stdin test with output" {
     try testing.expect(std.mem.indexOf(u8, result.stdout, "After stdin") != null);
 }
 
-// Note: stdin_simple.roc has an alignment bug, skipping test for now
+test "fx platform stdin simple" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_simple.roc", "simple test\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    // stdin_simple reads from stdin and prints to stderr
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "simple test") != null);
+}
