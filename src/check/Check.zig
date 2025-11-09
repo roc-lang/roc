@@ -3639,16 +3639,16 @@ fn checkBinopExpr(
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
                 // The return type is unknown, so create a fresh variable
-                const ret_var = try self.fresh(rank, expr_region);
-                try self.var_pool.addVarToRank(ret_var, rank);
+                const ret_var = try self.fresh(env, expr_region);
+                try env.var_pool.addVarToRank(ret_var, env.rank());
 
                 // Create the constraint function type
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
                     .ret = ret_var,
                     .needs_instantiation = false,
-                } } }, rank, expr_region);
-                try self.var_pool.addVarToRank(constraint_fn_var, rank);
+                } } }, env, expr_region);
+                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
                 // Create the static dispatch constraint
                 const constraint = StaticDispatchConstraint{
@@ -3660,12 +3660,12 @@ fn checkBinopExpr(
                 // Create a constrained flex and unify it with the lhs (receiver)
                 const constrained_var = try self.freshFromContent(
                     .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                    rank,
+                    env,
                     expr_region,
                 );
-                try self.var_pool.addVarToRank(constrained_var, rank);
+                try env.var_pool.addVarToRank(constrained_var, env.rank());
 
-                _ = try self.unify(constrained_var, lhs_var, rank);
+                _ = try self.unify(constrained_var, lhs_var, env);
 
                 // Set the expression to redirect to the return type
                 try self.types.setVarRedirect(expr_var, ret_var);
@@ -3674,15 +3674,15 @@ fn checkBinopExpr(
                 // This is the same as the other arithmetic operators
                 switch (expected) {
                     .expected => |expectation| {
-                        const lhs_instantiated = try self.instantiateVar(expectation.var_, rank, .{ .explicit = expr_region });
-                        const rhs_instantiated = try self.instantiateVar(expectation.var_, rank, .{ .explicit = expr_region });
+                        const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
+                        const rhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
 
                         if (expectation.from_annotation) {
-                            _ = try self.unifyFromAnno(lhs_instantiated, lhs_var, rank);
-                            _ = try self.unifyFromAnno(rhs_instantiated, rhs_var, rank);
+                            _ = try self.unifyWithCtx(lhs_instantiated, lhs_var, env, .anno);
+                            _ = try self.unifyWithCtx(rhs_instantiated, rhs_var, env, .anno);
                         } else {
-                            _ = try self.unify(lhs_instantiated, lhs_var, rank);
-                            _ = try self.unify(rhs_instantiated, rhs_var, rank);
+                            _ = try self.unify(lhs_instantiated, lhs_var, env);
+                            _ = try self.unify(rhs_instantiated, rhs_var, env);
                         }
                     },
                     .no_expectation => {
@@ -3693,17 +3693,17 @@ fn checkBinopExpr(
                                 .frac_requirements = Num.FracRequirements.init(),
                             },
                         } } };
-                        const lhs_num_var = try self.freshFromContent(num_content, rank, expr_region);
-                        const rhs_num_var = try self.freshFromContent(num_content, rank, expr_region);
+                        const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
+                        const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
 
                         // Unify left and right operands with num
-                        _ = try self.unify(lhs_num_var, lhs_var, rank);
-                        _ = try self.unify(rhs_num_var, rhs_var, rank);
+                        _ = try self.unify(lhs_num_var, lhs_var, env);
+                        _ = try self.unify(rhs_num_var, rhs_var, env);
                     },
                 }
 
                 // Unify left and right together
-                _ = try self.unify(lhs_var, rhs_var, rank);
+                _ = try self.unify(lhs_var, rhs_var, env);
 
                 // Set root expr. If unifications succeeded this will the the
                 // num, otherwise the propgate error
