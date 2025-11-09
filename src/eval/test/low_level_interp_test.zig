@@ -273,3 +273,75 @@ test "e_low_level_lambda - List.concat preserves order" {
     const tag_name = result.module_env.getIdent(first_expr.e_tag.ident);
     try testing.expectEqualStrings("Ok", tag_name);
 }
+
+test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
+    const src =
+        \\x = List.concat(["hello", "world"], ["foo", "bar"])
+        \\len = List.len(x)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 0 crashes
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the length is 4
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const len_def = result.module_env.store.getDef(defs[1]);
+    const len_expr = result.module_env.store.getExpr(len_def.expr);
+
+    try testing.expect(len_expr == .e_num);
+    try testing.expectEqual(@as(u64, 4), len_expr.e_num.value.int);
+}
+
+test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" {
+    const src =
+        \\x = List.concat([[1, 2], [3]], [[4, 5, 6]])
+        \\len = List.len(x)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 0 crashes
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the length is 3 (outer list has 3 elements)
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const len_def = result.module_env.store.getDef(defs[1]);
+    const len_expr = result.module_env.store.getExpr(len_def.expr);
+
+    try testing.expect(len_expr == .e_num);
+    try testing.expectEqual(@as(u64, 3), len_expr.e_num.value.int);
+}
+
+test "e_low_level_lambda - List.concat with empty string list" {
+    const src =
+        \\x = List.concat([], ["a", "b", "c"])
+        \\len = List.len(x)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 0 crashes
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the length is 3
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const len_def = result.module_env.store.getDef(defs[1]);
+    const len_expr = result.module_env.store.getExpr(len_def.expr);
+
+    try testing.expect(len_expr == .e_num);
+    try testing.expectEqual(@as(u64, 3), len_expr.e_num.value.int);
+}

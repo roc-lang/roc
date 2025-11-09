@@ -2229,24 +2229,42 @@ pub const Interpreter = struct {
                 // Determine if elements are refcounted
                 const elements_refcounted = elem_layout.isRefcounted();
 
-                // TODO: Proper refcounting for list elements
-                // For now, we use no-op functions even for refcounted elements.
-                // This works correctly because listConcat will handle the list-level refcounting,
-                // but element-level refcounting may need manual handling in complex cases.
-                const inc_fn = builtins.list.rcNone;
-                const dec_fn = builtins.list.rcNone;
-
-                // Call listConcat - it consumes both input lists
+                // Call listConcat with NO element refcounting.
+                // We use the post-processing approach: tell listConcat that elements
+                // aren't refcounted (avoiding the need for C-callable function pointers
+                // with context), then manually fix element refcounts afterward using
+                // StackValue.incref() which already handles all layout types.
+                // This has the same performance characteristics but avoids threadlocals.
                 const result_list = builtins.list.listConcat(
                     list_a.*,
                     list_b.*,
                     elem_alignment_u32,
                     elem_size,
-                    elements_refcounted,
-                    inc_fn,
-                    dec_fn,
+                    false, // Tell listConcat elements aren't refcounted
+                    &builtins.list.rcNone, // No-op inc
+                    &builtins.list.rcNone, // No-op dec
                     roc_ops,
                 );
+
+                // Post-process: Fix element refcounts if needed.
+                // listConcat has already copied all elements via memcpy, so we need to
+                // increment their refcounts since they're now shared between the result
+                // and the original source data (before the input lists are decremented).
+                if (elements_refcounted) {
+                    if (result_list.bytes) |buffer| {
+                        var i: usize = 0;
+                        while (i < result_list.len()) : (i += 1) {
+                            const elem_ptr = buffer + i * elem_size;
+                            const elem_value = StackValue{
+                                .layout = elem_layout,
+                                .ptr = @ptrCast(elem_ptr),
+                                .is_initialized = true,
+                            };
+                            // This handles all nested refcounting (strings, lists, etc.)
+                            elem_value.incref();
+                        }
+                    }
+                }
 
                 // Allocate space for the result list
                 const result_layout = list_a_arg.layout; // Same layout as input
