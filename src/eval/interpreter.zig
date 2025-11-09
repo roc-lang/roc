@@ -2200,6 +2200,66 @@ pub const Interpreter = struct {
                 // Copy to new location and increment refcount
                 return try self.pushCopy(elem_value, roc_ops);
             },
+            .list_concat => {
+                // List.concat : List(a), List(a) -> List(a)
+                // Args: List(a), List(a)
+                // Returns: List(a) (concatenated list)
+                std.debug.assert(args.len == 2); // low-level .list_concat expects 2 arguments
+
+                const list_a_arg = args[0];
+                const list_b_arg = args[1];
+
+                std.debug.assert(list_a_arg.ptr != null); // low-level .list_concat expects non-null list pointer
+                std.debug.assert(list_b_arg.ptr != null); // low-level .list_concat expects non-null list pointer
+
+                // Extract element layout from List(a)
+                std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
+                std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
+
+                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
+                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+
+                // Get element layout
+                const elem_layout_idx = list_a_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // TODO: Proper refcounting for list elements
+                // For now, we use no-op functions even for refcounted elements.
+                // This works correctly because listConcat will handle the list-level refcounting,
+                // but element-level refcounting may need manual handling in complex cases.
+                const inc_fn = builtins.list.rcNone;
+                const dec_fn = builtins.list.rcNone;
+
+                // Call listConcat - it consumes both input lists
+                const result_list = builtins.list.listConcat(
+                    list_a.*,
+                    list_b.*,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    inc_fn,
+                    dec_fn,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                const result_layout = list_a_arg.layout; // Same layout as input
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);

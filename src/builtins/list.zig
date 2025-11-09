@@ -1281,7 +1281,8 @@ pub fn listAllocationPtr(
     return list.getAllocationDataPtr();
 }
 
-fn rcNone(_: ?[*]u8) callconv(.c) void {}
+/// No-op reference counting function for non-refcounted types
+pub fn rcNone(_: ?[*]u8) callconv(.c) void {}
 
 /// Append UTF-8 string bytes to list for efficient string-to-bytes conversion.
 pub fn listConcatUtf8(

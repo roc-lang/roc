@@ -9,6 +9,7 @@ Builtin := [].{
 	List := [ProvidedByCompiler].{
 		len : List(_elem) -> U64
 		is_empty : List(_elem) -> Bool
+		concat : List(item), List(item) -> List(item)
 
 		first : List(elem) -> Try(elem, [ListWasEmpty])
 		first = |list| List.get(list, 0)
@@ -25,9 +26,6 @@ Builtin := [].{
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |_, _| []
-
-		concat : List(a), List(a) -> List(a)
-		concat = |_, _| []
 	}
 
 	Bool := [True, False].{
