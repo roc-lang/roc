@@ -29,6 +29,35 @@ const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 
+/// Context structure for inc/dec callbacks in list operations
+const RefcountContext = struct {
+    layout_store: *layout.Store,
+    elem_layout: Layout,
+    roc_ops: *RocOps,
+};
+
+/// Increment callback for list operations - increments refcount of element via StackValue
+fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
+    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const elem_value = StackValue{
+        .layout = context.elem_layout,
+        .ptr = @ptrCast(elem_ptr),
+        .is_initialized = true,
+    };
+    elem_value.incref();
+}
+
+/// Decrement callback for list operations - decrements refcount of element via StackValue
+fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
+    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const elem_value = StackValue{
+        .layout = context.elem_layout,
+        .ptr = @ptrCast(elem_ptr),
+        .is_initialized = true,
+    };
+    elem_value.decref(context.layout_store, context.roc_ops);
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -2229,42 +2258,28 @@ pub const Interpreter = struct {
                 // Determine if elements are refcounted
                 const elements_refcounted = elem_layout.isRefcounted();
 
-                // Call listConcat with NO element refcounting.
-                // We use the post-processing approach: tell listConcat that elements
-                // aren't refcounted (avoiding the need for C-callable function pointers
-                // with context), then manually fix element refcounts afterward using
-                // StackValue.incref() which already handles all layout types.
-                // This has the same performance characteristics but avoids threadlocals.
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Call listConcat with proper inc/dec callbacks.
+                // If elements are refcounted, pass callbacks that will inc/dec each element.
+                // Otherwise, pass no-op callbacks.
                 const result_list = builtins.list.listConcat(
                     list_a.*,
                     list_b.*,
                     elem_alignment_u32,
                     elem_size,
-                    false, // Tell listConcat elements aren't refcounted
-                    &builtins.list.rcNone, // No-op inc
-                    &builtins.list.rcNone, // No-op dec
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
                     roc_ops,
                 );
-
-                // Post-process: Fix element refcounts if needed.
-                // listConcat has already copied all elements via memcpy, so we need to
-                // increment their refcounts since they're now shared between the result
-                // and the original source data (before the input lists are decremented).
-                if (elements_refcounted) {
-                    if (result_list.bytes) |buffer| {
-                        var i: usize = 0;
-                        while (i < result_list.len()) : (i += 1) {
-                            const elem_ptr = buffer + i * elem_size;
-                            const elem_value = StackValue{
-                                .layout = elem_layout,
-                                .ptr = @ptrCast(elem_ptr),
-                                .is_initialized = true,
-                            };
-                            // This handles all nested refcounting (strings, lists, etc.)
-                            elem_value.incref();
-                        }
-                    }
-                }
 
                 // Allocate space for the result list
                 const result_layout = list_a_arg.layout; // Same layout as input
