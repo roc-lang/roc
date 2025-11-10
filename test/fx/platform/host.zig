@@ -1,5 +1,4 @@
 ///! Platform host that tests effectful functions writing to stdout and stderr.
-
 const std = @import("std");
 const builtins = @import("builtins");
 
@@ -164,7 +163,7 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 /// These correspond to the hosted functions defined in Stderr, Stdin, and Stdout Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     hostedStderrLine, // Stderr.line! (index 0)
-    hostedStdinLine,  // Stdin.line! (index 1)
+    hostedStdinLine, // Stdin.line! (index 1)
     hostedStdoutLine, // Stdout.line! (index 2)
 };
 
@@ -194,6 +193,7 @@ fn platform_main() !void {
     var unit_result: [0]u8 = undefined; // Result is {} which is zero-sized
     // For a function with signature () => {}, the argument is an empty tuple (zero parameters)
     // An empty tuple is zero-sized, so we pass a zero-sized value
+    // Note: Can't pass null here - Roc-generated code dereferences the pointer even for zero-sized types
     var args: [0]u8 = undefined;
     roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&unit_result)), @as(*anyopaque, @ptrCast(&args)));
 }

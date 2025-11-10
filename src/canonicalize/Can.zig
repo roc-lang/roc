@@ -493,11 +493,10 @@ fn processTypeDeclFirstPass(
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
 
-            // Extract and expose functions from the associated block
-            // For Platform Type Modules like `Stdout := [].{ line! : Str => {} }`, the associated block
-            // contains type annotation statements for the effectful functions
-            // Only do this for platform modules
-            if (self.env.building_platform_modules) {
+            // Extract and expose annotation-only functions, e.g.
+            // `Stdout := [].{ line! : Str => {} }`
+            // (Only do this when building a platform module as the root module)
+            if (self.env.root_module_is_platform) {
                 if (type_decl.associated) |assoc| {
                     const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
 
@@ -1281,7 +1280,7 @@ pub fn canonicalizeFile(
         },
         .platform => |h| {
             self.env.module_kind = .platform;
-            self.env.building_platform_modules = true;
+            self.env.root_module_is_platform = true;
             try self.createExposedScope(h.exposes);
         },
         .hosted => |h| {
@@ -1762,7 +1761,7 @@ pub fn canonicalizeFile(
     // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
     // Only do this when building platform modules (i.e., when root module is a platform)
-    if (self.env.module_kind == .type_module and self.env.building_platform_modules) {
+    if (self.env.module_kind == .type_module and self.env.root_module_is_platform) {
 
         // First, create definitions for Type Module annotations (like `line! : Str => {}`)
         // These annotations are exposed but don't have actual definitions yet

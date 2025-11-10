@@ -553,8 +553,8 @@ pub const PackageEnv = struct {
         // init CIR fields
         try env.initCIRFields(self.gpa, st.name);
 
-        // Set building_platform_modules based on whether root is a platform
-        env.building_platform_modules = self.root_is_platform;
+        // Set root_module_is_platform based on whether root is a platform
+        env.root_module_is_platform = self.root_is_platform;
 
         try env.common.calcLineStarts(self.gpa);
 

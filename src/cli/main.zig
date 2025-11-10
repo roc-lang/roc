@@ -1285,7 +1285,7 @@ fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8,
 fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, shm: *SharedMemoryAllocator, shm_allocator: std.mem.Allocator) !SharedMemoryHandle {
     // This is a simplified implementation that handles the specific case of:
     // - An app that uses a platform
-    // - Platform modules that need to be compiled with building_platform_modules=true
+    // - Platform modules that need to be compiled with root_module_is_platform=true
     //
     // For the general case, this would need to use BuildEnv for full dependency resolution.
     // But for the fx test case, we can hard-code the platform modules.
@@ -1348,7 +1348,7 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
             module_filename,
             shm_allocator,
             &builtin_modules,
-            true, // building_platform_modules
+            true, // root_module_is_platform
         );
         module_env_offsets_ptr[i + 1] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
         platform_env_ptrs[i] = module_env_ptr;
@@ -1474,7 +1474,7 @@ fn compileModuleToSharedMemory(
     module_name: []const u8,
     shm_allocator: std.mem.Allocator,
     builtin_modules: *eval.BuiltinModules,
-    building_platform_modules: bool,
+    root_module_is_platform: bool,
 ) !*ModuleEnv {
     // Read file
     const file = try std.fs.cwd().openFile(file_path, .{});
@@ -1515,13 +1515,13 @@ fn compileModuleToSharedMemory(
     var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
     defer canonicalizer.deinit();
 
-    // Set building_platform_modules flag
-    env.building_platform_modules = building_platform_modules;
+    // Set root_module_is_platform flag
+    env.root_module_is_platform = root_module_is_platform;
 
     try canonicalizer.canonicalizeFile();
 
     // Type check if this is a platform module
-    if (building_platform_modules) {
+    if (root_module_is_platform) {
         // Create module_envs_map for type checking (use same type as in canonicalization)
         var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
         defer check_module_envs_map.deinit();

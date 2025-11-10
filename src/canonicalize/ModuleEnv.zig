@@ -53,7 +53,7 @@ types: TypeStore,
 /// The kind of module (type_module, app, etc.) - set during canonicalization
 module_kind: ModuleKind,
 /// Whether we're currently building platform modules (set to true when processing a platform header)
-building_platform_modules: bool,
+root_module_is_platform: bool,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -153,7 +153,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .common = common,
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .module_kind = .deprecated_module, // Set during canonicalization
-        .building_platform_modules = false,
+        .root_module_is_platform = false,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1528,7 +1528,7 @@ pub const Serialized = struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
-    building_platform_modules_reserved: u8, // Reserved space for building_platform_modules field (set during deserialization)
+    root_module_is_platform_reserved: u8, // Reserved space for root_module_is_platform field (set during deserialization)
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
     from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
@@ -1562,12 +1562,12 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, module_name_idx_reserved, building_platform_modules_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
+        // Set gpa, module_name, module_name_idx_reserved, root_module_is_platform_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
         // the space needs to be here, but the values will be set separately during deserialization (these are runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
-        self.building_platform_modules_reserved = 0;
+        self.root_module_is_platform_reserved = 0;
         self.evaluation_order_reserved = 0;
         self.from_int_digits_ident_reserved = 0;
         self.from_dec_digits_ident_reserved = 0;
@@ -1600,7 +1600,7 @@ pub const Serialized = struct {
             .common = common,
             .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
-            .building_platform_modules = false,
+            .root_module_is_platform = false,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
