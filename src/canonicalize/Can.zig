@@ -561,6 +561,12 @@ fn processTypeDeclFirstPass(
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
             try self.processAssociatedBlock(qualified_name_idx, type_header.name, assoc);
+
+            // For type modules, expose all associated items after processing
+            // This populates exposed_items with fully qualified names
+            if (self.env.module_kind == .type_module) {
+                try self.exposeAssociatedItems(qualified_name_idx, type_decl);
+            }
         }
     }
 }
@@ -916,6 +922,12 @@ fn processAssociatedItemsSecondPass(
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(decl_ident, def_idx_u16);
 
+                                    // Also register by the type-qualified name for type modules
+                                    // This is needed so lookups like "Builtin.Str.is_empty" work
+                                    if (self.env.module_kind == .type_module) {
+                                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    }
+
                                     // Make the real pattern available in current scope (replaces placeholder)
                                     // We already added unqualified and type-qualified names earlier,
                                     // but need to update them to point to the real pattern instead of placeholder.
@@ -961,6 +973,12 @@ fn processAssociatedItemsSecondPass(
                     // (e.g., "isEmpty" not "Str.isEmpty")
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                    // Also register by the type-qualified name for type modules
+                    // This is needed so lookups like "Builtin.Str.is_empty" work
+                    if (self.env.module_kind == .type_module) {
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                    }
 
                     // Make the real pattern available in current scope (replaces placeholder)
                     const def_cir = self.env.store.getDef(def_idx);
@@ -1908,7 +1926,25 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // Store the matching type ident in module_kind if found
             if (matching_type_ident) |type_ident| {
                 main_type_ident.* = type_ident;
-                // The main type and associated items are already exposed in canonicalize()
+
+                // Expose all associated items for the main type
+                // This populates exposed_items with fully qualified names like "Builtin.Str.is_empty"
+                const file = self.parse_ir.store.getFile();
+                for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+                    const stmt = self.parse_ir.store.getStatement(stmt_id);
+                    if (stmt == .type_decl) {
+                        const type_decl = stmt.type_decl;
+                        const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                        const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
+
+                        // Check if this is the main type
+                        if (@as(u32, @bitCast(type_name_ident)) == @as(u32, @bitCast(type_ident))) {
+                            // Expose all associated items of the main type
+                            try self.exposeAssociatedItems(type_ident, type_decl);
+                            break;
+                        }
+                    }
+                }
             }
 
             // Valid if either we have a valid main! or a matching type declaration
@@ -2275,8 +2311,13 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            const is_exposed = self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident));
-            // Check if this definition's identifier is in the exposed items
+            // For type modules, use the deterministic "nested under main type" rule
+            // For regular modules, check the exposed_items map
+            const is_exposed = if (self.env.module_kind == .type_module)
+                self.env.isExposedInTypeModule(pattern.assign.ident)
+            else
+                self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident));
+
             if (is_exposed) {
                 // Add this definition to the exports scratch space
                 try self.env.store.addScratchDef(def_idx);
@@ -3498,25 +3539,23 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
-                                    // For regular module imports (e.g., A), just use the field name directly
+                                    // For auto-imported nested types (e.g., Bool, Str inside Builtin),
+                                    // use fully qualified names because they share a CommonEnv.
+                                    // For user-defined type modules, use unqualified names.
                                     const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
-                                        // Associated items are stored with the full qualified parent type name
+                                        // Auto-imported nested type: build "Builtin.Str.is_empty"
+                                        // This prevents collisions in the shared exposed_items map
                                         const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
                                         const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
                                         const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
                                         break :blk_name self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
 
-                                    // Look up the associated item by its qualified name
-                                    const qname_ident = module_env.common.findIdent(lookup_name) orelse {
-                                        // Identifier not found - just return null
-                                        // The error will be handled by the code below that checks target_node_idx_opt
+                                    if (module_env.common.findIdent(lookup_name)) |target_ident| {
+                                        break :blk module_env.getExposedNodeIndexById(target_ident);
+                                    } else {
                                         break :blk null;
-                                    };
-                                    const node_idx = module_env.getExposedNodeIndexById(qname_ident);
-                                    break :blk node_idx;
+                                    }
                                 } else {
                                     break :blk null;
                                 }
@@ -8565,7 +8604,14 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         }
 
         // Skip if this identifier is exposed (implicitly used in type modules)
-        if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx))) {
+        // For type modules, use the deterministic "nested under main type" rule
+        // For regular modules, check the exposed_items map
+        const is_exposed = if (self.env.module_kind == .type_module)
+            self.env.isExposedInTypeModule(ident_idx)
+        else
+            self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx));
+
+        if (is_exposed) {
             continue;
         }
 
@@ -9663,7 +9709,8 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.met
                             const decl_text = self.env.getIdent(decl_ident);
                             const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
-                            // Expose the declaration
+                            // Node index was already set during definition processing
+                            // Just ensure qualified name is in exposed_items
                             try self.env.addExposedById(qualified_idx);
                         }
                     }
@@ -9676,9 +9723,8 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.met
                         const anno_text = self.env.getIdent(anno_ident);
                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
 
-                        // Expose the qualified name
-                        // The unqualified name is added to scope but doesn't need to be in exposed_items
-                        // because lookups use the qualified name
+                        // Node index was already set during definition processing
+                        // Just ensure qualified name is in exposed_items
                         try self.env.addExposedById(qualified_idx);
                     }
                 },

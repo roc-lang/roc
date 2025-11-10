@@ -1680,6 +1680,49 @@ pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
     return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
 }
 
+/// Checks whether the given identifier is exposed in a type module using the deterministic rule:
+/// "anything nested under MainType.* is exposed by definition"
+/// For example, in Builtin module: "Builtin", "Builtin.Bool", "Builtin.Bool.not" are all exposed.
+pub fn isExposedInTypeModule(self: *const Self, ident_idx: Ident.Idx) bool {
+    // Only applies to type modules
+    switch (self.module_kind) {
+        .type_module => {
+            // For type modules, the main type name is the same as the module name
+            // Use module_name_idx which is always properly initialized
+            const main_type_name_idx = self.module_name_idx;
+
+            // The main type itself is always exposed
+            const ident_u32: u32 = @bitCast(ident_idx);
+            const main_type_u32: u32 = @bitCast(main_type_name_idx);
+            if (ident_u32 == main_type_u32) {
+                return true;
+            }
+
+            // Check if identifier starts with "MainType."
+            const main_type_name = self.getIdent(main_type_name_idx);
+            const ident_name = self.getIdent(ident_idx);
+
+            // Must be at least "MainType.x" in length
+            if (ident_name.len <= main_type_name.len + 1) {
+                return false;
+            }
+
+            // Check prefix match
+            if (!std.mem.startsWith(u8, ident_name, main_type_name)) {
+                return false;
+            }
+
+            // Check for dot separator
+            if (ident_name[main_type_name.len] != '.') {
+                return false;
+            }
+
+            return true;
+        },
+        else => return false,
+    }
+}
+
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
