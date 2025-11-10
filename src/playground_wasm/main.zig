@@ -967,10 +967,10 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
                 .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
                 .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
-        .minus_ident = common.findIdent(base.Ident.MINUS_METHOD_NAME) orelse unreachable,
-        .times_ident = common.findIdent(base.Ident.TIMES_METHOD_NAME) orelse unreachable,
-        .div_ident = common.findIdent(base.Ident.DIV_METHOD_NAME) orelse unreachable,
-        .div_trunc_ident = common.findIdent(base.Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
+                .minus_ident = common.findIdent(base.Ident.MINUS_METHOD_NAME) orelse unreachable,
+                .times_ident = common.findIdent(base.Ident.TIMES_METHOD_NAME) orelse unreachable,
+                .div_ident = common.findIdent(base.Ident.DIV_METHOD_NAME) orelse unreachable,
+                .div_trunc_ident = common.findIdent(base.Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 

@@ -1,7 +1,7 @@
 # META
 ~~~ini
 description=Demonstrates error messages for - operator vs .minus() method on type without minus
-type=file
+type=file:MyType.roc
 ~~~
 # SOURCE
 ~~~roc
@@ -22,40 +22,10 @@ result2 : MyType
 result2 = a.minus(b)
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - minus_operator_vs_method.md:1:1:15:21
 MISSING METHOD - minus_operator_vs_method.md:11:11:11:16
 - - :0:0:0:0
 MISSING METHOD - minus_operator_vs_method.md:15:11:15:21
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
-
-This file is named `minus_operator_vs_method`.roc, but no top-level type declaration named `minus_operator_vs_method` was found.
-
-Add either:
-`minus_operator_vs_method := ...` (nominal type)
-or:
-`minus_operator_vs_method : ...` (type alias)
-**minus_operator_vs_method.md:1:1:15:21:**
-```roc
-MyType := [Val(U64)].{}
-
-a : MyType
-a = MyType.Val(5)
-
-b : MyType
-b = MyType.Val(10)
-
-# Using the - operator - should show "Cannot use the - operator" message
-result1 : MyType
-result1 = a - b
-
-# Using the .minus() method directly - should show generic "does not have a minus method" message
-result2 : MyType
-result2 = a.minus(b)
-```
-
-
 **MISSING METHOD**
 The value before this **-** operator has the type **MyType**, which has no **minus** method:
 **minus_operator_vs_method.md:11:11:11:16:**
