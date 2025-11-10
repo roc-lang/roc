@@ -8,27 +8,34 @@ type=expr
 "\u(FFFFFF)"
 ~~~
 # EXPECTED
-NIL
+INVALID UNICODE ESCAPE SEQUENCE - unicode_overflow_str.md:1:2:1:12
 # PROBLEMS
-NIL
+**INVALID UNICODE ESCAPE SEQUENCE**
+This Unicode escape sequence is not valid.
+
+**unicode_overflow_str.md:1:2:1:12:**
+```roc
+"\u(FFFFFF)"
+```
+ ^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
-StringStart,StringPart,StringEnd,
+StringStart,MalformedStringPart,StringEnd,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-string
-	(e-string-part (raw "\u(FFFFFF)")))
+(e-string)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+""
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string
-	(e-literal (string "\u(FFFFFF)")))
+(e-string)
 ~~~
 # TYPES
 ~~~clojure

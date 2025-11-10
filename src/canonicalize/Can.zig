@@ -2942,7 +2942,8 @@ fn canonicalizeDeclWithAnnotation(
 
 fn parseSingleQuoteCodepoint(
     inner_text: []const u8,
-) ?u21 {
+) u21 {
+    // tokenizer checks for valid single quote codepoints, so every error case is unreachable here
     const escaped = inner_text[0] == '\\';
 
     if (escaped) {
@@ -2950,13 +2951,9 @@ fn parseSingleQuoteCodepoint(
         switch (c) {
             'u' => {
                 const hex_code = inner_text[3 .. inner_text.len - 1];
-                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
-                    return null;
-                };
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch unreachable;
 
-                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
-                    return null;
-                }
+                std.debug.assert(std.unicode.utf8ValidCodepoint(codepoint));
 
                 return codepoint;
             },
@@ -2972,26 +2969,16 @@ fn parseSingleQuoteCodepoint(
             't' => {
                 return '\t';
             },
-            else => {
-                return null;
-            },
+            else => unreachable,
         }
     } else {
-        const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
-            error.InvalidUtf8 => {
-                return null;
-            },
-        };
+        const view = std.unicode.Utf8View.init(inner_text) catch unreachable;
 
         var iterator = view.iterator();
 
-        if (iterator.nextCodepoint()) |codepoint| {
-            std.debug.assert(iterator.nextCodepoint() == null);
-            return codepoint;
-        } else {
-            // only single valid utf8 codepoint can be here after tokenization
-            unreachable;
-        }
+        const codepoint = iterator.nextCodepoint().?;
+        std.debug.assert(iterator.nextCodepoint() == null);
+        return codepoint;
     }
 }
 
@@ -3033,34 +3020,30 @@ fn canonicalizeSingleQuote(
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
+    std.debug.assert(token_text[0] == '\'' and token_text[token_text.len - 1] == '\'');
 
-    if (parseSingleQuoteCodepoint(token_text[1 .. token_text.len - 1])) |codepoint| {
-        const value_content = CIR.IntValue{
-            .bytes = @bitCast(@as(u128, @intCast(codepoint))),
-            .kind = .u128,
-        };
-        if (comptime Idx == Expr.Idx) {
-            const expr_idx = try self.env.addExpr(CIR.Expr{
-                .e_num = .{
-                    .value = value_content,
-                    .kind = .int_unbound,
-                },
-            }, region);
-            return expr_idx;
-        } else if (comptime Idx == Pattern.Idx) {
-            const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
+    const codepoint = parseSingleQuoteCodepoint(token_text[1 .. token_text.len - 1]);
+    const value_content = CIR.IntValue{
+        .bytes = @bitCast(@as(u128, @intCast(codepoint))),
+        .kind = .u128,
+    };
+    if (comptime Idx == Expr.Idx) {
+        const expr_idx = try self.env.addExpr(CIR.Expr{
+            .e_num = .{
                 .value = value_content,
                 .kind = .int_unbound,
-            } }, region);
-            return pat_idx;
-        } else {
-            @compileError("Unsupported Idx type");
-        }
+            },
+        }, region);
+        return expr_idx;
+    } else if (comptime Idx == Pattern.Idx) {
+        const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
+            .value = value_content,
+            .kind = .int_unbound,
+        } }, region);
+        return pat_idx;
+    } else {
+        @compileError("Unsupported Idx type");
     }
-
-    return try self.env.pushMalformed(Idx, Diagnostic{ .invalid_single_quote = .{
-        .region = region,
-    } });
 }
 
 fn canonicalizeRecordField(

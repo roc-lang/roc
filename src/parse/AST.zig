@@ -128,6 +128,9 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
         .DollarInMiddleOfIdentifier => "STRAY DOLLAR SIGN",
+        .SingleQuoteTooLong => "SINGLE QUOTE TOO LONG",
+        .SingleQuoteEmpty => "SINGLE QUOTE EMPTY",
+        .SingleQuoteUnclosed => "UNCLOSED SINGLE QUOTE",
     };
 
     const body = switch (diagnostic.tag) {
@@ -141,6 +144,8 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
         .DollarInMiddleOfIdentifier => "Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.",
+        .SingleQuoteTooLong, .SingleQuoteEmpty => "Single-quoted literals must contain exactly one valid UTF-8 codepoint.",
+        .SingleQuoteUnclosed => "This single-quoted literal is missing a closing quote.",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);

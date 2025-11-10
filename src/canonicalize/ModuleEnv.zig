@@ -972,7 +972,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
 
             break :blk report;
-        },        
+        },
         .value_not_exposed => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

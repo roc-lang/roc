@@ -687,12 +687,6 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .invalid_single_quote = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
         .f64_pattern_literal = .{
             .region = rand_region(),
         },
