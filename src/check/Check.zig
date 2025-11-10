@@ -3634,14 +3634,71 @@ fn checkBinopExpr(
                 else => unreachable,
             };
 
-            // Check if lhs is a nominal type
-            const lhs_resolved = self.types.resolveVar(lhs_var).desc.content;
-            const is_nominal = switch (lhs_resolved) {
-                .structure => |s| s == .nominal_type,
+            // Unwrap aliases to check the underlying type
+            var check_var = lhs_var;
+            var lhs_resolved = self.types.resolveVar(check_var);
+            while (lhs_resolved.desc.content == .alias) {
+                const alias_data = lhs_resolved.desc.content.alias;
+                check_var = self.types.getAliasBackingVar(alias_data);
+                lhs_resolved = self.types.resolveVar(check_var);
+            }
+
+            const lhs_content = lhs_resolved.desc.content;
+
+            // Check if this is a known builtin number type (optimization)
+            const is_known_number = switch (lhs_content) {
+                .structure => |s| s == .num,
                 else => false,
             };
 
-            if (is_nominal) {
+            // Check if we should use static dispatch (nominal types, or flex/rigid with constraints)
+            const should_use_static_dispatch = switch (lhs_content) {
+                .structure => |s| s == .nominal_type,
+                .flex => |f| f.constraints.len() > 0, // Flex with existing constraints
+                .rigid => |r| r.constraints.len() > 0, // Rigid with constraints from where clause
+                else => false,
+            };
+
+            if (is_known_number) {
+                // Builtin numeric type: use standard numeric constraints (optimized path)
+                // This is the same as the other arithmetic operators
+                switch (expected) {
+                    .expected => |expectation| {
+                        const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
+                        const rhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
+
+                        if (expectation.from_annotation) {
+                            _ = try self.unifyWithCtx(lhs_instantiated, lhs_var, env, .anno);
+                            _ = try self.unifyWithCtx(rhs_instantiated, rhs_var, env, .anno);
+                        } else {
+                            _ = try self.unify(lhs_instantiated, lhs_var, env);
+                            _ = try self.unify(rhs_instantiated, rhs_var, env);
+                        }
+                    },
+                    .no_expectation => {
+                        // Start with empty requirements that can be constrained by operands
+                        const num_content = Content{ .structure = .{ .num = .{
+                            .num_unbound = .{
+                                .int_requirements = Num.IntRequirements.init(),
+                                .frac_requirements = Num.FracRequirements.init(),
+                            },
+                        } } };
+                        const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
+                        const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
+
+                        // Unify left and right operands with num
+                        _ = try self.unify(lhs_num_var, lhs_var, env);
+                        _ = try self.unify(rhs_num_var, rhs_var, env);
+                    },
+                }
+
+                // Unify left and right together
+                _ = try self.unify(lhs_var, rhs_var, env);
+
+                // Set root expr. If unifications succeeded this will the the
+                // num, otherwise the propgate error
+                try self.types.setVarRedirect(expr_var, lhs_var);
+            } else if (should_use_static_dispatch) {
                 // User-defined nominal type: use static dispatch to call the method
 
                 // Create the function type: lhs_type, rhs_type -> ret_type
@@ -3680,8 +3737,8 @@ fn checkBinopExpr(
                 // Set the expression to redirect to the return type
                 try self.types.setVarRedirect(expr_var, ret_var);
             } else {
-                // Builtin numeric type: use standard numeric constraints
-                // This is the same as the other arithmetic operators
+                // For unconstrained flex/rigid or other types, use numeric constraints
+                // This allows flex variables to unify with numbers
                 switch (expected) {
                     .expected => |expectation| {
                         const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
