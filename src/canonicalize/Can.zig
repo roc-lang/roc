@@ -971,7 +971,7 @@ fn processAssociatedItemsSecondPass(
                 if (!has_matching_decl) {
                     const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
-                    // Build qualified name for the annotation (e.g., "Str.isEmpty")
+                    // Build qualified name for the annotation (e.g., "Builtin.Str.is_empty")
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
@@ -980,25 +980,14 @@ fn processAssociatedItemsSecondPass(
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
                     // Register this associated item by its unqualified name
-                    // (e.g., "isEmpty" not "Str.isEmpty")
+                    // (e.g., "is_empty" not "Str.is_empty")
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
 
-                    // Compute type-qualified name first (e.g., "Str.is_empty") before exposing
-                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-
-                    // Always register by the type-qualified name (e.g., "Str.is_empty")
-                    // This is needed so lookups like "Str.is_empty" work from other modules
-                    if (type_qualified_idx.idx != name_ident.idx) {
-                        try self.env.setExposedNodeIndexById(type_qualified_idx, def_idx_u16);
-                    }
-
-                    // Also register by the fully qualified name for type modules (e.g., "Builtin.Str.is_empty")
+                    // Also register by the type-qualified name for type modules
                     // This is needed so lookups like "Builtin.Str.is_empty" work
                     if (self.env.module_kind == .type_module) {
-                        if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != name_ident.idx) {
-                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                        }
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                     }
 
                     // Make the real pattern available in current scope (replaces placeholder)
@@ -1010,6 +999,7 @@ fn processAssociatedItemsSecondPass(
                     try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
 
                     // Update type-qualified name (e.g., "List.is_empty")
+                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
                     if (type_qualified_idx.idx != name_ident.idx) {
                         try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
                     }
