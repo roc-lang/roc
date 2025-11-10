@@ -69,8 +69,11 @@ test "can add and lookup idents at top level" {
 
     const foo_ident = try ctx.module_env.insertIdent(Ident.for_text("foo"));
     const bar_ident = try ctx.module_env.insertIdent(Ident.for_text("bar"));
-    const foo_pattern: Pattern.Idx = @enumFromInt(1);
-    const bar_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Create patterns properly in the NodeStore with dummy regions
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const foo_pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = foo_ident } }, dummy_region);
+    const bar_pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = bar_ident } }, dummy_region);
 
     // Add identifiers
     const foo_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, foo_pattern, false, true);
@@ -94,8 +97,11 @@ test "nested scopes shadow outer scopes" {
     defer ctx.deinit();
 
     const x_ident = try ctx.module_env.insertIdent(Ident.for_text("x"));
-    const outer_pattern: Pattern.Idx = @enumFromInt(1);
-    const inner_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Create patterns properly in the NodeStore with dummy regions
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const outer_pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = x_ident } }, dummy_region);
+    const inner_pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = x_ident } }, dummy_region);
 
     // Add x to outer scope
     const outer_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, outer_pattern, false, true);
@@ -131,7 +137,10 @@ test "top level var error" {
     defer ctx.deinit();
 
     const var_ident = try ctx.module_env.insertIdent(Ident.for_text("count_"));
-    const pattern: Pattern.Idx = @enumFromInt(1);
+
+    // Create pattern properly in the NodeStore with dummy region
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = var_ident } }, dummy_region);
 
     // Should fail to introduce var at top level
     const result = ctx.self.scopeIntroduceInternal(gpa, .ident, var_ident, pattern, true, true);
@@ -147,7 +156,10 @@ test "type variables are tracked separately from value identifiers" {
 
     // Create identifiers for 'a' - one for value, one for type
     const a_ident = try ctx.module_env.insertIdent(Ident.for_text("a"));
-    const pattern: Pattern.Idx = @enumFromInt(1);
+
+    // Create pattern properly in the NodeStore with dummy region
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = a_ident } }, dummy_region);
     const type_anno: TypeAnno.Idx = @enumFromInt(1);
 
     // Introduce 'a' as a value identifier
@@ -178,8 +190,11 @@ test "var reassignment within same function" {
     try ctx.self.scopeEnter(gpa, true);
 
     const count_ident = try ctx.module_env.insertIdent(Ident.for_text("count_"));
-    const pattern1: Pattern.Idx = @enumFromInt(1);
-    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // Create patterns properly in the NodeStore with dummy regions
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const pattern1 = try ctx.module_env.addPattern(.{ .assign = .{ .ident = count_ident } }, dummy_region);
+    const pattern2 = try ctx.module_env.addPattern(.{ .assign = .{ .ident = count_ident } }, dummy_region);
 
     // Declare var
     const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
@@ -204,8 +219,11 @@ test "var reassignment across function boundary fails" {
     try ctx.self.scopeEnter(gpa, true);
 
     const count_ident = try ctx.module_env.insertIdent(Ident.for_text("count_"));
-    const pattern1: Pattern.Idx = @enumFromInt(1);
-    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // Create patterns properly in the NodeStore with dummy regions
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const pattern1 = try ctx.module_env.addPattern(.{ .assign = .{ .ident = count_ident } }, dummy_region);
+    const pattern2 = try ctx.module_env.addPattern(.{ .assign = .{ .ident = count_ident } }, dummy_region);
 
     // Declare var in first function
     const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
@@ -227,8 +245,11 @@ test "identifiers with and without underscores are different" {
 
     const sum_ident = try ctx.module_env.insertIdent(Ident.for_text("sum"));
     const sum_underscore_ident = try ctx.module_env.insertIdent(Ident.for_text("sum_"));
-    const pattern1: Pattern.Idx = @enumFromInt(1);
-    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // Create patterns properly in the NodeStore with dummy regions
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const pattern1 = try ctx.module_env.addPattern(.{ .assign = .{ .ident = sum_ident } }, dummy_region);
+    const pattern2 = try ctx.module_env.addPattern(.{ .assign = .{ .ident = sum_underscore_ident } }, dummy_region);
 
     // Enter function scope so we can use var
     try ctx.self.scopeEnter(gpa, true);
@@ -256,8 +277,11 @@ test "aliases work separately from idents" {
     defer ctx.deinit();
 
     const foo_ident = try ctx.module_env.insertIdent(Ident.for_text("Foo"));
-    const ident_pattern: Pattern.Idx = @enumFromInt(1);
-    const alias_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Create patterns properly in the NodeStore with dummy regions
+    const dummy_region = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const ident_pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = foo_ident } }, dummy_region);
+    const alias_pattern = try ctx.module_env.addPattern(.{ .assign = .{ .ident = foo_ident } }, dummy_region);
 
     // Add as both ident and alias (they're in separate namespaces)
     const ident_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, ident_pattern, false, true);
