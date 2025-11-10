@@ -3620,7 +3620,7 @@ fn checkBinopExpr(
 
     switch (binop.op) {
         .add => {
-            // For built-in numeric types, use the old numeric constraint logic
+            // For builtin numeric types, use the efficient special-cased numeric constraint logic
             // For user-defined nominal types, desugar `a + b` to `a.plus(b)` using static dispatch
 
             // Check if lhs is a nominal type
@@ -3670,7 +3670,7 @@ fn checkBinopExpr(
                 // Set the expression to redirect to the return type
                 try self.types.setVarRedirect(expr_var, ret_var);
             } else {
-                // Built-in numeric type or other: use standard numeric constraints
+                // Builtin numeric type: use standard numeric constraints
                 // This is the same as the other arithmetic operators
                 switch (expected) {
                     .expected => |expectation| {
