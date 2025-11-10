@@ -756,8 +756,8 @@ test "Document string memory safety" {
     try document.addAnnotated(temp_annotated.items, .emphasized);
 
     // Clear the temporary strings to simulate memory being freed
-    temp_text.clearAndFree();
-    temp_annotated.clearAndFree();
+    temp_text.clearAndFree(gpa);
+    temp_annotated.clearAndFree(gpa);
 
     // Verify we can still access the document content
     try std.testing.expect(document.elements.items.len == 2);

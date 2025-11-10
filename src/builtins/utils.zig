@@ -184,7 +184,7 @@ pub const REFCOUNT_STATIC_DATA: isize = 0;
 /// - Testing with simple data types that don't need reference counting
 /// - Working with primitive types that don't contain pointers to refcounted data
 /// - As a placeholder when the decrement operation is handled elsewhere
-pub fn rcNone(_: ?[*]u8) callconv(.c) void {}
+pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
 /// Enum representing different integer widths and signedness for runtime type information
 pub const IntWidth = enum(u8) {
@@ -780,10 +780,10 @@ test "isUnique with different scenarios" {
 
 test "rcNone function" {
     // rcNone should be safe to call with any pointer
-    @import("utils.zig").rcNone(null);
+    @import("utils.zig").rcNone(null, null);
 
     var dummy: u8 = 42;
-    @import("utils.zig").rcNone(@as(?[*]u8, @ptrCast(&dummy)));
+    @import("utils.zig").rcNone(null, @as(?[*]u8, @ptrCast(&dummy)));
 
     // If we get here without crashing, the test passed
     try std.testing.expect(true);

@@ -7,13 +7,14 @@ Builtin := [].{
 	}
 
 	List := [ProvidedByCompiler].{
-		len : List(_elem) -> U64
-		is_empty : List(_elem) -> Bool
+		len : List(_item) -> U64
+		is_empty : List(_item) -> Bool
+		concat : List(item), List(item) -> List(item)
 
-		first : List(elem) -> Try(elem, [ListWasEmpty])
+		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| List.get(list, 0)
 
-		get : List(elem), U64 -> Try(elem, [ListWasEmpty])
+		get : List(item), U64 -> Try(item, [ListWasEmpty])
 		get = |list, index| if index < List.len(list) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
@@ -25,9 +26,6 @@ Builtin := [].{
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |_, _| []
-
-		concat : List(a), List(a) -> List(a)
-		concat = |_, _| []
 	}
 
 	Bool := [True, False].{
@@ -83,10 +81,10 @@ Builtin := [].{
 
 	Dict := [EmptyDict].{}
 
-	Set(elem) := [].{
-		is_empty : Set(elem) -> Bool
+	Set(item) := [].{
+		is_empty : Set(item) -> Bool
 
-		is_eq : Set(elem), Set(elem) -> Bool
+		is_eq : Set(item), Set(item) -> Bool
 		is_eq = |_a, _b| Bool.False
 	}
 
@@ -342,4 +340,4 @@ Builtin := [].{
 
 # Private top-level function for unsafe list access
 # This is a low-level operation that gets replaced by the compiler
-list_get_unsafe : List(elem), U64 -> elem
+list_get_unsafe : List(item), U64 -> item

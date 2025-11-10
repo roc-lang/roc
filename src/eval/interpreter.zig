@@ -29,6 +29,35 @@ const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 
+/// Context structure for inc/dec callbacks in list operations
+const RefcountContext = struct {
+    layout_store: *layout.Store,
+    elem_layout: Layout,
+    roc_ops: *RocOps,
+};
+
+/// Increment callback for list operations - increments refcount of element via StackValue
+fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
+    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const elem_value = StackValue{
+        .layout = context.elem_layout,
+        .ptr = @ptrCast(elem_ptr),
+        .is_initialized = true,
+    };
+    elem_value.incref();
+}
+
+/// Decrement callback for list operations - decrements refcount of element via StackValue
+fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
+    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const elem_value = StackValue{
+        .layout = context.elem_layout,
+        .ptr = @ptrCast(elem_ptr),
+        .is_initialized = true,
+    };
+    elem_value.decref(context.layout_store, context.roc_ops);
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -685,7 +714,117 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_binop => |binop| {
-                if (binop.op == .add or binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
+                if (binop.op == .add) {
+                    // Desugar `a + b` to `a.plus(b)` using method lookup
+                    // For built-in numeric types (represented as .num), fall back to direct arithmetic
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+
+                    // Check if lhs is a numeric type (could be .num structure or flex/rigid with numeric content)
+                    // For built-in numeric types, use direct arithmetic; for user nominal types, use method dispatch
+                    const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+                    const is_user_nominal = switch (lhs_resolved.desc.content) {
+                        .structure => |s| s == .nominal_type,
+                        else => false,
+                    };
+
+                    if (!is_user_nominal) {
+                        // For built-in numeric types (or any non-nominal type), use direct arithmetic evaluation
+                        // This includes .num, flex vars, rigid vars, etc.
+                        const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                        const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+                        return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
+                    }
+
+                    // For user-defined nominal types with plus methods, use method dispatch
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Get the nominal type information from lhs
+                    const nominal_info = switch (lhs_resolved.desc.content) {
+                        .structure => |s| switch (s) {
+                            .nominal_type => |nom| .{
+                                .origin = nom.origin_module,
+                                .ident = nom.ident.ident_idx,
+                            },
+                            else => return error.InvalidMethodReceiver,
+                        },
+                        else => return error.InvalidMethodReceiver,
+                    };
+
+                    // Get the pre-cached "plus" identifier from the ModuleEnv
+                    const method_name = self.env.plus_ident;
+
+                    // Resolve the plus method function
+                    const method_func = try self.resolveMethodFunction(
+                        nominal_info.origin,
+                        nominal_info.ident,
+                        method_name,
+                        roc_ops,
+                    );
+                    defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Prepare arguments: lhs (receiver) + rhs
+                    var args = [2]StackValue{ lhs, rhs };
+
+                    // Call the method closure
+                    if (method_func.layout.tag != .closure) {
+                        return error.TypeMismatch;
+                    }
+
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    // Switch to the closure's source module
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+                    defer {
+                        self.env = saved_env;
+                        self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                    }
+
+                    const params = self.env.store.slicePatterns(closure_header.params);
+                    if (params.len != args.len) {
+                        return error.TypeMismatch;
+                    }
+
+                    // Provide closure context for capture lookup
+                    try self.active_closures.append(method_func);
+                    defer _ = self.active_closures.pop();
+
+                    // Check if this is a low-level lambda - if so, dispatch to builtin
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        // Dispatch to actual low-level builtin implementation
+                        return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops);
+                    }
+
+                    // Bind parameters
+                    for (params, 0..) |param, i| {
+                        try self.bindings.append(.{
+                            .pattern_idx = param,
+                            .value = args[i],
+                            .expr_idx = @enumFromInt(0),
+                        });
+                    }
+
+                    // Evaluate the method body
+                    const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+
+                    // Clean up bindings
+                    var k = params.len;
+                    while (k > 0) {
+                        k -= 1;
+                        _ = self.bindings.pop();
+                    }
+
+                    return result;
+                } else if (binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
@@ -2329,6 +2468,68 @@ pub const Interpreter = struct {
 
                 // Copy to new location and increment refcount
                 return try self.pushCopy(elem_value, roc_ops);
+            },
+            .list_concat => {
+                // List.concat : List(a), List(a) -> List(a)
+                std.debug.assert(args.len == 2);
+
+                const list_a_arg = args[0];
+                const list_b_arg = args[1];
+
+                std.debug.assert(list_a_arg.ptr != null);
+                std.debug.assert(list_b_arg.ptr != null);
+
+                // Extract element layout from List(a)
+                std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
+                std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
+
+                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
+                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+
+                // Get element layout
+                const elem_layout_idx = list_a_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Call listConcat with proper inc/dec callbacks.
+                // If elements are refcounted, pass callbacks that will inc/dec each element.
+                // Otherwise, pass no-op callbacks.
+                const result_list = builtins.list.listConcat(
+                    list_a.*,
+                    list_b.*,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                const result_layout = list_a_arg.layout; // Same layout as input
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
             },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
@@ -4739,6 +4940,7 @@ pub const Interpreter = struct {
                             try rt_constraints.append(self.allocator, .{
                                 .fn_name = ct_constraint.fn_name,
                                 .fn_var = rt_fn_var,
+                                .origin = ct_constraint.origin,
                             });
                         }
 
@@ -4762,6 +4964,7 @@ pub const Interpreter = struct {
                             try rt_constraints.append(self.allocator, .{
                                 .fn_name = ct_constraint.fn_name,
                                 .fn_var = rt_fn_var,
+                                .origin = ct_constraint.origin,
                             });
                         }
 
@@ -5407,6 +5610,7 @@ test "interpreter: translateTypeVar for flex var with static dispatch constraint
     const ct_constraint = types.StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = ct_fn_var,
+        .origin = .method_call,
     };
     const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
@@ -5496,9 +5700,9 @@ test "interpreter: translateTypeVar for flex var with multiple static dispatch c
     const method_toStr = try env.common.idents.insert(gpa, @import("base").Ident.for_text("toStr"));
 
     const ct_constraints = [_]types.StaticDispatchConstraint{
-        .{ .fn_name = method_len, .fn_var = ct_fn1_var },
-        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var },
-        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var },
+        .{ .fn_name = method_len, .fn_var = ct_fn1_var, .origin = .method_call },
+        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var, .origin = .method_call },
+        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var, .origin = .method_call },
     };
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
 
@@ -5564,6 +5768,7 @@ test "interpreter: translateTypeVar for rigid var with static dispatch constrain
     const ct_constraint = types.StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = ct_fn_var,
+        .origin = .method_call,
     };
     const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
@@ -5628,8 +5833,8 @@ test "interpreter: getStaticDispatchConstraint finds method on flex var" {
     const method_reverse = try env.common.idents.insert(gpa, @import("base").Ident.for_text("reverse"));
 
     const ct_constraints = [_]types.StaticDispatchConstraint{
-        .{ .fn_name = method_count, .fn_var = ct_fn1_var },
-        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var },
+        .{ .fn_name = method_count, .fn_var = ct_fn1_var, .origin = .method_call },
+        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var, .origin = .method_call },
     };
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
 

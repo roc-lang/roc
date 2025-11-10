@@ -448,6 +448,7 @@ fn copyStaticDispatchConstraints(
             try dest_constraints.append(StaticDispatchConstraint{
                 .fn_name = translated_fn_name,
                 .fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator),
+                .origin = source_constraint.origin,
             });
         }
 

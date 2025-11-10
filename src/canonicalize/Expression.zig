@@ -403,6 +403,7 @@ pub const Expr = union(enum) {
         list_len,
         list_is_empty,
         list_get_unsafe,
+        list_concat,
 
         // Set operations
         set_is_empty,

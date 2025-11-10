@@ -78,7 +78,7 @@ EncoderFormatting implements
 ##     # Appends the byte 42
 ##     custom_encoder = Encode.custom(\bytes, _fmt -> List.append(bytes, 42))
 ##
-##     actual = Encode.append_with([], custom_encoder, Core.json)
+##     actual = Encode.append_with([], custom_encoder, Json.utf8)
 ##     expected = [42] # Expected result is a list with a single byte, 42
 ##
 ##     actual == expected
@@ -93,7 +93,7 @@ append_with = |lst, @Encoder(do_encoding), fmt| do_encoding(lst, fmt)
 ##
 ## ```roc
 ## expect
-##     actual = Encode.append([], { foo: 43 }, Core.json)
+##     actual = Encode.append([], { foo: 43 }, Json.utf8)
 ##     expected = Str.to_utf8("""{"foo":43}""")
 ##
 ##     actual == expected
@@ -107,7 +107,7 @@ append = |lst, val, fmt| append_with(lst, to_encoder(val), fmt)
 ## expect
 ##     foo_rec = { foo: 42 }
 ##
-##     actual = Encode.to_bytes(foo_rec, Core.json)
+##     actual = Encode.to_bytes(foo_rec, Json.utf8)
 ##     expected = Str.to_utf8("""{"foo":42}""")
 ##
 ##     actual == expected

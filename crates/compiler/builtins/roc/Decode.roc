@@ -60,7 +60,7 @@ DecodeError : [TooShort]
 ## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.to_utf8
-##     actual = Decode.from_bytes_partial(input, Json.json)
+##     actual = Decode.from_bytes_partial(input, Json.utf8)
 ##     expected = Ok("hello")
 ##
 ##     actual.result == expected
@@ -133,7 +133,7 @@ decode_with = |bytes, @Decoder(decode), fmt| decode(bytes, fmt)
 ## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.to_utf8
-##     actual = Decode.from_bytes_partial(input Json.json)
+##     actual = Decode.from_bytes_partial(input Json.utf8)
 ##     expected = Ok("hello")
 ##
 ##     actual.result == expected
@@ -147,7 +147,7 @@ from_bytes_partial = |bytes, fmt| decode_with(bytes, decoder, fmt)
 ## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.to_utf8
-##     actual = Decode.from_bytes(input, Json.json)
+##     actual = Decode.from_bytes(input, Json.utf8)
 ##     expected = Ok("hello")
 ##
 ##     actual == expected

@@ -865,13 +865,13 @@ test "render report to markdown" {
 
     try report.document.addText("This is a test error message.");
 
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderReportToMarkdown(&report, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderReportToMarkdown(&report, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "**TEST ERROR**") != null);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "This is a test error message.") != null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "**TEST ERROR**") != null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "This is a test error message.") != null);
 }
 
 test "render document with annotations to markdown" {
@@ -882,12 +882,12 @@ test "render document with annotations to markdown" {
     try doc.addAnnotated("world", .emphasized);
     try doc.addText("!");
 
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("Hello **world**!", buffer.items);
+    try testing.expectEqualStrings("Hello **world**!", writer.written());
 }
 
 test "render HTML escaping" {
@@ -896,13 +896,13 @@ test "render HTML escaping" {
 
     try doc.addText("<script>alert('test')</script>");
 
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToHtml(&doc, buffer.writer(), ReportingConfig.initHtml());
+    try renderDocumentToHtml(&doc, &writer.writer, ReportingConfig.initHtml());
 
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "&lt;script&gt;") != null);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "<script>") == null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "&lt;script&gt;") != null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "<script>") == null);
 }
 
 test "render indentation and spacing" {
@@ -914,12 +914,12 @@ test "render indentation and spacing" {
     try doc.addSpace(3);
     try doc.addText("spaced");
 
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("        indented   spaced", buffer.items);
+    try testing.expectEqualStrings("        indented   spaced", writer.written());
 }
 
 test "render horizontal rule" {
@@ -928,10 +928,10 @@ test "render horizontal rule" {
 
     try doc.addHorizontalRule(5);
 
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("\n---\n", buffer.items);
+    try testing.expectEqualStrings("\n---\n", writer.written());
 }

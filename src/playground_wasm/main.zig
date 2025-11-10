@@ -965,6 +965,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .try_ident = common.findIdent("Try") orelse unreachable,
                 .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
                 .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
+                .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
