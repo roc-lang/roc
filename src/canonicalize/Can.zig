@@ -1459,17 +1459,9 @@ pub fn canonicalizeFile(
                 const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                 const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
 
-                // Build fully qualified name (e.g., "Builtin.Str")
-                // For type-modules where the main type name equals the module name,
-                // use just the module name to avoid "Builtin.Builtin"
-                const module_name_text = self.env.module_name;
-                const type_name_text = self.env.getIdent(type_ident);
-                const qualified_type_ident = if (std.mem.eql(u8, module_name_text, type_name_text))
-                    type_ident // Type-module: use unqualified name
-                else
-                    try self.env.insertQualifiedIdent(module_name_text, type_name_text);
-
-                try self.processAssociatedBlock(qualified_type_ident, type_ident, assoc);
+                // Process associated block with unqualified type name
+                // Module qualification happens later during imports, not during canonicalization
+                try self.processAssociatedBlock(type_ident, type_ident, assoc);
             }
         }
     }
