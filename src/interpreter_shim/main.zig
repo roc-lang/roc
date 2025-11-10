@@ -140,21 +140,24 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     // Get expression info from shared memory using entry_idx
     const base_ptr = shm.getBasePtr();
-    var buf: [256]u8 = undefined;
 
     // Read the header structure from shared memory
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
     const header_ptr: *const Header = @ptrFromInt(header_addr);
     if (entry_idx >= header_ptr.entry_count) {
-        const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const err_msg = std.fmt.allocPrint(std.heap.page_allocator, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
         roc_ops.crash(err_msg);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.InvalidEntryIndex;
     }
 
     const def_offset = header_ptr.def_indices_offset + entry_idx * @sizeOf(u32);
     const def_idx_raw = safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), shm.total_size) catch |err| {
-        const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const read_err = std.fmt.allocPrint(std.heap.page_allocator, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
         roc_ops.crash(read_err);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.MemoryLayoutInvalid;
     };
     const def_idx: CIR.Def.Idx = @enumFromInt(def_idx_raw);
@@ -176,12 +179,12 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
     // Validate memory layout - we need at least space for the header
     const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
     if (shm.total_size < min_required_size) {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const msg = std.fmt.allocPrint(std.heap.page_allocator, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
         roc_ops.crash(msg);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.MemoryLayoutInvalid;
     }
-    var buf: [256]u8 = undefined;
 
     // Get base pointer
     const base_ptr = shm.getBasePtr();
@@ -197,8 +200,10 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 
     // Sanity check for overflow potential
     if (@abs(offset) > std.math.maxInt(isize) / 2) {
-        const err_msg = std.fmt.bufPrint(&buf, "Relocation offset too large: {}", .{offset}) catch "Relocation offset too large";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const err_msg = std.fmt.allocPrint(std.heap.page_allocator, "Relocation offset too large: {}", .{offset}) catch "Relocation offset too large";
         roc_ops.crash(err_msg);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.ModuleEnvSetupFailed;
     }
 
