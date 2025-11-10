@@ -387,11 +387,11 @@ quux = ("hello", 42)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "BadType"))
+		(patt (type "BadList"))
+		(patt (type "BadRecord"))
+		(patt (type "BadFunction"))
+		(patt (type "BadTuple")))
 	(type_decls
 		(nominal (type "BadType")
 			(ty-header (name "BadType")))

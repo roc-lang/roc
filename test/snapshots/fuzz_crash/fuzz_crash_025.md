@@ -313,7 +313,7 @@ j = -17011687303715884105728
 		(patt (type "Num(Int(Unsigned8))"))
 		(patt (type "Num(Int(Unsigned16))"))
 		(patt (type "Num(Int(Unsigned32))"))
-		(patt (type "Error"))
+		(patt (type "Num(Int(Unsigned128))"))
 		(patt (type "Num(Int(Signed16))"))
 		(patt (type "Num(Int(Signed32))"))
 		(patt (type "Num(Int(Signed64))"))

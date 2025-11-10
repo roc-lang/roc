@@ -103,7 +103,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "UsedType")))
 	(type_decls
 		(nominal (type "UnusedType")
 			(ty-header (name "UnusedType")))

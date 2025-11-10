@@ -56,7 +56,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Num(Int(Unsigned8))")))
 	(expressions
 		(expr (type "Error"))))
 ~~~

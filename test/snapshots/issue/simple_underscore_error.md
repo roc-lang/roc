@@ -81,7 +81,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "BadType")))
 	(type_decls
 		(nominal (type "BadType")
 			(ty-header (name "BadType"))))

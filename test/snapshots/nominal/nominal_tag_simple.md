@@ -94,7 +94,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Color"))
-		(patt (type "Error")))
+		(patt (type "Color")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))

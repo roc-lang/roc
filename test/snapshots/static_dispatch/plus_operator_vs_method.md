@@ -161,8 +161,8 @@ NO CHANGE
 	(defs
 		(patt (type "MyType"))
 		(patt (type "MyType"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "MyType"))
+		(patt (type "MyType")))
 	(type_decls
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))

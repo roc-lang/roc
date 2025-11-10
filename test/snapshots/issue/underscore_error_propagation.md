@@ -145,8 +145,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "BadDerived"))
+		(patt (type "GoodDerived")))
 	(type_decls
 		(nominal (type "BadBase")
 			(ty-header (name "BadBase")))

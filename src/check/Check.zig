@@ -836,6 +836,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(env);
 
+        // TODO: This currently only works if the root type is an error, but we
+        // should later expand this to use the annotation if there's _any_ error.
+        //
+        // For example, if the expr resolves to `Error -> Error` does not
+        // trigger this codepath
         if (mb_instantiated_anno_var != null and
             self.types.resolveVar(expr_var).desc.content == .err)
         {
@@ -3171,13 +3176,21 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
         switch (stmt) {
             .s_decl => |decl_stmt| {
-                // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
+                const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
+                // Check the pattern
+                try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
+
+                // Create placeholder for the annotation, if it exists
+                var mb_instantiated_anno_var: ?Var = null;
+
                 // Evaluate the rhs of the expression
-                const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
+                    // Enter a new rank
+                    try env.var_pool.pushRank();
+                    defer env.var_pool.popRank();
+
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
@@ -3185,13 +3198,16 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                             try self.generateAnnotationType(annotation_idx, env);
                             const annotation_var = ModuleEnv.varFrom(annotation_idx);
 
-                            // TODO: If we instantiate here, then var lookups break. But if we don't
-                            // then the type anno gets corrupted if we have an error in the body
-                            // const instantiated_anno_var = try self.instantiateVarPreserveRigids(
-                            //     annotation_var,
-                            //     rank,
-                            //     .use_last_var,
-                            // );
+                            // Here we copy the annotation before we unify against it
+                            //
+                            // This is so if there's an error in the expr/ptrn, we can preserve
+                            // the annotation so other places that reference it still get the
+                            // type of the annotation.
+                            mb_instantiated_anno_var = try self.instantiateVarPreserveRigids(
+                                annotation_var,
+                                env,
+                                .use_last_var,
+                            );
 
                             // Return the expectation
                             break :blk Expected{
@@ -3202,10 +3218,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                         }
                     };
 
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
-
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
                     // Now that we are existing the scope, we must generalize then pop this rank
@@ -3215,10 +3227,19 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     try self.checkDeferredStaticDispatchConstraints(env);
                 }
 
-                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
+                if (mb_instantiated_anno_var != null and
+                    self.types.resolveVar(decl_expr_var).desc.content == .err)
+                {
+                    // If there was an annotation AND the expr errored, then
+                    // unify the ptrn against the annotation
+                    const instantiated_anno_var = mb_instantiated_anno_var.?;
+                    _ = try self.unify(decl_pattern_var, instantiated_anno_var, env);
+                } else {
+                    // Otherwise, unify the ptrn and expr
+                    _ = try self.unify(decl_pattern_var, decl_expr_var, env);
+                }
 
                 // Unify the pattern with the expression
-
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
             },
             .s_var => |var_stmt| {

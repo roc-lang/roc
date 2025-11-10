@@ -83,7 +83,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Str -> Str")))
 	(expressions
 		(expr (type "Error"))))
 ~~~

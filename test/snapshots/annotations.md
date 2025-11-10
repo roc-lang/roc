@@ -316,8 +316,8 @@ NO CHANGE
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(Num(Int(Unsigned8)))"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "Pair(Num(Int(Unsigned8)))"))
+		(patt (type "Pair(Num(Int(Unsigned64)))"))
 		(patt (type "a, b -> Error")))
 	(type_decls
 		(nominal (type "Pair(a)")

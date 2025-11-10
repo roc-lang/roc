@@ -29,21 +29,21 @@ pass = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_local_scope_vars.md:9:12:9:16
+TYPE MISMATCH - type_local_scope_vars.md:9:14:9:15
 # PROBLEMS
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_local_scope_vars.md:9:12:9:16:**
+The first argument being passed to this function has the wrong type:
+**type_local_scope_vars.md:9:14:9:15:**
 ```roc
 		result = g(x)
 ```
-		         ^^^^
+		           ^
 
-It has the type:
+This argument has the type:
     _a_
 
-But the type annotation says it should have the type:
-    _c_
+But `g` needs the first argument to be:
+    _b_
 
 # TOKENS
 ~~~zig
