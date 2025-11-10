@@ -4120,7 +4120,6 @@ pub fn canonicalizeExpr(
                 .OpGreaterThanOrEq => .ge,
                 .OpEquals => .eq,
                 .OpNotEquals => .ne,
-                .OpCaret => .pow,
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",

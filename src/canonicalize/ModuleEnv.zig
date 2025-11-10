@@ -102,6 +102,8 @@ times_ident: Ident.Idx,
 div_ident: Ident.Idx,
 /// Interned identifier for "div_trunc" - used for // operator desugaring
 div_trunc_ident: Ident.Idx,
+/// Interned identifier for "rem" - used for % operator desugaring
+rem_ident: Ident.Idx,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -160,6 +162,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const times_ident = try common.insertIdent(gpa, Ident.for_text(Ident.TIMES_METHOD_NAME));
     const div_ident = try common.insertIdent(gpa, Ident.for_text(Ident.DIV_METHOD_NAME));
     const div_trunc_ident = try common.insertIdent(gpa, Ident.for_text(Ident.DIV_TRUNC_METHOD_NAME));
+    const rem_ident = try common.insertIdent(gpa, Ident.for_text(Ident.REM_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -187,6 +190,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .times_ident = times_ident,
         .div_ident = div_ident,
         .div_trunc_ident = div_trunc_ident,
+        .rem_ident = rem_ident,
     };
 }
 
@@ -1556,6 +1560,7 @@ pub const Serialized = struct {
     times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
     div_ident_reserved: u32, // Reserved space for div_ident field (interned during deserialization)
     div_trunc_ident_reserved: u32, // Reserved space for div_trunc_ident field (interned during deserialization)
+    rem_ident_reserved: u32, // Reserved space for rem_ident field (interned during deserialization)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1599,6 +1604,7 @@ pub const Serialized = struct {
         self.times_ident_reserved = 0;
         self.div_ident_reserved = 0;
         self.div_trunc_ident_reserved = 0;
+        self.rem_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1647,6 +1653,7 @@ pub const Serialized = struct {
             .times_ident = common.findIdent(Ident.TIMES_METHOD_NAME) orelse unreachable,
             .div_ident = common.findIdent(Ident.DIV_METHOD_NAME) orelse unreachable,
             .div_trunc_ident = common.findIdent(Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
+            .rem_ident = common.findIdent(Ident.REM_METHOD_NAME) orelse unreachable,
         };
 
         return env;

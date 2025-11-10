@@ -503,7 +503,6 @@ pub const Expr = union(enum) {
             ge, // >=
             eq, // ==
             ne, // !=
-            pow, // ^
             div_trunc, // //
             @"and", // and
             @"or", // or

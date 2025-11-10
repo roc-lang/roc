@@ -971,6 +971,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .times_ident = common.findIdent(base.Ident.TIMES_METHOD_NAME) orelse unreachable,
                 .div_ident = common.findIdent(base.Ident.DIV_METHOD_NAME) orelse unreachable,
                 .div_trunc_ident = common.findIdent(base.Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
+                .rem_ident = common.findIdent(base.Ident.REM_METHOD_NAME) orelse unreachable,
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 

@@ -289,6 +289,7 @@ pub const ReportBuilder = struct {
         operator_symbol_map.put(can_ir.times_ident, "*") catch unreachable;
         operator_symbol_map.put(can_ir.div_ident, "/") catch unreachable;
         operator_symbol_map.put(can_ir.div_trunc_ident, "//") catch unreachable;
+        operator_symbol_map.put(can_ir.rem_ident, "%") catch unreachable;
 
         return .{
             .gpa = gpa,

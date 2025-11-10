@@ -95,6 +95,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .times_ident = common.findIdent(base.Ident.TIMES_METHOD_NAME) orelse unreachable,
         .div_ident = common.findIdent(base.Ident.DIV_METHOD_NAME) orelse unreachable,
         .div_trunc_ident = common.findIdent(base.Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
+        .rem_ident = common.findIdent(base.Ident.REM_METHOD_NAME) orelse unreachable,
     };
 
     return LoadedModule{

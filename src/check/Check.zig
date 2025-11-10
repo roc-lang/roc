@@ -3622,7 +3622,7 @@ fn checkBinopExpr(
 
     switch (binop.op) {
         // Operators that support desugaring to method calls on nominal types
-        .add, .sub, .mul, .div, .div_trunc => {
+        .add, .sub, .mul, .div, .div_trunc, .rem => {
             // Map operator to its corresponding method name
             const method_name: Ident.Idx = switch (binop.op) {
                 .add => self.cir.plus_ident,
@@ -3630,6 +3630,7 @@ fn checkBinopExpr(
                 .mul => self.cir.times_ident,
                 .div => self.cir.div_ident,
                 .div_trunc => self.cir.div_trunc_ident,
+                .rem => self.cir.rem_ident,
                 else => unreachable,
             };
 
@@ -3718,50 +3719,6 @@ fn checkBinopExpr(
                 // num, otherwise the propgate error
                 try self.types.setVarRedirect(expr_var, lhs_var);
             }
-        },
-        .rem, .pow => {
-            // For now, we'll constrain both operands to be numbers
-            // In the future, this will use static dispatch based on the lhs type
-
-            // We check the lhs and the rhs independently, then unify them with
-            // each other. This ensures that all errors are surfaced and the
-            // operands are the same type
-            switch (expected) {
-                .expected => |expectation| {
-                    const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
-                    const rhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
-
-                    if (expectation.from_annotation) {
-                        _ = try self.unifyWithCtx(lhs_instantiated, lhs_var, env, .anno);
-                        _ = try self.unifyWithCtx(rhs_instantiated, rhs_var, env, .anno);
-                    } else {
-                        _ = try self.unify(lhs_instantiated, lhs_var, env);
-                        _ = try self.unify(rhs_instantiated, rhs_var, env);
-                    }
-                },
-                .no_expectation => {
-                    // Start with empty requirements that can be constrained by operands
-                    const num_content = Content{ .structure = .{ .num = .{
-                        .num_unbound = .{
-                            .int_requirements = Num.IntRequirements.init(),
-                            .frac_requirements = Num.FracRequirements.init(),
-                        },
-                    } } };
-                    const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-                    const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-
-                    // Unify left and right operands with num
-                    _ = try self.unify(lhs_num_var, lhs_var, env);
-                    _ = try self.unify(rhs_num_var, rhs_var, env);
-                },
-            }
-
-            // Unify left and right together
-            _ = try self.unify(lhs_var, rhs_var, env);
-
-            // Set root expr. If unifications succeeded this will the the
-            // num, otherwise the propgate error
-            _ = try self.unify(expr_var, lhs_var, env);
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Ensure the operands are the same type
