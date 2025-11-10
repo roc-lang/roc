@@ -4622,6 +4622,7 @@ pub const Interpreter = struct {
                             try rt_constraints.append(self.allocator, .{
                                 .fn_name = ct_constraint.fn_name,
                                 .fn_var = rt_fn_var,
+                                .origin = ct_constraint.origin,
                             });
                         }
 
@@ -4645,6 +4646,7 @@ pub const Interpreter = struct {
                             try rt_constraints.append(self.allocator, .{
                                 .fn_name = ct_constraint.fn_name,
                                 .fn_var = rt_fn_var,
+                                .origin = ct_constraint.origin,
                             });
                         }
 
@@ -5271,6 +5273,7 @@ test "interpreter: translateTypeVar for flex var with static dispatch constraint
     const ct_constraint = types.StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = ct_fn_var,
+        .origin = .method_call,
     };
     const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
@@ -5360,9 +5363,9 @@ test "interpreter: translateTypeVar for flex var with multiple static dispatch c
     const method_toStr = try env.common.idents.insert(gpa, @import("base").Ident.for_text("toStr"));
 
     const ct_constraints = [_]types.StaticDispatchConstraint{
-        .{ .fn_name = method_len, .fn_var = ct_fn1_var },
-        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var },
-        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var },
+        .{ .fn_name = method_len, .fn_var = ct_fn1_var, .origin = .method_call },
+        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var, .origin = .method_call },
+        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var, .origin = .method_call },
     };
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
 
@@ -5428,6 +5431,7 @@ test "interpreter: translateTypeVar for rigid var with static dispatch constrain
     const ct_constraint = types.StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = ct_fn_var,
+        .origin = .method_call,
     };
     const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
@@ -5492,8 +5496,8 @@ test "interpreter: getStaticDispatchConstraint finds method on flex var" {
     const method_reverse = try env.common.idents.insert(gpa, @import("base").Ident.for_text("reverse"));
 
     const ct_constraints = [_]types.StaticDispatchConstraint{
-        .{ .fn_name = method_count, .fn_var = ct_fn1_var },
-        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var },
+        .{ .fn_name = method_count, .fn_var = ct_fn1_var, .origin = .method_call },
+        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var, .origin = .method_call },
     };
     const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
 

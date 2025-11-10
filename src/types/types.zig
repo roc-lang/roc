@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(8, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(12, @sizeOf(StaticDispatchConstraint));
 }
 
 /// A type variable
@@ -978,6 +978,15 @@ pub const StaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
+    /// the origin of this constraint (operator, method call, or where clause)
+    origin: Origin,
+
+    /// Tracks where a static dispatch constraint originated from
+    pub const Origin = enum(u8) {
+        binop_plus,   // From + operator desugaring
+        method_call,  // From .method() syntax
+        where_clause, // From where clause in type annotation
+    };
 
     /// A safe list of static dispatch constraints
     pub const SafeList = MkSafeList(Self);

@@ -225,6 +225,7 @@ pub const DispatcherDoesNotImplMethod = struct {
     dispatcher_type: DispatcherType,
     fn_var: Var,
     method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
@@ -1690,7 +1691,7 @@ pub const ReportBuilder = struct {
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         // Check if this is the "plus" method (from the + operator)
-        const is_plus_operator = data.method_name == self.can_ir.plus_ident;
+        const is_plus_operator = data.origin == .binop_plus;
 
         if (is_plus_operator) {
             try report.document.addReflowingText("The value before this ");

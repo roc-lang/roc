@@ -393,6 +393,7 @@ pub const Instantiator = struct {
         return StaticDispatchConstraint{
             .fn_name = constraint.fn_name,
             .fn_var = try self.instantiateVar(constraint.fn_var),
+            .origin = constraint.origin,
         };
     }
 };

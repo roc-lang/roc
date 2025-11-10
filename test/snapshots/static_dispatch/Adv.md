@@ -71,7 +71,7 @@ The **Adv** type does not have a **update_strr** method:
 	           ^^^^^^^^^^^^^^^^^^^^
 
 
-**Hint:** Did you forget to define **update_strr** in the type's method block?
+**Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
 
 **TYPE DOES NOT HAVE METHODS**
 You're calling the method `update` on a type that doesn't support methods:

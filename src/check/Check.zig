@@ -1070,6 +1070,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 .constraint = StaticDispatchConstraint{
                     .fn_name = method.method_name,
                     .fn_var = func_var,
+                    .origin = .where_clause,
                 },
             });
         },
@@ -3046,6 +3047,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint = StaticDispatchConstraint{
                         .fn_name = dot_access.field_name,
                         .fn_var = constraint_fn_var,
+                        .origin = .method_call,
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -3654,6 +3656,7 @@ fn checkBinopExpr(
                 const constraint = StaticDispatchConstraint{
                     .fn_name = method_name,
                     .fn_var = constraint_fn_var,
+                    .origin = .binop_plus,
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -4232,6 +4235,7 @@ fn reportConstraintError(
                 .dispatcher_type = dispatcher_type,
                 .fn_var = constraint.fn_var,
                 .method_name = constraint.fn_name,
+                .origin = constraint.origin,
             },
         } },
         .not_nominal => problem.Problem{ .static_dispach = .{

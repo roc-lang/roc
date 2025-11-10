@@ -25,7 +25,6 @@ result2 = a.plus(b)
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
 MISSING METHOD - plus_operator_vs_method.md:15:11:15:20
-+ - :0:0:0:0
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has a type with no **plus** method:
@@ -36,10 +35,10 @@ result1 = a + b
           ^^^^^
 
 
-**Hint:** The **+** operator requires the type to have a **plus** method. Did you forget to define it in the type's method block?
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **MISSING METHOD**
-The value before this **+** operator has a type with no **plus** method:
+The **MyType** type does not have a **plus** method:
 **plus_operator_vs_method.md:15:11:15:20:**
 ```roc
 result2 = a.plus(b)
@@ -47,7 +46,7 @@ result2 = a.plus(b)
           ^^^^^^^^^
 
 
-**Hint:** The **+** operator requires the type to have a **plus** method. Did you forget to define it in the type's method block?
+**Hint: **For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
