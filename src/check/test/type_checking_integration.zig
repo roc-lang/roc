@@ -1787,28 +1787,28 @@ test "check type - body w/ anno does not leak to references - top level" {
     try test_env.assertDefTypeOptions("y", "Bool", .{ .allow_type_errors = true });
 }
 
-// test "check type - body w/ anno does not leak to references - inline" {
-//     // First verify Bool basics work
-//     const source =
-//         \\Test := [].{}
-//         \\
-//         \\test = {
-//         \\  x : Num(size)
-//         \\  x = False
-//         \\
-//         \\  y : Num(size)
-//         \\  y = x + 10
-//         \\
-//         \\  y
-//         \\}
-//     ;
+test "check type - body w/ anno does not leak to references - inline" {
+    // First verify Bool basics work
+    const source =
+        \\Test := [].{}
+        \\
+        \\test = {
+        \\  x : Num(size)
+        \\  x = False
+        \\
+        \\  y : Num(size)
+        \\  y = x + 10
+        \\
+        \\  y
+        \\}
+    ;
 
-//     var test_env = try TestEnv.init("Test", source);
-//     defer test_env.deinit();
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
 
-//     try test_env.assertOneTypeError("TYPE MISMATCH");
-//     try test_env.assertDefTypeOptions("test", "Bool", .{ .allow_type_errors = true });
-// }
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertDefTypeOptions("test", "Num(size)", .{ .allow_type_errors = true });
+}
 
 // Associated items referencing each other
 
