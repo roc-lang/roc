@@ -268,6 +268,8 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
+    /// Hash map for O(1) lookup of operator symbols from method names
+    operator_symbol_map: std.AutoHashMap(Ident.Idx, []const u8),
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -280,6 +282,14 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
     ) Self {
+        // Initialize operator symbol map for O(1) lookup
+        var operator_symbol_map = std.AutoHashMap(Ident.Idx, []const u8).init(gpa);
+        operator_symbol_map.put(can_ir.plus_ident, "+") catch unreachable;
+        operator_symbol_map.put(can_ir.minus_ident, "-") catch unreachable;
+        operator_symbol_map.put(can_ir.times_ident, "*") catch unreachable;
+        operator_symbol_map.put(can_ir.div_ident, "/") catch unreachable;
+        operator_symbol_map.put(can_ir.div_trunc_ident, "//") catch unreachable;
+
         return .{
             .gpa = gpa,
             .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore(), import_mapping),
@@ -291,24 +301,21 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .operator_symbol_map = operator_symbol_map,
         };
     }
 
     /// Deinit report builder
-    /// Only owned field is `buf`
     pub fn deinit(self: *Self) void {
         self.snapshot_writer.deinit();
         self.bytes_buf.deinit();
+        self.operator_symbol_map.deinit();
     }
 
     /// Get the operator symbol for a desugared binary operator method name
+    /// Uses O(1) hash map lookup
     fn getOperatorSymbol(self: *const Self, method_name: Ident.Idx) []const u8 {
-        if (method_name == self.can_ir.plus_ident) return "+";
-        if (method_name == self.can_ir.minus_ident) return "-";
-        if (method_name == self.can_ir.times_ident) return "*";
-        if (method_name == self.can_ir.div_ident) return "/";
-        if (method_name == self.can_ir.div_trunc_ident) return "//";
-        unreachable;
+        return self.operator_symbol_map.get(method_name) orelse unreachable;
     }
 
     /// Build a report for a problem
