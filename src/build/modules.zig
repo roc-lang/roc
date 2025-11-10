@@ -263,8 +263,13 @@ pub const ModuleTest = struct {
     run_step: *Step.Run,
 };
 
+/// Bundles the per-module test steps with accounting for forced passes (aggregators +
+/// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
+    /// Compile/run steps for each module's tests, in creation order.
     tests: [19]ModuleTest,
+    /// Number of synthetic passes the summary must subtract when filters were injected.
+    /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
 };
 
