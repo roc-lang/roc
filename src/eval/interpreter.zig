@@ -29,6 +29,35 @@ const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 
+/// Context structure for inc/dec callbacks in list operations
+const RefcountContext = struct {
+    layout_store: *layout.Store,
+    elem_layout: Layout,
+    roc_ops: *RocOps,
+};
+
+/// Increment callback for list operations - increments refcount of element via StackValue
+fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
+    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const elem_value = StackValue{
+        .layout = context.elem_layout,
+        .ptr = @ptrCast(elem_ptr),
+        .is_initialized = true,
+    };
+    elem_value.incref();
+}
+
+/// Decrement callback for list operations - decrements refcount of element via StackValue
+fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
+    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const elem_value = StackValue{
+        .layout = context.elem_layout,
+        .ptr = @ptrCast(elem_ptr),
+        .is_initialized = true,
+    };
+    elem_value.decref(context.layout_store, context.roc_ops);
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -2199,6 +2228,68 @@ pub const Interpreter = struct {
 
                 // Copy to new location and increment refcount
                 return try self.pushCopy(elem_value, roc_ops);
+            },
+            .list_concat => {
+                // List.concat : List(a), List(a) -> List(a)
+                std.debug.assert(args.len == 2);
+
+                const list_a_arg = args[0];
+                const list_b_arg = args[1];
+
+                std.debug.assert(list_a_arg.ptr != null);
+                std.debug.assert(list_b_arg.ptr != null);
+
+                // Extract element layout from List(a)
+                std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
+                std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
+
+                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
+                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+
+                // Get element layout
+                const elem_layout_idx = list_a_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Call listConcat with proper inc/dec callbacks.
+                // If elements are refcounted, pass callbacks that will inc/dec each element.
+                // Otherwise, pass no-op callbacks.
+                const result_list = builtins.list.listConcat(
+                    list_a.*,
+                    list_b.*,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                const result_layout = list_a_arg.layout; // Same layout as input
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
             },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
