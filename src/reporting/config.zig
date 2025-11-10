@@ -74,7 +74,7 @@ pub const ReportingConfig = struct {
 
         // Check if output is TTY
         config.is_tty = isTty: {
-            if (comptime builtin.target.cpu.arch == .wasm32) {
+            if (comptime builtin.target.os.tag == .freestanding and builtin.target.abi == .wasm32) {
                 // can't use stdio in WASM
                 break :isTty false;
             } else {
@@ -82,38 +82,35 @@ pub const ReportingConfig = struct {
             }
         };
 
-        // Check environment variables (not available on WASM)
-        if (comptime builtin.target.cpu.arch != .wasm32) {
-            // Check NO_COLOR environment variable
-            const no_color = std.process.getEnvVarOwned(allocator, "NO_COLOR") catch null;
-            if (no_color) |value| {
-                defer allocator.free(value);
-                if (value.len > 0) {
-                    config.color_preference = .never;
-                }
+        // Check NO_COLOR environment variable
+        const no_color = std.process.getEnvVarOwned(allocator, "NO_COLOR") catch null;
+        if (no_color) |value| {
+            defer allocator.free(value);
+            if (value.len > 0) {
+                config.color_preference = .never;
             }
+        }
 
-            // Check FORCE_COLOR environment variable
-            const force_color = std.process.getEnvVarOwned(allocator, "FORCE_COLOR") catch null;
-            if (force_color) |value| {
-                defer allocator.free(value);
-                if (value.len > 0) {
-                    config.color_preference = .always;
-                }
+        // Check FORCE_COLOR environment variable
+        const force_color = std.process.getEnvVarOwned(allocator, "FORCE_COLOR") catch null;
+        if (force_color) |value| {
+            defer allocator.free(value);
+            if (value.len > 0) {
+                config.color_preference = .always;
             }
+        }
 
-            // Check ROC_HIGH_CONTRAST environment variable
-            const high_contrast = std.process.getEnvVarOwned(allocator, "ROC_HIGH_CONTRAST") catch null;
-            if (high_contrast) |value| {
-                defer allocator.free(value);
-                if (std.mem.eql(u8, value, "1")) {
-                    config.color_preference = .high_contrast;
-                }
+        // Check ROC_HIGH_CONTRAST environment variable
+        const high_contrast = std.process.getEnvVarOwned(allocator, "ROC_HIGH_CONTRAST") catch null;
+        if (high_contrast) |value| {
+            defer allocator.free(value);
+            if (std.mem.eql(u8, value, "1")) {
+                config.color_preference = .high_contrast;
             }
         }
 
         // Check ROC_MAX_LINE_WIDTH environment variable
-        const max_width = if (comptime builtin.target.cpu.arch != .wasm32) std.process.getEnvVarOwned(allocator, "ROC_MAX_LINE_WIDTH") catch null else null;
+        const max_width = std.process.getEnvVarOwned(allocator, "ROC_MAX_LINE_WIDTH") catch null;
         if (max_width) |value| {
             defer allocator.free(value);
             if (std.fmt.parseInt(u32, value, 10)) |width| {
