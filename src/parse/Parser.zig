@@ -2999,10 +2999,11 @@ const BinOpBp = struct { left: u8, right: u8 };
 /// Get the binding power for a Token if it's a operator token, else return null.
 fn getTokenBP(tok: Token.Tag) ?BinOpBp {
     return switch (tok) {
+        // All multiplication and division operators have the same precedence
         .OpStar => .{ .left = 30, .right = 31 }, // 31 LEFT
-        .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
-        .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
-        .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
+        .OpSlash => .{ .left = 30, .right = 31 }, // 31 LEFT
+        .OpDoubleSlash => .{ .left = 30, .right = 31 }, // 31 LEFT
+        .OpPercent => .{ .left = 30, .right = 31 }, // 31 LEFT
         .OpPlus => .{ .left = 22, .right = 23 }, // 23 LEFT
         .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
