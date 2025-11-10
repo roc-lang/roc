@@ -23,8 +23,13 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
 const TestsSummaryStep = struct {
     step: Step,
     has_filters: bool,
+    forced_passes: u64,
 
-    fn create(b: *std.Build, test_filters: []const []const u8) *TestsSummaryStep {
+    fn create(
+        b: *std.Build,
+        test_filters: []const []const u8,
+        forced_passes: usize,
+    ) *TestsSummaryStep {
         const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
@@ -34,6 +39,7 @@ const TestsSummaryStep = struct {
                 .makeFn = make,
             }),
             .has_filters = test_filters.len > 0,
+            .forced_passes = @intCast(forced_passes),
         };
         return self;
     }
@@ -48,23 +54,22 @@ const TestsSummaryStep = struct {
         const self: *TestsSummaryStep = @fieldParentPtr("step", step);
 
         var passed: u64 = 0;
-        var modules_with_exactly_one_pass: u64 = 0;
 
         for (step.dependencies.items) |dependency| {
             const module_pass_count = dependency.test_results.passCount();
             passed += @intCast(module_pass_count);
-            if (module_pass_count == 1) {
-                modules_with_exactly_one_pass += 1;
-            }
         }
 
-        // When filters are applied, only unnamed aggregator tests may run
-        // (which do nothing but compile-time refAllDecls). If all passing tests
-        // are single aggregators (each module reports 0 or 1 pass), treat as "no tests ran".
-        if (passed == 0 or (self.has_filters and passed == modules_with_exactly_one_pass)) {
+        var effective_passed = passed;
+        if (self.has_filters and self.forced_passes != 0) {
+            const subtract = @min(effective_passed, self.forced_passes);
+            effective_passed -= subtract;
+        }
+
+        if (effective_passed == 0) {
             std.debug.print("No tests ran (all tests filtered out).\n", .{});
         } else {
-            std.debug.print("✅ All {d} tests passed.\n", .{passed});
+            std.debug.print("✅ All {d} tests passed.\n", .{effective_passed});
         }
     }
 };
@@ -464,9 +469,9 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create and add module tests
-    const tests_summary = TestsSummaryStep.create(b, test_filters);
-    const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
-    for (module_tests) |module_test| {
+    const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
+    const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
+    for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to check, repl, and eval module tests
         if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
