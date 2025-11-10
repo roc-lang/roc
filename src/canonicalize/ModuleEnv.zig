@@ -92,6 +92,8 @@ try_ident: Ident.Idx,
 out_of_range_ident: Ident.Idx,
 /// Interned identifier for "Builtin" - used for numeric literal type checking
 builtin_module_ident: Ident.Idx,
+/// Interned identifier for "plus" - used for + operator desugaring
+plus_ident: Ident.Idx,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -145,6 +147,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const try_ident = try common.insertIdent(gpa, Ident.for_text("Try"));
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
+    const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -167,6 +170,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .try_ident = try_ident,
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
+        .plus_ident = plus_ident,
     };
 }
 
@@ -1531,6 +1535,7 @@ pub const Serialized = struct {
     try_ident_reserved: u32, // Reserved space for try_ident field (interned during deserialization)
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
+    plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1569,6 +1574,7 @@ pub const Serialized = struct {
         self.try_ident_reserved = 0;
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
+        self.plus_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1612,6 +1618,7 @@ pub const Serialized = struct {
             .try_ident = common.findIdent("Try") orelse unreachable,
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
+            .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
         };
 
         return env;

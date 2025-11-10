@@ -225,6 +225,7 @@ pub const DispatcherDoesNotImplMethod = struct {
     dispatcher_type: DispatcherType,
     fn_var: Var,
     method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
@@ -1689,11 +1690,24 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("The ");
-        try report.document.addAnnotated(snapshot_str, .emphasized);
-        try report.document.addReflowingText(" type does not have a ");
-        try report.document.addAnnotated(method_name_str, .emphasized);
-        try report.document.addReflowingText(" method:");
+        // Check if this is the "plus" method (from the + operator)
+        const is_plus_operator = data.origin == .desugared_binop;
+
+        if (is_plus_operator) {
+            try report.document.addReflowingText("The value before this ");
+            try report.document.addAnnotated("+", .emphasized);
+            try report.document.addReflowingText(" operator has the type ");
+            try report.document.addAnnotated(snapshot_str, .emphasized);
+            try report.document.addReflowingText(", which has no ");
+            try report.document.addAnnotated(method_name_str, .emphasized);
+            try report.document.addReflowingText(" method:");
+        } else {
+            try report.document.addReflowingText("This ");
+            try report.document.addAnnotated(method_name_str, .emphasized);
+            try report.document.addReflowingText(" method is being called on the type ");
+            try report.document.addAnnotated(snapshot_str, .emphasized);
+            try report.document.addReflowingText(", which has no method with that name:");
+        }
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -1709,17 +1723,33 @@ pub const ReportBuilder = struct {
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addAnnotated("Hint: ", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
-                try report.document.addReflowingText(" Did you forget to define ");
-                try report.document.addAnnotated(method_name_str, .emphasized);
-                try report.document.addReflowingText(" in the type's method block?");
+                if (is_plus_operator) {
+                    try report.document.addReflowingText("The ");
+                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addReflowingText(" operator calls a method named ");
+                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
+                } else {
+                    try report.document.addReflowingText("For this to work, the type would need to have a method named ");
+                    try report.document.addAnnotated(method_name_str, .emphasized);
+                    try report.document.addReflowingText(" associated with it in the type's declaration.");
+                }
             },
             .rigid => {
-                try report.document.addReflowingText(" Did you forget to specify ");
-                try report.document.addAnnotated(method_name_str, .emphasized);
-                try report.document.addReflowingText(" in the type annotation?");
+                if (is_plus_operator) {
+                    try report.document.addReflowingText(" The ");
+                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addReflowingText(" operator requires the type to have a ");
+                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
+                } else {
+                    try report.document.addReflowingText(" Did you forget to specify ");
+                    try report.document.addAnnotated(method_name_str, .emphasized);
+                    try report.document.addReflowingText(" in the type annotation?");
+                }
             },
         }
 

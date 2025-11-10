@@ -3755,6 +3755,7 @@ test "unify - flex with no constraints unifies with flex with constraints" {
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("sort")),
         .fn_var = sort_fn,
+        .origin = .where_clause,
     };
 
     const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -3785,6 +3786,7 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
+        .origin = .where_clause,
     };
 
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -3815,6 +3817,7 @@ test "unify - flex with constraints unifies with flex with compatible constraint
     const add_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("add")),
         .fn_var = add_fn_a,
+        .origin = .where_clause,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{add_constraint_a});
 
@@ -3823,6 +3826,7 @@ test "unify - flex with constraints unifies with flex with compatible constraint
     const add_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("add")),
         .fn_var = add_fn_b,
+        .origin = .where_clause,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{add_constraint_b});
 
@@ -3852,6 +3856,7 @@ test "unify - flex with multiple constraints" {
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
+        .origin = .where_clause,
     };
 
     // Create constraint 2: a.hash : Int -> Int
@@ -3859,6 +3864,7 @@ test "unify - flex with multiple constraints" {
     const hash_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("hash")),
         .fn_var = hash_fn,
+        .origin = .where_clause,
     };
 
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ to_str_constraint, hash_constraint });
@@ -3890,6 +3896,7 @@ test "unify - flex with constraints fails on incompatible arg types" {
     const foo_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn_a,
+        .origin = .where_clause,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_a});
 
@@ -3898,6 +3905,7 @@ test "unify - flex with constraints fails on incompatible arg types" {
     const foo_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn_b,
+        .origin = .where_clause,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_b});
 
@@ -3927,6 +3935,7 @@ test "unify - flex with constraints fails on incompatible return types" {
     const foo_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn_a,
+        .origin = .where_clause,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_a});
 
@@ -3935,6 +3944,7 @@ test "unify - flex with constraints fails on incompatible return types" {
     const foo_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn_b,
+        .origin = .where_clause,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_b});
 
@@ -3964,6 +3974,7 @@ test "unify - flex with constraints fails on different arity" {
     const foo_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn_a,
+        .origin = .where_clause,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_a});
 
@@ -3972,6 +3983,7 @@ test "unify - flex with constraints fails on different arity" {
     const foo_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn_b,
+        .origin = .where_clause,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_b});
 
@@ -4001,6 +4013,7 @@ test "unify - flex with subset of constraints (a subset b)" {
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn,
+        .origin = .where_clause,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
@@ -4009,6 +4022,7 @@ test "unify - flex with subset of constraints (a subset b)" {
     const bar_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar")),
         .fn_var = bar_fn,
+        .origin = .where_clause,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
 
@@ -4045,12 +4059,14 @@ test "unify - flex with constraints vs rigid with constraints" {
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = foo_ident,
         .fn_var = foo_fn,
+        .origin = .where_clause,
     };
     const bar_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const bar_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar"));
     const bar_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = bar_ident,
         .fn_var = bar_fn,
+        .origin = .where_clause,
     };
     const flex_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
 
@@ -4095,6 +4111,7 @@ test "unify - flex with constraints vs rigid constraints 2" {
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = foo_ident,
         .fn_var = foo_fn,
+        .origin = .where_clause,
     };
     const flex_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
@@ -4103,6 +4120,7 @@ test "unify - flex with constraints vs rigid constraints 2" {
     const bar_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar")),
         .fn_var = bar_fn,
+        .origin = .where_clause,
     };
     const rigid_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
 
@@ -4138,6 +4156,7 @@ test "unify - empty constraints unify with any" {
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn,
+        .origin = .where_clause,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
@@ -4170,6 +4189,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
+        .origin = .where_clause,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -4204,6 +4224,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
+        .origin = .where_clause,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -4254,12 +4275,14 @@ test "unify - flex with multiple constraints vs structure captures all" {
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
+        .origin = .where_clause,
     };
 
     const hash_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const hash_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("hash")),
         .fn_var = hash_fn,
+        .origin = .where_clause,
     };
 
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ to_str_constraint, hash_constraint });
@@ -4296,6 +4319,7 @@ test "unify - flex vs nominal type captures constraint" {
     const ord_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("ord")),
         .fn_var = ord_fn,
+        .origin = .where_clause,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ord_constraint});
 
