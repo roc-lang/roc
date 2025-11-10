@@ -38,28 +38,6 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
         target.result.abi == builtin.target.abi;
 }
 
-fn extendWithAggregatorFilters(
-    b: *Build,
-    base: []const []const u8,
-    module_type: ModuleType,
-) []const []const u8 {
-    if (base.len == 0) return base;
-
-    const extras = aggregatorFilters(module_type);
-    if (extras.len == 0) return base;
-
-    var list = std.ArrayList([]const u8).empty;
-    list.ensureTotalCapacity(b.allocator, base.len + extras.len) catch @panic("OOM while extending module test filters");
-    list.appendSlice(b.allocator, base) catch @panic("OOM while extending module test filters");
-
-    for (extras) |extra| {
-        if (filtersContain(base, extra)) continue;
-        list.append(b.allocator, b.dupe(extra)) catch @panic("OOM while extending module test filters");
-    }
-
-    return list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing module test filters");
-}
-
 /// Represents a test module with its compilation and execution steps.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
@@ -330,7 +308,6 @@ pub const RocModules = struct {
 
         inline for (test_configs, 0..) |module_type, i| {
             const module = self.getModule(module_type);
-            const module_filters = extendWithAggregatorFilters(b, test_filters, module_type);
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}", .{@tagName(module_type)}),
                 .root_module = b.createModule(.{
@@ -342,7 +319,7 @@ pub const RocModules = struct {
                     // Unbundle module doesn't need libc (uses Zig's std zstandard)
                     .link_libc = (module_type == .ipc or module_type == .bundle),
                 }),
-                .filters = module_filters,
+                .filters = test_filters,
             });
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)

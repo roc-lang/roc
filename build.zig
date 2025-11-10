@@ -22,8 +22,9 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
 
 const TestsSummaryStep = struct {
     step: Step,
+    has_filters: bool,
 
-    fn create(b: *std.Build) *TestsSummaryStep {
+    fn create(b: *std.Build, test_filters: []const []const u8) *TestsSummaryStep {
         const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
@@ -32,6 +33,7 @@ const TestsSummaryStep = struct {
                 .owner = b,
                 .makeFn = make,
             }),
+            .has_filters = test_filters.len > 0,
         };
         return self;
     }
@@ -43,12 +45,27 @@ const TestsSummaryStep = struct {
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
 
+        const self: *TestsSummaryStep = @fieldParentPtr("step", step);
+
         var passed: u64 = 0;
+        var modules_with_exactly_one_pass: u64 = 0;
+
         for (step.dependencies.items) |dependency| {
-            passed += @intCast(dependency.test_results.passCount());
+            const module_pass_count = dependency.test_results.passCount();
+            passed += @intCast(module_pass_count);
+            if (module_pass_count == 1) {
+                modules_with_exactly_one_pass += 1;
+            }
         }
 
-        std.debug.print("✅ All {d} tests passed.\n", .{passed});
+        // When filters are applied, only unnamed aggregator tests may run
+        // (which do nothing but compile-time refAllDecls). If all passing tests
+        // are single aggregators (each module reports 0 or 1 pass), treat as "no tests ran".
+        if (passed == 0 or (self.has_filters and passed == modules_with_exactly_one_pass)) {
+            std.debug.print("No tests ran (all tests filtered out).\n", .{});
+        } else {
+            std.debug.print("✅ All {d} tests passed.\n", .{passed});
+        }
     }
 };
 
@@ -192,14 +209,7 @@ pub fn build(b: *std.Build) void {
     }
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
-
-    const target_is_native =
-        // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
-        // but we still want to treat those builds as native so macOS can link against real FSEvents.
-        target.result.os.tag == builtin.target.os.tag and
-        target.result.cpu.arch == builtin.target.cpu.arch and
-        target.result.abi == builtin.target.abi;
-    build_options.addOption(bool, "target_is_native", target_is_native);
+    build_options.addOption(bool, "target_is_native", target.query.isNative());
 
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
@@ -454,7 +464,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create and add module tests
-    const tests_summary = TestsSummaryStep.create(b);
+    const tests_summary = TestsSummaryStep.create(b, test_filters);
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
         // Add compiled builtins to check, repl, and eval module tests
@@ -571,7 +581,7 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
         // Link platform-specific libraries for file watching
-        if (target.result.os.tag == .macos and target_is_native) {
+        if (target.result.os.tag == .macos) {
             watch_test.linkFramework("CoreFoundation");
             watch_test.linkFramework("CoreServices");
         } else if (target.result.os.tag == .windows) {
