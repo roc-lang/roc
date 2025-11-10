@@ -76,9 +76,10 @@ const ShimError = error{
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
-        var buf: [512]u8 = undefined;
-        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s} (entry_idx={})", .{ @errorName(err), entry_idx }) catch "Error evaluating from shared memory";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const msg2 = std.fmt.allocPrint(std.heap.page_allocator, "Error evaluating from shared memory: {s} (entry_idx={})", .{ @errorName(err), entry_idx }) catch "Error evaluating from shared memory";
         ops.crash(msg2);
+        // Note: We're about to crash, so it's ok to leak this allocation
     };
 }
 
@@ -99,15 +100,16 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     }
 
     const allocator = std.heap.page_allocator;
-    var buf: [256]u8 = undefined;
 
     // Get page size
     const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
     // Create shared memory allocator from coordination info
     var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
-        const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const msg2 = std.fmt.allocPrint(allocator, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
         roc_ops.crash(msg2);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.SharedMemoryError;
     };
 
@@ -231,7 +233,7 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         } else "";
 
         // Deserialize the ModuleEnv with the relocated module_name
-        // Empty string is used for source since it's not needed in the interpreter
+        // Source text is not available because we don't put it in the shared memory.
         module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", module_name);
     }
 

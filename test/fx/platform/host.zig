@@ -190,10 +190,12 @@ fn platform_main() !void {
     };
 
     // Call the app's main! entrypoint
-    var unit_result: [0]u8 = undefined; // Result is {} which is zero-sized
-    // For a function with signature () => {}, the argument is an empty tuple (zero parameters)
-    // An empty tuple is zero-sized, so we pass a zero-sized value
-    // Note: Can't pass null here - Roc-generated code dereferences the pointer even for zero-sized types
+    var ret: [0]u8 = undefined; // Result is {} which is zero-sized
     var args: [0]u8 = undefined;
-    roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&unit_result)), @as(*anyopaque, @ptrCast(&args)));
+    // Note: although this is a function with no args and a zero-sized return value,
+    // we can't currently pass null pointers for either of these because Roc will
+    // currently dereference both of these eagerly even though it won't use either,
+    // causing a segfault if you pass null. This should be changed! Dereferencing
+    // garbage memory is obviously pointless, and there's no reason we should do it.
+    roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
 }
