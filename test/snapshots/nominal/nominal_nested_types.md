@@ -13,9 +13,46 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_nested_types.md:3:9:3:10
+UNUSED VARIABLE - nominal_nested_types.md:3:9:3:10
+UNUSED VARIABLE - nominal_nested_types.md:5:5:5:6
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Bar.y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Bar.y` to suppress this warning.
+The unused variable is declared here:
+**nominal_nested_types.md:3:9:3:10:**
+```roc
+        y = 6
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable `Bar.y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Bar.y` to suppress this warning.
+The unused variable is declared here:
+**nominal_nested_types.md:3:9:3:10:**
+```roc
+        y = 6
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable `Foo.x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.x` to suppress this warning.
+The unused variable is declared here:
+**nominal_nested_types.md:5:5:5:6:**
+```roc
+    x = 5
+```
+    ^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

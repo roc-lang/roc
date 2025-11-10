@@ -26,9 +26,69 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - Basic.md:3:3:3:9
+UNUSED VARIABLE - Basic.md:6:3:6:10
+MISSING METHOD - Basic.md:6:20:6:33
+MISSING METHOD - Basic.md:10:15:10:25
+MISSING METHOD - Basic.md:13:15:13:26
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Basic.to_str` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Basic.to_str` to suppress this warning.
+The unused variable is declared here:
+**Basic.md:3:3:3:9:**
+```roc
+  to_str = |Basic.Val(s)| s
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Basic.to_str2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Basic.to_str2` to suppress this warning.
+The unused variable is declared here:
+**Basic.md:6:3:6:10:**
+```roc
+  to_str2 = |test| test.to_str()
+```
+  ^^^^^^^
+
+
+**MISSING METHOD**
+The **Basic** type does not have a **to_str** method:
+**Basic.md:6:20:6:33:**
+```roc
+  to_str2 = |test| test.to_str()
+```
+                   ^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **to_str** in the type's method block?
+
+**MISSING METHOD**
+The **Basic** type does not have a **to_str** method:
+**Basic.md:10:15:10:25:**
+```roc
+helper1 = |x| x.to_str()
+```
+              ^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **to_str** in the type's method block?
+
+**MISSING METHOD**
+The **Basic** type does not have a **to_str2** method:
+**Basic.md:13:15:13:26:**
+```roc
+helper2 = |x| x.to_str2()
+```
+              ^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **to_str2** in the type's method block?
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -272,19 +332,19 @@ main = (helper1(val), helper2(val))
 (inferred-types
 	(defs
 		(patt (type "Basic -> Str"))
-		(patt (type "Basic -> Str"))
+		(patt (type "Basic -> Error"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
-		(patt (type "(Str, Str)")))
+		(patt (type "(Error, Error)")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
 		(expr (type "Basic -> Str"))
-		(expr (type "Basic -> Str"))
+		(expr (type "Basic -> Error"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))
-		(expr (type "(Str, Str)"))))
+		(expr (type "(Error, Error)"))))
 ~~~

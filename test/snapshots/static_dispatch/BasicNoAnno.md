@@ -21,9 +21,57 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - BasicNoAnno.md:2:3:2:9
+UNUSED VARIABLE - BasicNoAnno.md:4:3:4:10
+MISSING METHOD - BasicNoAnno.md:7:15:7:25
+MISSING METHOD - BasicNoAnno.md:9:15:9:26
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `BasicNoAnno.to_str` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_BasicNoAnno.to_str` to suppress this warning.
+The unused variable is declared here:
+**BasicNoAnno.md:2:3:2:9:**
+```roc
+  to_str = |BasicNoAnno.Val(s)| s
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `BasicNoAnno.to_str2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_BasicNoAnno.to_str2` to suppress this warning.
+The unused variable is declared here:
+**BasicNoAnno.md:4:3:4:10:**
+```roc
+  to_str2 = |test| test.to_str()
+```
+  ^^^^^^^
+
+
+**MISSING METHOD**
+The **BasicNoAnno** type does not have a **to_str** method:
+**BasicNoAnno.md:7:15:7:25:**
+```roc
+helper1 = |x| x.to_str()
+```
+              ^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **to_str** in the type's method block?
+
+**MISSING METHOD**
+The **BasicNoAnno** type does not have a **to_str2** method:
+**BasicNoAnno.md:9:15:9:26:**
+```roc
+helper2 = |x| x.to_str2()
+```
+              ^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **to_str2** in the type's method block?
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -205,7 +253,7 @@ main = (helper1(val), helper2(val))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "BasicNoAnno"))
-		(patt (type "(Str, Str)")))
+		(patt (type "(Error, Error)")))
 	(type_decls
 		(nominal (type "BasicNoAnno")
 			(ty-header (name "BasicNoAnno"))))
@@ -215,5 +263,5 @@ main = (helper1(val), helper2(val))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "BasicNoAnno"))
-		(expr (type "(Str, Str)"))))
+		(expr (type "(Error, Error)"))))
 ~~~

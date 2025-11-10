@@ -17,9 +17,20 @@ result : U64
 result = myBar
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_associated_value_alias.md:2:5:2:8
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Foo.bar` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.bar` to suppress this warning.
+The unused variable is declared here:
+**nominal_associated_value_alias.md:2:5:2:8:**
+```roc
+    bar = 42
+```
+    ^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -74,12 +85,12 @@ result = myBar
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "nominal_associated_value_alias.Foo.bar"))
+		(p-assign (ident "Foo.bar"))
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "myBar"))
 		(e-lookup-local
-			(p-assign (ident "nominal_associated_value_alias.Foo.bar")))
+			(p-assign (ident "Foo.bar")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let

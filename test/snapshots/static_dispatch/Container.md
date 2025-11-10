@@ -46,9 +46,58 @@ func = {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - Container.md:5:3:5:6
+UNUSED VARIABLE - Container.md:13:3:13:9
+UNUSED VARIABLE - Container.md:22:3:22:11
+MISSING METHOD - Container.md:33:13:34:20
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Container.map` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.map` to suppress this warning.
+The unused variable is declared here:
+**Container.md:5:3:5:6:**
+```roc
+  map = |container, f| {
+```
+  ^^^
+
+
+**UNUSED VARIABLE**
+Variable `Container.get_or` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.get_or` to suppress this warning.
+The unused variable is declared here:
+**Container.md:13:3:13:9:**
+```roc
+  get_or = |container, default| {
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Container.flat_map` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.flat_map` to suppress this warning.
+The unused variable is declared here:
+**Container.md:22:3:22:11:**
+```roc
+  flat_map = |container, f| {
+```
+  ^^^^^^^^
+
+
+**MISSING METHOD**
+The **Container(Num(_size))** type does not have a **map** method:
+**Container.md:33:13:34:20:**
+```roc
+  chained = num_container
+    .map(|x| x + 1)
+```
+
+
+**Hint:** Did you forget to define **map** in the type's method block?
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -436,7 +485,7 @@ func = {
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
 		(patt (type "[Value(c), Empty]_others, c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "Num(_size)")))
+		(patt (type "_c")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -446,5 +495,5 @@ func = {
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
 		(expr (type "[Value(c), Empty]_others, c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "Num(_size)"))))
+		(expr (type "_c"))))
 ~~~

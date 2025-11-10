@@ -39,7 +39,16 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             // Get the identifier from the pattern
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {
-                const ident = pattern.assign.ident;
+                const full_ident = pattern.assign.ident;
+
+                // Extract the unqualified name (e.g., "line!" from "Stdout.line!")
+                // The pattern might contain a qualified name, but we need the unqualified one
+                const full_name = env.getIdent(full_ident);
+                const unqualified_name = if (std.mem.lastIndexOfScalar(u8, full_name, '.')) |dot_idx|
+                    full_name[dot_idx + 1 ..]
+                else
+                    full_name;
+                const ident = env.common.findIdent(unqualified_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(unqualified_name));
 
                 // Extract the number of arguments from the annotation
                 const annotation = env.store.getAnnotation(def.annotation.?);
@@ -151,12 +160,6 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
         if (expr == .e_hosted_lambda) {
             const hosted = expr.e_hosted_lambda;
             const local_name = env.getIdent(hosted.symbol_name);
-
-            // Skip malformed qualified names (contains '.') - only keep simple unqualified names
-            // e.g., skip "Stdout.roc.Stdout.line!" and only keep "line!"
-            if (std.mem.indexOfScalar(u8, local_name, '.') != null) {
-                continue;
-            }
 
             // Deduplicate based on symbol identifier
             const gop = try seen_symbols.getOrPut(hosted.symbol_name);

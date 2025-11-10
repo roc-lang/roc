@@ -65,7 +65,7 @@ x = Foo.Bar.X
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-nominal (nominal "nominal_nested_type_ref.Foo.Bar")
+		(e-nominal (nominal "Foo.Bar")
 			(e-tag (name "X")))
 		(annotation
 			(ty-lookup (name "Foo.Bar") (local))))
@@ -74,7 +74,7 @@ x = Foo.Bar.X
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "nominal_nested_type_ref.Foo.Bar"))
+		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
@@ -84,12 +84,12 @@ x = Foo.Bar.X
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "nominal_nested_type_ref.Foo.Bar")))
+		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_nested_type_ref.Foo.Bar")
-			(ty-header (name "nominal_nested_type_ref.Foo.Bar"))))
+		(nominal (type "Foo.Bar")
+			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "nominal_nested_type_ref.Foo.Bar"))))
+		(expr (type "Foo.Bar"))))
 ~~~

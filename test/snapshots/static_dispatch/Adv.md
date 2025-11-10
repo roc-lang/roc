@@ -44,23 +44,73 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - Adv.md:17:13:17:32
+UNUSED VARIABLE - Adv.md:3:3:3:9
+UNUSED VARIABLE - Adv.md:6:3:6:9
+UNUSED VARIABLE - Adv.md:9:3:9:13
+UNUSED VARIABLE - Adv.md:12:3:12:13
+MISSING METHOD - Adv.md:17:13:17:32
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:35:13:35:36
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**UNUSED VARIABLE**
+Variable `Adv.to_str` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Adv.to_str` to suppress this warning.
+The unused variable is declared here:
+**Adv.md:3:3:3:9:**
+```roc
+  to_str = |Adv.Val(_, s)| s
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Adv.to_u64` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Adv.to_u64` to suppress this warning.
+The unused variable is declared here:
+**Adv.md:6:3:6:9:**
+```roc
+  to_u64 = |Adv.Val(u, _)| u
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Adv.update_str` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Adv.update_str` to suppress this warning.
+The unused variable is declared here:
+**Adv.md:9:3:9:13:**
+```roc
+  update_str = |Adv.Val(u64, _), next_str| Adv.Val(u64, next_str)
+```
+  ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Adv.update_u64` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Adv.update_u64` to suppress this warning.
+The unused variable is declared here:
+**Adv.md:12:3:12:13:**
+```roc
+  update_u64 = |Adv.Val(_, str), next_u64| Adv.Val(next_u64, str)
+```
+  ^^^^^^^^^^
+
+
+**MISSING METHOD**
+The **Adv** type does not have a **update_str** method:
 **Adv.md:17:13:17:32:**
 ```roc
 	next_val = val.update_str(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
-It has the type:
-    _Adv, Num(_size) -> _ret_
 
-But I expected it to be:
-    _Adv, Str -> Adv_
+**Hint:** Did you forget to define **update_str** in the type's method block?
 
 **MISSING METHOD**
 The **Adv** type does not have a **update_strr** method:
@@ -85,6 +135,17 @@ This type doesn't support methods:
     _Str_
 
 
+
+**MISSING METHOD**
+The **Adv** type does not have a **update_str** method:
+**Adv.md:35:13:35:36:**
+```roc
+	next_val = val.update_str("world").update_u64(20)
+```
+	           ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **update_str** in the type's method block?
 
 # TOKENS
 ~~~zig

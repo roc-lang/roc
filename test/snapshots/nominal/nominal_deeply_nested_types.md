@@ -19,9 +19,98 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_deeply_nested_types.md:5:17:5:18
+UNUSED VARIABLE - nominal_deeply_nested_types.md:5:17:5:18
+UNUSED VARIABLE - nominal_deeply_nested_types.md:7:13:7:14
+UNUSED VARIABLE - nominal_deeply_nested_types.md:7:13:7:14
+UNUSED VARIABLE - nominal_deeply_nested_types.md:9:9:9:10
+UNUSED VARIABLE - nominal_deeply_nested_types.md:9:9:9:10
+UNUSED VARIABLE - nominal_deeply_nested_types.md:11:5:11:6
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Qux.w` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Qux.w` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:5:17:5:18:**
+```roc
+                w = 1
+```
+                ^
+
+
+**UNUSED VARIABLE**
+Variable `Qux.w` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Qux.w` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:5:17:5:18:**
+```roc
+                w = 1
+```
+                ^
+
+
+**UNUSED VARIABLE**
+Variable `Baz.z` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Baz.z` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:7:13:7:14:**
+```roc
+            z = 2
+```
+            ^
+
+
+**UNUSED VARIABLE**
+Variable `Baz.z` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Baz.z` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:7:13:7:14:**
+```roc
+            z = 2
+```
+            ^
+
+
+**UNUSED VARIABLE**
+Variable `Bar.y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Bar.y` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:9:9:9:10:**
+```roc
+        y = 3
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable `Bar.y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Bar.y` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:9:9:9:10:**
+```roc
+        y = 3
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable `Foo.x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.x` to suppress this warning.
+The unused variable is declared here:
+**nominal_deeply_nested_types.md:11:5:11:6:**
+```roc
+    x = 4
+```
+    ^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

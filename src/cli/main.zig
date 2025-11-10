@@ -1384,6 +1384,22 @@ fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, 
     };
     std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
 
+    // Deduplicate by name_text after sorting
+    // (Duplicates can occur when the same function exists in multiple modules)
+    var write_idx: usize = 0;
+    for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+        if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+            if (write_idx != read_idx) {
+                all_hosted_fns.items[write_idx] = fn_info;
+            }
+            write_idx += 1;
+        } else {
+            // Duplicate - free the name_text string
+            allocs.gpa.free(fn_info.name_text);
+        }
+    }
+    all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
     // Now reassign indices globally across all modules
     // We need to track which module each function belongs to
     for (platform_env_ptrs) |platform_env| {

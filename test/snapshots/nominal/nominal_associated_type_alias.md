@@ -76,7 +76,7 @@ useMyBar = Foo.Bar.X
 (can-ir
 	(d-let
 		(p-assign (ident "useMyBar"))
-		(e-nominal (nominal "nominal_associated_type_alias.Foo.Bar")
+		(e-nominal (nominal "Foo.Bar")
 			(e-tag (name "X")))
 		(annotation
 			(ty-lookup (name "MyBar") (local))))
@@ -85,7 +85,7 @@ useMyBar = Foo.Bar.X
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "nominal_associated_type_alias.Foo.Bar"))
+		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
@@ -102,8 +102,8 @@ useMyBar = Foo.Bar.X
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_associated_type_alias.Foo.Bar")
-			(ty-header (name "nominal_associated_type_alias.Foo.Bar")))
+		(nominal (type "Foo.Bar")
+			(ty-header (name "Foo.Bar")))
 		(alias (type "MyBar")
 			(ty-header (name "MyBar"))))
 	(expressions

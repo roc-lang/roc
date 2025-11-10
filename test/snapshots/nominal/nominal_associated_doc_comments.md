@@ -15,9 +15,20 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_associated_doc_comments.md:7:5:7:15
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Foo.defaultBar` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.defaultBar` to suppress this warning.
+The unused variable is declared here:
+**nominal_associated_doc_comments.md:7:5:7:15:**
+```roc
+    defaultBar = Foo.Bar.X
+```
+    ^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

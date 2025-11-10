@@ -907,9 +907,10 @@ fn processAssociatedItemsSecondPass(
                                     );
                                     try self.env.store.addScratchDef(def_idx);
 
-                                    // Register this associated item by its qualified name
+                                    // Register this associated item by its unqualified name
+                                    // (e.g., "method!" not "Type.method!")
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    try self.env.setExposedNodeIndexById(decl_ident, def_idx_u16);
 
                                     // Make the real pattern available in current scope (replaces placeholder)
                                     // We already added unqualified and type-qualified names earlier,
@@ -952,9 +953,10 @@ fn processAssociatedItemsSecondPass(
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
-                    // Register this associated item by its qualified name
+                    // Register this associated item by its unqualified name
+                    // (e.g., "isEmpty" not "Str.isEmpty")
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
 
                     // Make the real pattern available in current scope (replaces placeholder)
                     const def_cir = self.env.store.getDef(def_idx);
@@ -994,9 +996,10 @@ fn processAssociatedItemsSecondPass(
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Register this associated item by its qualified name
+                        // Register this associated item by its unqualified name
+                        // (e.g., "bar" not "Foo.bar")
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                        try self.env.setExposedNodeIndexById(decl_ident, def_idx_u16);
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks

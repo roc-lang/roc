@@ -12,9 +12,46 @@ Foo := [A, B, C].{
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_type_with_associated_multi_statement.md:2:5:2:6
+UNUSED VARIABLE - nominal_type_with_associated_multi_statement.md:3:5:3:6
+UNUSED VARIABLE - nominal_type_with_associated_multi_statement.md:4:5:4:6
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Foo.x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.x` to suppress this warning.
+The unused variable is declared here:
+**nominal_type_with_associated_multi_statement.md:2:5:2:6:**
+```roc
+    x = 5
+```
+    ^
+
+
+**UNUSED VARIABLE**
+Variable `Foo.y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.y` to suppress this warning.
+The unused variable is declared here:
+**nominal_type_with_associated_multi_statement.md:3:5:3:6:**
+```roc
+    y = 10
+```
+    ^
+
+
+**UNUSED VARIABLE**
+Variable `Foo.z` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Foo.z` to suppress this warning.
+The unused variable is declared here:
+**nominal_type_with_associated_multi_statement.md:4:5:4:6:**
+```roc
+    z = 15
+```
+    ^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,

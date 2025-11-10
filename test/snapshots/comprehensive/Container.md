@@ -121,9 +121,82 @@ main = {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - Container.md:5:3:5:6
+UNUSED VARIABLE - Container.md:13:3:13:9
+UNUSED VARIABLE - Container.md:22:3:22:11
+MISSING METHOD - Container.md:93:16:93:44
+MISSING METHOD - Container.md:94:17:94:41
+MISSING METHOD - Container.md:97:13:98:20
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Container.map` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.map` to suppress this warning.
+The unused variable is declared here:
+**Container.md:5:3:5:6:**
+```roc
+  map = |container, f| {
+```
+  ^^^
+
+
+**UNUSED VARIABLE**
+Variable `Container.get_or` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.get_or` to suppress this warning.
+The unused variable is declared here:
+**Container.md:13:3:13:9:**
+```roc
+  get_or = |container, default| {
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Container.flat_map` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.flat_map` to suppress this warning.
+The unused variable is declared here:
+**Container.md:22:3:22:11:**
+```roc
+  flat_map = |container, f| {
+```
+  ^^^^^^^^
+
+
+**MISSING METHOD**
+The **Container(Num(_size))** type does not have a **map** method:
+**Container.md:93:16:93:44:**
+```roc
+  num_result = num_container.map(|x| x + 1)
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **map** in the type's method block?
+
+**MISSING METHOD**
+The **Container(Str)** type does not have a **map** method:
+**Container.md:94:17:94:41:**
+```roc
+  _str_result = str_container.map(|s| s)
+```
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **map** in the type's method block?
+
+**MISSING METHOD**
+The **Container(Num(_size))** type does not have a **map** method:
+**Container.md:97:13:98:20:**
+```roc
+  chained = num_container
+    .map(|x| x + 1)
+```
+
+
+**Hint:** Did you forget to define **map** in the type's method block?
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -1224,7 +1297,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, [True]_others), processed: Num(_size4), transformed: Num(_size5) }")))
+		(patt (type "{ chained: _field, final: Error, id_results: (Num(_size), Str, [True]_others), processed: Num(_size2), transformed: Num(_size3) }")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1238,5 +1311,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, [True]_others), processed: Num(_size4), transformed: Num(_size5) }"))))
+		(expr (type "{ chained: _field, final: Error, id_results: (Num(_size), Str, [True]_others), processed: Num(_size2), transformed: Num(_size3) }"))))
 ~~~

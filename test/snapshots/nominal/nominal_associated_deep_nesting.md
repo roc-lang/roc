@@ -22,9 +22,33 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_associated_deep_nesting.md:5:17:5:22
+UNUSED VARIABLE - nominal_associated_deep_nesting.md:5:17:5:22
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Level3.value` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Level3.value` to suppress this warning.
+The unused variable is declared here:
+**nominal_associated_deep_nesting.md:5:17:5:22:**
+```roc
+                value = 42
+```
+                ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Level3.value` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Level3.value` to suppress this warning.
+The unused variable is declared here:
+**nominal_associated_deep_nesting.md:5:17:5:22:**
+```roc
+                value = 42
+```
+                ^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

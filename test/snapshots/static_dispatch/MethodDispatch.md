@@ -45,9 +45,69 @@ main : (Str, Str, Str)
 main = (directCall, result1, extract(result2))
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - MethodDispatch.md:3:2:3:11
+UNUSED VARIABLE - MethodDispatch.md:5:2:5:11
+MISSING METHOD - MethodDispatch.md:25:14:25:37
+MISSING METHOD - MethodDispatch.md:10:15:10:28
+MISSING METHOD - MethodDispatch.md:14:18:14:33
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `Container.get_value` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.get_value` to suppress this warning.
+The unused variable is declared here:
+**MethodDispatch.md:3:2:3:11:**
+```roc
+	get_value = |Container.Box(s)| s
+```
+	^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `Container.transform` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_Container.transform` to suppress this warning.
+The unused variable is declared here:
+**MethodDispatch.md:5:2:5:11:**
+```roc
+	transform = |Container.Box(s), fn| Container.Box(fn(s))
+```
+	^^^^^^^^^
+
+
+**MISSING METHOD**
+The **Container** type does not have a **get_value** method:
+**MethodDispatch.md:25:14:25:37:**
+```roc
+directCall = myContainer.get_value()
+```
+             ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **get_value** in the type's method block?
+
+**MISSING METHOD**
+The **Container** type does not have a **get_value** method:
+**MethodDispatch.md:10:15:10:28:**
+```roc
+extract = |x| x.get_value()
+```
+              ^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **get_value** in the type's method block?
+
+**MISSING METHOD**
+The **Container** type does not have a **transform** method:
+**MethodDispatch.md:14:18:14:33:**
+```roc
+modify = |x, fn| x.transform(fn)
+```
+                 ^^^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **transform** in the type's method block?
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -408,10 +468,10 @@ NO CHANGE
 		(patt (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
 		(patt (type "Container"))
 		(patt (type "Container"))
-		(patt (type "Str"))
-		(patt (type "Str"))
-		(patt (type "Container"))
-		(patt (type "(Str, Str, Str)")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "(Error, Error, Error)")))
 	(type_decls
 		(nominal (type "Container")
 			(ty-header (name "Container"))))
@@ -422,8 +482,8 @@ NO CHANGE
 		(expr (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
 		(expr (type "Container"))
 		(expr (type "Container"))
-		(expr (type "Str"))
-		(expr (type "Str"))
-		(expr (type "Container"))
-		(expr (type "(Str, Str, Str)"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "(Error, Error, Error)"))))
 ~~~
