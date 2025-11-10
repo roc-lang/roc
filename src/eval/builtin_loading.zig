@@ -86,6 +86,9 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
         .minus_ident = common.findIdent(base.Ident.MINUS_METHOD_NAME) orelse unreachable,
+        .times_ident = common.findIdent(base.Ident.TIMES_METHOD_NAME) orelse unreachable,
+        .div_ident = common.findIdent(base.Ident.DIV_METHOD_NAME) orelse unreachable,
+        .div_trunc_ident = common.findIdent(base.Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
     };
 
     return LoadedModule{

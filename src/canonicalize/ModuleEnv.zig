@@ -96,6 +96,12 @@ builtin_module_ident: Ident.Idx,
 plus_ident: Ident.Idx,
 /// Interned identifier for "minus" - used for - operator desugaring
 minus_ident: Ident.Idx,
+/// Interned identifier for "times" - used for * operator desugaring
+times_ident: Ident.Idx,
+/// Interned identifier for "div" - used for / operator desugaring
+div_ident: Ident.Idx,
+/// Interned identifier for "div_trunc" - used for // operator desugaring
+div_trunc_ident: Ident.Idx,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -151,6 +157,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
     const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
     const minus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.MINUS_METHOD_NAME));
+    const times_ident = try common.insertIdent(gpa, Ident.for_text(Ident.TIMES_METHOD_NAME));
+    const div_ident = try common.insertIdent(gpa, Ident.for_text(Ident.DIV_METHOD_NAME));
+    const div_trunc_ident = try common.insertIdent(gpa, Ident.for_text(Ident.DIV_TRUNC_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -175,6 +184,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
         .minus_ident = minus_ident,
+        .times_ident = times_ident,
+        .div_ident = div_ident,
+        .div_trunc_ident = div_trunc_ident,
     };
 }
 
@@ -1540,6 +1552,10 @@ pub const Serialized = struct {
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
     plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
+    minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
+    times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
+    div_ident_reserved: u32, // Reserved space for div_ident field (interned during deserialization)
+    div_trunc_ident_reserved: u32, // Reserved space for div_trunc_ident field (interned during deserialization)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1579,6 +1595,10 @@ pub const Serialized = struct {
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
         self.plus_ident_reserved = 0;
+        self.minus_ident_reserved = 0;
+        self.times_ident_reserved = 0;
+        self.div_ident_reserved = 0;
+        self.div_trunc_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1624,6 +1644,9 @@ pub const Serialized = struct {
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
             .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
             .minus_ident = common.findIdent(Ident.MINUS_METHOD_NAME) orelse unreachable,
+            .times_ident = common.findIdent(Ident.TIMES_METHOD_NAME) orelse unreachable,
+            .div_ident = common.findIdent(Ident.DIV_METHOD_NAME) orelse unreachable,
+            .div_trunc_ident = common.findIdent(Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
         };
 
         return env;

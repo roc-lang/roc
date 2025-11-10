@@ -1697,6 +1697,12 @@ pub const ReportBuilder = struct {
                 "+"
             else if (data.method_name == self.can_ir.minus_ident)
                 "-"
+            else if (data.method_name == self.can_ir.times_ident)
+                "*"
+            else if (data.method_name == self.can_ir.div_ident)
+                "/"
+            else if (data.method_name == self.can_ir.div_trunc_ident)
+                "//"
             else
                 unreachable;
 
@@ -1738,8 +1744,14 @@ pub const ReportBuilder = struct {
                         "+"
                     else if (data.method_name == self.can_ir.minus_ident)
                         "-"
+                    else if (data.method_name == self.can_ir.times_ident)
+                        "*"
+                    else if (data.method_name == self.can_ir.div_ident)
+                        "/"
+                    else if (data.method_name == self.can_ir.div_trunc_ident)
+                        "//"
                     else
-                        "?";
+                        unreachable;
 
                     try report.document.addReflowingText("The ");
                     try report.document.addAnnotated(operator_symbol, .emphasized);
@@ -1759,8 +1771,14 @@ pub const ReportBuilder = struct {
                         "+"
                     else if (data.method_name == self.can_ir.minus_ident)
                         "-"
+                    else if (data.method_name == self.can_ir.times_ident)
+                        "*"
+                    else if (data.method_name == self.can_ir.div_ident)
+                        "/"
+                    else if (data.method_name == self.can_ir.div_trunc_ident)
+                        "//"
                     else
-                        "?";
+                        unreachable;
 
                     try report.document.addReflowingText(" The ");
                     try report.document.addAnnotated(operator_symbol, .emphasized);
