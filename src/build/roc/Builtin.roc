@@ -4,6 +4,8 @@ Builtin := [].{
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
+
+		concat : Str, Str -> Str
 	}
 
 	List := [ProvidedByCompiler].{

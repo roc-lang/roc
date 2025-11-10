@@ -1821,6 +1821,15 @@ test "Str.is_empty works as low-level builtin associated item" {
     try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
 }
 
+test "List.fold works as builtin associated item" {
+    const source =
+        \\Test := [].{}
+        \\
+        \\x = List.fold(["a", "b", "c"], "", |acc, item| Str.concat(acc, item))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Str");
+}
+
 test "associated item: type annotation followed by body should not create duplicate definition" {
     const source =
         \\Test := [].{
