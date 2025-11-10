@@ -68,8 +68,6 @@ import_mapping: @import("types").import_mapping.ImportMapping,
 unify_scratch: unifier.Scratch,
 /// reusable scratch arrays used in occurs check
 occurs_scratch: occurs.Scratch,
-/// free vars collected when generation types from annotation
-anno_free_vars: base.Scratch(FreeVar),
 /// free vars collected when generation types from type decls
 decl_free_vars: base.Scratch(FreeVar),
 /// annos we've already seen when generation a type from an annotation
@@ -160,7 +158,6 @@ pub fn init(
         .import_mapping = import_mapping,
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
         .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
         .seen_annos = std.AutoHashMap(CIR.TypeAnno.Idx, Var).init(gpa),
         .env_pool = try EnvPool.init(gpa),
@@ -187,7 +184,6 @@ pub fn deinit(self: *Self) void {
     self.import_mapping.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.anno_free_vars.deinit();
     self.decl_free_vars.deinit();
     self.seen_annos.deinit();
     self.env_pool.deinit();
@@ -801,29 +797,38 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Check the pattern
         try self.checkPattern(def.pattern, env, .no_expectation);
 
-        // Handle if there's an annotation associated with this def
-        if (def.annotation) |annotation_idx| {
-            // Generate the annotation type
-            self.anno_free_vars.items.clearRetainingCapacity();
-            try self.generateAnnotationType(annotation_idx, env);
-            const annotation_var = ModuleEnv.varFrom(annotation_idx);
+        // Create placeholder for the annotation, if it exists
+        var mb_instantiated_anno_var: ?Var = null;
 
-            // TODO: If we instantiate here, then var lookups break. But if we don't
-            // then the type anno gets corrupted if we have an error in the body
-            // const instantiated_anno_var = try self.instantiateVarPreserveRigids(
-            //     annotation_var,
-            //     rank,
-            //     .use_last_var,
-            // );
+        // Check the annotation, if it exists
+        const expectation = blk: {
+            if (def.annotation) |annotation_idx| {
+                // Generate the annotation type var in-place
+                try self.generateAnnotationType(annotation_idx, env);
+                const annotation_var = ModuleEnv.varFrom(annotation_idx);
 
-            // Infer types for the body, checking against the instantaited annotation
-            _ = try self.checkExpr(def.expr, env, .{
-                .expected = .{ .var_ = annotation_var, .from_annotation = true },
-            });
-        } else {
-            // Check the expr
-            _ = try self.checkExpr(def.expr, env, .no_expectation);
-        }
+                // Here we copy the annotation before we unify against it
+                //
+                // This is so if there's an error in the expr/ptrn, we can preserve
+                // the annotation so other places that reference it still get the
+                // type of the annotation.
+                mb_instantiated_anno_var = try self.instantiateVarPreserveRigids(
+                    annotation_var,
+                    env,
+                    .use_last_var,
+                );
+
+                // Return the expectation
+                break :blk Expected{
+                    .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                };
+            } else {
+                break :blk Expected.no_expectation;
+            }
+        };
+
+        // Infer types for the body, checking against the instantaited annotation
+        _ = try self.checkExpr(def.expr, env, expectation);
 
         // Now that we are existing the scope, we must generalize then pop this rank
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -831,8 +836,17 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(env);
 
-        // Check that the ptrn and the expr match
-        _ = try self.unify(ptrn_var, expr_var, env);
+        if (mb_instantiated_anno_var != null and
+            self.types.resolveVar(expr_var).desc.content == .err)
+        {
+            // If there was an annotation AND the expr errored, then unify the
+            // ptrn against the annotation
+            const instantiated_anno_var = mb_instantiated_anno_var.?;
+            _ = try self.unify(ptrn_var, instantiated_anno_var, env);
+        } else {
+            // Otherwise, unify the ptrn and expr
+            _ = try self.unify(ptrn_var, expr_var, env);
+        }
 
         // Check that the def and ptrn match
         _ = try self.unify(def_var, ptrn_var, env);
@@ -2594,9 +2608,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // block //
         .e_block => |block| {
-            const anno_free_vars_top = self.anno_free_vars.top();
-            defer self.anno_free_vars.clearFrom(anno_free_vars_top);
-
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             does_fx = try self.checkBlockStatements(statements, env, expr_region) or does_fx;
