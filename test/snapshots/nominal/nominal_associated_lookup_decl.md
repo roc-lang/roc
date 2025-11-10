@@ -13,20 +13,9 @@ useBar : U64
 useBar = Foo.bar
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_lookup_decl.md:2:5:2:8
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Foo.bar` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.bar` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_lookup_decl.md:2:5:2:8:**
-```roc
-    bar = 42
-```
-    ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

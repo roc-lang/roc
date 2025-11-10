@@ -8,20 +8,9 @@ type=file:Foo.roc
 Foo := [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_type_with_associated_single_statement.md:1:20:1:21
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Foo.x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.x` to suppress this warning.
-The unused variable is declared here:
-**nominal_type_with_associated_single_statement.md:1:20:1:21:**
-```roc
-Foo := [A, B, C].{ x = 5 }
-```
-                   ^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,CloseCurly,

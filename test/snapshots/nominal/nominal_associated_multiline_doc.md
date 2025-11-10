@@ -17,20 +17,9 @@ Foo := [A, B].{
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_multiline_doc.md:9:5:9:17
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Foo.defaultValue` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.defaultValue` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_multiline_doc.md:9:5:9:17:**
-```roc
-    defaultValue = 42
-```
-    ^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,

@@ -4018,9 +4018,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
             };
 
-            // Get some data about the nominal type
+            // Get the region for error reporting
             const region = self.getRegionAt(deferred_constraint.var_);
-            const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -4035,28 +4034,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // Czer creates this as `TypeName.method_name`
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
 
-                // Calculate the name of the static dispatch function
-                //
-                // TODO: This works for top-level types, but not for deeply
-                // nested types like: MyModule.A.B.C.my_func
-                self.static_dispatch_method_name_buf.clearRetainingCapacity();
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}.{s}",
-                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
-                    );
-                }
-                const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
-
-                // Get the ident of this method in the original env
-                const ident_in_original_env = original_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
+                // Look up the method by its unqualified name
+                // Associated items are now registered with unqualified names only
+                // (e.g., "to_str" instead of "Test.to_str")
+                const ident_in_original_env = original_env.getIdentStoreConst().findByString(constraint_fn_name_bytes) orelse {
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,

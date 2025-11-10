@@ -26,43 +26,9 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-MISSING METHOD - Basic.md:6:20:6:33
-MISSING METHOD - Basic.md:10:15:10:25
-MISSING METHOD - Basic.md:13:15:13:26
+NIL
 # PROBLEMS
-**MISSING METHOD**
-The **Basic** type does not have a **to_str** method:
-**Basic.md:6:20:6:33:**
-```roc
-  to_str2 = |test| test.to_str()
-```
-                   ^^^^^^^^^^^^^
-
-
-**Hint:** Did you forget to define **to_str** in the type's method block?
-
-**MISSING METHOD**
-The **Basic** type does not have a **to_str** method:
-**Basic.md:10:15:10:25:**
-```roc
-helper1 = |x| x.to_str()
-```
-              ^^^^^^^^^^
-
-
-**Hint:** Did you forget to define **to_str** in the type's method block?
-
-**MISSING METHOD**
-The **Basic** type does not have a **to_str2** method:
-**Basic.md:13:15:13:26:**
-```roc
-helper2 = |x| x.to_str2()
-```
-              ^^^^^^^^^^^
-
-
-**Hint:** Did you forget to define **to_str2** in the type's method block?
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -306,19 +272,19 @@ main = (helper1(val), helper2(val))
 (inferred-types
 	(defs
 		(patt (type "Basic -> Str"))
-		(patt (type "Basic -> Error"))
+		(patt (type "Basic -> Str"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
-		(patt (type "(Error, Error)")))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
 		(expr (type "Basic -> Str"))
-		(expr (type "Basic -> Error"))
+		(expr (type "Basic -> Str"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "(Str, Str)"))))
 ~~~

@@ -46,32 +46,9 @@ func = {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - Container.md:13:3:13:9
-MISSING METHOD - Container.md:33:13:34:20
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Container.get_or` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Container.get_or` to suppress this warning.
-The unused variable is declared here:
-**Container.md:13:3:13:9:**
-```roc
-  get_or = |container, default| {
-```
-  ^^^^^^
-
-
-**MISSING METHOD**
-The **Container(Num(_size))** type does not have a **map** method:
-**Container.md:33:13:34:20:**
-```roc
-  chained = num_container
-    .map(|x| x + 1)
-```
-
-
-**Hint:** Did you forget to define **map** in the type's method block?
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -459,7 +436,7 @@ func = {
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
 		(patt (type "[Value(c), Empty]_others, c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "_c")))
+		(patt (type "Num(_size)")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -469,5 +446,5 @@ func = {
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
 		(expr (type "[Value(c), Empty]_others, c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "_c"))))
+		(expr (type "Num(_size)"))))
 ~~~

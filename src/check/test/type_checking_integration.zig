@@ -1371,7 +1371,7 @@ test "check type - static dispatch - polymorphic type" {
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "Test.Container.map" } },
+        .{ .pass = .{ .def = "Container.map" } },
         "Container(a), (a -> b) -> Container(b)",
     );
 }
@@ -1392,7 +1392,7 @@ test "check type - static dispatch - polymorphic type 2" {
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "Test.Container.map" } },
+        .{ .pass = .{ .def = "Container.map" } },
         "Container(a), (a -> b) -> Container(b)",
     );
 }
@@ -1414,7 +1414,7 @@ test "check type - static dispatch - polymorphic type 3" {
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "Test.Container.map" } },
+        .{ .pass = .{ .def = "Container.map" } },
         "Container(a), (a -> b) -> Container(b)",
     );
 }

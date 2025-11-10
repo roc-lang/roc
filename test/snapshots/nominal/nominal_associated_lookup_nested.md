@@ -18,33 +18,9 @@ myNum : U64
 myNum = Foo.Bar.baz
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_lookup_nested.md:3:9:3:12
-UNUSED VARIABLE - nominal_associated_lookup_nested.md:3:9:3:12
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Bar.baz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Bar.baz` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_lookup_nested.md:3:9:3:12:**
-```roc
-        baz = 5
-```
-        ^^^
-
-
-**UNUSED VARIABLE**
-Variable `Bar.baz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Bar.baz` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_lookup_nested.md:3:9:3:12:**
-```roc
-        baz = 5
-```
-        ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

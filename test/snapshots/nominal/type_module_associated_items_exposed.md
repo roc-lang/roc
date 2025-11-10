@@ -14,46 +14,9 @@ Foo := [Blah].{
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - type_module_associated_items_exposed.md:3:9:3:12
-UNUSED VARIABLE - type_module_associated_items_exposed.md:3:9:3:12
-UNUSED VARIABLE - type_module_associated_items_exposed.md:6:5:6:10
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Bar.baz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Bar.baz` to suppress this warning.
-The unused variable is declared here:
-**type_module_associated_items_exposed.md:3:9:3:12:**
-```roc
-        baz = {}
-```
-        ^^^
-
-
-**UNUSED VARIABLE**
-Variable `Bar.baz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Bar.baz` to suppress this warning.
-The unused variable is declared here:
-**type_module_associated_items_exposed.md:3:9:3:12:**
-```roc
-        baz = {}
-```
-        ^^^
-
-
-**UNUSED VARIABLE**
-Variable `Foo.stuff` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.stuff` to suppress this warning.
-The unused variable is declared here:
-**type_module_associated_items_exposed.md:6:5:6:10:**
-```roc
-    stuff = {}
-```
-    ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

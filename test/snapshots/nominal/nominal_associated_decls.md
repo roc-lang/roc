@@ -13,46 +13,9 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_decls.md:3:9:3:12
-UNUSED VARIABLE - nominal_associated_decls.md:3:9:3:12
-UNUSED VARIABLE - nominal_associated_decls.md:5:5:5:9
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Bar.baz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Bar.baz` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_decls.md:3:9:3:12:**
-```roc
-        baz = 5
-```
-        ^^^
-
-
-**UNUSED VARIABLE**
-Variable `Bar.baz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Bar.baz` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_decls.md:3:9:3:12:**
-```roc
-        baz = 5
-```
-        ^^^
-
-
-**UNUSED VARIABLE**
-Variable `Foo.blah` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.blah` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_decls.md:5:5:5:9:**
-```roc
-    blah = 6
-```
-    ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

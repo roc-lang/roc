@@ -44,21 +44,23 @@ main = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - Adv.md:17:13:17:32
+TYPE MISMATCH - Adv.md:17:13:17:32
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
-MISSING METHOD - Adv.md:35:13:35:36
 # PROBLEMS
-**MISSING METHOD**
-The **Adv** type does not have a **update_str** method:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **Adv.md:17:13:17:32:**
 ```roc
 	next_val = val.update_str(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
+It has the type:
+    _Adv, Num(_size) -> _ret_
 
-**Hint:** Did you forget to define **update_str** in the type's method block?
+But I expected it to be:
+    _Adv, Str -> Adv_
 
 **MISSING METHOD**
 The **Adv** type does not have a **update_strr** method:
@@ -83,17 +85,6 @@ This type doesn't support methods:
     _Str_
 
 
-
-**MISSING METHOD**
-The **Adv** type does not have a **update_str** method:
-**Adv.md:35:13:35:36:**
-```roc
-	next_val = val.update_str("world").update_u64(20)
-```
-	           ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**Hint:** Did you forget to define **update_str** in the type's method block?
 
 # TOKENS
 ~~~zig

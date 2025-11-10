@@ -8551,8 +8551,23 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
 
         if (node.tag == .pattern_identifier) {
             const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
+
+            // Check if the pattern's identifier (or its unqualified form) is exposed
             if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
                 continue;
+            }
+
+            // For qualified identifiers like "Test.to_str", also check the unqualified part "to_str"
+            const assign_ident_text = self.env.getIdent(assign_ident);
+            if (std.mem.lastIndexOfScalar(u8, assign_ident_text, '.')) |last_dot_idx| {
+                // Extract the unqualified part after the last dot
+                const unqualified_text = assign_ident_text[last_dot_idx + 1 ..];
+                const unqualified_ident = self.env.getIdentStore().findByString(unqualified_text);
+                if (unqualified_ident) |unqual_idx| {
+                    if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(unqual_idx))) {
+                        continue;
+                    }
+                }
             }
         }
 
