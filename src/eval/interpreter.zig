@@ -2231,15 +2231,13 @@ pub const Interpreter = struct {
             },
             .list_concat => {
                 // List.concat : List(a), List(a) -> List(a)
-                // Args: List(a), List(a)
-                // Returns: List(a) (concatenated list)
-                std.debug.assert(args.len == 2); // low-level .list_concat expects 2 arguments
+                std.debug.assert(args.len == 2);
 
                 const list_a_arg = args[0];
                 const list_b_arg = args[1];
 
-                std.debug.assert(list_a_arg.ptr != null); // low-level .list_concat expects non-null list pointer
-                std.debug.assert(list_b_arg.ptr != null); // low-level .list_concat expects non-null list pointer
+                std.debug.assert(list_a_arg.ptr != null);
+                std.debug.assert(list_b_arg.ptr != null);
 
                 // Extract element layout from List(a)
                 std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
