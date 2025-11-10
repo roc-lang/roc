@@ -954,7 +954,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             // Format the message to match origin/main
             try report.document.addText("The type ");
             try report.document.addInlineCode(type_name);
-            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addReflowingText(" is not exposed by the module ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(".");
             try report.document.addLineBreak();
@@ -981,7 +981,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             // Format the message to match origin/main
             try report.document.addText("The value ");
             try report.document.addInlineCode(self.getIdent(data.value_name));
-            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addReflowingText(" is not exposed by the module ");
             try report.document.addInlineCode(self.getIdent(data.module_name));
             try report.document.addReflowingText(".");
             try report.document.addLineBreak();
