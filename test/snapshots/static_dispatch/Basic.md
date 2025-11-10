@@ -26,36 +26,10 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-UNUSED VARIABLE - Basic.md:3:3:3:9
-UNUSED VARIABLE - Basic.md:6:3:6:10
 MISSING METHOD - Basic.md:6:20:6:33
 MISSING METHOD - Basic.md:10:15:10:25
 MISSING METHOD - Basic.md:13:15:13:26
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Basic.to_str` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Basic.to_str` to suppress this warning.
-The unused variable is declared here:
-**Basic.md:3:3:3:9:**
-```roc
-  to_str = |Basic.Val(s)| s
-```
-  ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `Basic.to_str2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Basic.to_str2` to suppress this warning.
-The unused variable is declared here:
-**Basic.md:6:3:6:10:**
-```roc
-  to_str2 = |test| test.to_str()
-```
-  ^^^^^^^
-
-
 **MISSING METHOD**
 The **Basic** type does not have a **to_str** method:
 **Basic.md:6:20:6:33:**

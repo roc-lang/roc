@@ -19,20 +19,9 @@ external : Foo.Baz
 external = Foo.defaultBaz
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_alias_within_block.md:8:5:8:15
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Foo.defaultBaz` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.defaultBaz` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_alias_within_block.md:8:5:8:15:**
-```roc
-    defaultBaz = Foo.Bar.X
-```
-    ^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

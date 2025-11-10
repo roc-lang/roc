@@ -121,25 +121,11 @@ main = {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - Container.md:5:3:5:6
 UNUSED VARIABLE - Container.md:13:3:13:9
-UNUSED VARIABLE - Container.md:22:3:22:11
 MISSING METHOD - Container.md:93:16:93:44
 MISSING METHOD - Container.md:94:17:94:41
 MISSING METHOD - Container.md:97:13:98:20
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Container.map` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Container.map` to suppress this warning.
-The unused variable is declared here:
-**Container.md:5:3:5:6:**
-```roc
-  map = |container, f| {
-```
-  ^^^
-
-
 **UNUSED VARIABLE**
 Variable `Container.get_or` is not used anywhere in your code.
 
@@ -150,18 +136,6 @@ The unused variable is declared here:
   get_or = |container, default| {
 ```
   ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `Container.flat_map` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Container.flat_map` to suppress this warning.
-The unused variable is declared here:
-**Container.md:22:3:22:11:**
-```roc
-  flat_map = |container, f| {
-```
-  ^^^^^^^^
 
 
 **MISSING METHOD**

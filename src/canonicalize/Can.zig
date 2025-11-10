@@ -8738,6 +8738,15 @@ fn updatePlaceholder(
     if (builtin.mode == .Debug) {
         std.debug.assert(self.isPlaceholder(ident_idx));
     }
+
+    // Mark the old placeholder pattern as "used" to prevent unused variable warnings
+    // When anno+decl pairs are merged, the annotation's placeholder pattern gets replaced
+    // with the decl's pattern. We need to mark the old pattern as used so it doesn't
+    // trigger an unused variable diagnostic.
+    if (scope.idents.get(ident_idx)) |old_pattern_idx| {
+        try self.used_patterns.put(self.env.gpa, old_pattern_idx, {});
+    }
+
     // Remove from placeholder tracking since it's now a real definition
     if (self.placeholder_idents.count() > 0) {
         _ = self.placeholder_idents.remove(ident_idx);

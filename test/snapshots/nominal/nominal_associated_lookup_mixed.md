@@ -22,7 +22,6 @@ result = Foo.transform(Foo.defaultBar)
 ~~~
 # EXPECTED
 UNUSED VARIABLE - nominal_associated_lookup_mixed.md:4:5:4:15
-UNUSED VARIABLE - nominal_associated_lookup_mixed.md:7:5:7:14
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `Foo.defaultBar` is not used anywhere in your code.
@@ -34,18 +33,6 @@ The unused variable is declared here:
     defaultBar = Bar.A
 ```
     ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `Foo.transform` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Foo.transform` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_lookup_mixed.md:7:5:7:14:**
-```roc
-    transform = |x| x
-```
-    ^^^^^^^^^
 
 
 # TOKENS

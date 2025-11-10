@@ -45,36 +45,10 @@ main : (Str, Str, Str)
 main = (directCall, result1, extract(result2))
 ~~~
 # EXPECTED
-UNUSED VARIABLE - MethodDispatch.md:3:2:3:11
-UNUSED VARIABLE - MethodDispatch.md:5:2:5:11
 MISSING METHOD - MethodDispatch.md:25:14:25:37
 MISSING METHOD - MethodDispatch.md:10:15:10:28
 MISSING METHOD - MethodDispatch.md:14:18:14:33
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `Container.get_value` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Container.get_value` to suppress this warning.
-The unused variable is declared here:
-**MethodDispatch.md:3:2:3:11:**
-```roc
-	get_value = |Container.Box(s)| s
-```
-	^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `Container.transform` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_Container.transform` to suppress this warning.
-The unused variable is declared here:
-**MethodDispatch.md:5:2:5:11:**
-```roc
-	transform = |Container.Box(s), fn| Container.Box(fn(s))
-```
-	^^^^^^^^^
-
-
 **MISSING METHOD**
 The **Container** type does not have a **get_value** method:
 **MethodDispatch.md:25:14:25:37:**
