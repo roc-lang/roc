@@ -982,10 +982,10 @@ pub const StaticDispatchConstraint = struct {
     origin: Origin,
 
     /// Tracks where a static dispatch constraint originated from
-    pub const Origin = enum(u8) {
-        binop_plus,   // From + operator desugaring
-        method_call,  // From .method() syntax
-        where_clause, // From where clause in type annotation
+    pub const Origin = enum(u2) {
+        desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
+        method_call,     // From .method() syntax
+        where_clause,    // From where clause in type annotation
     };
 
     /// A safe list of static dispatch constraints

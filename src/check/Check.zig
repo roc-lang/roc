@@ -3656,7 +3656,7 @@ fn checkBinopExpr(
                 const constraint = StaticDispatchConstraint{
                     .fn_name = method_name,
                     .fn_var = constraint_fn_var,
-                    .origin = .binop_plus,
+                    .origin = .desugared_binop,
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
