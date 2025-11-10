@@ -117,10 +117,10 @@ fn scanFileForWrappers(
     defer tree.deinit(allocator);
 
     const tags = tree.nodes.items(.tag);
-    const datas = tree.nodes.items(.data);
+    const all_data = tree.nodes.items(.data);
 
     var unnamed: usize = 0;
-    for (tags, datas) |tag, data| {
+    for (tags, all_data) |tag, data| {
         if (tag == .test_decl and data.opt_token_and_node[0] == .none) {
             unnamed += 1;
         }
