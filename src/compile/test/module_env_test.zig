@@ -119,7 +119,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 10 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div, div_trunc
+    // ModuleEnv.init() also interns well-known identifiers for type checking
     try testing.expectEqual(@as(u32, 13), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));

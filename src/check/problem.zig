@@ -301,6 +301,16 @@ pub const ReportBuilder = struct {
         self.bytes_buf.deinit();
     }
 
+    /// Get the operator symbol for a desugared binary operator method name
+    fn getOperatorSymbol(self: *const Self, method_name: Ident.Idx) []const u8 {
+        if (method_name == self.can_ir.plus_ident) return "+";
+        if (method_name == self.can_ir.minus_ident) return "-";
+        if (method_name == self.can_ir.times_ident) return "*";
+        if (method_name == self.can_ir.div_ident) return "/";
+        if (method_name == self.can_ir.div_trunc_ident) return "//";
+        unreachable;
+    }
+
     /// Build a report for a problem
     pub fn build(
         self: *Self,
@@ -1692,19 +1702,7 @@ pub const ReportBuilder = struct {
 
         // Check if this is a desugared binary operator
         if (data.origin == .desugared_binop) {
-            // Determine which operator symbol to show based on the method name
-            const operator_symbol = if (data.method_name == self.can_ir.plus_ident)
-                "+"
-            else if (data.method_name == self.can_ir.minus_ident)
-                "-"
-            else if (data.method_name == self.can_ir.times_ident)
-                "*"
-            else if (data.method_name == self.can_ir.div_ident)
-                "/"
-            else if (data.method_name == self.can_ir.div_trunc_ident)
-                "//"
-            else
-                unreachable;
+            const operator_symbol = self.getOperatorSymbol(data.method_name);
 
             try report.document.addReflowingText("The value before this ");
             try report.document.addAnnotated(operator_symbol, .emphasized);
@@ -1739,19 +1737,7 @@ pub const ReportBuilder = struct {
         switch (data.dispatcher_type) {
             .nominal => {
                 if (data.origin == .desugared_binop) {
-                    // Determine which operator symbol and method name based on the method
-                    const operator_symbol = if (data.method_name == self.can_ir.plus_ident)
-                        "+"
-                    else if (data.method_name == self.can_ir.minus_ident)
-                        "-"
-                    else if (data.method_name == self.can_ir.times_ident)
-                        "*"
-                    else if (data.method_name == self.can_ir.div_ident)
-                        "/"
-                    else if (data.method_name == self.can_ir.div_trunc_ident)
-                        "//"
-                    else
-                        unreachable;
+                    const operator_symbol = self.getOperatorSymbol(data.method_name);
 
                     try report.document.addReflowingText("The ");
                     try report.document.addAnnotated(operator_symbol, .emphasized);
@@ -1766,19 +1752,7 @@ pub const ReportBuilder = struct {
             },
             .rigid => {
                 if (data.origin == .desugared_binop) {
-                    // Determine which operator symbol and method name based on the method
-                    const operator_symbol = if (data.method_name == self.can_ir.plus_ident)
-                        "+"
-                    else if (data.method_name == self.can_ir.minus_ident)
-                        "-"
-                    else if (data.method_name == self.can_ir.times_ident)
-                        "*"
-                    else if (data.method_name == self.can_ir.div_ident)
-                        "/"
-                    else if (data.method_name == self.can_ir.div_trunc_ident)
-                        "//"
-                    else
-                        unreachable;
+                    const operator_symbol = self.getOperatorSymbol(data.method_name);
 
                     try report.document.addReflowingText(" The ");
                     try report.document.addAnnotated(operator_symbol, .emphasized);
