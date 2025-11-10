@@ -56,6 +56,8 @@ var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
+/// Tracks which pattern indices are from exposed associated items (should not be checked for unused)
+exposed_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of module name identifiers to their type information for import validation
 module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Map from module name string to Import.Idx for tracking unique imports
@@ -185,6 +187,7 @@ pub fn deinit(
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
+    self.exposed_patterns.deinit(gpa);
     self.scratch_vars.deinit();
     self.scratch_idents.deinit();
     self.scratch_type_var_validation.deinit();
@@ -215,6 +218,7 @@ pub fn init(
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
+        .exposed_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .module_envs = module_envs,
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
@@ -1174,6 +1178,9 @@ fn processAssociatedItemsFirstPass(
                         };
                         const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
 
+                        // Mark this pattern as exposed (associated item should not be checked for unused)
+                        try self.exposed_patterns.put(self.env.gpa, placeholder_pattern_idx, {});
+
                         // Also compute type-qualified name (e.g., "List.map")
                         // Re-fetch identifiers since insertQualifiedIdent may have reallocated the identifier table
                         const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), self.env.getIdent(decl_ident));
@@ -1205,6 +1212,9 @@ fn processAssociatedItemsFirstPass(
                         },
                     };
                     const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+
+                    // Mark this pattern as exposed (associated item should not be checked for unused)
+                    try self.exposed_patterns.put(self.env.gpa, placeholder_pattern_idx, {});
 
                     // Also compute type-qualified name (e.g., "List.is_empty")
                     // Re-fetch anno_text since insertQualifiedIdent may have reallocated the identifier table
@@ -1444,6 +1454,10 @@ pub fn canonicalizeFile(
                     if (self.exposed_ident_texts.contains(ident_text)) {
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                        // Mark the pattern as exposed (should not be checked for unused)
+                        const def_cir = self.env.store.getDef(def_idx);
+                        try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                     }
                 }
             }
@@ -1709,6 +1723,10 @@ pub fn canonicalizeFile(
                                 if (self.exposed_ident_texts.contains(ident_text)) {
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                                    // Mark the pattern as exposed (should not be checked for unused)
+                                    const def_cir = self.env.store.getDef(def_idx);
+                                    try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                                 }
                             }
                         },
@@ -1723,6 +1741,10 @@ pub fn canonicalizeFile(
                             if (self.exposed_ident_texts.contains(ident_text)) {
                                 const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                 try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                                // Mark the pattern as exposed (should not be checked for unused)
+                                const def_cir = self.env.store.getDef(def_idx);
+                                try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                             }
                         },
                     }
@@ -1740,6 +1762,10 @@ pub fn canonicalizeFile(
                     if (self.exposed_ident_texts.contains(ident_text)) {
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                        // Mark the pattern as exposed (should not be checked for unused)
+                        const def_cir = self.env.store.getDef(def_idx);
+                        try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                     }
                 }
             },
@@ -8528,6 +8554,11 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
             continue;
         }
 
+        // Skip if this pattern is exposed (from associated block or exposes clause)
+        if (self.exposed_patterns.contains(pattern_idx)) {
+            continue;
+        }
+
         // Skip if this is an ignored variable (starts with _)
         if (identIsIgnored(ident_idx)) {
             continue;
@@ -8536,39 +8567,6 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         // Skip if this identifier is exposed (implicitly used in type modules)
         if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx))) {
             continue;
-        }
-
-        // Get the pattern to check if it has a different ident than the scope key
-        // For pattern_identifier nodes, check if the qualified ident is exposed
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-
-        // Skip if the pattern doesn't have a corresponding node (e.g., in tests with fake indices)
-        if (@intFromEnum(node_idx) >= self.env.store.nodes.len()) {
-            continue;
-        }
-
-        const node = self.env.store.nodes.get(node_idx);
-
-        if (node.tag == .pattern_identifier) {
-            const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
-
-            // Check if the pattern's identifier (or its unqualified form) is exposed
-            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
-                continue;
-            }
-
-            // For qualified identifiers like "Test.to_str", also check the unqualified part "to_str"
-            const assign_ident_text = self.env.getIdent(assign_ident);
-            if (std.mem.lastIndexOfScalar(u8, assign_ident_text, '.')) |last_dot_idx| {
-                // Extract the unqualified part after the last dot
-                const unqualified_text = assign_ident_text[last_dot_idx + 1 ..];
-                const unqualified_ident = self.env.getIdentStore().findByString(unqualified_text);
-                if (unqualified_ident) |unqual_idx| {
-                    if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(unqual_idx))) {
-                        continue;
-                    }
-                }
-            }
         }
 
         // Get the region for this pattern to provide good error location
