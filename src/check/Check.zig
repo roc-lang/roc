@@ -3706,7 +3706,6 @@ fn checkBinopExpr(
 
                 // The return type is unknown, so create a fresh variable
                 const ret_var = try self.fresh(env, expr_region);
-                try env.var_pool.addVarToRank(ret_var, env.rank());
 
                 // Create the constraint function type
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
@@ -3714,7 +3713,6 @@ fn checkBinopExpr(
                     .ret = ret_var,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
-                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
                 // Create the static dispatch constraint
                 const constraint = StaticDispatchConstraint{
@@ -3730,7 +3728,6 @@ fn checkBinopExpr(
                     env,
                     expr_region,
                 );
-                try env.var_pool.addVarToRank(constrained_var, env.rank());
 
                 _ = try self.unify(constrained_var, lhs_var, env);
 
