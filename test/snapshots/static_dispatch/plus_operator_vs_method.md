@@ -27,7 +27,7 @@ MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 MISSING METHOD - plus_operator_vs_method.md:15:11:15:20
 # PROBLEMS
 **MISSING METHOD**
-The value before this **+** operator has a type with no **plus** method:
+The value before this **+** operator has the type **MyType**, which has no **plus** method:
 **plus_operator_vs_method.md:11:11:11:16:**
 ```roc
 result1 = a + b
@@ -38,7 +38,7 @@ result1 = a + b
 **Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **MISSING METHOD**
-The **MyType** type does not have a **plus** method:
+This **plus** method is being called on the type **MyType**, which has no method with that name:
 **plus_operator_vs_method.md:15:11:15:20:**
 ```roc
 result2 = a.plus(b)

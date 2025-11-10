@@ -1696,15 +1696,17 @@ pub const ReportBuilder = struct {
         if (is_plus_operator) {
             try report.document.addReflowingText("The value before this ");
             try report.document.addAnnotated("+", .emphasized);
-            try report.document.addReflowingText(" operator has a type with no ");
+            try report.document.addReflowingText(" operator has the type ");
+            try report.document.addAnnotated(snapshot_str, .emphasized);
+            try report.document.addReflowingText(", which has no ");
             try report.document.addAnnotated(method_name_str, .emphasized);
             try report.document.addReflowingText(" method:");
         } else {
-            try report.document.addReflowingText("The ");
-            try report.document.addAnnotated(snapshot_str, .emphasized);
-            try report.document.addReflowingText(" type does not have a ");
+            try report.document.addReflowingText("This ");
             try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(" method:");
+            try report.document.addReflowingText(" method is being called on the type ");
+            try report.document.addAnnotated(snapshot_str, .emphasized);
+            try report.document.addReflowingText(", which has no method with that name:");
         }
         try report.document.addLineBreak();
 

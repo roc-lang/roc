@@ -63,7 +63,7 @@ But I expected it to be:
     _Adv, Str -> Adv_
 
 **MISSING METHOD**
-The **Adv** type does not have a **update_strr** method:
+This **update_strr** method is being called on the type **Adv**, which has no method with that name:
 **Adv.md:23:13:23:33:**
 ```roc
 	next_val = val.update_strr(100)
