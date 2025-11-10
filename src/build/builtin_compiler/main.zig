@@ -267,7 +267,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
+    // Numeric arithmetic operations (all numeric types have plus, minus, times, div, rem)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
 
@@ -289,15 +289,15 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             try low_level_map.put(ident, .num_times);
         }
 
-        // div_by
-        const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
-        if (env.common.findIdent(div_by)) |ident| {
+        // div
+        const div = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div", .{num_type});
+        if (env.common.findIdent(div)) |ident| {
             try low_level_map.put(ident, .num_div_by);
         }
 
-        // rem_by
-        const rem_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem_by", .{num_type});
-        if (env.common.findIdent(rem_by)) |ident| {
+        // rem
+        const rem = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem", .{num_type});
+        if (env.common.findIdent(rem)) |ident| {
             try low_level_map.put(ident, .num_rem_by);
         }
     }
