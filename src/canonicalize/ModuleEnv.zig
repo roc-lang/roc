@@ -113,7 +113,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.imports.relocate(offset);
-    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
+    self.store.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -121,6 +121,8 @@ pub fn relocate(self: *Self, offset: isize) void {
         const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
         self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
     }
+
+    // Note: gpa allocator must be set by the caller after relocation
 }
 
 /// Initialize the compilation fields in an existing ModuleEnv
@@ -1626,10 +1628,12 @@ pub const Serialized = struct {
         // Deserialize common env first so we can look up identifiers
         const common = self.common.deserialize(offset, source).*;
 
+        const types_result = self.types.deserialize(offset, gpa).*;
+
         env.* = Self{
             .gpa = gpa,
             .common = common,
-            .types = self.types.deserialize(offset, gpa).*,
+            .types = types_result,
             .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
@@ -1715,25 +1719,20 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
-            std.debug.panic(
-                "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
-                .{ cir_nodes, region_nodes },
-            );
+            @panic("Arrays out of sync: cir_nodes != region_nodes");
         }
     }
 }
 
 /// Assert that nodes, regions and types are all in sync
 inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
+    _ = desc;
     if (builtin.mode == .Debug) {
         const idx1_int = @intFromEnum(idx1);
         const idx2_int = @intFromEnum(idx2);
 
         if (idx1_int != idx2_int) {
-            std.debug.panic(
-                "{s} idxs out of sync: {} != {}\n",
-                .{ desc, idx1_int, idx2_int },
-            );
+            @panic("Idxs out of sync");
         }
     }
 }

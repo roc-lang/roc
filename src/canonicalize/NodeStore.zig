@@ -114,6 +114,23 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     };
 }
 
+/// Relocate all pointers in the NodeStore when moved to a different address space
+pub fn relocate(self: *NodeStore, offset: isize) void {
+    // Relocate all sub-structures that contain pointers
+    self.nodes.relocate(offset);
+    self.regions.relocate(offset);
+    self.extra_data.relocate(offset);
+
+    // Relocate scratch pointer if it exists
+    if (self.scratch) |scratch_ptr| {
+        const old_ptr = @intFromPtr(scratch_ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.scratch = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
+
+    // Note: gpa allocator must be set by the caller after relocation
+}
+
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);

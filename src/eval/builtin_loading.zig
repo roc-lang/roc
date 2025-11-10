@@ -1,6 +1,7 @@
 //! Utilities for loading compiled builtin modules
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
@@ -35,7 +36,8 @@ pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !
     @memcpy(aligned_buffer, bin_data);
 
     const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
+    const result = indices_ptr.*;
+    return result;
 }
 
 /// Load a compiled ModuleEnv from embedded binary data
@@ -57,25 +59,34 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
 
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
+    const base_ptr_i64: i64 = @intCast(base_ptr);
 
     // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*;
+    const common = serialized_ptr.common.deserialize(base_ptr_i64, source).*;
+
+    const types = serialized_ptr.types.deserialize(base_ptr_i64, gpa).*;
+
+    const external_decls = serialized_ptr.external_decls.deserialize(base_ptr_i64).*;
+
+    const imports = (try serialized_ptr.imports.deserialize(base_ptr_i64, gpa)).*;
+
+    const store = serialized_ptr.store.deserialize(base_ptr_i64, gpa).*;
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
+        .types = types,
         .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
+        .external_decls = external_decls,
+        .imports = imports,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .store = store,
         .evaluation_order = null,
         // Well-known identifiers for type checking - look them up in the deserialized common env
         // These must exist in the Builtin module which defines them

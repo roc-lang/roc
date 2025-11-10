@@ -1,6 +1,7 @@
 //! Lists that make it easier to avoid incorrect indexing.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -159,7 +160,22 @@ pub fn SafeList(comptime T: type) type {
                     };
                 } else {
                     // Apply the offset to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(self.offset + offset)));
+                    // On 64-bit platforms, use @bitCast to handle negative relocation offsets correctly
+                    // On 32-bit platforms, use @intCast (relocation offsets should fit in 32 bits)
+                    const items_addr = self.offset + offset;
+                    const items_addr_usize = if (@bitSizeOf(usize) == 64)
+                        @as(usize, @bitCast(items_addr))
+                    else
+                        @as(usize, @intCast(items_addr));
+
+                    // Check alignment before creating the pointer
+                    const required_alignment = @alignOf(T);
+                    const misalignment = items_addr_usize % required_alignment;
+                    if (misalignment != 0) {
+                        @panic("SafeList deserialization alignment error");
+                    }
+
+                    const items_ptr: [*]T = @ptrFromInt(items_addr_usize);
 
                     safe_list.* = SafeList(T){
                         .items = .{
@@ -676,7 +692,21 @@ pub fn SafeMultiList(comptime T: type) type {
                 } else {
                     // We need to reconstruct the MultiArrayList from the serialized field arrays
                     // MultiArrayList stores fields separately by type, and we serialized them in field order
-                    const current_ptr = @as([*]u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
+                    // On 64-bit platforms, use @bitCast to handle negative relocation offsets correctly
+                    // On 32-bit platforms, use @intCast (relocation offsets should fit in 32 bits)
+                    const bytes_addr = self.offset + offset;
+                    const current_ptr_addr = if (@bitSizeOf(usize) == 64)
+                        @as(usize, @bitCast(bytes_addr))
+                    else
+                        @as(usize, @intCast(bytes_addr));
+                    const current_ptr = @as([*]u8, @ptrFromInt(current_ptr_addr));
+
+                    // Check alignment before casting
+                    const required_alignment = @alignOf(T);
+                    const misalignment = current_ptr_addr % required_alignment;
+                    if (misalignment != 0) {
+                        @panic("SafeMultiList deserialization alignment error");
+                    }
 
                     // Allocate aligned memory for the MultiArrayList bytes
                     const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));
