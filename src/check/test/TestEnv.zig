@@ -91,6 +91,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent(base.Ident.MINUS_METHOD_NAME) orelse unreachable,
     };
 
     return LoadedModule{

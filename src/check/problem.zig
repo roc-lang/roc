@@ -1690,12 +1690,18 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is the "plus" method (from the + operator)
-        const is_plus_operator = data.origin == .desugared_binop;
+        // Check if this is a desugared binary operator
+        if (data.origin == .desugared_binop) {
+            // Determine which operator symbol to show based on the method name
+            const operator_symbol = if (data.method_name == self.can_ir.plus_ident)
+                "+"
+            else if (data.method_name == self.can_ir.minus_ident)
+                "-"
+            else
+                unreachable;
 
-        if (is_plus_operator) {
             try report.document.addReflowingText("The value before this ");
-            try report.document.addAnnotated("+", .emphasized);
+            try report.document.addAnnotated(operator_symbol, .emphasized);
             try report.document.addReflowingText(" operator has the type ");
             try report.document.addAnnotated(snapshot_str, .emphasized);
             try report.document.addReflowingText(", which has no ");
@@ -1726,11 +1732,19 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("Hint: ", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
-                if (is_plus_operator) {
+                if (data.origin == .desugared_binop) {
+                    // Determine which operator symbol and method name based on the method
+                    const operator_symbol = if (data.method_name == self.can_ir.plus_ident)
+                        "+"
+                    else if (data.method_name == self.can_ir.minus_ident)
+                        "-"
+                    else
+                        "?";
+
                     try report.document.addReflowingText("The ");
-                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addAnnotated(operator_symbol, .emphasized);
                     try report.document.addReflowingText(" operator calls a method named ");
-                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addAnnotated(method_name_str, .emphasized);
                     try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
                 } else {
                     try report.document.addReflowingText("For this to work, the type would need to have a method named ");
@@ -1739,11 +1753,19 @@ pub const ReportBuilder = struct {
                 }
             },
             .rigid => {
-                if (is_plus_operator) {
+                if (data.origin == .desugared_binop) {
+                    // Determine which operator symbol and method name based on the method
+                    const operator_symbol = if (data.method_name == self.can_ir.plus_ident)
+                        "+"
+                    else if (data.method_name == self.can_ir.minus_ident)
+                        "-"
+                    else
+                        "?";
+
                     try report.document.addReflowingText(" The ");
-                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addAnnotated(operator_symbol, .emphasized);
                     try report.document.addReflowingText(" operator requires the type to have a ");
-                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addAnnotated(method_name_str, .emphasized);
                     try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
                 } else {
                     try report.document.addReflowingText(" Did you forget to specify ");

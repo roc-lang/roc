@@ -94,6 +94,8 @@ out_of_range_ident: Ident.Idx,
 builtin_module_ident: Ident.Idx,
 /// Interned identifier for "plus" - used for + operator desugaring
 plus_ident: Ident.Idx,
+/// Interned identifier for "minus" - used for - operator desugaring
+minus_ident: Ident.Idx,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -148,6 +150,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
     const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
+    const minus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.MINUS_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -171,6 +174,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
+        .minus_ident = minus_ident,
     };
 }
 
@@ -1619,6 +1623,7 @@ pub const Serialized = struct {
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
             .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .minus_ident = common.findIdent(Ident.MINUS_METHOD_NAME) orelse unreachable,
         };
 
         return env;
