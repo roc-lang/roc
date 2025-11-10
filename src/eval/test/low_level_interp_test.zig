@@ -60,7 +60,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_module = builtin_module.env,
     };
 
-    var czer = try Can.init(module_env, &parse_ast, null);
+    var czer = try Can.init(module_env, &parse_ast, null, false);
     defer czer.deinit();
 
     try czer.canonicalizeFile();

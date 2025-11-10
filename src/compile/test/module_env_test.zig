@@ -91,7 +91,6 @@ test "ModuleEnv.Serialized roundtrip" {
         .common = common,
         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
         .module_kind = deserialized_ptr.module_kind,
-        .root_module_is_platform = false,
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,

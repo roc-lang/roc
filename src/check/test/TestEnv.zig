@@ -74,7 +74,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind,
-        .root_module_is_platform = false,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -197,7 +196,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    can.* = try Can.init(module_env, parse_ast, &module_envs, false);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -313,7 +312,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    can.* = try Can.init(module_env, parse_ast, &module_envs, false);
     errdefer can.deinit();
 
     try can.canonicalizeFile();

@@ -785,7 +785,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env });
 
     // Create canonicalizer with module_envs_map for qualified name resolution
-    var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);
+    var czer = try Can.init(&original_env, &parse_ast, &module_envs_map, false);
     defer czer.deinit();
 
     // Canonicalize the expression

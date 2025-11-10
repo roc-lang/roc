@@ -553,9 +553,6 @@ pub const PackageEnv = struct {
         // init CIR fields
         try env.initCIRFields(self.gpa, st.name);
 
-        // Set root_module_is_platform based on whether root is a platform
-        env.root_module_is_platform = self.root_is_platform;
-
         try env.common.calcLineStarts(self.gpa);
 
         // replace env - save old source to free it after deinit
@@ -608,7 +605,7 @@ pub const PackageEnv = struct {
             self.builtin_modules.builtin_indices,
         );
 
-        var czer = try Can.init(env, &parse_ast, &module_envs_map);
+        var czer = try Can.init(env, &parse_ast, &module_envs_map, self.root_is_platform);
         try czer.canonicalizeFile();
         czer.deinit();
 

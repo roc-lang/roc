@@ -1222,7 +1222,7 @@ fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8,
     );
 
     // Create canonicalizer with module_envs
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, false);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -1512,11 +1512,8 @@ fn compileModuleToSharedMemory(
     );
 
     // Canonicalize
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, root_module_is_platform);
     defer canonicalizer.deinit();
-
-    // Set root_module_is_platform flag
-    env.root_module_is_platform = root_module_is_platform;
 
     try canonicalizer.canonicalizeFile();
 
@@ -1630,7 +1627,7 @@ fn compileAppModuleToSharedMemory(
     }
 
     // Canonicalize
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, false);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -2714,7 +2711,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     try env.initCIRFields(allocs.gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null, false) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
         return err;
     };

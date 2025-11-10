@@ -77,7 +77,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind,
-        .root_module_is_platform = false,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -325,7 +324,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 4: Canonicalize
-    var can = try Canon.init(cir, &parse_ast, null);
+    var can = try Canon.init(cir, &parse_ast, null, false);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

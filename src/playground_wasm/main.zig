@@ -949,7 +949,6 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .common = common,
                 .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
                 .module_kind = serialized_ptr.module_kind,
-                .root_module_is_platform = false,
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
@@ -1025,7 +1024,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     try module_envs_map.put(str_ident, .{ .env = builtin_module.env });
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
+    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map, false);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

@@ -52,8 +52,9 @@ types: TypeStore,
 
 /// The kind of module (type_module, app, etc.) - set during canonicalization
 module_kind: ModuleKind,
-/// Whether we're currently building platform modules (set to true when processing a platform header)
-root_module_is_platform: bool,
+/// Whether this module encountered any annotation-only definitions during canonicalization
+/// (used for cache key generation when building with/without platform root)
+has_anno_only_defs: bool = false,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -153,7 +154,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .common = common,
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .module_kind = .deprecated_module, // Set during canonicalization
-        .root_module_is_platform = false,
+        .has_anno_only_defs = false,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1528,7 +1529,7 @@ pub const Serialized = struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
-    root_module_is_platform_reserved: u8, // Reserved space for root_module_is_platform field (set during deserialization)
+    has_anno_only_defs: bool, // Whether this module encountered any annotation-only defs during canonicalization
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
     from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
@@ -1562,12 +1563,12 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, module_name_idx_reserved, root_module_is_platform_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
+        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
         // the space needs to be here, but the values will be set separately during deserialization (these are runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
-        self.root_module_is_platform_reserved = 0;
+        self.has_anno_only_defs = env.has_anno_only_defs;
         self.evaluation_order_reserved = 0;
         self.from_int_digits_ident_reserved = 0;
         self.from_dec_digits_ident_reserved = 0;
@@ -1600,7 +1601,7 @@ pub const Serialized = struct {
             .common = common,
             .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
-            .root_module_is_platform = false,
+            .has_anno_only_defs = self.has_anno_only_defs,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,

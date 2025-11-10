@@ -78,6 +78,8 @@ scratch_tags: base.Scratch(types.Tag),
 scratch_free_vars: base.Scratch(Pattern.Idx),
 /// Scratch free variables
 scratch_captures: base.Scratch(Pattern.Idx),
+/// Whether the root module is a platform (determines if Type Module transformations should be applied)
+root_is_platform: bool,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -200,6 +202,7 @@ pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+    root_is_platform: bool,
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -225,6 +228,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
+        .root_is_platform = root_is_platform,
     };
 
     // Top-level scope is not a function boundary
@@ -496,7 +500,7 @@ fn processTypeDeclFirstPass(
             // Extract and expose annotation-only functions, e.g.
             // `Stdout := [].{ line! : Str => {} }`
             // (Only do this when building a platform module as the root module)
-            if (self.env.root_module_is_platform) {
+            if (self.root_is_platform) {
                 if (type_decl.associated) |assoc| {
                     const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
 
@@ -517,6 +521,9 @@ fn processTypeDeclFirstPass(
                                 // Create a definition for this function with e_anno_only expression
                                 const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = func_name_idx } }, base.Region.zero());
                                 const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+
+                                // Track that we encountered annotation-only defs
+                                self.env.has_anno_only_defs = true;
 
                                 const def_idx = try self.env.addDef(.{
                                     .pattern = pattern_idx,
@@ -1280,7 +1287,6 @@ pub fn canonicalizeFile(
         },
         .platform => |h| {
             self.env.module_kind = .platform;
-            self.env.root_module_is_platform = true;
             try self.createExposedScope(h.exposes);
         },
         .hosted => |h| {
@@ -1761,7 +1767,7 @@ pub fn canonicalizeFile(
     // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
     // Only do this when building platform modules (i.e., when root module is a platform)
-    if (self.env.module_kind == .type_module and self.env.root_module_is_platform) {
+    if (self.env.module_kind == .type_module and self.root_is_platform) {
 
         // First, create definitions for Type Module annotations (like `line! : Str => {}`)
         // These annotations are exposed but don't have actual definitions yet
@@ -1795,6 +1801,9 @@ pub fn canonicalizeFile(
 
                 // Create the e_anno_only expression
                 const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+
+                // Track that we encountered annotation-only defs
+                self.env.has_anno_only_defs = true;
 
                 // Create the def (no annotation structure for now - it will be added by type checking)
                 const def_idx = try self.env.addDef(.{

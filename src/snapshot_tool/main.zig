@@ -694,7 +694,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_kind = serialized_ptr.module_kind,
-        .root_module_is_platform = false,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -1254,7 +1253,7 @@ fn processSnapshotContent(
         });
     }
 
-    var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+    var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
     defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
