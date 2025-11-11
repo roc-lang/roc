@@ -979,35 +979,31 @@ fn processAssociatedItemsSecondPass(
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
-                    // Get the type annotation index from the def - this is what has the actual type!
-                    // For anno-only defs, the expr is e_anno_only which doesn't have a type; the type anno has it.
-                    const def_cir = self.env.store.getDef(def_idx);
-                    const annotation_idx = def_cir.annotation.?;
-                    const annotation_cir = self.env.store.getAnnotation(annotation_idx);
-                    const type_anno_node_idx = annotation_cir.anno;
-                    const type_anno_idx_u16: u16 = @intCast(@intFromEnum(type_anno_node_idx));
+                    // Store the DEF index (not the type annotation index) for lookup
+                    // The interpreter needs to find the def, which contains the expression to evaluate
+                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
 
-
-                    // Register this associated item by its unqualified name using the TYPE ANNOTATION index
+                    // Register this associated item by its unqualified name using the DEF index
                     // (e.g., "is_empty" not "Str.is_empty")
-                    try self.env.setExposedNodeIndexById(name_ident, type_anno_idx_u16);
+                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
 
                     // Compute type-qualified name (e.g., "Str.is_empty")
                     const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
 
-                    // Always register by the type-qualified name (e.g., "Str.is_empty") using TYPE ANNOTATION index
+                    // Always register by the type-qualified name (e.g., "Str.is_empty") using DEF index
                     // This is needed so lookups like "Str.is_empty" work from other modules
                     if (type_qualified_idx.idx != name_ident.idx) {
-                        try self.env.setExposedNodeIndexById(type_qualified_idx, type_anno_idx_u16);
+                        try self.env.setExposedNodeIndexById(type_qualified_idx, def_idx_u16);
                     }
 
-                    // Also ALWAYS register by the fully qualified name (e.g., "Builtin.Str.is_empty") using TYPE ANNOTATION index
+                    // Also ALWAYS register by the fully qualified name (e.g., "Builtin.Str.is_empty") using DEF index
                     // This is needed for nested types inside regular modules (not just type modules)
                     if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != name_ident.idx) {
-                        try self.env.setExposedNodeIndexById(qualified_idx, type_anno_idx_u16);
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                     }
 
                     // Make the real pattern available in current scope (replaces placeholder)
+                    const def_cir = self.env.store.getDef(def_idx);
                     const pattern_idx = def_cir.pattern;
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
