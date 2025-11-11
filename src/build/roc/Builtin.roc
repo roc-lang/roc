@@ -26,6 +26,17 @@ Builtin := [].{
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |_, _| []
+
+		fold : List(item), state, (state, item -> state) -> state
+		fold = |list, init, step| {
+			var $state = init
+
+			for item in list {
+				$state = step($state, item)
+			}
+
+			$state
+		}
 	}
 
 	Bool := [True, False].{

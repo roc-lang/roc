@@ -1318,7 +1318,7 @@ pub const Store = struct {
                     // For now, default to I64 for numeric flex vars.
                     break :blk Layout.int(.i64);
                 },
-                .rigid => |_| blk: {
+                .rigid => blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue

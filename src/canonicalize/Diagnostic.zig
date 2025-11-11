@@ -30,9 +30,6 @@ pub const Diagnostic = union(enum) {
     invalid_num_literal: struct {
         region: Region,
     },
-    invalid_single_quote: struct {
-        region: Region,
-    },
     empty_tuple: struct {
         region: Region,
     },
