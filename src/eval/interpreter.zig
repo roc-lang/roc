@@ -570,7 +570,9 @@ pub const Interpreter = struct {
                             if (patt != .assign) return error.NotImplemented;
                             const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
                             var j: usize = self.bindings.items.len;
-                            while (j > original_len) {
+                            // Search through ALL bindings, not just current scope, to support
+                            // reassignments inside nested blocks/loops that modify outer scope variables
+                            while (j > 0) {
                                 j -= 1;
                                 if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
                                     self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
@@ -1815,7 +1817,13 @@ pub const Interpreter = struct {
                     unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                 );
 
-                _ = try self.getRuntimeLayout(call_ret_rt_var);
+                // Resolve return var after unification to follow any substitutions
+                const resolved_call_ret_var = self.runtime_types.resolveVar(call_ret_rt_var).var_;
+                // Try to get layout, but skip if it's still a rigid var (layout will be inferred later)
+                _ = self.getRuntimeLayout(resolved_call_ret_var) catch |err| {
+                    if (err != error.BugUnboxedRigidVar) return err;
+                    // Rigid var - layout will be determined when function returns
+                };
 
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
 
@@ -3695,7 +3703,26 @@ pub const Interpreter = struct {
         var false_idx: ?usize = null;
         var true_idx: ?usize = null;
         for (tags, 0..) |tag, i| {
-            // Use env to look up tag names - works for both Bool module and copied Bool types
+            // Hybrid approach to handle both scenarios:
+            // 1. Tags with identifiers from Bool module (match by index to avoid cross-module lookup)
+            // 2. Tags with identifiers re-interned in current module (match by string)
+
+            // First, try direct index comparison with Bool module's identifiers
+            if (tag.name.idx == self.builtins.false_ident.idx) {
+                false_idx = i;
+                continue;
+            } else if (tag.name.idx == self.builtins.true_ident.idx) {
+                true_idx = i;
+                continue;
+            }
+
+            // If index doesn't match, try string comparison (but only if the index is valid in current module)
+            const env_bytes_len = self.env.common.idents.interner.bytes.items.items.len;
+            if (tag.name.idx >= env_bytes_len) {
+                // Identifier is out of bounds in current module and doesn't match Bool module indices
+                return false;
+            }
+
             const name_text = self.env.getIdent(tag.name);
             if (std.mem.eql(u8, name_text, "False")) {
                 false_idx = i;
@@ -5135,18 +5162,31 @@ pub const Interpreter = struct {
                 );
             }
         }
-        // ret_var may now be constrained
+        // ret_var may now be constrained through unification
+        // Resolve it to follow any substitutions made during parameter unification
+        const resolved_ret_var = self.runtime_types.resolveVar(ret_var).var_;
 
-        // Ensure layout slot for return var
-        _ = try self.getRuntimeLayout(ret_var);
-        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret_var).var_);
-        try self.ensureVarLayoutCapacity(root_idx + 1);
-        const slot = self.var_to_layout_slot.items[root_idx];
+        // Try to get layout slot for return var. If it's still a rigid var, use sentinel value 0.
+        // The actual layout will be computed by the caller after full type unification.
+        const slot = blk: {
+            const layout_result = self.getRuntimeLayout(resolved_ret_var);
+            if (layout_result) |_| {
+                const root_idx: usize = @intFromEnum(resolved_ret_var);
+                try self.ensureVarLayoutCapacity(root_idx + 1);
+                break :blk self.var_to_layout_slot.items[root_idx];
+            } else |err| {
+                if (err == error.BugUnboxedRigidVar) {
+                    // Rigid var not yet instantiated - use sentinel, caller will compute layout
+                    break :blk 0;
+                }
+                return err;
+            }
+        };
         const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
         errdefer self.allocator.free(args_copy_mut);
         std.mem.copyForwards(types.Var, args_copy_mut, args);
 
-        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
+        const entry = PolyEntry{ .return_var = resolved_ret_var, .return_layout_slot = slot, .args = args_copy_mut };
         try self.polyInsert(module_id, func_id, entry);
         return entry;
     }
