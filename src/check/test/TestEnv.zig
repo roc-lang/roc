@@ -113,6 +113,8 @@ module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 builtin_module: LoadedModule,
 // Whether this TestEnv owns the builtin_module and should deinit it
 owns_builtin_module: bool,
+/// Heap-allocated source buffer owned by this TestEnv (if any)
+owned_source: ?[]u8 = null,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -372,16 +374,23 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !TestEnv {
+    const gpa = std.testing.allocator;
+
     const source_wrapper =
         \\main =
     ;
 
-    var source: [source_wrapper.len + 1 + source_expr.len]u8 = undefined;
-    std.mem.copyForwards(u8, source[0..], source_wrapper);
-    std.mem.copyForwards(u8, source[source_wrapper.len..], " ");
+    const total_len = source_wrapper.len + 1 + source_expr.len;
+    var source = try gpa.alloc(u8, total_len);
+    errdefer gpa.free(source);
+
+    std.mem.copyForwards(u8, source[0..source_wrapper.len], source_wrapper);
+    source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    return TestEnv.init(module_name, &source);
+    var test_env = try TestEnv.init(module_name, source);
+    test_env.owned_source = source;
+    return test_env;
 }
 
 pub fn deinit(self: *TestEnv) void {
@@ -397,6 +406,10 @@ pub fn deinit(self: *TestEnv) void {
     // Since common is now a value field, we don't need to free it separately
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
+
+    if (self.owned_source) |buffer| {
+        self.gpa.free(buffer);
+    }
 
     self.module_envs.deinit();
 
