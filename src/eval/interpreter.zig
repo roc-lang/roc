@@ -5090,23 +5090,9 @@ pub const Interpreter = struct {
                 .fn_pure => |f| f.ret,
                 .fn_effectful => |f| f.ret,
                 .fn_unbound => |f| f.ret,
-                else => {
-                    std.debug.print("ERROR: prepareCallWithFuncVar got structure type {s}, not a function. func_id={}, args.len={}\n", .{
-                        @tagName(flat),
-                        func_id,
-                        args.len,
-                    });
-                    return error.TypeMismatch;
-                },
+                else => return error.TypeMismatch,
             },
-            else => {
-                std.debug.print("ERROR: prepareCallWithFuncVar got non-structure type {s}, expected function. func_id={}, args.len={}\n", .{
-                    @tagName(func_resolved.desc.content),
-                    func_id,
-                    args.len,
-                });
-                return error.TypeMismatch;
-            },
+            else => return error.TypeMismatch,
         };
 
         // Attempt simple runtime unification of parameters with arguments.
