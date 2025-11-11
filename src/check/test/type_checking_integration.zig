@@ -1825,9 +1825,9 @@ test "List.fold works as builtin associated item" {
     const source =
         \\Test := [].{}
         \\
-        \\x = List.fold(["a", "b", "c"], "", |acc, item| Str.concat(acc, item))
+        \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Str");
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Num(_size)");
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
