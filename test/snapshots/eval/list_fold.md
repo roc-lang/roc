@@ -117,11 +117,7 @@ fold = |list, init, step| {
 }
 
 sumResult : U64
-sumResult = fold(
-	[1, 2, 3, 4],
-	0,
-	|acc, x| acc + x,
-)
+sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 
 expect sumResult == 10
 ~~~
