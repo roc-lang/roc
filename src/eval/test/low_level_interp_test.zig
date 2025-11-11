@@ -152,7 +152,7 @@ test "e_low_level_lambda - Str.is_empty returns True for empty string" {
     const expr = result.module_env.store.getExpr(def.expr);
 
     try testing.expect(expr == .e_zero_argument_tag);
-    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.closure_name);
+    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
     try testing.expectEqualStrings("True", tag_name);
 }
 
@@ -176,7 +176,7 @@ test "e_low_level_lambda - Str.is_empty returns False for non-empty string" {
     const expr = result.module_env.store.getExpr(def.expr);
 
     try testing.expect(expr == .e_zero_argument_tag);
-    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.closure_name);
+    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
     try testing.expectEqualStrings("False", tag_name);
 }
 
@@ -204,7 +204,7 @@ test "e_low_level_lambda - Str.is_empty in conditional" {
     const expr = result.module_env.store.getExpr(def.expr);
 
     try testing.expect(expr == .e_zero_argument_tag);
-    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.closure_name);
+    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
     try testing.expectEqualStrings("True", tag_name);
 }
 
