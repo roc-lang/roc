@@ -2215,7 +2215,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             };
 
-            // Update the pattern var
+            // Update the expr var
             try self.unifyWith(expr_var, .{ .structure = .{ .num = num_type } }, env);
         },
         .e_frac_f32 => |frac| {
@@ -3634,28 +3634,46 @@ fn checkBinopExpr(
                 else => unreachable,
             };
 
-            // Unwrap aliases to check the underlying type
-            var check_var = lhs_var;
-            var lhs_resolved = self.types.resolveVar(check_var);
+            // Unwrap aliases to check the underlying type of both operands
+            var lhs_check_var = lhs_var;
+            var lhs_resolved = self.types.resolveVar(lhs_check_var);
             while (lhs_resolved.desc.content == .alias) {
                 const alias_data = lhs_resolved.desc.content.alias;
-                check_var = self.types.getAliasBackingVar(alias_data);
-                lhs_resolved = self.types.resolveVar(check_var);
+                lhs_check_var = self.types.getAliasBackingVar(alias_data);
+                lhs_resolved = self.types.resolveVar(lhs_check_var);
+            }
+
+            var rhs_check_var = rhs_var;
+            var rhs_resolved = self.types.resolveVar(rhs_check_var);
+            while (rhs_resolved.desc.content == .alias) {
+                const alias_data = rhs_resolved.desc.content.alias;
+                rhs_check_var = self.types.getAliasBackingVar(alias_data);
+                rhs_resolved = self.types.resolveVar(rhs_check_var);
             }
 
             const lhs_content = lhs_resolved.desc.content;
+            const rhs_content = rhs_resolved.desc.content;
 
-            // Check if this is a known builtin number type (optimization)
-            const is_known_number = switch (lhs_content) {
+            // Check if either operand is a known builtin number type
+            // If so, use numeric constraints instead of static dispatch
+            const lhs_is_known_number = switch (lhs_content) {
                 .structure => |s| s == .num,
                 else => false,
             };
+            const rhs_is_known_number = switch (rhs_content) {
+                .structure => |s| s == .num,
+                else => false,
+            };
+            const is_known_number = lhs_is_known_number or rhs_is_known_number;
 
-            // Check if we should use static dispatch (nominal types, or flex/rigid with constraints)
+            // Check if we should use static dispatch (nominal types, or flex/rigid types)
+            // For flex/rigid, we always use static dispatch to get the more general constrained type
+            // (e.g., `|a, b| a + b` becomes `a, b -> c where [ a.plus : a -> b -> c ]`)
+            // rather than falling back to numeric inference (which would give `Num(size), Num(size) -> Num(size)`)
             const should_use_static_dispatch = switch (lhs_content) {
                 .structure => |s| s == .nominal_type,
-                .flex => |f| f.constraints.len() > 0, // Flex with existing constraints
-                .rigid => |r| r.constraints.len() > 0, // Rigid with constraints from where clause
+                .flex => true, // All flex types get static dispatch for more general inference
+                .rigid => true, // All rigid types get static dispatch for more general inference
                 else => false,
             };
 
@@ -3699,7 +3717,7 @@ fn checkBinopExpr(
                 // num, otherwise the propgate error
                 try self.types.setVarRedirect(expr_var, lhs_var);
             } else if (should_use_static_dispatch) {
-                // User-defined nominal type: use static dispatch to call the method
+                // Nominal types or flex/rigid variables: use static dispatch to create method constraints
 
                 // Create the function type: lhs_type, rhs_type -> ret_type
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
@@ -3734,8 +3752,8 @@ fn checkBinopExpr(
                 // Set the expression to redirect to the return type
                 try self.types.setVarRedirect(expr_var, ret_var);
             } else {
-                // For unconstrained flex/rigid or other types, use numeric constraints
-                // This allows flex variables to unify with numbers
+                // For other types (not nominal, flex, or rigid), use numeric constraints
+                // This path is for unknown types that need to be constrained to numbers
                 switch (expected) {
                     .expected => |expectation| {
                         const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });

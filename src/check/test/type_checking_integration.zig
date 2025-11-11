@@ -256,7 +256,9 @@ test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    // After applying numeric literals to the lambda with arithmetic operations,
+    // the result is a flex variable with plus constraints that gets resolved
+    try checkTypesModule(source, .{ .pass = .last_def }, "_d");
 }
 
 test "check type - def - forward ref" {
@@ -1721,7 +1723,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: Num(_size5) }",
+        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: a } where [a.plus : a, a -> a]",
     );
 }
 
