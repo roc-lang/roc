@@ -259,6 +259,7 @@ pub fn populateModuleEnvs(
         .{ "Dict", builtin_indices.dict_type },
         .{ "Set", builtin_indices.set_type },
         .{ "Str", builtin_indices.str_type },
+        .{ "List", builtin_indices.list_type },
         .{ "U8", builtin_indices.u8_type },
         .{ "I8", builtin_indices.i8_type },
         .{ "U16", builtin_indices.u16_type },

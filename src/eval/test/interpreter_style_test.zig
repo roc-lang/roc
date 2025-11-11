@@ -868,6 +868,116 @@ test "interpreter: match empty list branch" {
     try std.testing.expectEqualStrings("42", rendered);
 }
 
+test "interpreter: simple for loop sum" {
+    // Test simpler for loop without passing functions
+    const roc_src = "{\n    var total = 0\n    for n in [1, 2, 3, 4] {\n        total = total + n\n    }\n    total\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("10", rendered);
+}
+
+test "interpreter: List.fold sum with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([1, 2, 3, 4], 0, |acc, x| acc + x)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("10", rendered);
+}
+
+test "interpreter: List.fold product with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([2, 3, 4], 1, |acc, x| acc * x)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("24", rendered);
+}
+
+test "interpreter: List.fold empty list with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([], 42, |acc, x| acc + x)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+}
+
+test "interpreter: List.fold count elements with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([10, 20, 30, 40], 0, |acc, _| acc + 1)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("4", rendered);
+}
+
+test "interpreter: List.fold from Builtin using numbers" {
+    const roc_src = "List.fold([1, 2, 3], 0, |acc, item| acc + item)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &imported_envs);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+}
+
 test "interpreter: crash statement triggers crash error and message" {
     const roc_src = "{\n    crash \"boom\"\n    0\n}";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
