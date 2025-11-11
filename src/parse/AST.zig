@@ -60,12 +60,26 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     var i = region.start;
     const tags = self.tokens.tokens.items(.tag);
     while (i < region.end) {
-        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
-            tags[i + 1] == .CloseRound or
-            tags[i + 1] == .CloseCurly or
-            tags[i + 1] == .OpBar))
-        {
-            return true;
+        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len) {
+            const next_tag = tags[i + 1];
+            if (next_tag == .CloseSquare or next_tag == .CloseRound or next_tag == .CloseCurly) {
+                return true;
+            }
+            // For OpBar, we need to distinguish between:
+            // - Closing bar (trailing comma): |x, y,| body
+            // - Opening bar (NOT trailing): fn(a, |x| body)
+            // Check the token after the bar to determine which case this is
+            if (next_tag == .OpBar and i + 2 < self.tokens.tokens.len) {
+                const after_bar = tags[i + 2];
+                // If what follows is a lambda parameter, the bar is opening (not a trailing comma)
+                const is_opening_bar = switch (after_bar) {
+                    .LowerIdent, .UpperIdent, .Underscore, .OpenRound, .OpenSquare, .OpenCurly => true,
+                    else => false,
+                };
+                if (!is_opening_bar) {
+                    return true;
+                }
+            }
         }
         i += 1;
     }

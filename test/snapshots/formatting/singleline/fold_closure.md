@@ -8,7 +8,7 @@ type=snippet
 sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - fold_closure.md:1:13:1:17
 # PROBLEMS
 NIL
 # TOKENS
