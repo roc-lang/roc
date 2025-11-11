@@ -143,5 +143,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Num(_size)"))
 ~~~

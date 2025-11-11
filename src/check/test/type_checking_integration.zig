@@ -1723,7 +1723,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: a } where [a.plus : a, a -> a]",
+        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: Num(_size5) }",
     );
 }
 
@@ -1821,6 +1821,15 @@ test "Str.is_empty works as low-level builtin associated item" {
         \\x = Str.is_empty("")
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
+}
+
+test "List.fold works as builtin associated item" {
+    const source =
+        \\Test := [].{}
+        \\
+        \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Num(_size)");
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
@@ -1966,4 +1975,19 @@ fn checkTypesExpr(
     }
 
     return test_env.assertLastDefType(expected);
+}
+
+// Test arithmetic operator desugaring with flex types
+test "check type - lambda with + operator on flex types" {
+    const source =
+        \\addFn = |x, y| x + y
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a, b -> c where [a.plus : a, b -> c]");
+}
+
+test "check type - lambda with .plus method call on flex types" {
+    const source =
+        \\addFn = |x, y| x.plus(y)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a, b -> c where [a.plus : a, b -> c]");
 }

@@ -551,42 +551,20 @@ const Unifier = struct {
                     try self.unifyGuarded(vars.a.var_, backing_var);
                 }
             },
-            .structure => |b_flat_type| {
+            .structure => |b_structure| {
                 if (a_flex.constraints.len() > 0) {
-                    // Check if we're unifying with a num_unbound - in that case, keep the constrained flex
-                    // to preserve polymorphic numeric types like `a where [a.plus : a, b -> c]`
-                    const is_num_unbound = switch (b_flat_type) {
-                        .num => |num| switch (num) {
-                            .num_unbound, .int_unbound, .frac_unbound => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-
-                    if (is_num_unbound) {
-                        // When constrained flex unifies with num_unbound, keep the flex with constraints
-                        // This allows `|a, b| a + b` to stay as `a, b -> c where [a.plus : a, b -> c]`
-                        // instead of collapsing to `Num(_size), Num(_size) -> Num(_size)`
+                    // Don't defer constraints for num types - they inherently support arithmetic operations
+                    const is_num = b_structure == .num;
+                    if (!is_num) {
+                        // Record that we need to check constraints later
                         _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                            .var_ = vars.a.var_,
+                            .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                             .constraints = a_flex.constraints,
                         }) catch return Error.AllocatorError;
-
-                        self.merge(vars, Content{ .flex = a_flex });
-                    } else {
-                        // For other structures (nominal types, etc.), use normal resolution:
-                        // defer constraints and merge to the structure
-                        _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                            .var_ = vars.b.var_,
-                            .constraints = a_flex.constraints,
-                        }) catch return Error.AllocatorError;
-
-                        self.merge(vars, b_content);
                     }
-                } else {
-                    // Unconstrained flex: merge to the structure
-                    self.merge(vars, b_content);
                 }
+
+                self.merge(vars, b_content);
             },
             .err => self.merge(vars, .err),
         }
@@ -718,40 +696,18 @@ const Unifier = struct {
         switch (b_content) {
             .flex => |b_flex| {
                 if (b_flex.constraints.len() > 0) {
-                    // Check if we're unifying with a num_unbound - in that case, keep the constrained flex
-                    // to preserve polymorphic numeric types like `a where [a.plus : a, b -> c]`
-                    const is_num_unbound = switch (a_flat_type) {
-                        .num => |num| switch (num) {
-                            .num_unbound, .int_unbound, .frac_unbound => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-
-                    if (is_num_unbound) {
-                        // When num_unbound unifies with constrained flex, keep the flex with constraints
-                        // This allows `|a, b| a + b` to stay as `a, b -> c where [a.plus : a, b -> c]`
-                        // instead of collapsing to `Num(_size), Num(_size) -> Num(_size)`
+                    // Don't defer constraints for num types - they inherently support arithmetic operations
+                    const is_num = a_flat_type == .num;
+                    if (!is_num) {
+                        // Record that we need to check constraints later
                         _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                            .var_ = vars.b.var_,
+                            .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                             .constraints = b_flex.constraints,
                         }) catch return Error.AllocatorError;
-
-                        self.merge(vars, Content{ .flex = b_flex });
-                    } else {
-                        // For other structures (nominal types, etc.), use normal resolution:
-                        // defer constraints and merge to the structure
-                        _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                            .var_ = vars.b.var_,
-                            .constraints = b_flex.constraints,
-                        }) catch return Error.AllocatorError;
-
-                        self.merge(vars, Content{ .structure = a_flat_type });
                     }
-                } else {
-                    // Unconstrained flex: merge to the structure
-                    self.merge(vars, Content{ .structure = a_flat_type });
                 }
+
+                self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid => return error.TypeMismatch,
             .alias => |b_alias| {

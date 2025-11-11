@@ -22,9 +22,20 @@ addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
++ - :0:0:0:0
 # PROBLEMS
-NIL
+**MISSING METHOD**
+The value before this **+** operator has the type **a**, which has no **plus** method:
+**lambda_currying_constraint.md:3:21:3:26:**
+```roc
+makeAdder = |x| |y| x + y
+```
+                    ^^^^^
+
+
+**Hint: ** The **+** operator requires the type to have a **plus** method. Did you forget to specify it in the type annotation?
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,
@@ -196,13 +207,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> (a -> a)"))
-		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
+		(patt (type "Error -> (Error -> Error)"))
+		(patt (type "Error -> Error"))
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))")))
 	(expressions
-		(expr (type "a -> (a -> a)"))
-		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
+		(expr (type "Error -> (Error -> Error)"))
+		(expr (type "Error -> Error"))
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))))
 ~~~

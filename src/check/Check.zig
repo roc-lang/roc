@@ -3719,13 +3719,11 @@ fn checkBinopExpr(
             } else if (should_use_static_dispatch) {
                 // Nominal types or flex/rigid variables: use static dispatch to create method constraints
 
-                // Create the function type: lhs_type, rhs_type -> ret_type
+                // Create the constraint function type using the ACTUAL operand vars
+                // (matching how method calls work - see e_method_call around line 3025)
+                const ret_var = try self.fresh(env, expr_region);
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
-                // The return type is unknown, so create a fresh variable
-                const ret_var = try self.fresh(env, expr_region);
-
-                // Create the constraint function type
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
                     .ret = ret_var,
@@ -3746,7 +3744,6 @@ fn checkBinopExpr(
                     env,
                     expr_region,
                 );
-
                 _ = try self.unify(constrained_var, lhs_var, env);
 
                 // Set the expression to redirect to the return type

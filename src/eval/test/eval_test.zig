@@ -423,6 +423,7 @@ test "lambdas with unary minus" {
     try runExpectInt("(|x| if True -10 else x)(999)", -10, .no_trace);
 }
 
+
 test "lambdas closures" {
     // Curried functions still have interpreter issues with TypeMismatch
     return error.SkipZigTest;

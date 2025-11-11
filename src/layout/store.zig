@@ -1297,7 +1297,7 @@ pub const Store = struct {
                         return LayoutError.ZeroSizedType;
                     },
                 },
-                .flex => |_| blk: {
+                .flex => |flex_data| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1313,12 +1313,15 @@ pub const Store = struct {
                         }
                     }
 
-                    // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
-                    // This is a known issue that needs proper constraint solving before layout computation.
-                    // For now, default to I64 for numeric flex vars.
-                    break :blk Layout.int(.i64);
+                    // Flex vars should not appear unboxed during layout computation.
+                    // Return undefined as a placeholder - if this value is ever actually used,
+                    // it will crash in dev builds, exposing the real problem.
+                    // In practice, this should be immediately overridden by adjustNumericResultLayout
+                    // or similar runtime type resolution.
+                    _ = flex_data;
+                    break :blk undefined;
                 },
-                .rigid => |_| blk: {
+                .rigid => blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue

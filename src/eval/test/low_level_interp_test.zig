@@ -60,7 +60,40 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_module = builtin_module.env,
     };
 
-    var czer = try Can.init(module_env, &parse_ast, null);
+    // Create module_envs map for canonicalization (enables qualified calls to Str, List, etc.)
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs_map.deinit();
+    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
+    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
+    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
+    try module_envs_map.put(bool_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.bool_type,
+    });
+    try module_envs_map.put(result_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.try_type,
+    });
+    try module_envs_map.put(str_ident, .{
+        .env = builtin_module.env,
+    });
+    try module_envs_map.put(list_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.list_type,
+    });
+    try module_envs_map.put(dict_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.dict_type,
+    });
+    try module_envs_map.put(set_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.set_type,
+    });
+
+    var czer = try Can.init(module_env, &parse_ast, &module_envs_map);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -196,7 +229,7 @@ test "e_low_level_lambda - List.concat with two non-empty lists" {
     const len_expr = result.module_env.store.getExpr(len_def.expr);
 
     try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 4), len_expr.e_num.value.int);
+    try testing.expectEqual(@as(u64, 4), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }
 
 test "e_low_level_lambda - List.concat with empty and non-empty list" {
@@ -220,7 +253,7 @@ test "e_low_level_lambda - List.concat with empty and non-empty list" {
     const len_expr = result.module_env.store.getExpr(len_def.expr);
 
     try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 3), len_expr.e_num.value.int);
+    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }
 
 test "e_low_level_lambda - List.concat with two empty lists" {
@@ -245,7 +278,7 @@ test "e_low_level_lambda - List.concat with two empty lists" {
     const len_expr = result.module_env.store.getExpr(len_def.expr);
 
     try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 0), len_expr.e_num.value.int);
+    try testing.expectEqual(@as(u64, 0), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }
 
 test "e_low_level_lambda - List.concat preserves order" {
@@ -270,7 +303,7 @@ test "e_low_level_lambda - List.concat preserves order" {
 
     // Should be a Try.Ok tag with value 10
     try testing.expect(first_expr == .e_tag);
-    const tag_name = result.module_env.getIdent(first_expr.e_tag.ident);
+    const tag_name = result.module_env.getIdent(first_expr.e_tag.name);
     try testing.expectEqualStrings("Ok", tag_name);
 }
 
@@ -295,7 +328,7 @@ test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
     const len_expr = result.module_env.store.getExpr(len_def.expr);
 
     try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 4), len_expr.e_num.value.int);
+    try testing.expectEqual(@as(u64, 4), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }
 
 test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" {
@@ -319,7 +352,31 @@ test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" 
     const len_expr = result.module_env.store.getExpr(len_def.expr);
 
     try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 3), len_expr.e_num.value.int);
+    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+}
+
+test "e_low_level_lambda - List.concat with large I128 values EXPOSES HACK" {
+    const src =
+        \\x = List.concat([10000000000000000000, 20000000000000000000], [30000000000000000000])
+        \\len = List.len(x)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 0 crashes
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the length is 3
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const len_def = result.module_env.store.getDef(defs[1]);
+    const len_expr = result.module_env.store.getExpr(len_def.expr);
+
+    try testing.expect(len_expr == .e_num);
+    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }
 
 test "e_low_level_lambda - List.concat with empty string list" {
@@ -343,5 +400,5 @@ test "e_low_level_lambda - List.concat with empty string list" {
     const len_expr = result.module_env.store.getExpr(len_def.expr);
 
     try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 3), len_expr.e_num.value.int);
+    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }

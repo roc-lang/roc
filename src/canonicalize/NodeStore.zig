@@ -145,7 +145,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 58;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 35;
 /// Count of the statement nodes in the ModuleEnv
@@ -2687,10 +2687,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_invalid_num_literal;
             region = r.region;
         },
-        .invalid_single_quote => |r| {
-            node.tag = .diag_invalid_single_quote;
-            region = r.region;
-        },
         .empty_tuple => |r| {
             node.tag = .diag_empty_tuple;
             region = r.region;
@@ -3044,9 +3040,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
