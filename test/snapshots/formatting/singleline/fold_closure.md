@@ -10,10 +10,20 @@ sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 # EXPECTED
 UNDEFINED VARIABLE - fold_closure.md:1:13:1:17
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `fold` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fold_closure.md:1:13:1:17:**
+```roc
+sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
+```
+            ^^^^
+
+
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,Number,Comma,Number,Comma,Number,Comma,Number,CloseSquare,Comma,Number,Comma,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,Int,Comma,Int,Comma,Int,Comma,Int,CloseSquare,Comma,Int,Comma,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
@@ -26,11 +36,11 @@ EndOfFile,
 			(e-apply
 				(e-ident (raw "fold"))
 				(e-list
-					(e-num (raw "1"))
-					(e-num (raw "2"))
-					(e-num (raw "3"))
-					(e-num (raw "4")))
-				(e-num (raw "0"))
+					(e-int (raw "1"))
+					(e-int (raw "2"))
+					(e-int (raw "3"))
+					(e-int (raw "4")))
+				(e-int (raw "0"))
 				(e-lambda
 					(args
 						(p-ident (raw "acc"))
@@ -49,7 +59,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "sumResult"))
 		(e-call
-			(e-lookup-global (ident "fold") (module-id "_Num") (toplevel true))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-list
 				(elems
 					(e-num (value "1"))
@@ -57,23 +67,21 @@ NO CHANGE
 					(e-num (value "3"))
 					(e-num (value "4"))))
 			(e-num (value "0"))
-			(e-closure
-				(e-lambda
-					(args
-						(p-assign (ident "acc"))
-						(p-assign (ident "x")))
-					(e-call
-						(e-lookup-global (ident "add") (module-id "_Num") (toplevel true))
-						(e-lookup-local
-							(p-assign (ident "acc")))
-						(e-lookup-local
-							(p-assign (ident "x")))))))))
+			(e-lambda
+				(args
+					(p-assign (ident "acc"))
+					(p-assign (ident "x")))
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "acc")))
+					(e-lookup-local
+						(p-assign (ident "x"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(a)")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(a)"))))
+		(expr (type "Error"))))
 ~~~
