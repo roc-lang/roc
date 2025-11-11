@@ -28,12 +28,6 @@ const Closure = layout_mod.Closure;
 const Expr = CIR.Expr;
 const Ident = base.Ident;
 
-// RocList.decref always requires a callback for element teardown. When we've
-// already decref'd the elements ourselves (or they don't need refcounting), we
-// pass this no-op stub so the list header can clean up without touching the
-// payload again.
-fn noopDecref(_: ?[*]u8) callconv(.c) void {}
-
 const StackValue = @This();
 
 /// Type and memory layout information for the result value
@@ -870,7 +864,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                     }
                 }
             }
-            list_value.decref(alignment_u32, element_width, elements_refcounted, noopDecref, ops);
+            // We already decreffed all elements above, so pass rcNone to avoid double-decref.
+            // But we still need elements_refcounted=true for correct allocation layout.
+            list_value.decref(alignment_u32, element_width, elements_refcounted, null, &builtins.list.rcNone, ops);
             return;
         },
         .list_of_zst => {
@@ -878,7 +874,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const list_header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
             const list_value = list_header.*;
             const alignment_u32: u32 = @intCast(layout_cache.targetUsize().size());
-            list_value.decref(alignment_u32, 0, false, noopDecref, ops);
+            list_value.decref(alignment_u32, 0, false, null, &builtins.list.rcNone, ops);
             return;
         },
         .box => {

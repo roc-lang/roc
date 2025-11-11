@@ -16,9 +16,9 @@ const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 
-const Inc = *const fn (?[*]u8) callconv(.c) void;
-const IncN = *const fn (?[*]u8, usize) callconv(.c) void;
-const Dec = *const fn (?[*]u8) callconv(.c) void;
+const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+const IncN = *const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) void;
+const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 const HasTagId = *const fn (u16, ?[*]u8) callconv(.c) extern struct { matched: bool, data: ?[*]u8 };
 
 /// A bit mask were the only set bit is the bit indicating if the List is a seamless slice.
@@ -173,6 +173,7 @@ pub const RocList = extern struct {
         alignment: u32,
         element_width: usize,
         elements_refcounted: bool,
+        dec_context: ?*anyopaque,
         dec: Dec,
         roc_ops: *RocOps,
     ) void {
@@ -184,7 +185,7 @@ pub const RocList = extern struct {
                 var i: usize = 0;
                 while (i < count) : (i += 1) {
                     const element = source + i * element_width;
-                    dec(element);
+                    dec(dec_context, element);
                 }
             }
         }
@@ -222,7 +223,9 @@ pub const RocList = extern struct {
         alignment: u32,
         element_width: usize,
         elements_refcounted: bool,
+        inc_context: ?*anyopaque,
         inc: Inc,
+        dec_context: ?*anyopaque,
         dec: Dec,
         roc_ops: *RocOps,
     ) RocList {
@@ -233,7 +236,7 @@ pub const RocList = extern struct {
         if (self.isEmpty()) {
             // Empty is not necessarily unique on it's own.
             // The list could have capacity and be shared.
-            self.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+            self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
             return RocList.empty();
         }
 
@@ -250,11 +253,11 @@ pub const RocList = extern struct {
         if (elements_refcounted) {
             var i: usize = 0;
             while (i < self.len()) : (i += 1) {
-                inc(new_bytes + i * element_width);
+                inc(inc_context, new_bytes + i * element_width);
             }
         }
 
-        self.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return new_list;
     }
@@ -314,6 +317,7 @@ pub const RocList = extern struct {
         new_length: usize,
         element_width: usize,
         elements_refcounted: bool,
+        inc_context: ?*anyopaque,
         inc: Inc,
         roc_ops: *RocOps,
     ) RocList {
@@ -328,7 +332,7 @@ pub const RocList = extern struct {
                     return RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
                 }
             }
-            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc, roc_ops);
+            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc_context, inc, roc_ops);
         }
         return RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
     }
@@ -340,6 +344,7 @@ pub const RocList = extern struct {
         new_length: usize,
         element_width: usize,
         elements_refcounted: bool,
+        inc_context: ?*anyopaque,
         inc: Inc,
         roc_ops: *RocOps,
     ) RocList {
@@ -358,7 +363,7 @@ pub const RocList = extern struct {
             if (elements_refcounted) {
                 var i: usize = 0;
                 while (i < old_length) : (i += 1) {
-                    inc(dest_ptr + i * element_width);
+                    inc(inc_context, dest_ptr + i * element_width);
                 }
             }
         }
@@ -403,6 +408,7 @@ pub fn listDecref(
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    dec_context: ?*anyopaque,
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) void {
@@ -410,6 +416,7 @@ pub fn listDecref(
         alignment,
         element_width,
         elements_refcounted,
+        dec_context,
         dec,
         roc_ops,
     );
@@ -421,6 +428,7 @@ pub fn listWithCapacity(
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
@@ -430,6 +438,7 @@ pub fn listWithCapacity(
         capacity,
         element_width,
         elements_refcounted,
+        inc_context,
         inc,
         .InPlace,
         roc_ops,
@@ -443,6 +452,7 @@ pub fn listReserve(
     spare: u64,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
@@ -462,6 +472,7 @@ pub fn listReserve(
             @as(usize, @intCast(reserve_size)),
             element_width,
             elements_refcounted,
+            inc_context,
             inc,
             roc_ops,
         );
@@ -476,7 +487,9 @@ pub fn listReleaseExcessCapacity(
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
@@ -486,7 +499,7 @@ pub fn listReleaseExcessCapacity(
     if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_alloc_ptr == old_length) {
         return list;
     } else if (old_length == 0) {
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return RocList.empty();
     } else {
         // TODO: This can be made more efficient, but has to work around the `decref`.
@@ -502,11 +515,11 @@ pub fn listReleaseExcessCapacity(
                 var i: usize = 0;
                 while (i < old_length) : (i += 1) {
                     const element = source_ptr + i * element_width;
-                    inc(element);
+                    inc(inc_context, element);
                 }
             }
         }
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return output;
     }
 }
@@ -600,6 +613,7 @@ pub fn pushInPlace(
             new_length,
             element_size,
             false,
+            null,
             rcNone,
             roc_ops,
         );
@@ -671,6 +685,7 @@ pub fn listPrepend(
     element: Opaque,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
     copy: CopyFn,
     roc_ops: *RocOps,
@@ -683,6 +698,7 @@ pub fn listPrepend(
         1,
         element_width,
         elements_refcounted,
+        inc_context,
         inc,
         .Immutable,
         roc_ops,
@@ -713,7 +729,9 @@ pub fn listSwap(
     index_1: u64,
     index_2: u64,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     update_mode: UpdateMode,
     copy: CopyFn,
@@ -737,7 +755,9 @@ pub fn listSwap(
                 alignment,
                 element_width,
                 elements_refcounted,
+                inc_context,
                 inc,
+                dec_context,
                 dec,
                 roc_ops,
             );
@@ -762,6 +782,7 @@ pub fn listSublist(
     elements_refcounted: bool,
     start_u64: u64,
     len_u64: u64,
+    dec_context: ?*anyopaque,
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
@@ -774,7 +795,7 @@ pub fn listSublist(
                     var i: usize = 0;
                     while (i < size) : (i += 1) {
                         const element = source_ptr + i * element_width;
-                        dec(element);
+                        dec(dec_context, element);
                     }
                 }
             }
@@ -783,7 +804,7 @@ pub fn listSublist(
             output.length = 0;
             return output;
         }
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return RocList.empty();
     }
 
@@ -809,7 +830,7 @@ pub fn listSublist(
                 var i: usize = 0;
                 while (i < drop_end_len) : (i += 1) {
                     const element = source_ptr + (start + keep_len + i) * element_width;
-                    dec(element);
+                    dec(dec_context, element);
                 }
             }
 
@@ -842,7 +863,9 @@ pub fn listDropAt(
     element_width: usize,
     elements_refcounted: bool,
     drop_index_u64: u64,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
@@ -854,7 +877,7 @@ pub fn listDropAt(
     // because we rely on the pointer field being null if the list is empty
     // which also requires duplicating the utils.decref call to spend the RC token
     if (size <= 1) {
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return RocList.empty();
     }
 
@@ -869,6 +892,7 @@ pub fn listDropAt(
             elements_refcounted,
             1,
             size -| 1,
+            dec_context,
             dec,
             roc_ops,
         );
@@ -882,6 +906,7 @@ pub fn listDropAt(
             elements_refcounted,
             0,
             size -| 1,
+            dec_context,
             dec,
             roc_ops,
         );
@@ -899,7 +924,7 @@ pub fn listDropAt(
         if (list.isUnique()) {
             if (elements_refcounted) {
                 const element = source_ptr + drop_index * element_width;
-                dec(element);
+                dec(dec_context, element);
             }
 
             const copy_target = source_ptr + (drop_index * element_width);
@@ -934,11 +959,11 @@ pub fn listDropAt(
             var i: usize = 0;
             while (i < output.len()) : (i += 1) {
                 const cloned_elem = target_ptr + i * element_width;
-                inc(cloned_elem);
+                inc(inc_context, cloned_elem);
             }
         }
 
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return output;
     } else {
@@ -951,12 +976,15 @@ pub fn listSortWith(
     input: RocList,
     cmp: CompareFn,
     cmp_data: Opaque,
+    inc_n_context: ?*anyopaque,
     inc_n_data: IncN,
     data_is_owned: bool,
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     copy: CopyFn,
     roc_ops: *RocOps,
@@ -968,7 +996,9 @@ pub fn listSortWith(
         alignment,
         element_width,
         elements_refcounted,
+        inc_context,
         inc,
+        dec_context,
         dec,
         roc_ops,
     );
@@ -980,6 +1010,7 @@ pub fn listSortWith(
             cmp,
             cmp_data,
             data_is_owned,
+            inc_n_context,
             inc_n_data,
             element_width,
             alignment,
@@ -1059,7 +1090,9 @@ pub fn listConcat(
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
@@ -1067,11 +1100,11 @@ pub fn listConcat(
     if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
             // a could be a seamless slice, so we still need to decref.
-            list_a.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+            list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity
-            list_b.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+            list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
             return list_a;
         }
@@ -1083,6 +1116,7 @@ pub fn listConcat(
             total_length,
             element_width,
             elements_refcounted,
+            inc_context,
             inc,
             roc_ops,
         );
@@ -1097,12 +1131,12 @@ pub fn listConcat(
             var i: usize = 0;
             while (i < list_b.len()) : (i += 1) {
                 const cloned_elem = source_b + i * element_width;
-                inc(cloned_elem);
+                inc(inc_context, cloned_elem);
             }
         }
 
         // decrement list b.
-        list_b.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return resized_list_a;
     } else if (list_b.isUnique()) {
@@ -1113,6 +1147,7 @@ pub fn listConcat(
             total_length,
             element_width,
             elements_refcounted,
+            inc_context,
             inc,
             roc_ops,
         );
@@ -1134,12 +1169,12 @@ pub fn listConcat(
             var i: usize = 0;
             while (i < list_a.len()) : (i += 1) {
                 const cloned_elem = source_a + i * element_width;
-                inc(cloned_elem);
+                inc(inc_context, cloned_elem);
             }
         }
 
         // decrement list a.
-        list_a.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+        list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return resized_list_b;
     }
@@ -1160,18 +1195,18 @@ pub fn listConcat(
         var i: usize = 0;
         while (i < list_a.len()) : (i += 1) {
             const cloned_elem = source_a + i * element_width;
-            inc(cloned_elem);
+            inc(inc_context, cloned_elem);
         }
         i = 0;
         while (i < list_b.len()) : (i += 1) {
             const cloned_elem = source_b + i * element_width;
-            inc(cloned_elem);
+            inc(inc_context, cloned_elem);
         }
     }
 
     // decrement list a and b.
-    list_a.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
-    list_b.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+    list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+    list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
     return output;
 }
@@ -1203,7 +1238,9 @@ pub fn listReplace(
     element: Opaque,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     out_element: ?[*]u8,
     copy: CopyFn,
@@ -1218,7 +1255,7 @@ pub fn listReplace(
     // and it's always safe to cast index to usize.
     // because inserting into an empty list is always out of bounds
     return listReplaceInPlaceHelp(
-        list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_ops),
+        list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops),
         @as(usize, @intCast(index)),
         element,
         element_width,
@@ -1260,11 +1297,13 @@ pub fn listClone(
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    return list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_ops);
+    return list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
 }
 
 /// Get current allocated capacity for growth planning.
@@ -1281,7 +1320,8 @@ pub fn listAllocationPtr(
     return list.getAllocationDataPtr();
 }
 
-fn rcNone(_: ?[*]u8) callconv(.c) void {}
+/// No-op reference counting function for non-refcounted types
+pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
 /// Append UTF-8 string bytes to list for efficient string-to-bytes conversion.
 pub fn listConcatUtf8(
@@ -1295,7 +1335,7 @@ pub fn listConcatUtf8(
         const combined_length = list.len() + string.len();
 
         // List U8 has alignment 1 and element_width 1
-        const result = list.reallocate(1, combined_length, 1, false, &rcNone, roc_ops);
+        const result = list.reallocate(1, combined_length, 1, false, null, &rcNone, roc_ops);
         // We just allocated combined_length, which is > 0 because string.len() > 0
         var bytes = result.bytes orelse unreachable;
         @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
@@ -1318,10 +1358,10 @@ test "listConcat: non-unique with unique overlapping" {
     const unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..], false, test_env.getOps());
     // NOTE: unique will be consumed by listConcat, so no defer decref needed
 
-    var concatted = listConcat(nonUnique, unique, 1, 1, false, rcNone, rcNone, test_env.getOps());
-    defer concatted.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var concatted = listConcat(nonUnique, unique, 1, 1, false, null, rcNone, null, rcNone, test_env.getOps());
+    defer concatted.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
     var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..], false, test_env.getOps());
-    defer wanted.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer wanted.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expect(concatted.eql(wanted));
 }
@@ -1336,9 +1376,9 @@ test "listConcatUtf8" {
     const string = RocStr.init(string_bytes.ptr, string_bytes.len, test_env.getOps());
     defer string.decref(test_env.getOps());
     const ret = listConcatUtf8(list, string, test_env.getOps());
-    defer ret.decref(1, 1, false, &rcNone, test_env.getOps());
+    defer ret.decref(1, 1, false, null, &rcNone, test_env.getOps());
     const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 }, false, test_env.getOps());
-    defer expected.decref(1, 1, false, &rcNone, test_env.getOps());
+    defer expected.decref(1, 1, false, null, &rcNone, test_env.getOps());
     try std.testing.expect(ret.eql(expected));
 }
 
@@ -1347,7 +1387,7 @@ test "RocList empty list creation" {
     defer test_env.deinit();
 
     const empty_list = RocList.empty();
-    defer empty_list.decref(1, 1, false, rcNone, test_env.getOps());
+    defer empty_list.decref(1, 1, false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), empty_list.len());
     try std.testing.expect(empty_list.isEmpty());
@@ -1359,7 +1399,7 @@ test "RocList fromSlice basic functionality" {
 
     const data = [_]i32{ 10, 20, 30, 40 };
     const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), list.len());
     try std.testing.expect(!list.isEmpty());
@@ -1371,7 +1411,7 @@ test "RocList elements access" {
 
     const data = [_]u8{ 1, 2, 3, 4, 5 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const elements_ptr = list.elements(u8);
     try std.testing.expect(elements_ptr != null);
@@ -1389,7 +1429,7 @@ test "RocList capacity operations" {
 
     const data = [_]i16{ 100, 200 };
     const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(i16), @sizeOf(i16), false, null, rcNone, test_env.getOps());
 
     const capacity = list.getCapacity();
     try std.testing.expect(capacity >= list.len());
@@ -1405,13 +1445,13 @@ test "RocList equality operations" {
     const data3 = [_]u8{ 1, 2, 4 };
 
     const list1 = RocList.fromSlice(u8, data1[0..], false, test_env.getOps());
-    defer list1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list1.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const list2 = RocList.fromSlice(u8, data2[0..], false, test_env.getOps());
-    defer list2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const list3 = RocList.fromSlice(u8, data3[0..], false, test_env.getOps());
-    defer list3.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list3.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Equal lists should be equal
     try std.testing.expect(list1.eql(list2));
@@ -1423,9 +1463,9 @@ test "RocList equality operations" {
 
     // Empty lists should be equal
     const empty1 = RocList.empty();
-    defer empty1.decref(1, 1, false, rcNone, test_env.getOps());
+    defer empty1.decref(1, 1, false, null, rcNone, test_env.getOps());
     const empty2 = RocList.empty();
-    defer empty2.decref(1, 1, false, rcNone, test_env.getOps());
+    defer empty2.decref(1, 1, false, null, rcNone, test_env.getOps());
     try std.testing.expect(empty1.eql(empty2));
 }
 
@@ -1441,12 +1481,12 @@ test "RocList uniqueness and cloning" {
 
     // Make the list non-unique by incrementing reference count
     list.incref(1, false);
-    defer list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
     try std.testing.expect(!list.isUnique());
 
     // Clone the list (this will consume one reference to the original)
-    const cloned = listClone(list, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
-    defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const cloned = listClone(list, @alignOf(i32), @sizeOf(i32), false, null, rcNone, null, rcNone, test_env.getOps());
+    defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Both should be equal but different objects (since list was not unique)
     try std.testing.expect(list.eql(cloned));
@@ -1459,14 +1499,14 @@ test "RocList isUnique with reference counting" {
 
     const data = [_]u8{ 1, 2, 3 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unique initially
     try std.testing.expect(list.isUnique());
 
     // Increment reference count
     list.incref(1, false);
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should no longer be unique
     try std.testing.expect(!list.isUnique());
@@ -1477,8 +1517,8 @@ test "listWithCapacity basic functionality" {
     defer test_env.deinit();
 
     const capacity: usize = 10;
-    const list = listWithCapacity(capacity, @alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
-    defer list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const list = listWithCapacity(capacity, @alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Should have the requested capacity
     try std.testing.expect(list.getCapacity() >= capacity);
@@ -1494,8 +1534,8 @@ test "listReserve functionality" {
     const data = [_]u8{ 1, 2, 3 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
-    const reserved_list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
-    defer reserved_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const reserved_list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    defer reserved_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should have at least the requested capacity
     try std.testing.expect(reserved_list.getCapacity() >= 20);
@@ -1516,7 +1556,7 @@ test "listCapacity function" {
 
     const data = [_]i16{ 100, 200, 300 };
     const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(i16), @sizeOf(i16), false, null, rcNone, test_env.getOps());
 
     const capacity = listCapacity(list);
     try std.testing.expectEqual(list.getCapacity(), capacity);
@@ -1529,7 +1569,7 @@ test "RocList allocateExact functionality" {
 
     const exact_size: usize = 5;
     const list = RocList.allocateExact(@alignOf(u64), exact_size, @sizeOf(u64), false, test_env.getOps());
-    defer list.decref(@alignOf(u64), @sizeOf(u64), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
 
     // Should have exactly the requested capacity (or very close)
     try std.testing.expectEqual(exact_size, list.getCapacity());
@@ -1547,15 +1587,15 @@ test "listReleaseExcessCapacity functionality" {
     const list_with_data = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve excess capacity for it
-    const list_with_excess = listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    const list_with_excess = listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     // Verify it has excess capacity
     try std.testing.expect(list_with_excess.getCapacity() >= 100);
     try std.testing.expectEqual(@as(usize, 3), list_with_excess.len());
 
     // Release the excess capacity
-    const released_list = listReleaseExcessCapacity(list_with_excess, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
-    defer released_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const released_list = listReleaseExcessCapacity(list_with_excess, @alignOf(u8), @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    defer released_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // The released list should have capacity close to its length and preserve the data
     try std.testing.expectEqual(@as(usize, 3), released_list.len());
@@ -1580,8 +1620,8 @@ test "listSublist basic functionality" {
     // Note: listSublist consumes the original list
 
     // Extract middle portion
-    const sublist = listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 4, rcNone, test_env.getOps());
-    defer sublist.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const sublist = listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 4, null, rcNone, test_env.getOps());
+    defer sublist.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), sublist.len());
 
@@ -1602,8 +1642,8 @@ test "listSublist edge cases" {
     const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     // Take empty sublist
-    const empty_sublist = listSublist(list, @alignOf(i32), @sizeOf(i32), false, 1, 0, rcNone, test_env.getOps());
-    defer empty_sublist.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const empty_sublist = listSublist(list, @alignOf(i32), @sizeOf(i32), false, 1, 0, null, rcNone, test_env.getOps());
+    defer empty_sublist.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), empty_sublist.len());
     try std.testing.expect(empty_sublist.isEmpty());
@@ -1628,8 +1668,8 @@ test "listSwap basic functionality" {
         }
     }.copy;
 
-    const swapped_list = listSwap(list, @alignOf(u16), @sizeOf(u16), 1, 3, false, rcNone, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
-    defer swapped_list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const swapped_list = listSwap(list, @alignOf(u16), @sizeOf(u16), 1, 3, false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    defer swapped_list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), swapped_list.len());
 
@@ -1659,7 +1699,7 @@ test "listAppendUnsafe basic functionality" {
     }.copy;
 
     // Create a list with some capacity
-    var list = listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list = listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Add some initial elements using listAppendUnsafe
     const element1: u8 = 42;
@@ -1668,7 +1708,7 @@ test "listAppendUnsafe basic functionality" {
     const element2: u8 = 84;
     list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), copy_fn);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 2), list.len());
 
@@ -1695,12 +1735,12 @@ test "listAppendUnsafe with different types" {
     }.copy;
 
     // Test with i32
-    var int_list = listWithCapacity(5, @alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    var int_list = listWithCapacity(5, @alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     const int_val: i32 = -123;
     int_list = listAppendUnsafe(int_list, @as(?[*]u8, @ptrCast(@constCast(&int_val))), @sizeOf(i32), copy_fn);
 
-    defer int_list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer int_list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), int_list.len());
 
@@ -1726,12 +1766,12 @@ test "listAppendUnsafe with pre-allocated capacity" {
     }.copy;
 
     // Create a list with capacity (listAppendUnsafe requires pre-allocated space)
-    var list_with_capacity = listWithCapacity(5, @alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    var list_with_capacity = listWithCapacity(5, @alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     const element: u16 = 9999;
     list_with_capacity = listAppendUnsafe(list_with_capacity, @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u16), copy_fn);
 
-    defer list_with_capacity.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer list_with_capacity.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), list_with_capacity.len());
     try std.testing.expect(!list_with_capacity.isEmpty());
@@ -1763,8 +1803,8 @@ test "listPrepend basic functionality" {
 
     // Prepend an element
     const element: u8 = 1;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, rcNone, copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
 
@@ -1797,8 +1837,8 @@ test "listPrepend to empty list" {
 
     // Prepend an element
     const element: i32 = 42;
-    const result = listPrepend(empty_list, @alignOf(i32), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(i32), false, rcNone, copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const result = listPrepend(empty_list, @alignOf(i32), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(i32), false, null, rcNone, copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
     try std.testing.expect(!result.isEmpty());
@@ -1830,13 +1870,13 @@ test "listPrepend multiple elements" {
 
     // Prepend first element
     const element1: u16 = 200;
-    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u16), false, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u16), false, null, rcNone, copy_fn, test_env.getOps());
 
     // Prepend second element
     const element2: u16 = 300;
-    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u16), false, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u16), false, null, rcNone, copy_fn, test_env.getOps());
 
-    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), list.len());
 
@@ -1857,8 +1897,8 @@ test "listDropAt basic functionality" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Drop element at index 2 (value 30)
-    const result = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 2, rcNone, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 2, null, rcNone, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
 
@@ -1880,8 +1920,8 @@ test "listDropAt first element" {
     const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     // Drop first element (index 0)
-    const result = listDropAt(list, @alignOf(i32), @sizeOf(i32), false, 0, rcNone, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const result = listDropAt(list, @alignOf(i32), @sizeOf(i32), false, 0, null, rcNone, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 2), result.len());
 
@@ -1901,8 +1941,8 @@ test "listDropAt last element" {
     const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
 
     // Drop last element (index 3)
-    const result = listDropAt(list, @alignOf(u16), @sizeOf(u16), false, 3, rcNone, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const result = listDropAt(list, @alignOf(u16), @sizeOf(u16), false, 3, null, rcNone, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), result.len());
 
@@ -1923,8 +1963,8 @@ test "listDropAt single element list" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Drop the only element (index 0)
-    const result = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 0, rcNone, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 0, null, rcNone, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), result.len());
     try std.testing.expect(result.isEmpty());
@@ -1939,8 +1979,8 @@ test "listDropAt out of bounds" {
     const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
 
     // Try to drop at index 5 (out of bounds)
-    const result = listDropAt(list, @alignOf(i16), @sizeOf(i16), false, 5, rcNone, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
+    const result = listDropAt(list, @alignOf(i16), @sizeOf(i16), false, 5, null, rcNone, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(i16), @sizeOf(i16), false, null, rcNone, test_env.getOps());
 
     // Should return the original list unchanged
     try std.testing.expectEqual(@as(usize, 3), result.len());
@@ -1975,8 +2015,8 @@ test "listReplace basic functionality" {
     // Replace element at index 2 (value 30) with 99
     const new_element: u8 = 99;
     var out_element: u8 = 0;
-    const result = listReplace(list, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listReplace(list, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
     try std.testing.expectEqual(@as(u8, 30), out_element); // original value
@@ -2012,8 +2052,8 @@ test "listReplace first element" {
     // Replace first element (index 0)
     const new_element: i32 = -999;
     var out_element: i32 = 0;
-    const result = listReplace(list, @alignOf(i32), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(i32), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const result = listReplace(list, @alignOf(i32), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(i32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), result.len());
     try std.testing.expectEqual(@as(i32, 100), out_element); // original value
@@ -2048,8 +2088,8 @@ test "listReplace last element" {
     // Replace last element (index 3)
     const new_element: u16 = 9999;
     var out_element: u16 = 0;
-    const result = listReplace(list, @alignOf(u16), 3, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const result = listReplace(list, @alignOf(u16), 3, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
     try std.testing.expectEqual(@as(u16, 4), out_element); // original value
@@ -2085,8 +2125,8 @@ test "listReplace single element list" {
     // Replace the only element (index 0)
     const new_element: u8 = 84;
     var out_element: u8 = 0;
-    const result = listReplace(list, @alignOf(u8), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listReplace(list, @alignOf(u8), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
     try std.testing.expectEqual(@as(u8, 42), out_element); // original value
@@ -2104,8 +2144,8 @@ test "edge case: listConcat with empty lists" {
     const empty1 = RocList.empty();
     const empty2 = RocList.empty();
 
-    const result = listConcat(empty1, empty2, 1, 1, false, rcNone, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listConcat(empty1, empty2, 1, 1, false, null, rcNone, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), result.len());
     try std.testing.expect(result.isEmpty());
@@ -2120,16 +2160,16 @@ test "edge case: listConcat one empty one non-empty" {
     const non_empty = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Empty + non-empty
-    const result1 = listConcat(empty_list, non_empty, 1, 1, false, rcNone, rcNone, test_env.getOps());
-    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result1 = listConcat(empty_list, non_empty, 1, 1, false, null, rcNone, null, rcNone, test_env.getOps());
+    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), result1.len());
 
     // Non-empty + empty
     const empty2 = RocList.empty();
     const non_empty2 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    const result2 = listConcat(non_empty2, empty2, 1, 1, false, rcNone, rcNone, test_env.getOps());
-    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result2 = listConcat(non_empty2, empty2, 1, 1, false, null, rcNone, null, rcNone, test_env.getOps());
+    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), result2.len());
 }
@@ -2142,8 +2182,8 @@ test "edge case: listSublist with zero length" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Extract zero-length sublist from middle
-    const sublist = listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 0, rcNone, test_env.getOps());
-    defer sublist.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const sublist = listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 0, null, rcNone, test_env.getOps());
+    defer sublist.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), sublist.len());
     try std.testing.expect(sublist.isEmpty());
@@ -2157,8 +2197,8 @@ test "edge case: listSublist entire list" {
     const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
 
     // Extract entire list as sublist
-    const sublist = listSublist(list, @alignOf(i16), @sizeOf(i16), false, 0, 3, rcNone, test_env.getOps());
-    defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
+    const sublist = listSublist(list, @alignOf(i16), @sizeOf(i16), false, 0, 3, null, rcNone, test_env.getOps());
+    defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), sublist.len());
 
@@ -2194,8 +2234,8 @@ test "edge case: listPrepend to large list" {
 
     // Prepend an element
     const element: u8 = 255;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, rcNone, copy_fn, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 101), result.len());
 
@@ -2211,8 +2251,8 @@ test "edge case: listWithCapacity zero capacity" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    const list = listWithCapacity(0, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
-    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    const list = listWithCapacity(0, @alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), list.len());
     try std.testing.expect(list.isEmpty());
@@ -2225,10 +2265,10 @@ test "edge case: RocList equality with different capacities" {
     // Create two lists with same content but different capacities
     const data = [_]u8{ 1, 2, 3 };
     const list1 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer list1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list1.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Create list with larger capacity
-    var list2 = listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list2 = listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
     // Manually set the same content
     list2.length = 3;
     if (list2.bytes) |bytes| {
@@ -2236,7 +2276,7 @@ test "edge case: RocList equality with different capacities" {
             bytes[i] = val;
         }
     }
-    defer list2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be equal despite different capacities
     try std.testing.expect(list1.eql(list2));
@@ -2259,7 +2299,7 @@ test "edge case: listAppendUnsafe multiple times" {
     }.copy;
 
     // Create a list with sufficient capacity
-    var list = listWithCapacity(5, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list = listWithCapacity(5, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Append multiple elements
     const element1: u8 = 10;
@@ -2271,7 +2311,7 @@ test "edge case: listAppendUnsafe multiple times" {
     const element3: u8 = 30;
     list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element3))), @sizeOf(u8), copy_fn);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), list.len());
 
@@ -2290,13 +2330,13 @@ test "seamless slice: isSeamlessSlice detection" {
     // Regular list should not be a seamless slice
     const data = [_]u8{ 1, 2, 3 };
     const regular_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer regular_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer regular_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expect(!regular_list.isSeamlessSlice());
 
     // Empty list should not be a seamless slice
     const empty_list = RocList.empty();
-    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expect(!empty_list.isSeamlessSlice());
 }
@@ -2308,13 +2348,13 @@ test "seamless slice: seamlessSliceMask functionality" {
     // Regular list should have mask of all zeros
     const data = [_]u8{ 1, 2, 3 };
     const regular_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer regular_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer regular_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), regular_list.seamlessSliceMask());
 
     // Empty list should have mask of all zeros
     const empty_list = RocList.empty();
-    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), empty_list.seamlessSliceMask());
 }
@@ -2338,7 +2378,7 @@ test "seamless slice: getCapacity behavior" {
     // Regular list capacity
     const data = [_]u8{ 1, 2, 3 };
     const regular_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer regular_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer regular_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const regular_capacity = regular_list.getCapacity();
     try std.testing.expect(regular_capacity >= 3);
@@ -2373,15 +2413,15 @@ test "complex reference counting: multiple increfs and decrefs" {
     try std.testing.expect(!list.isUnique());
 
     // Decrement back down
-    list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
-    list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
-    list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unique again
     try std.testing.expect(list.isUnique());
 
     // Final cleanup
-    list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "complex reference counting: makeUnique with shared list" {
@@ -2393,13 +2433,13 @@ test "complex reference counting: makeUnique with shared list" {
 
     // Make the list non-unique by incrementing reference count
     original_list.incref(1, false);
-    defer original_list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer original_list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expect(!original_list.isUnique());
 
     // makeUnique should create a new copy
-    const unique_list = original_list.makeUnique(@alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
-    defer unique_list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const unique_list = original_list.makeUnique(@alignOf(i32), @sizeOf(i32), false, null, rcNone, null, rcNone, test_env.getOps());
+    defer unique_list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // The unique list should be different from the original
     try std.testing.expect(unique_list.bytes != original_list.bytes);
@@ -2421,13 +2461,13 @@ test "complex reference counting: listIsUnique consistency" {
 
     // After incref, both should report not unique
     list.incref(1, false);
-    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(list.isUnique(), listIsUnique(list));
     try std.testing.expect(!listIsUnique(list));
 
     // Final cleanup
-    list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 }
 
 test "complex reference counting: clone behavior" {
@@ -2438,8 +2478,8 @@ test "complex reference counting: clone behavior" {
     const original_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Clone should create a new independent copy
-    const cloned_list = listClone(original_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, test_env.getOps());
-    defer cloned_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const cloned_list = listClone(original_list, @alignOf(u8), @sizeOf(u8), false, null, rcNone, null, rcNone, test_env.getOps());
+    defer cloned_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Cloned list should be unique and have same content
     try std.testing.expect(cloned_list.isUnique());
@@ -2451,7 +2491,7 @@ test "complex reference counting: empty list operations" {
     defer test_env.deinit();
 
     const empty_list = RocList.empty();
-    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Empty lists should handle basic operations gracefully
     try std.testing.expect(empty_list.isUnique());
@@ -2482,7 +2522,7 @@ test "listReplaceInPlace basic functionality" {
     const new_element: u8 = 99;
     var out_element: u8 = 0;
     const result = listReplaceInPlace(list, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element)), copy_fn);
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
     try std.testing.expectEqual(@as(u8, 30), out_element); // original value
@@ -2518,7 +2558,7 @@ test "listReplaceInPlace first and last elements" {
     const new_first: i32 = -999;
     var out_first: i32 = 0;
     const result1 = listReplaceInPlace(list1, 0, @as(?[*]u8, @ptrCast(@constCast(&new_first))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_first)), copy_fn);
-    defer result1.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer result1.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(i32, 100), out_first);
     const elements1_ptr = result1.elements(i32);
@@ -2532,7 +2572,7 @@ test "listReplaceInPlace first and last elements" {
     const new_last: i32 = 999;
     var out_last: i32 = 0;
     const result2 = listReplaceInPlace(list2, 2, @as(?[*]u8, @ptrCast(@constCast(&new_last))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_last)), copy_fn);
-    defer result2.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer result2.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(i32, 300), out_last);
     const elements2_ptr = result2.elements(i32);
@@ -2564,7 +2604,7 @@ test "listReplaceInPlace single element list" {
     const new_element: u16 = 84;
     var out_element: u16 = 0;
     const result = listReplaceInPlace(list, 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), @as(?[*]u8, @ptrCast(&out_element)), copy_fn);
-    defer result.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
     try std.testing.expectEqual(@as(u16, 42), out_element); // original value
@@ -2597,14 +2637,14 @@ test "listReplaceInPlace vs listReplace comparison" {
     const new_element1: u8 = 99;
     var out_element1: u8 = 0;
     const result1 = listReplaceInPlace(list1, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element1))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element1)), copy_fn);
-    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Test listReplace with same parameters
     const list2 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
     const new_element2: u8 = 99;
     var out_element2: u8 = 0;
-    const result2 = listReplace(list2, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element2))), @sizeOf(u8), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element2)), copy_fn, test_env.getOps());
-    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const result2 = listReplace(list2, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element2))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element2)), copy_fn, test_env.getOps());
+    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Both should produce the same result
     try std.testing.expect(result1.eql(result2));
@@ -2618,7 +2658,7 @@ test "listAllocationPtr basic functionality" {
     // Test with regular list
     const data = [_]u8{ 1, 2, 3, 4 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const alloc_ptr = listAllocationPtr(list);
     try std.testing.expect(alloc_ptr != null);
@@ -2635,7 +2675,7 @@ test "listAllocationPtr empty list" {
     defer test_env.deinit();
 
     const empty_list = RocList.empty();
-    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const alloc_ptr = listAllocationPtr(empty_list);
     // Empty lists may have null allocation pointer
@@ -2659,13 +2699,13 @@ test "listIncref and listDecref public functions" {
     try std.testing.expect(!list.isUnique());
 
     // Use public listDecref function
-    listDecref(list, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    listDecref(list, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unique again
     try std.testing.expect(list.isUnique());
 
     // Final cleanup
-    listDecref(list, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    listDecref(list, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "integration: prepend then drop operations" {
@@ -2689,21 +2729,21 @@ test "integration: prepend then drop operations" {
 
     // Prepend multiple elements
     const element1: u8 = 1;
-    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
 
     const element2: u8 = 2;
-    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
 
     // Now we should have [2, 1, 5, 10, 15]
     try std.testing.expectEqual(@as(usize, 5), list.len());
 
     // Drop the middle element (index 2, value 5)
-    list = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 2, rcNone, rcNone, test_env.getOps());
+    list = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 2, null, rcNone, null, rcNone, test_env.getOps());
 
     // Now we should have [2, 1, 10, 15]
     try std.testing.expectEqual(@as(usize, 4), list.len());
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     const elements_ptr = list.elements(u8);
     try std.testing.expect(elements_ptr != null);
@@ -2726,14 +2766,14 @@ test "integration: concat then sublist operations" {
     const list2 = RocList.fromSlice(i16, data2[0..], false, test_env.getOps());
 
     // Concatenate them
-    const concatenated = listConcat(list1, list2, @alignOf(i16), @sizeOf(i16), false, rcNone, rcNone, test_env.getOps());
+    const concatenated = listConcat(list1, list2, @alignOf(i16), @sizeOf(i16), false, null, rcNone, null, rcNone, test_env.getOps());
 
     // Should have [100, 200, 300, 400, 500]
     try std.testing.expectEqual(@as(usize, 5), concatenated.len());
 
     // Extract a sublist from the middle
-    const sublist = listSublist(concatenated, @alignOf(i16), @sizeOf(i16), false, 1, 3, rcNone, test_env.getOps());
-    defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
+    const sublist = listSublist(concatenated, @alignOf(i16), @sizeOf(i16), false, 1, 3, null, rcNone, test_env.getOps());
+    defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, null, rcNone, test_env.getOps());
 
     // Should have [200, 300, 400]
     try std.testing.expectEqual(@as(usize, 3), sublist.len());
@@ -2768,15 +2808,15 @@ test "integration: replace then swap operations" {
     // Replace element at index 1 (20 -> 99)
     const new_element: u32 = 99;
     var out_element: u32 = 0;
-    list = listReplace(list, @alignOf(u32), 1, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u32), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    list = listReplace(list, @alignOf(u32), 1, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
 
     try std.testing.expectEqual(@as(u32, 20), out_element);
 
     // Now we should have [10, 99, 30, 40]
     // Swap elements at indices 0 and 2 (10 <-> 30)
-    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, rcNone, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
 
-    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 
     // Now we should have [30, 99, 10, 40]
     try std.testing.expectEqual(@as(usize, 4), list.len());
@@ -2808,8 +2848,8 @@ test "stress: large list operations" {
     try std.testing.expect(large_list.getCapacity() >= large_size);
 
     // Test sublist on large list (note: listSublist consumes the original list)
-    const mid_sublist = listSublist(large_list, @alignOf(u16), @sizeOf(u16), false, 400, 200, rcNone, test_env.getOps());
-    defer mid_sublist.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const mid_sublist = listSublist(large_list, @alignOf(u16), @sizeOf(u16), false, 400, 200, null, rcNone, test_env.getOps());
+    defer mid_sublist.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 200), mid_sublist.len());
 
@@ -2837,7 +2877,7 @@ test "stress: many small operations" {
     }.copy;
 
     // Start with a list with some capacity
-    var list = listWithCapacity(50, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list = listWithCapacity(50, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Add many elements using listAppendUnsafe
     var i: u8 = 0;
@@ -2856,7 +2896,7 @@ test "stress: many small operations" {
         try std.testing.expectEqual(@as(u8, @intCast(idx)), elem);
     }
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "memory management: capacity boundary conditions" {
@@ -2865,14 +2905,14 @@ test "memory management: capacity boundary conditions" {
 
     // Create a list with exact capacity
     const exact_capacity: usize = 10;
-    var list = listWithCapacity(exact_capacity, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    var list = listWithCapacity(exact_capacity, @alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expect(list.getCapacity() >= exact_capacity);
     try std.testing.expectEqual(@as(usize, 0), list.len());
 
     // Use listReserve to ensure we have exactly the capacity we want
-    list = listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
-    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    list = listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 
     // Verify capacity management functions work correctly
     const initial_capacity = list.getCapacity();
@@ -2891,14 +2931,14 @@ test "memory management: release excess capacity edge cases" {
     const small_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve much more capacity than needed
-    const oversized_list = listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    const oversized_list = listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), oversized_list.len());
     try std.testing.expect(oversized_list.getCapacity() >= 1000);
 
     // Release excess capacity
-    const trimmed_list = listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
-    defer trimmed_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const trimmed_list = listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    defer trimmed_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should maintain content but reduce capacity
     try std.testing.expectEqual(@as(usize, 1), trimmed_list.len());
@@ -2921,20 +2961,20 @@ test "boundary conditions: zero-sized operations" {
 
     // Zero-length sublist from start
     const list1 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-    const empty_start = listSublist(list1, @alignOf(u16), @sizeOf(u16), false, 0, 0, rcNone, test_env.getOps());
-    defer empty_start.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const empty_start = listSublist(list1, @alignOf(u16), @sizeOf(u16), false, 0, 0, null, rcNone, test_env.getOps());
+    defer empty_start.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), empty_start.len());
 
     // Zero-length sublist from middle
     const list2 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-    const empty_mid = listSublist(list2, @alignOf(u16), @sizeOf(u16), false, 2, 0, rcNone, test_env.getOps());
-    defer empty_mid.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const empty_mid = listSublist(list2, @alignOf(u16), @sizeOf(u16), false, 2, 0, null, rcNone, test_env.getOps());
+    defer empty_mid.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), empty_mid.len());
 
     // Zero-length sublist from end
     const list3 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-    const empty_end = listSublist(list3, @alignOf(u16), @sizeOf(u16), false, 5, 0, rcNone, test_env.getOps());
-    defer empty_end.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    const empty_end = listSublist(list3, @alignOf(u16), @sizeOf(u16), false, 5, 0, null, rcNone, test_env.getOps());
+    defer empty_end.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), empty_end.len());
 }
 
@@ -2946,8 +2986,8 @@ test "boundary conditions: maximum index operations" {
 
     // Test dropAt with index at boundary (last valid index)
     const list1 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    const dropped_last = listDropAt(list1, @alignOf(u8), @sizeOf(u8), false, 2, rcNone, rcNone, test_env.getOps());
-    defer dropped_last.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const dropped_last = listDropAt(list1, @alignOf(u8), @sizeOf(u8), false, 2, null, rcNone, null, rcNone, test_env.getOps());
+    defer dropped_last.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 2), dropped_last.len());
     const elements_ptr = dropped_last.elements(u8);
@@ -2958,8 +2998,8 @@ test "boundary conditions: maximum index operations" {
 
     // Test dropAt with out-of-bounds index (should return original list)
     const list2 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    const dropped_oob = listDropAt(list2, @alignOf(u8), @sizeOf(u8), false, 10, rcNone, rcNone, test_env.getOps());
-    defer dropped_oob.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const dropped_oob = listDropAt(list2, @alignOf(u8), @sizeOf(u8), false, 10, null, rcNone, null, rcNone, test_env.getOps());
+    defer dropped_oob.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), dropped_oob.len());
 }
@@ -2973,11 +3013,11 @@ test "memory management: clone with different update modes" {
 
     // Make the list non-unique
     original.incref(1, false);
-    defer original.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    defer original.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Clone should create an independent copy
-    const cloned = listClone(original, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
-    defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const cloned = listClone(original, @alignOf(i32), @sizeOf(i32), false, null, rcNone, null, rcNone, test_env.getOps());
+    defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Verify independence - they should have the same content but different memory
     try std.testing.expect(cloned.eql(original));
@@ -3013,8 +3053,8 @@ test "boundary conditions: swap with identical indices" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Swap element with itself (index 2 with index 2)
-    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, rcNone, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
-    defer swapped.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    defer swapped.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unchanged
     try std.testing.expectEqual(@as(usize, 4), swapped.len());
@@ -3036,17 +3076,17 @@ test "memory management: multiple reserve operations" {
     var list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve capacity multiple times, each time increasing
-    list = listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 12); // 2 existing + 10 spare
 
-    list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 22); // 2 existing + 20 spare
 
-    list = listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     // Should not decrease capacity, so still >= 22
     try std.testing.expect(list.getCapacity() >= 22);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Verify content is preserved through all operations
     try std.testing.expectEqual(@as(usize, 2), list.len());
@@ -3076,7 +3116,7 @@ test "push: basic functionality with empty list" {
     try std.testing.expect(elements_ptr != null);
     try std.testing.expectEqual(@as(u8, 42), elements_ptr.?[0]);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "push: multiple elements with reallocation" {
@@ -3103,7 +3143,7 @@ test "push: multiple elements with reallocation" {
         try std.testing.expectEqual(expected, elements[i]);
     }
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "push: with pre-existing capacity" {
@@ -3111,7 +3151,7 @@ test "push: with pre-existing capacity" {
     defer test_env.deinit();
 
     // Create a list with capacity but no elements
-    var list = listWithCapacity(10, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    var list = listWithCapacity(10, @alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 
     const initial_capacity = list.getCapacity();
     try std.testing.expect(initial_capacity >= 10);
@@ -3134,7 +3174,7 @@ test "push: with pre-existing capacity" {
     try std.testing.expectEqual(@as(u32, 100), elements[0]);
     try std.testing.expectEqual(@as(u32, 200), elements[1]);
 
-    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 }
 
 test "push: different sized elements" {
@@ -3158,7 +3198,7 @@ test "push: different sized elements" {
     try std.testing.expectEqual(@as(u64, 0xDEADBEEF), elements[0]);
     try std.testing.expectEqual(@as(u64, 0xCAFEBABE), elements[1]);
 
-    defer list.decref(@alignOf(u64), @sizeOf(u64), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
 }
 
 test "push: stress test with many elements" {
@@ -3187,7 +3227,7 @@ test "push: stress test with many elements" {
         try std.testing.expectEqual(i, elements[i]);
     }
 
-    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 }
 
 test "append: with unique list (refcount 1)" {
@@ -3215,7 +3255,7 @@ test "append: with unique list (refcount 1)" {
     try std.testing.expectEqual(@as(u8, 10), elements[0]);
     try std.testing.expectEqual(@as(u8, 20), elements[1]);
 
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "append: with shared list (refcount > 1)" {
@@ -3247,8 +3287,8 @@ test "append: with shared list (refcount > 1)" {
     try std.testing.expectEqual(@as(u8, 200), result_elements[1]);
     try std.testing.expectEqual(@as(u8, 50), result_elements[2]);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "append: with empty list" {
@@ -3266,7 +3306,7 @@ test "append: with empty list" {
     try std.testing.expect(elements_ptr != null);
     try std.testing.expectEqual(@as(u32, 42), elements_ptr.?[0]);
 
-    defer result.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 }
 
 test "push: large element types" {
@@ -3300,7 +3340,7 @@ test "push: large element types" {
     try std.testing.expectEqual(@as(u64, 5), elements[1].a);
     try std.testing.expectEqual(@as(u64, 6), elements[1].b);
 
-    defer list.decref(@alignOf(LargeElement), @sizeOf(LargeElement), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(LargeElement), @sizeOf(LargeElement), false, null, rcNone, test_env.getOps());
 }
 
 test "push: with exact capacity boundary" {
@@ -3308,7 +3348,7 @@ test "push: with exact capacity boundary" {
     defer test_env.deinit();
 
     // Create list with exact capacity of 3
-    var list = listWithCapacity(3, @alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    var list = listWithCapacity(3, @alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     const initial_capacity = list.getCapacity();
     try std.testing.expect(initial_capacity >= 3);
@@ -3339,7 +3379,7 @@ test "push: with exact capacity boundary" {
     try std.testing.expectEqual(@as(u16, 333), elements[2]);
     try std.testing.expectEqual(@as(u16, 444), elements[3]);
 
-    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 }
 
 test "push: single byte elements" {
@@ -3366,7 +3406,7 @@ test "push: single byte elements" {
     try std.testing.expectEqual(@as(u8, 'l'), elements[3]);
     try std.testing.expectEqual(@as(u8, 'o'), elements[4]);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "append: refcount transitions" {
@@ -3403,8 +3443,8 @@ test "append: refcount transitions" {
     try std.testing.expectEqual(@as(u8, 20), result2_elements[1]);
     try std.testing.expectEqual(@as(u8, 30), result2_elements[2]);
 
-    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
-    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "append: capacity growth strategy" {
@@ -3435,8 +3475,8 @@ test "append: capacity growth strategy" {
     try std.testing.expectEqual(@as(u32, 300), result_elements[2]);
     try std.testing.expectEqual(@as(u32, 400), result_elements[3]);
 
-    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 }
 
 test "append: mixed with push operations" {
@@ -3473,8 +3513,8 @@ test "append: mixed with push operations" {
     try std.testing.expectEqual(@as(u8, 3), result_elements[2]);
     try std.testing.expectEqual(@as(u8, 4), result_elements[3]);
 
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
-    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 }
 
 test "push and append: large scale alternating operations" {
@@ -3502,7 +3542,7 @@ test "push and append: large scale alternating operations" {
         try std.testing.expectEqual(i, elements[i]);
     }
 
-    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 }
 
 // Helper function for tests that does proper append with cloning for shared lists
@@ -3523,7 +3563,7 @@ fn testAppend(
         const new_capacity = old_len + 1;
 
         // Create new list with capacity for the new element
-        var new_list = listWithCapacity(new_capacity, alignment, element_size, false, rcNone, test_env.getOps());
+        var new_list = listWithCapacity(new_capacity, alignment, element_size, false, null, rcNone, test_env.getOps());
         new_list.length = old_len + 1;
 
         // Copy existing elements
@@ -3583,9 +3623,9 @@ test "append: stress test with cloning" {
     }
 
     // Cleanup
-    defer original.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer original.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
     i = 0;
     while (i < 10) : (i += 1) {
-        defer clones[i].decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+        defer clones[i].decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
     }
 }
