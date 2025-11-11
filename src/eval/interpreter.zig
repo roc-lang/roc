@@ -58,6 +58,20 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
     elem_value.decref(context.layout_store, context.roc_ops);
 }
 
+fn interpreterLookupModuleEnv(
+    ctx: ?*const anyopaque,
+    module_ident: base_pkg.Ident.Idx,
+) ?*const can.ModuleEnv {
+    const map_ptr = ctx orelse return null;
+    const map: *const std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv) =
+        @ptrCast(@alignCast(map_ptr));
+
+    if (map.*.get(module_ident)) |entry| {
+        return entry;
+    }
+    return null;
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -1710,6 +1724,10 @@ pub const Interpreter = struct {
                     &self.snapshots,
                     &self.unify_scratch,
                     &self.unify_scratch.occurs_scratch,
+                    unify.ModuleEnvLookup{
+                        .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                        .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                    },
                     call_ret_rt_var,
                     poly_entry.return_var,
                     unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -4884,6 +4902,10 @@ pub const Interpreter = struct {
                 &self.snapshots,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
+                unify.ModuleEnvLookup{
+                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                },
                 params[i],
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
