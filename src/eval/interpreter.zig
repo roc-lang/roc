@@ -4476,9 +4476,9 @@ pub const Interpreter = struct {
         var resolved = self.runtime_types.resolveVar(type_var);
 
         // Apply rigid variable substitution if this is a rigid variable
-        // May need to follow multiple levels if unification created cycles
-        var max_subst_depth: usize = 10;
-        while (max_subst_depth > 0 and resolved.desc.content == .rigid) : (max_subst_depth -= 1) {
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
+        // Note: Cycles are prevented by unification, so this chain must terminate
+        while (resolved.desc.content == .rigid) {
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
@@ -5126,10 +5126,11 @@ pub const Interpreter = struct {
         // ret_var may now be constrained
 
         // Apply rigid substitutions to ret_var if needed
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
+        // Note: Cycles are prevented by unification, so this chain must terminate
         var resolved_ret = self.runtime_types.resolveVar(ret_var);
         var substituted_ret = ret_var;
-        var max_subst_depth: usize = 10;
-        while (max_subst_depth > 0 and resolved_ret.desc.content == .rigid) : (max_subst_depth -= 1) {
+        while (resolved_ret.desc.content == .rigid) {
             if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
                 substituted_ret = subst_var;
                 resolved_ret = self.runtime_types.resolveVar(subst_var);
