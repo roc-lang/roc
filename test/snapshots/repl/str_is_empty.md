@@ -9,8 +9,8 @@ type=repl
 » Str.is_empty("a")
 ~~~
 # OUTPUT
-Evaluation error: error.TypeMismatch
+Crash: This value has no implementation. It is only a type annotation for now.
 ---
-Evaluation error: error.TypeMismatch
+Crash: This value has no implementation. It is only a type annotation for now.
 # PROBLEMS
 NIL

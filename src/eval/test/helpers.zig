@@ -448,6 +448,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
     const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs_map.put(bool_ident, .{
@@ -462,6 +463,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // (see transformStrNominalToPrimitive in builtin_compiler)
     try module_envs_map.put(str_ident, .{
         .env = builtin_module.env,
+    });
+    try module_envs_map.put(list_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.list_type,
     });
     try module_envs_map.put(dict_ident, .{
         .env = builtin_module.env,

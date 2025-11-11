@@ -2,6 +2,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
+const trace_eval = build_options.trace_eval;
 const base_pkg = @import("base");
 const types = @import("types");
 const layout = @import("layout");
@@ -143,6 +145,9 @@ pub const Interpreter = struct {
     empty_scope: TypeScope,
     // Translation cache: (env_ptr, compile_var) -> runtime_var
     translate_cache: std.AutoHashMap(u64, types.Var),
+    // Rigid variable substitution context for generic function instantiation
+    // Maps rigid type variables to their concrete instantiations
+    rigid_subst: std.AutoHashMap(types.Var, types.Var),
 
     // Polymorphic instantiation cache
 
@@ -186,89 +191,28 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
-        // Safely access import count
-        const import_count = if (env.imports.imports.items.items.len > 0)
-            env.imports.imports.items.items.len
-        else
-            0;
-
-        if (other_envs.len > 0 and import_count > 0) {
-            // Allocate capacity for all imports (even if some are duplicates)
+        if (other_envs.len > 0) {
             try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-            try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
+            try import_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
 
-            // Process ALL imports, matching each to the appropriate module from other_envs
+            // Match imports in order with other_envs
+            const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
             for (0..import_count) |i| {
+                const module_env = other_envs[i];
                 const str_idx = env.imports.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // Find matching module in other_envs
-                // Since modules loaded from shared memory may have empty names, we match based on:
-                // 1. "Builtin" imports match the module with module_name="Builtin"
-                // 2. Imports containing "Stdout" match other_env[1] (first platform module)
-                // 3. Imports containing "Stderr" match other_env[2] (second platform module)
-                var matched_module: ?*const can.ModuleEnv = null;
+                // Find or create the Ident.Idx for this import name
+                const ident_idx = env.common.findIdent(import_name) orelse continue;
 
-                if (std.mem.indexOf(u8, import_name, "Builtin") != null) {
-                    // Match Builtin
-                    for (other_envs) |module_env| {
-                        if (std.mem.indexOf(u8, module_env.module_name, "Builtin") != null) {
-                            matched_module = module_env;
-                            break;
-                        }
-                    }
-                } else {
-                    // Dynamically match any platform module
-                    // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
-                    const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
-                        import_name[0 .. import_name.len - 4]
-                    else
-                        import_name;
-
-                    // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
-                    const module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
-                        without_ext[dot_idx + 1 ..]
-                    else
-                        without_ext;
-
-                    // Find matching platform module by searching through all other_envs
-                    for (other_envs) |platform_env| {
-                        const platform_module_name = platform_env.module_name;
-
-                        // Strip .roc extension if present for exact matching
-                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
-                            platform_module_name[0 .. platform_module_name.len - 4]
-                        else
-                            platform_module_name;
-
-                        // Match "Stdout" to "Stdout.roc" via exact match, not substring
-                        if (std.mem.eql(u8, name_without_ext, module_name)) {
-                            matched_module = platform_env;
-                            break;
-                        }
-                    }
-                }
-
-                const module_env = matched_module orelse {
-                    continue; // Skip if no match found
-                };
-
-                // Store in import_envs (always, for every import)
-                // This is the critical mapping that e_lookup_external needs!
+                // Store in all three maps
+                module_envs.putAssumeCapacity(ident_idx, module_env);
+                module_ids.putAssumeCapacity(ident_idx, next_id);
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
-                // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
-                const ident_idx = env.common.findIdent(import_name);
-                if (ident_idx) |idx| {
-                    // Only add to module_envs/module_ids if not already present (to avoid duplicates)
-                    if (!module_envs.contains(idx)) {
-                        module_envs.putAssumeCapacity(idx, module_env);
-                        module_ids.putAssumeCapacity(idx, next_id);
-                        next_id += 1;
-                    }
-                }
+                next_id += 1;
             }
         }
 
@@ -301,6 +245,7 @@ pub const Interpreter = struct {
             .var_to_layout_slot = slots,
             .empty_scope = scope,
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
+            .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .module_envs = module_envs,
@@ -400,7 +345,6 @@ pub const Interpreter = struct {
 
                 const tuple_idx = try self.runtime_layout_store.putTuple(param_layouts);
                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
-                // Keep args_ptr even for zero-sized tuples to preserve address information
                 args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true };
                 args_accessor = try args_tuple_value.asTuple(&self.runtime_layout_store);
 
@@ -428,7 +372,6 @@ pub const Interpreter = struct {
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
-
             return;
         }
 
@@ -569,8 +512,10 @@ pub const Interpreter = struct {
                             const patt = self.env.store.getPattern(r.pattern_idx);
                             if (patt != .assign) return error.NotImplemented;
                             const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
+                            // Search through all bindings, not just current block scope
+                            // This allows reassigning variables from outer scopes (e.g., in for loops)
                             var j: usize = self.bindings.items.len;
-                            while (j > original_len) {
+                            while (j > 0) {
                                 j -= 1;
                                 if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
                                     self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
@@ -958,8 +903,7 @@ pub const Interpreter = struct {
                         std.mem.copyForwards(u8, buffer[offset .. offset + slice.len], slice);
                         offset += slice.len;
                     }
-                    const created = RocStr.fromSlice(buffer, roc_ops);
-                    break :blk created;
+                    break :blk RocStr.fromSlice(buffer, roc_ops);
                 };
 
                 const value = try self.pushStr("");
@@ -971,8 +915,7 @@ pub const Interpreter = struct {
                 const content = self.env.getString(seg.literal);
                 const value = try self.pushStr(content);
                 const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
-                const created_str = RocStr.fromSlice(content, roc_ops);
-                roc_str.* = created_str;
+                roc_str.* = RocStr.fromSlice(content, roc_ops);
                 return value;
             },
             .e_frac_f32 => |lit| {
@@ -1560,8 +1503,14 @@ pub const Interpreter = struct {
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {
                 // Build a closure value with empty captures using the runtime layout for the lambda's type
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                // Use provided expected_rt_var if available (for cross-module instantiated functions),
+                // otherwise translate from compile-time types
+                const rt_var = if (expected_rt_var) |provided_var|
+                    provided_var
+                else blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
                 const closure_layout = try self.getRuntimeLayout(rt_var);
                 // Expect a closure layout from type-to-layout translation
                 if (closure_layout.tag != .closure) return error.NotImplemented;
@@ -1588,10 +1537,15 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .e_low_level_lambda => |lam| {
-                // Treat like e_lambda - build a closure that will crash when called
-                // (since the body will be e_runtime_error or will crash)
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                // Build a closure for a low-level builtin function
+                // Use provided expected_rt_var if available (for cross-module instantiated functions),
+                // otherwise translate from compile-time types
+                const rt_var = if (expected_rt_var) |provided_var|
+                    provided_var
+                else blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
                 const closure_layout = try self.getRuntimeLayout(rt_var);
                 const value = try self.pushRaw(closure_layout, 0);
                 self.registerDefValue(expr_idx, value);
@@ -1601,36 +1555,6 @@ pub const Interpreter = struct {
                     header.* = .{
                         .body_idx = lam.body,
                         .params = lam.args,
-                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                        .lambda_expr_idx = expr_idx,
-                        .source_env = self.env,
-                    };
-                }
-                return value;
-            },
-            .e_hosted_lambda => |hosted| {
-                // Build a closure for a hosted function that will dispatch to the host via RocOps
-                // We MUST create a closure layout manually since the type might be flex/unknown
-
-                // Manually create a closure layout instead of using getRuntimeLayout
-                // because hosted functions might have flex types
-                const closure_layout = Layout{
-                    .tag = .closure,
-                    .data = .{
-                        .closure = .{
-                            .captures_layout_idx = @enumFromInt(0), // No captures for hosted functions
-                        },
-                    },
-                };
-                const value = try self.pushRaw(closure_layout, 0);
-                self.registerDefValue(expr_idx, value);
-
-                if (value.ptr) |ptr| {
-                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                    header.* = .{
-                        .body_idx = hosted.body,
-                        .params = hosted.args,
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                         .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                         .lambda_expr_idx = expr_idx,
@@ -1756,6 +1680,7 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
+                if (all.len == 0) return error.TypeMismatch;
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
@@ -1784,40 +1709,106 @@ pub const Interpreter = struct {
                 }
 
                 // Runtime unification for call: constrain return type from arg types
+                const func_expr = self.env.store.getExpr(func_idx);
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
-                const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
+                const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
 
-                // Skip the function return type checking for now - it's causing issues
-                // Just use prepareCallWithFuncVar which will extract the return type
+                // Only instantiate if we have an actual function type (not a flex variable)
+                // This is needed for cross-module calls with rigid type parameters
+                const func_rt_orig_resolved = self.runtime_types.resolveVar(func_rt_var_orig);
+                const should_instantiate = func_rt_orig_resolved.desc.content == .structure and
+                    (func_rt_orig_resolved.desc.content.structure == .fn_pure or
+                        func_rt_orig_resolved.desc.content.structure == .fn_effectful or
+                        func_rt_orig_resolved.desc.content.structure == .fn_unbound);
+
+                var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                defer subst_map.deinit();
+                const func_rt_var = if (should_instantiate)
+                    try self.instantiateType(func_rt_var_orig, &subst_map)
+                else
+                    func_rt_var_orig;
+
+                // Save current rigid substitution context and merge in the new substitutions (only if we instantiated)
+                // This will be used during function body evaluation
+                const saved_subst = if (should_instantiate) try self.rigid_subst.clone() else null;
+                defer {
+                    if (saved_subst) |saved| {
+                        // Restore the previous substitution context after the call
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+                }
+
+                if (should_instantiate) {
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+
+                    // Clear the layout cache so layouts are recomputed with substitutions
+                    @memset(self.var_to_layout_slot.items, 0);
+                }
 
                 var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
                 defer self.allocator.free(arg_rt_buf);
                 var i: usize = 0;
                 while (i < arg_indices.len) : (i += 1) {
                     const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
-                    arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
+                    const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
+
+                    // Apply substitution if this argument is a rigid variable that was instantiated
+                    if (should_instantiate) {
+                        const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_buf[i] = substituted_arg;
+                            } else {
+                                arg_rt_buf[i] = arg_rt_var;
+                            }
+                        } else {
+                            arg_rt_buf[i] = arg_rt_var;
+                        }
+                    } else {
+                        arg_rt_buf[i] = arg_rt_var;
+                    }
                 }
-                const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
 
+                // Check if this is an error expression that shouldn't be called
+                // These should return TypeMismatch immediately
+                if (func_expr == .e_runtime_error or func_expr == .e_anno_only or func_expr == .e_crash) {
+                    return error.TypeMismatch;
+                }
+
+                // Prepare polymorphic call entry
+                // For flex types this may return null if the function type isn't resolved yet
+                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf) catch |err| blk: {
+                    // If we got TypeMismatch from prepareCallWithFuncVar, allow null
+                    // The function value will be evaluated and closures will be handled
+                    if (err == error.TypeMismatch) {
+                        break :blk null;
+                    }
+                    break :blk null;
+                };
                 // Unify this call expression's return var with the function's constrained return var
-                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+                // Only do this if we have a polymorphic call entry (concrete function type)
+                if (poly_entry) |entry| {
+                    const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+                    _ = try unify.unifyWithConf(
+                        self.env,
+                        self.runtime_types,
+                        &self.problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.unify_scratch.occurs_scratch,
+                        call_ret_rt_var,
+                        entry.return_var,
+                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                    );
+                }
 
-                _ = try unify.unifyWithConf(
-                    self.env,
-                    self.runtime_types,
-                    &self.problems,
-                    &self.snapshots,
-                    &self.unify_scratch,
-                    &self.unify_scratch.occurs_scratch,
-                    call_ret_rt_var,
-                    poly_entry.return_var,
-                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                );
-
-                _ = try self.getRuntimeLayout(call_ret_rt_var);
-
-                const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
+                // Pass the instantiated function type so cross-module generic functions work correctly
+                const func_val = try self.evalExprMinimal(func_idx, roc_ops, func_rt_var);
 
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
@@ -1859,23 +1850,8 @@ pub const Interpreter = struct {
                         return result;
                     }
 
-                    // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
-                    if (lambda_expr == .e_hosted_lambda) {
-                        const hosted = lambda_expr.e_hosted_lambda;
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, call_ret_rt_var);
-
-                        // Decref all args
-                        for (arg_values) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
-                        }
-
-                        return result;
-                    }
-
                     const params = self.env.store.slicePatterns(header.params);
-                    if (params.len != arg_indices.len) {
-                        return error.TypeMismatch;
-                    }
+                    if (params.len != arg_indices.len) return error.TypeMismatch;
                     // Provide closure context for capture lookup during body eval
                     try self.active_closures.append(func_val);
                     defer _ = self.active_closures.pop();
@@ -1896,13 +1872,11 @@ pub const Interpreter = struct {
                 }
 
                 // Fallback: direct lambda expression (legacy minimal path)
-                const func_expr = self.env.store.getExpr(func_idx);
+                // (func_expr was already declared above for external lookup handling)
                 if (func_expr == .e_lambda) {
                     const lambda = func_expr.e_lambda;
                     const params = self.env.store.slicePatterns(lambda.args);
-                    if (params.len != arg_indices.len) {
-                        return error.TypeMismatch;
-                    }
+                    if (params.len != arg_indices.len) return error.TypeMismatch;
                     var bind_count: usize = 0;
                     while (bind_count < params.len) : (bind_count += 1) {
                         try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0) });
@@ -1939,11 +1913,9 @@ pub const Interpreter = struct {
 
                 if (!treat_as_method) {
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
+                    if (receiver_value.ptr == null) return error.ZeroSizedType;
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
-                    if (rec_data.fields.count == 0 or receiver_value.ptr == null) {
-                        // Empty record or zero-sized record - field access should fail
-                        return error.TypeMismatch;
-                    }
+                    if (rec_data.fields.count == 0) return error.ZeroSizedType;
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                     const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);
@@ -2240,15 +2212,6 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
-                // Check what type of node this is by using the store's method
-                const is_def = other_env.store.isDefNode(lookup.target_node_idx);
-
-                // If it's not a def node, we can't evaluate it currently
-                // This might be a type declaration, lambda_capture, or other non-def node
-                if (!is_def) {
-                    return error.NotImplemented;
-                }
-
                 // The target_node_idx is a Def.Idx in the other module
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const target_def = other_env.store.getDef(target_def_idx);
@@ -2263,9 +2226,9 @@ pub const Interpreter = struct {
                 }
 
                 // Evaluate the definition's expression in the other module's context
-                const target_ct_var = can.ModuleEnv.varFrom(target_def.expr);
-                const target_rt_var = try self.translateTypeVar(self.env, target_ct_var);
-                const result = try self.evalExprMinimal(target_def.expr, roc_ops, target_rt_var);
+                // If this is being called as a function, pass through the instantiated type
+                // from the call site (via expected_rt_var) to avoid re-translating generic types
+                const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
 
                 return result;
             },
@@ -2825,85 +2788,6 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Call a hosted function via RocOps.hosted_fns array
-    /// This marshals arguments to the host, invokes the function pointer, and marshals the result back
-    fn callHostedFunction(
-        self: *Interpreter,
-        hosted_fn_index: u32,
-        args: []StackValue,
-        roc_ops: *RocOps,
-        return_rt_var: types.Var,
-    ) !StackValue {
-        // Validate index is within bounds
-        if (hosted_fn_index >= roc_ops.hosted_fns.count) {
-            self.triggerCrash("Hosted function index out of bounds", false, roc_ops);
-            return error.Crash;
-        }
-
-        // Get the hosted function pointer from RocOps
-        const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
-
-        // Allocate space for the return value
-        const return_layout = try self.getRuntimeLayout(return_rt_var);
-        _ = self.runtime_layout_store.layoutSize(return_layout);
-        const result_value = try self.pushRaw(return_layout, 0);
-
-        // Allocate stack space for marshalled arguments
-        // The host now uses the same RocStr as builtins, so no conversion needed
-        const ArgsStruct = extern struct { str: RocStr };
-        var args_struct: ArgsStruct = undefined;
-
-        // Marshal arguments into a contiguous struct matching the RocCall ABI
-        // For now, we support zero-argument and single-argument functions
-        if (args.len == 0) {
-            // Zero argument case - pass dummy pointer for args
-            const ret_ptr = if (result_value.ptr) |p| p else blk: {
-                // Zero-sized return - pass stack address
-                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
-            };
-
-            // For zero-argument functions, we still need to pass a valid args pointer
-            // Use the address of args_struct even though it won't be read
-            const arg_ptr = @as(*anyopaque, @ptrCast(&args_struct));
-
-            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            hosted_fn(roc_ops, ret_ptr, arg_ptr);
-        } else if (args.len == 1) {
-            // Single argument case - we need to marshal it properly
-            // For strings, we need to pass a RocStr struct wrapped in Args
-            const arg_ptr = blk: {
-                // For strings, we need to pass a RocStr struct
-                // Try to determine if this is a string by checking if it contains a RocStr
-                // For now, we assume it's a string if it has a pointer (TODO: better type checking)
-                if (args[0].ptr) |str_ptr| {
-                    const roc_str: *const RocStr = @ptrCast(@alignCast(str_ptr));
-                    // Host and builtin now use the same RocStr, so just copy it
-                    args_struct.str = roc_str.*;
-                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
-                } else {
-                    // Empty or zero-sized argument - create empty small string
-                    args_struct.str = RocStr.empty();
-                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
-                }
-            };
-
-            const ret_ptr = if (result_value.ptr) |p| p else blk: {
-                // Zero-sized return - pass stack address
-                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
-            };
-
-            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            hosted_fn(roc_ops, ret_ptr, arg_ptr);
-        } else {
-            // Multi-argument case - pack arguments into a struct
-            // TODO: implement multi-argument marshalling
-            self.triggerCrash("Multi-argument hosted functions not yet implemented in interpreter", false, roc_ops);
-            return error.Crash;
-        }
-
-        return result_value;
-    }
-
     /// Helper to create a simple boolean StackValue (for low-level builtins)
     fn makeSimpleBoolValue(self: *Interpreter, value: bool) !StackValue {
         const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
@@ -2914,6 +2798,7 @@ pub const Interpreter = struct {
         }
         return bool_value;
     }
+
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
         defer if (owned) self.allocator.free(@constCast(message));
         roc_ops.crash(message);
@@ -3695,7 +3580,6 @@ pub const Interpreter = struct {
         var false_idx: ?usize = null;
         var true_idx: ?usize = null;
         for (tags, 0..) |tag, i| {
-            // Use env to look up tag names - works for both Bool module and copied Bool types
             const name_text = self.env.getIdent(tag.name);
             if (std.mem.eql(u8, name_text, "False")) {
                 false_idx = i;
@@ -4435,6 +4319,7 @@ pub const Interpreter = struct {
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
+        self.rigid_subst.deinit();
         var it = self.poly_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.args.len > 0) {
@@ -4588,7 +4473,19 @@ pub const Interpreter = struct {
 
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
-        const resolved = self.runtime_types.resolveVar(type_var);
+        var resolved = self.runtime_types.resolveVar(type_var);
+
+        // Apply rigid variable substitution if this is a rigid variable
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
+        // Note: Cycles are prevented by unification, so this chain must terminate
+        while (resolved.desc.content == .rigid) {
+            if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
+                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else {
+                break;
+            }
+        }
+
         const idx: usize = @intFromEnum(resolved.var_);
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
@@ -4601,27 +4498,8 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
-                .record => |rec| blk: {
-                    // Check if this is an empty record (no fields)
-                    const fields_slice = self.runtime_types.getRecordFieldsSlice(rec.fields);
-                    if (fields_slice.len == 0) {
-                        break :blk try self.runtime_layout_store.ensureEmptyRecordLayout();
-                    }
-                    break :blk try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
-                },
-                .tuple => |tup| blk: {
-                    // Check if this is an empty tuple (no elements)
-                    const elems_slice = self.runtime_types.sliceVars(tup.elems);
-                    if (elems_slice.len == 0) {
-                        break :blk try self.runtime_layout_store.ensureEmptyRecordLayout();
-                    }
-                    break :blk try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
-                },
                 else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
             },
-            // Treat flex/unconstrained variables as empty records (zero-sized)
-            // This handles cases like `{}` return types that haven't been fully constrained
-            .flex => try self.runtime_layout_store.ensureEmptyRecordLayout(),
             else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
         };
         slot_ptr.* = @intFromEnum(layout_idx) + 1;
@@ -4784,8 +4662,11 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
+                                // Translate the tag name identifier from the source module to the current module
+                                const name_str = module.getIdent(tag.name);
+                                const translated_name = try self.env.insertIdent(base_pkg.Ident.for_text(name_str));
                                 tag.* = .{
-                                    .name = tag.name,
+                                    .name = translated_name,
                                     .args = rt_args_range,
                                 };
                             }
@@ -4976,13 +4857,138 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
-                    return error.TypeMismatch;
+                    // Handle generic type parameters from compiled builtin modules.
+                    // When a generic type variable (like `item` or `state` in List.fold) is
+                    // serialized in the compiled Builtin module, it may have .err content
+                    // because no concrete type was known at compile time.
+                    // Create a fresh unbound variable to represent this generic parameter.
+                    // This will be properly instantiated/unified when the function is called.
+                    break :blk try self.runtime_types.fresh();
                 },
             }
         };
 
-        try self.translate_cache.put(key, out_var);
-        return out_var;
+        // Check if this variable has a substitution active (for generic function instantiation)
+        const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
+            // Recursively check if the substituted variable also has a substitution
+            var current = substituted;
+            while (self.rigid_subst.get(current)) |next_subst| {
+                current = next_subst;
+            }
+            break :blk current;
+        } else out_var;
+
+        try self.translate_cache.put(key, final_var);
+        return final_var;
+    }
+
+    /// Instantiate a type by replacing rigid variables with fresh flex variables.
+    /// This is used when calling generic functions - it allows rigid type parameters
+    /// to be unified with concrete argument types.
+    fn instantiateType(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!types.Var {
+        const resolved = self.runtime_types.resolveVar(type_var);
+
+        // Check if we've already instantiated this variable
+        if (subst_map.get(resolved.var_)) |instantiated| {
+            return instantiated;
+        }
+
+        const instantiated = switch (resolved.desc.content) {
+            .rigid => blk: {
+                // Replace rigid with fresh flex that can be unified
+                const fresh = try self.runtime_types.fresh();
+                try subst_map.put(resolved.var_, fresh);
+                break :blk fresh;
+            },
+            .structure => |st| blk_struct: {
+                // Recursively instantiate type arguments in structures
+                const new_var = switch (st) {
+                    .fn_pure => |f| blk_fn: {
+                        const arg_vars = self.runtime_types.sliceVars(f.args);
+                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
+                        defer self.allocator.free(new_args);
+                        for (arg_vars, 0..) |arg_var, i| {
+                            new_args[i] = try self.instantiateType(arg_var, subst_map);
+                        }
+                        const new_ret = try self.instantiateType(f.ret, subst_map);
+                        const content = try self.runtime_types.mkFuncPure(new_args, new_ret);
+                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .fn_effectful => |f| blk_fn: {
+                        const arg_vars = self.runtime_types.sliceVars(f.args);
+                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
+                        defer self.allocator.free(new_args);
+                        for (arg_vars, 0..) |arg_var, i| {
+                            new_args[i] = try self.instantiateType(arg_var, subst_map);
+                        }
+                        const new_ret = try self.instantiateType(f.ret, subst_map);
+                        const content = try self.runtime_types.mkFuncEffectful(new_args, new_ret);
+                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .fn_unbound => |f| blk_fn: {
+                        const arg_vars = self.runtime_types.sliceVars(f.args);
+                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
+                        defer self.allocator.free(new_args);
+                        for (arg_vars, 0..) |arg_var, i| {
+                            new_args[i] = try self.instantiateType(arg_var, subst_map);
+                        }
+                        const new_ret = try self.instantiateType(f.ret, subst_map);
+                        const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
+                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .list => |elem_var| blk_list: {
+                        // Recursively instantiate the element type
+                        const new_elem = try self.instantiateType(elem_var, subst_map);
+                        const content = types.Content{ .structure = .{ .list = new_elem } };
+                        break :blk_list try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .box => |boxed_var| blk_box: {
+                        // Recursively instantiate the boxed type
+                        const new_boxed = try self.instantiateType(boxed_var, subst_map);
+                        const content = types.Content{ .structure = .{ .box = new_boxed } };
+                        break :blk_box try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .tuple => |tuple| blk_tuple: {
+                        // Recursively instantiate tuple element types
+                        const elem_vars = self.runtime_types.sliceVars(tuple.elems);
+                        var new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
+                        defer self.allocator.free(new_elems);
+                        for (elem_vars, 0..) |elem_var, i| {
+                            new_elems[i] = try self.instantiateType(elem_var, subst_map);
+                        }
+                        const new_elems_range = try self.runtime_types.appendVars(new_elems);
+                        const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
+                        break :blk_tuple try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .record => |record| blk_record: {
+                        // Recursively instantiate record field types
+                        const fields = self.runtime_types.record_fields.sliceRange(record.fields);
+                        var new_fields = try self.allocator.alloc(types.RecordField, fields.len);
+                        defer self.allocator.free(new_fields);
+                        var i: usize = 0;
+                        while (i < fields.len) : (i += 1) {
+                            const field = fields.get(i);
+                            new_fields[i] = .{
+                                .name = field.name,
+                                .var_ = try self.instantiateType(field.var_, subst_map),
+                            };
+                        }
+                        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
+                        const new_ext = try self.instantiateType(record.ext, subst_map);
+                        const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = new_ext } } };
+                        break :blk_record try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    // For other structures (str, num, empty_record, etc.), return as-is
+                    else => type_var,
+                };
+                try subst_map.put(resolved.var_, new_var);
+                break :blk_struct new_var;
+            },
+            // For other content types, return as-is
+            else => type_var,
+        };
+
+        return instantiated;
     }
 
     /// Recursively expand a tag union's tags, returning an array list
@@ -5080,6 +5086,7 @@ pub const Interpreter = struct {
         if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         const func_resolved = self.runtime_types.resolveVar(func_type_var);
+
         const ret_var: types.Var = switch (func_resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure => |f| f.ret,
@@ -5100,53 +5107,48 @@ pub const Interpreter = struct {
             },
             else => &[_]types.Var{},
         };
+        if (params.len != args.len) return error.TypeMismatch;
 
-        // Special case: if func has 1 param that is empty tuple () and call has 0 args, that's valid
-        const is_unit_arg_call = unit_check: {
-            if (params.len == 1 and args.len == 0) {
-                const param_resolved = self.runtime_types.resolveVar(params[0]);
-                if (param_resolved.desc.content == .structure) {
-                    const struct_flat = param_resolved.desc.content.structure;
-                    // Empty tuple has 0 fields
-                    if (struct_flat == .tuple and struct_flat.tuple.elems.len() == 0) {
-                        break :unit_check true;
-                    }
-                }
-            }
-            break :unit_check false;
-        };
-
-        if (params.len != args.len and !is_unit_arg_call) return error.TypeMismatch;
-
-        // Skip unification if this is a unit arg call (0 args to unify)
-        if (!is_unit_arg_call) {
-            var i: usize = 0;
-            while (i < params.len) : (i += 1) {
-                _ = try unify.unifyWithConf(
-                    self.env,
-                    self.runtime_types,
-                    &self.problems,
-                    &self.snapshots,
-                    &self.unify_scratch,
-                    &self.unify_scratch.occurs_scratch,
-                    params[i],
-                    args[i],
-                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                );
-            }
+        var i: usize = 0;
+        while (i < params.len) : (i += 1) {
+            _ = try unify.unifyWithConf(
+                self.env,
+                self.runtime_types,
+                &self.problems,
+                &self.snapshots,
+                &self.unify_scratch,
+                &self.unify_scratch.occurs_scratch,
+                params[i],
+                args[i],
+                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+            );
         }
         // ret_var may now be constrained
 
+        // Apply rigid substitutions to ret_var if needed
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
+        // Note: Cycles are prevented by unification, so this chain must terminate
+        var resolved_ret = self.runtime_types.resolveVar(ret_var);
+        var substituted_ret = ret_var;
+        while (resolved_ret.desc.content == .rigid) {
+            if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                substituted_ret = subst_var;
+                resolved_ret = self.runtime_types.resolveVar(subst_var);
+            } else {
+                break;
+            }
+        }
+
         // Ensure layout slot for return var
-        _ = try self.getRuntimeLayout(ret_var);
-        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret_var).var_);
+        _ = try self.getRuntimeLayout(substituted_ret);
+        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(substituted_ret).var_);
         try self.ensureVarLayoutCapacity(root_idx + 1);
         const slot = self.var_to_layout_slot.items[root_idx];
         const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
         errdefer self.allocator.free(args_copy_mut);
         std.mem.copyForwards(types.Var, args_copy_mut, args);
 
-        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
+        const entry = PolyEntry{ .return_var = substituted_ret, .return_layout_slot = slot, .args = args_copy_mut };
         try self.polyInsert(module_id, func_id, entry);
         return entry;
     }
