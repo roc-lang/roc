@@ -979,27 +979,42 @@ fn processAssociatedItemsSecondPass(
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
-                    // Register this associated item by its unqualified name
-                    // (e.g., "is_empty" not "Str.is_empty")
-                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                    // Get the type annotation index from the def - this is what has the actual type!
+                    // For anno-only defs, the expr is e_anno_only which doesn't have a type; the type anno has it.
+                    const def_cir = self.env.store.getDef(def_idx);
+                    const annotation_idx = def_cir.annotation.?;
+                    const annotation_cir = self.env.store.getAnnotation(annotation_idx);
+                    const type_anno_node_idx = annotation_cir.anno;
+                    const type_anno_idx_u16: u16 = @intCast(@intFromEnum(type_anno_node_idx));
 
-                    // Also register by the type-qualified name for type modules
-                    // This is needed so lookups like "Builtin.Str.is_empty" work
-                    if (self.env.module_kind == .type_module) {
-                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                    // Register this associated item by its unqualified name using the TYPE ANNOTATION index
+                    // (e.g., "is_empty" not "Str.is_empty")
+                    try self.env.setExposedNodeIndexById(name_ident, type_anno_idx_u16);
+
+                    // Compute type-qualified name (e.g., "Str.is_empty")
+                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+
+                    // Always register by the type-qualified name (e.g., "Str.is_empty") using TYPE ANNOTATION index
+                    // This is needed so lookups like "Str.is_empty" work from other modules
+                    if (type_qualified_idx.idx != name_ident.idx) {
+                        try self.env.setExposedNodeIndexById(type_qualified_idx, type_anno_idx_u16);
+                    }
+
+                    // Also ALWAYS register by the fully qualified name (e.g., "Builtin.Str.is_empty") using TYPE ANNOTATION index
+                    // This is needed for nested types inside regular modules (not just type modules)
+                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != name_ident.idx) {
+                        try self.env.setExposedNodeIndexById(qualified_idx, type_anno_idx_u16);
                     }
 
                     // Make the real pattern available in current scope (replaces placeholder)
-                    const def_cir = self.env.store.getDef(def_idx);
                     const pattern_idx = def_cir.pattern;
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                     // Update unqualified name (e.g., "is_empty")
                     try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
 
-                    // Update type-qualified name (e.g., "List.is_empty")
-                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+                    // Update type-qualified name (e.g., "List.is_empty") - reuse already computed value
                     if (type_qualified_idx.idx != name_ident.idx) {
                         try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
                     }
@@ -9721,35 +9736,15 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.met
                     // Only recursively expose its associated items (defs, not types)
                     try self.exposeAssociatedItems(qualified_idx, nested_type_decl);
                 },
-                .decl => |decl| {
-                    // Get the declaration name
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const pattern_ident_tok = pattern.ident.ident_tok;
-                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            // Build qualified name (e.g., "Foo.stuff")
-                            const parent_text = self.env.getIdent(parent_name);
-                            const decl_text = self.env.getIdent(decl_ident);
-                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
-
-                            // Node index was already set during definition processing
-                            // Just ensure qualified name is in exposed_items
-                            try self.env.addExposedById(qualified_idx);
-                        }
-                    }
+                .decl => {
+                    // Node index was already set during processAssociatedItemsSecondPass
+                    // for type modules, so there's nothing to do here. The old code was calling
+                    // addExposedById which would overwrite the correct value with 0.
                 },
-                .type_anno => |type_anno| {
-                    // Get the annotation name (for annotation-only definitions like compiler intrinsics)
-                    if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build qualified name (e.g., "Bool.is_ne")
-                        const parent_text = self.env.getIdent(parent_name);
-                        const anno_text = self.env.getIdent(anno_ident);
-                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
-
-                        // Node index was already set during definition processing
-                        // Just ensure qualified name is in exposed_items
-                        try self.env.addExposedById(qualified_idx);
-                    }
+                .type_anno => {
+                    // Node index was already set during processAssociatedItemsSecondPass
+                    // for type modules, so there's nothing to do here. The old code was calling
+                    // addExposedById which would overwrite the correct value with 0.
                 },
                 else => {},
             }
