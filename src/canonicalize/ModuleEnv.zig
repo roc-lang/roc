@@ -1726,13 +1726,12 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 
 /// Assert that nodes, regions and types are all in sync
 inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
-    _ = desc;
     if (builtin.mode == .Debug) {
         const idx1_int = @intFromEnum(idx1);
         const idx2_int = @intFromEnum(idx2);
 
         if (idx1_int != idx2_int) {
-            @panic("Idxs out of sync");
+            @panic("Idxs out of sync: " ++ desc);
         }
     }
 }
