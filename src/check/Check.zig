@@ -3621,59 +3621,46 @@ fn checkBinopExpr(
     does_fx = try self.checkExpr(binop.rhs, env, .no_expectation) or does_fx;
 
     switch (binop.op) {
-        .add => {
-            // For builtin numeric types, use the efficient special-cased numeric constraint logic
-            // For user-defined nominal types, desugar `a + b` to `a.plus(b)` using static dispatch
+        // Operators that support desugaring to method calls on nominal types
+        .add, .sub, .mul, .div, .div_trunc, .rem => {
+            // Map operator to its corresponding method name
+            const method_name: Ident.Idx = switch (binop.op) {
+                .add => self.cir.plus_ident,
+                .sub => self.cir.minus_ident,
+                .mul => self.cir.times_ident,
+                .div => self.cir.div_ident,
+                .div_trunc => self.cir.div_trunc_ident,
+                .rem => self.cir.rem_ident,
+                else => unreachable,
+            };
 
-            // Check if lhs is a nominal type
-            const lhs_resolved = self.types.resolveVar(lhs_var).desc.content;
-            const is_nominal = switch (lhs_resolved) {
-                .structure => |s| s == .nominal_type,
+            // Unwrap aliases to check the underlying type
+            var check_var = lhs_var;
+            var lhs_resolved = self.types.resolveVar(check_var);
+            while (lhs_resolved.desc.content == .alias) {
+                const alias_data = lhs_resolved.desc.content.alias;
+                check_var = self.types.getAliasBackingVar(alias_data);
+                lhs_resolved = self.types.resolveVar(check_var);
+            }
+
+            const lhs_content = lhs_resolved.desc.content;
+
+            // Check if this is a known builtin number type (optimization)
+            const is_known_number = switch (lhs_content) {
+                .structure => |s| s == .num,
                 else => false,
             };
 
-            if (is_nominal) {
-                // User-defined nominal type: use static dispatch to call the plus method
-                // Get the pre-cached "plus" identifier from the ModuleEnv
-                const method_name = self.cir.plus_ident;
+            // Check if we should use static dispatch (nominal types, or flex/rigid with constraints)
+            const should_use_static_dispatch = switch (lhs_content) {
+                .structure => |s| s == .nominal_type,
+                .flex => |f| f.constraints.len() > 0, // Flex with existing constraints
+                .rigid => |r| r.constraints.len() > 0, // Rigid with constraints from where clause
+                else => false,
+            };
 
-                // Create the function type: lhs_type, rhs_type -> ret_type
-                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
-
-                // The return type is unknown, so create a fresh variable
-                const ret_var = try self.fresh(env, expr_region);
-                try env.var_pool.addVarToRank(ret_var, env.rank());
-
-                // Create the constraint function type
-                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                    .args = args_range,
-                    .ret = ret_var,
-                    .needs_instantiation = false,
-                } } }, env, expr_region);
-                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
-
-                // Create the static dispatch constraint
-                const constraint = StaticDispatchConstraint{
-                    .fn_name = method_name,
-                    .fn_var = constraint_fn_var,
-                    .origin = .desugared_binop,
-                };
-                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-
-                // Create a constrained flex and unify it with the lhs (receiver)
-                const constrained_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                    env,
-                    expr_region,
-                );
-                try env.var_pool.addVarToRank(constrained_var, env.rank());
-
-                _ = try self.unify(constrained_var, lhs_var, env);
-
-                // Set the expression to redirect to the return type
-                try self.types.setVarRedirect(expr_var, ret_var);
-            } else {
-                // Builtin numeric type: use standard numeric constraints
+            if (is_known_number) {
+                // Builtin numeric type: use standard numeric constraints (optimized path)
                 // This is the same as the other arithmetic operators
                 switch (expected) {
                     .expected => |expectation| {
@@ -3711,51 +3698,81 @@ fn checkBinopExpr(
                 // Set root expr. If unifications succeeded this will the the
                 // num, otherwise the propgate error
                 try self.types.setVarRedirect(expr_var, lhs_var);
+            } else if (should_use_static_dispatch) {
+                // User-defined nominal type: use static dispatch to call the method
+
+                // Create the function type: lhs_type, rhs_type -> ret_type
+                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+
+                // The return type is unknown, so create a fresh variable
+                const ret_var = try self.fresh(env, expr_region);
+
+                // Create the constraint function type
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                // Create the static dispatch constraint
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = method_name,
+                    .fn_var = constraint_fn_var,
+                    .origin = .desugared_binop,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                // Create a constrained flex and unify it with the lhs (receiver)
+                const constrained_var = try self.freshFromContent(
+                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                    env,
+                    expr_region,
+                );
+
+                _ = try self.unify(constrained_var, lhs_var, env);
+
+                // Set the expression to redirect to the return type
+                try self.types.setVarRedirect(expr_var, ret_var);
+            } else {
+                // For unconstrained flex/rigid or other types, use numeric constraints
+                // This allows flex variables to unify with numbers
+                switch (expected) {
+                    .expected => |expectation| {
+                        const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
+                        const rhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
+
+                        if (expectation.from_annotation) {
+                            _ = try self.unifyWithCtx(lhs_instantiated, lhs_var, env, .anno);
+                            _ = try self.unifyWithCtx(rhs_instantiated, rhs_var, env, .anno);
+                        } else {
+                            _ = try self.unify(lhs_instantiated, lhs_var, env);
+                            _ = try self.unify(rhs_instantiated, rhs_var, env);
+                        }
+                    },
+                    .no_expectation => {
+                        // Start with empty requirements that can be constrained by operands
+                        const num_content = Content{ .structure = .{ .num = .{
+                            .num_unbound = .{
+                                .int_requirements = Num.IntRequirements.init(),
+                                .frac_requirements = Num.FracRequirements.init(),
+                            },
+                        } } };
+                        const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
+                        const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
+
+                        // Unify left and right operands with num
+                        _ = try self.unify(lhs_num_var, lhs_var, env);
+                        _ = try self.unify(rhs_num_var, rhs_var, env);
+                    },
+                }
+
+                // Unify left and right together
+                _ = try self.unify(lhs_var, rhs_var, env);
+
+                // Set root expr. If unifications succeeded this will the the
+                // num, otherwise the propgate error
+                try self.types.setVarRedirect(expr_var, lhs_var);
             }
-        },
-        .sub, .mul, .div, .rem, .pow, .div_trunc => {
-            // For now, we'll constrain both operands to be numbers
-            // In the future, this will use static dispatch based on the lhs type
-
-            // We check the lhs and the rhs independently, then unify them with
-            // each other. This ensures that all errors are surfaced and the
-            // operands are the same type
-            switch (expected) {
-                .expected => |expectation| {
-                    const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
-                    const rhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
-
-                    if (expectation.from_annotation) {
-                        _ = try self.unifyWithCtx(lhs_instantiated, lhs_var, env, .anno);
-                        _ = try self.unifyWithCtx(rhs_instantiated, rhs_var, env, .anno);
-                    } else {
-                        _ = try self.unify(lhs_instantiated, lhs_var, env);
-                        _ = try self.unify(rhs_instantiated, rhs_var, env);
-                    }
-                },
-                .no_expectation => {
-                    // Start with empty requirements that can be constrained by operands
-                    const num_content = Content{ .structure = .{ .num = .{
-                        .num_unbound = .{
-                            .int_requirements = Num.IntRequirements.init(),
-                            .frac_requirements = Num.FracRequirements.init(),
-                        },
-                    } } };
-                    const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-                    const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-
-                    // Unify left and right operands with num
-                    _ = try self.unify(lhs_num_var, lhs_var, env);
-                    _ = try self.unify(rhs_num_var, rhs_var, env);
-                },
-            }
-
-            // Unify left and right together
-            _ = try self.unify(lhs_var, rhs_var, env);
-
-            // Set root expr. If unifications succeeded this will the the
-            // num, otherwise the propgate error
-            _ = try self.unify(expr_var, lhs_var, env);
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Ensure the operands are the same type

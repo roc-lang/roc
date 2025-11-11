@@ -316,8 +316,14 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     };
                 } else {
                     // Apply the offset to convert from serialized offset to actual pointer
-                    const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
-                    const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
+                    // On 64-bit platforms, use @bitCast to handle negative relocation offsets correctly
+                    // On 32-bit platforms, use @intCast (relocation offsets should fit in 32 bits)
+                    const entries_addr = self.entries_offset + offset;
+                    const entries_addr_usize = if (@bitSizeOf(usize) == 64)
+                        @as(usize, @bitCast(entries_addr))
+                    else
+                        @as(usize, @intCast(entries_addr));
+                    const entries_ptr: [*]Entry = @ptrFromInt(entries_addr_usize);
 
                     builder.* = SortedArrayBuilder(K, V){
                         .entries = .{

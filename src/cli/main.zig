@@ -1313,14 +1313,24 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     const shm_allocator = shm.allocator();
 
-    // Create a properly aligned header structure
-    const Header = struct {
+    // Test coordination header structure
+    // This must match TestCoordinationHeader in src/interpreter_shim/main.zig
+    const Header = extern struct {
         parent_base_addr: u64,
         entry_count: u32,
         _padding: u32, // Ensure 8-byte alignment
         def_indices_offset: u64,
         module_env_offset: u64,
+        // Builtin type statement indices (from Builtin module)
+        bool_stmt: u32,
+        try_stmt: u32,
+        str_stmt: u32,
+        _padding2: u32, // Ensure 8-byte alignment
     };
+
+    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
+    var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
+    defer builtin_modules.deinit();
 
     const header_ptr = try shm_allocator.create(Header);
 
@@ -1333,6 +1343,11 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const env_ptr = try shm_allocator.create(ModuleEnv);
     const module_env_offset = @intFromPtr(env_ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_env_offset = module_env_offset;
+
+    // Store builtin type statement indices for the interpreter
+    header_ptr.bool_stmt = @intFromEnum(builtin_modules.builtin_indices.bool_type);
+    header_ptr.try_stmt = @intFromEnum(builtin_modules.builtin_indices.try_type);
+    header_ptr.str_stmt = @intFromEnum(builtin_modules.builtin_indices.str_type);
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -1349,10 +1364,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Extract module name from the file path
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
-
-    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
-    var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
-    defer builtin_modules.deinit();
 
     // Create arena allocator for scratch memory
     var arena = std.heap.ArenaAllocator.init(shm_allocator);
@@ -1396,9 +1407,13 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Create canonicalizer with module_envs
     var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
 
+    std.log.debug("After Can.init: builtin_statements = {{ .start = {}, .len = {} }}", .{ env.builtin_statements.span.start, env.builtin_statements.span.len });
+
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
     try canonicalizer.validateForExecution();
+
+    std.log.debug("After canonicalization: builtin_statements = {{ .start = {}, .len = {} }}", .{ env.builtin_statements.span.start, env.builtin_statements.span.len });
 
     // Validation check - ensure exports were populated during canonicalization
     if (env.exports.span.len == 0) {
@@ -2479,14 +2494,19 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
     defer builtin_module.deinit();
 
+    std.debug.print("DEBUG main.zig: About to call BuiltinTypes.init\n", .{});
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    std.debug.print("DEBUG main.zig: BuiltinTypes.init succeeded\n", .{});
+    std.debug.print("DEBUG main.zig: About to call ComptimeEvaluator.init\n", .{});
     var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
+    std.debug.print("DEBUG main.zig: ComptimeEvaluator.init succeeded\n", .{});
     // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
     // because the crash messages are owned by the evaluator but referenced by the problems
 
+    std.debug.print("DEBUG main.zig: About to call comptime_evaluator.evalAll()\n", .{});
     _ = comptime_evaluator.evalAll() catch |err| {
         try stderr.print("Failed to evaluate declarations: {}\n", .{err});
         return err;

@@ -129,6 +129,30 @@ test "arithmetic binops" {
     try runExpectInt("7 % 3", 1, .no_trace);
 }
 
+test "multiplication and division operator precedence" {
+    // All multiplication and division operators should have the same precedence
+    // and evaluate left-to-right
+
+    // Test that // and * have same precedence (left-to-right)
+    // 100 // 10 * 10 should be (100 // 10) * 10 = 10 * 10 = 100
+    // not 100 // (10 * 10) = 100 // 100 = 1
+    try runExpectInt("100 // 10 * 10", 100, .no_trace);
+
+    // Test that / and * have same precedence (left-to-right)
+    // 100 / 10 * 10 should be (100 / 10) * 10 = 10 * 10 = 100
+    // not 100 / (10 * 10) = 100 / 100 = 1
+    try runExpectInt("100 / 10 * 10", 100, .no_trace);
+
+    // Test that * and // have same precedence (left-to-right)
+    // 100 * 10 // 10 should be (100 * 10) // 10 = 1000 // 10 = 100
+    // not 100 * (10 // 10) = 100 * 1 = 100 (this happens to be the same, so use different numbers)
+    try runExpectInt("200 * 5 // 10", 100, .no_trace);
+
+    // Test that * and / have same precedence (left-to-right)
+    // 200 * 5 / 10 should be (200 * 5) / 10 = 1000 / 10 = 100
+    try runExpectInt("200 * 5 / 10", 100, .no_trace);
+}
+
 test "comparison binops" {
     return error.SkipZigTest; // Comparison operators not yet implemented
     //     try runExpectInt("if 1 < 2 100 else 200", 100, .no_trace);

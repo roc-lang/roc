@@ -38,18 +38,35 @@ const RocOps = builtins.host_abi.RocOps;
 const Interpreter = eval.Interpreter;
 const safe_memory = base.safe_memory;
 
-// Constants for shared memory layout
-const FIRST_ALLOC_OFFSET = 504; // 0x1f8 - First allocation starts at this offset
-const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
-
-// Header structure that matches the one in main.zig
-const Header = struct {
+// Test coordination header structure that follows SharedMemoryAllocator.Header
+// This must match the structure created in main.zig
+const TestCoordinationHeader = extern struct {
     parent_base_addr: u64,
     entry_count: u32,
     _padding: u32, // Ensure 8-byte alignment
     def_indices_offset: u64,
     module_env_offset: u64,
+    // Builtin type statement indices (from Builtin module)
+    bool_stmt: u32,
+    try_stmt: u32,
+    str_stmt: u32,
+    _padding2: u32, // Ensure 8-byte alignment
 };
+
+// The SharedMemoryAllocator places its own header at offset 0, and starts allocations
+// after that. Our test coordination header is the first allocation.
+const FIRST_ALLOC_OFFSET = @sizeOf(SharedMemoryAllocator.Header);
+
+// Compile-time checks to ensure proper alignment
+comptime {
+    const collections = @import("collections");
+    const alignment_bytes = collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits();
+
+    // The first allocation must be properly aligned for serialized data
+    if (FIRST_ALLOC_OFFSET % alignment_bytes != 0) {
+        @compileError("FIRST_ALLOC_OFFSET must be aligned to SERIALIZATION_ALIGNMENT");
+    }
+}
 
 /// Comprehensive error handling for the shim
 const ShimError = error{
@@ -131,17 +148,19 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const shm = global_shm.?;
     const env_ptr = global_env_ptr.?;
 
-    // Set up interpreter infrastructure (per-call, as it's lightweight)
-    var interpreter = try createInterpreter(env_ptr, roc_ops);
-    defer interpreter.deinit();
-
     // Get expression info from shared memory using entry_idx
     const base_ptr = shm.getBasePtr();
     var buf: [256]u8 = undefined;
 
     // Read the header structure from shared memory
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
-    const header_ptr: *const Header = @ptrFromInt(header_addr);
+    const header_ptr: *const TestCoordinationHeader = @ptrFromInt(header_addr);
+
+    // Set up interpreter infrastructure (per-call, as it's lightweight)
+    var interpreter = try createInterpreter(env_ptr, header_ptr, roc_ops);
+    defer interpreter.deinit();
+
+    // Validate entry_idx
     if (entry_idx >= header_ptr.entry_count) {
         const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
         roc_ops.crash(err_msg);
@@ -168,67 +187,95 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*ModuleEnv {
 
     // Validate memory layout - we need at least space for the header
-    const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
+    const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(TestCoordinationHeader);
     if (shm.total_size < min_required_size) {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
         roc_ops.crash(msg);
         return error.MemoryLayoutInvalid;
     }
-    var buf: [256]u8 = undefined;
 
     // Get base pointer
     const base_ptr = shm.getBasePtr();
 
-    // Read parent's shared memory base address from header and calculate relocation offset
-    const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
-    const header_ptr: *const Header = @ptrFromInt(header_addr);
+    // The ModuleEnv in shared memory was created live by the parent process.
+    // We need to RELOCATE the pointers, not deserialize from a serialized buffer.
+    const child_base_addr = @intFromPtr(base_ptr);
+
+    // Get the test coordination header
+    const header_addr = child_base_addr + FIRST_ALLOC_OFFSET;
+    const header_ptr: *const TestCoordinationHeader = @ptrFromInt(header_addr);
     const parent_base_addr = header_ptr.parent_base_addr;
 
-    // Calculate relocation offset
-    const child_base_addr = @intFromPtr(base_ptr);
-    const offset = @as(isize, @intCast(child_base_addr)) - @as(isize, @intCast(parent_base_addr));
+    // Calculate relocation offset (how much to adjust all pointers by)
+    const relocation_offset = @as(isize, @intCast(child_base_addr)) - @as(isize, @intCast(parent_base_addr));
 
-    // Sanity check for overflow potential
-    if (@abs(offset) > std.math.maxInt(isize) / 2) {
-        const err_msg = std.fmt.bufPrint(&buf, "Relocation offset too large: {}", .{offset}) catch "Relocation offset too large";
-        roc_ops.crash(err_msg);
-        return error.ModuleEnvSetupFailed;
-    }
+    // Get the ModuleEnv pointer (it's a live struct, not serialized)
+    const env_addr = child_base_addr + @as(usize, @intCast(header_ptr.module_env_offset));
+    const env_ptr: *ModuleEnv = @ptrFromInt(env_addr);
 
-    // Get ModuleEnv.Serialized pointer from the offset stored in the header
-    const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
-    const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
+    // Relocate all pointers in the ModuleEnv to point to the child's address space
+    env_ptr.relocate(relocation_offset);
 
-    // Deserialize the ModuleEnv, which properly reconstructs runtime fields
-    // Empty strings are used for source and module_name since they're not needed in the interpreter
-    const env_ptr = serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
+    // IMPORTANT: The gpa allocator fields contain function pointers from the parent process.
+    // We must replace them with fresh allocators for the child process.
+    env_ptr.gpa = std.heap.page_allocator;
+    env_ptr.store.gpa = std.heap.page_allocator;
 
     return env_ptr;
 }
 
 /// Create and initialize interpreter with heap-allocated stable objects
-fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
+fn createInterpreter(env_ptr: *ModuleEnv, header: *const TestCoordinationHeader, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
-    // Extract builtin statement indices from the builtin_statements span
-    // The span contains Bool, Result, and Str statements
-    const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
-    const try_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 1);
-    const str_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 2);
+    // Get builtin statement indices from the header (provided by parent process)
+    const bool_stmt: CIR.Statement.Idx = @enumFromInt(header.bool_stmt);
+    const try_stmt: CIR.Statement.Idx = @enumFromInt(header.try_stmt);
+    const str_stmt: CIR.Statement.Idx = @enumFromInt(header.str_stmt);
+    // Load the actual builtin modules (Bool, Result, Str) which contain the type definitions
+    // We need to load these from the embedded Builtin.bin, not from the user's ModuleEnv
+    const compiled_builtins = @import("compiled_builtins");
+    const builtin_loading = @import("eval").builtin_loading;
 
-    // In the shim context, builtins are embedded in the main module_env
+    var bool_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Bool", compiled_builtins.builtin_source) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Failed to load Bool module: {s}", .{@errorName(err)}) catch "Failed to load Bool module";
+        roc_ops.crash(msg);
+        return error.InterpreterSetupFailed;
+    };
+    defer bool_module.deinit();
+
+    var result_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Result", compiled_builtins.builtin_source) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Failed to load Result module: {s}", .{@errorName(err)}) catch "Failed to load Result module";
+        roc_ops.crash(msg);
+        return error.InterpreterSetupFailed;
+    };
+    defer result_module.deinit();
+
+    var str_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Str", compiled_builtins.builtin_source) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Failed to load Str module: {s}", .{@errorName(err)}) catch "Failed to load Str module";
+        roc_ops.crash(msg);
+        return error.InterpreterSetupFailed;
+    };
+    defer str_module.deinit();
+
+    // Use the loaded builtin modules for type lookups
     const builtin_types = eval.BuiltinTypes{
         .bool_stmt = bool_stmt,
         .try_stmt = try_stmt,
         .str_stmt = str_stmt,
-        .bool_env = env_ptr,
-        .try_env = env_ptr,
-        .str_env = env_ptr,
+        .bool_env = bool_module.env,
+        .try_env = result_module.env,
+        .str_env = str_module.env,
     };
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch {
-        roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Interpreter initialization failed: {s}", .{@errorName(err)}) catch "INTERPRETER SHIM: Interpreter initialization failed";
+        roc_ops.crash(msg);
         return error.InterpreterSetupFailed;
     };
     return interpreter;

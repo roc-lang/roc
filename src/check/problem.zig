@@ -268,6 +268,8 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
+    /// Hash map for O(1) lookup of operator symbols from method names
+    operator_symbol_map: std.AutoHashMap(Ident.Idx, []const u8),
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -280,6 +282,15 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
     ) Self {
+        // Initialize operator symbol map for O(1) lookup
+        var operator_symbol_map = std.AutoHashMap(Ident.Idx, []const u8).init(gpa);
+        operator_symbol_map.put(can_ir.plus_ident, "+") catch unreachable;
+        operator_symbol_map.put(can_ir.minus_ident, "-") catch unreachable;
+        operator_symbol_map.put(can_ir.times_ident, "*") catch unreachable;
+        operator_symbol_map.put(can_ir.div_ident, "/") catch unreachable;
+        operator_symbol_map.put(can_ir.div_trunc_ident, "//") catch unreachable;
+        operator_symbol_map.put(can_ir.rem_ident, "%") catch unreachable;
+
         return .{
             .gpa = gpa,
             .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore(), import_mapping),
@@ -291,14 +302,21 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .operator_symbol_map = operator_symbol_map,
         };
     }
 
     /// Deinit report builder
-    /// Only owned field is `buf`
     pub fn deinit(self: *Self) void {
         self.snapshot_writer.deinit();
         self.bytes_buf.deinit();
+        self.operator_symbol_map.deinit();
+    }
+
+    /// Get the operator symbol for a desugared binary operator method name
+    /// Uses O(1) hash map lookup
+    fn getOperatorSymbol(self: *const Self, method_name: Ident.Idx) []const u8 {
+        return self.operator_symbol_map.get(method_name) orelse unreachable;
     }
 
     /// Build a report for a problem
@@ -1690,12 +1708,12 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is the "plus" method (from the + operator)
-        const is_plus_operator = data.origin == .desugared_binop;
+        // Check if this is a desugared binary operator
+        if (data.origin == .desugared_binop) {
+            const operator_symbol = self.getOperatorSymbol(data.method_name);
 
-        if (is_plus_operator) {
             try report.document.addReflowingText("The value before this ");
-            try report.document.addAnnotated("+", .emphasized);
+            try report.document.addAnnotated(operator_symbol, .emphasized);
             try report.document.addReflowingText(" operator has the type ");
             try report.document.addAnnotated(snapshot_str, .emphasized);
             try report.document.addReflowingText(", which has no ");
@@ -1726,11 +1744,13 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("Hint: ", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
-                if (is_plus_operator) {
+                if (data.origin == .desugared_binop) {
+                    const operator_symbol = self.getOperatorSymbol(data.method_name);
+
                     try report.document.addReflowingText("The ");
-                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addAnnotated(operator_symbol, .emphasized);
                     try report.document.addReflowingText(" operator calls a method named ");
-                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addAnnotated(method_name_str, .emphasized);
                     try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
                 } else {
                     try report.document.addReflowingText("For this to work, the type would need to have a method named ");
@@ -1739,11 +1759,13 @@ pub const ReportBuilder = struct {
                 }
             },
             .rigid => {
-                if (is_plus_operator) {
+                if (data.origin == .desugared_binop) {
+                    const operator_symbol = self.getOperatorSymbol(data.method_name);
+
                     try report.document.addReflowingText(" The ");
-                    try report.document.addAnnotated("+", .emphasized);
+                    try report.document.addAnnotated(operator_symbol, .emphasized);
                     try report.document.addReflowingText(" operator requires the type to have a ");
-                    try report.document.addAnnotated("plus", .emphasized);
+                    try report.document.addAnnotated(method_name_str, .emphasized);
                     try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
                 } else {
                     try report.document.addReflowingText(" Did you forget to specify ");

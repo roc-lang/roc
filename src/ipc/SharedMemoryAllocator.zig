@@ -37,13 +37,24 @@ const coordination = @import("coordination.zig");
 const SharedMemoryAllocator = @This();
 
 /// Header stored at the beginning of shared memory to communicate metadata
+/// Total size is 512 bytes (aligned to 16-byte boundary required for serialization)
 pub const Header = extern struct {
     magic: u32 = 0x524F4353, // "ROCS"
     version: u32 = 1,
     used_size: u64 = 0,
     total_size: u64 = 0,
     data_offset: u64 = @sizeOf(Header),
-    reserved: [472]u8 = [_]u8{0} ** 472, // Pad to 512 bytes total
+    reserved: [480]u8 = [_]u8{0} ** 480, // Pad to 512 bytes total (32 + 480 = 512)
+
+    comptime {
+        // Ensure header is exactly 512 bytes and properly aligned for serialization
+        if (@sizeOf(Header) != 512) {
+            @compileError("SharedMemoryAllocator.Header must be exactly 512 bytes");
+        }
+        if (512 % 16 != 0) {
+            @compileError("Header size must be aligned to 16-byte boundary for serialization");
+        }
+    }
 };
 
 /// Platform-specific handle for the shared memory

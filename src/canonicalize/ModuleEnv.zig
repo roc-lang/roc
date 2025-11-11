@@ -94,6 +94,16 @@ out_of_range_ident: Ident.Idx,
 builtin_module_ident: Ident.Idx,
 /// Interned identifier for "plus" - used for + operator desugaring
 plus_ident: Ident.Idx,
+/// Interned identifier for "minus" - used for - operator desugaring
+minus_ident: Ident.Idx,
+/// Interned identifier for "times" - used for * operator desugaring
+times_ident: Ident.Idx,
+/// Interned identifier for "div" - used for / operator desugaring
+div_ident: Ident.Idx,
+/// Interned identifier for "div_trunc" - used for // operator desugaring
+div_trunc_ident: Ident.Idx,
+/// Interned identifier for "rem" - used for % operator desugaring
+rem_ident: Ident.Idx,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -103,7 +113,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.imports.relocate(offset);
-    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
+    self.store.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -111,6 +121,8 @@ pub fn relocate(self: *Self, offset: isize) void {
         const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
         self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
     }
+
+    // Note: gpa allocator must be set by the caller after relocation
 }
 
 /// Initialize the compilation fields in an existing ModuleEnv
@@ -148,6 +160,11 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
     const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
+    const minus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.MINUS_METHOD_NAME));
+    const times_ident = try common.insertIdent(gpa, Ident.for_text(Ident.TIMES_METHOD_NAME));
+    const div_ident = try common.insertIdent(gpa, Ident.for_text(Ident.DIV_METHOD_NAME));
+    const div_trunc_ident = try common.insertIdent(gpa, Ident.for_text(Ident.DIV_TRUNC_METHOD_NAME));
+    const rem_ident = try common.insertIdent(gpa, Ident.for_text(Ident.REM_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -171,6 +188,11 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
+        .minus_ident = minus_ident,
+        .times_ident = times_ident,
+        .div_ident = div_ident,
+        .div_trunc_ident = div_trunc_ident,
+        .rem_ident = rem_ident,
     };
 }
 
@@ -1563,6 +1585,11 @@ pub const Serialized = struct {
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
     plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
+    minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
+    times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
+    div_ident_reserved: u32, // Reserved space for div_ident field (interned during deserialization)
+    div_trunc_ident_reserved: u32, // Reserved space for div_trunc_ident field (interned during deserialization)
+    rem_ident_reserved: u32, // Reserved space for rem_ident field (interned during deserialization)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1602,6 +1629,11 @@ pub const Serialized = struct {
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
         self.plus_ident_reserved = 0;
+        self.minus_ident_reserved = 0;
+        self.times_ident_reserved = 0;
+        self.div_ident_reserved = 0;
+        self.div_trunc_ident_reserved = 0;
+        self.rem_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1623,10 +1655,12 @@ pub const Serialized = struct {
         // Deserialize common env first so we can look up identifiers
         const common = self.common.deserialize(offset, source).*;
 
+        const types_result = self.types.deserialize(offset, gpa).*;
+
         env.* = Self{
             .gpa = gpa,
             .common = common,
-            .types = self.types.deserialize(offset, gpa).*,
+            .types = types_result,
             .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
@@ -1646,6 +1680,11 @@ pub const Serialized = struct {
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
             .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .minus_ident = common.findIdent(Ident.MINUS_METHOD_NAME) orelse unreachable,
+            .times_ident = common.findIdent(Ident.TIMES_METHOD_NAME) orelse unreachable,
+            .div_ident = common.findIdent(Ident.DIV_METHOD_NAME) orelse unreachable,
+            .div_trunc_ident = common.findIdent(Ident.DIV_TRUNC_METHOD_NAME) orelse unreachable,
+            .rem_ident = common.findIdent(Ident.REM_METHOD_NAME) orelse unreachable,
         };
 
         return env;
@@ -1707,10 +1746,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
-            std.debug.panic(
-                "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
-                .{ cir_nodes, region_nodes },
-            );
+            @panic("Arrays out of sync: cir_nodes != region_nodes");
         }
     }
 }
@@ -1722,10 +1758,7 @@ inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: any
         const idx2_int = @intFromEnum(idx2);
 
         if (idx1_int != idx2_int) {
-            std.debug.panic(
-                "{s} idxs out of sync: {} != {}\n",
-                .{ desc, idx1_int, idx2_int },
-            );
+            @panic("Idxs out of sync: " ++ desc);
         }
     }
 }

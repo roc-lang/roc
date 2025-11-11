@@ -22,6 +22,16 @@ pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
 pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
+/// Method name for subtraction - used by - operator desugaring
+pub const MINUS_METHOD_NAME = "minus";
+/// Method name for multiplication - used by * operator desugaring
+pub const TIMES_METHOD_NAME = "times";
+/// Method name for division - used by / operator desugaring
+pub const DIV_METHOD_NAME = "div";
+/// Method name for truncating division - used by // operator desugaring
+pub const DIV_TRUNC_METHOD_NAME = "div_trunc";
+/// Method name for remainder - used by % operator desugaring
+pub const REM_METHOD_NAME = "rem";
 
 /// The original text of the identifier.
 raw_text: []const u8,
