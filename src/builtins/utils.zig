@@ -50,7 +50,7 @@ pub const TestEnv = struct {
                 .roc_dbg = rocDbgFn,
                 .roc_expect_failed = rocExpectFailedFn,
                 .roc_crashed = rocCrashedFn,
-                .host_fns = undefined, // No host functions in tests
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // No host functions in tests
             };
         }
         return &self.ops.?;

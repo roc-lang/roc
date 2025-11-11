@@ -1254,7 +1254,7 @@ fn processSnapshotContent(
         });
     }
 
-    var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+    var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
     defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
@@ -3089,7 +3089,7 @@ pub const SnapshotOps = struct {
                 .roc_dbg = snapshotRocDbg,
                 .roc_expect_failed = snapshotRocExpectFailed,
                 .roc_crashed = snapshotRocCrashed,
-                .host_fns = undefined, // Not used in snapshots
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
             },
         };
     }

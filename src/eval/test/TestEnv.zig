@@ -44,7 +44,7 @@ pub fn get_ops(self: *TestEnv) *RocOps {
             .roc_dbg = testRocDbg,
             .roc_expect_failed = testRocExpectFailed,
             .roc_crashed = testRocCrashed,
-            .host_fns = undefined, // Not used in tests
+            .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in tests
         };
     }
     self.crash.reset();
