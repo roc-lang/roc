@@ -50,10 +50,7 @@ pub const Token = struct {
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
-        MalformedSingleQuoteUnclosed, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteEmpty, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteTooLong, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteInvalidEscapeSequence, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuote, // malformed, but should be treated similar to a SingleQuote in the parser
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
@@ -315,10 +312,7 @@ pub const Token = struct {
                 .MalformedOpaqueNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
-                .MalformedSingleQuoteUnclosed,
-                .MalformedSingleQuoteEmpty,
-                .MalformedSingleQuoteTooLong,
-                .MalformedSingleQuoteInvalidEscapeSequence,
+                .MalformedSingleQuote,
                 .MalformedStringPart,
                 => true,
             };
@@ -486,6 +480,9 @@ pub const Diagnostic = struct {
         NonPrintableUnicodeInStrLiteral,
         InvalidUtf8InSource,
         DollarInMiddleOfIdentifier,
+        SingleQuoteTooLong,
+        SingleQuoteEmpty,
+        SingleQuoteUnclosed,
     };
 };
 
@@ -924,6 +921,16 @@ pub const Cursor = struct {
                         return error.InvalidUnicodeEscapeSequence;
                     }
                 }
+                const hex_code = self.buf[hex_start .. self.pos - 1];
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
+                    return error.InvalidUnicodeEscapeSequence;
+                };
+
+                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
+                    return error.InvalidUnicodeEscapeSequence;
+                }
             },
             else => {
                 // Include the character after the backslash in the error region
@@ -941,7 +948,9 @@ pub const Cursor = struct {
             TooLong,
             Invalid,
         };
+
         std.debug.assert(self.peek() == '\'');
+        const start = self.pos;
 
         // Skip the initial quote.
         self.pos += 1;
@@ -959,7 +968,8 @@ pub const Cursor = struct {
             switch (state) {
                 .Empty => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteEmpty;
+                        self.pushMessage(.SingleQuoteEmpty, start, self.pos);
+                        return .MalformedSingleQuote;
                     },
                     '\\' => {
                         state = .Enough;
@@ -983,20 +993,22 @@ pub const Cursor = struct {
                 },
                 .TooLong => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteTooLong;
+                        self.pushMessage(.SingleQuoteTooLong, start, self.pos);
+                        return .MalformedSingleQuote;
                     },
                     else => {},
                 },
                 .Invalid => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteInvalidEscapeSequence;
+                        return .MalformedSingleQuote;
                     },
                     else => {},
                 },
             }
         }
 
-        return .MalformedSingleQuoteUnclosed;
+        self.pushMessage(.SingleQuoteUnclosed, start, self.pos);
+        return .MalformedSingleQuote;
     }
 
     /// Chomps a UTF-8 codepoint and advances the cursor position.
@@ -2277,10 +2289,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
             .MalformedOpaqueNameWithoutName,
-            .MalformedSingleQuoteEmpty,
-            .MalformedSingleQuoteTooLong,
-            .MalformedSingleQuoteUnclosed,
-            .MalformedSingleQuoteInvalidEscapeSequence,
+            .MalformedSingleQuote,
             .MalformedStringPart,
             => {
                 return error.Unsupported;

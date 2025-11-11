@@ -14,6 +14,7 @@ x = (
     '\u(',
     '\u()',
     '\u(1F680)',
+    '\u(EDA0B5)'
     '\u(K)',
     '\\',
     '\'',
@@ -32,27 +33,24 @@ INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:5:6:5:8
 INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:6:6:6:8
 INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:7:6:7:9
 INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:8:6:8:10
-INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:10:6:10:11
-INVALID ESCAPE SEQUENCE - unicode_single_quotes.md:21:2:22:1
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:10:6:10:16
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:11:6:11:11
+SINGLE QUOTE EMPTY - unicode_single_quotes.md:14:5:14:7
+SINGLE QUOTE TOO LONG - unicode_single_quotes.md:15:5:15:11
+UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:16:5:16:9
+UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:19:5:19:7
+INVALID ESCAPE SEQUENCE - unicode_single_quotes.md:22:2:23:1
+UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:22:1:22:3
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:5:5:9
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:5:6:10
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:10
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:12
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:13:5:13:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:14:5:14:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:5:15:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:18:5:18:7
-PARSE ERROR - unicode_single_quotes.md:21:1:21:3
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-UNRECOGNIZED SYNTAX - unicode_single_quotes.md:18:5:18:7
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:17
+PARSE ERROR - unicode_single_quotes.md:17:1:17:2
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:19:5:19:7
+PARSE ERROR - unicode_single_quotes.md:22:1:22:3
+UNRECOGNIZED SYNTAX - unicode_single_quotes.md:17:1:17:2
+UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
@@ -97,21 +95,81 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:10:6:10:11:**
+**unicode_single_quotes.md:10:6:10:16:**
+```roc
+    '\u(EDA0B5)'
+```
+     ^^^^^^^^^^
+
+
+**INVALID UNICODE ESCAPE SEQUENCE**
+This Unicode escape sequence is not valid.
+
+**unicode_single_quotes.md:11:6:11:11:**
 ```roc
     '\u(K)',
 ```
      ^^^^^
 
 
+**SINGLE QUOTE EMPTY**
+Single-quoted literals must contain exactly one valid UTF-8 codepoint.
+
+**unicode_single_quotes.md:14:5:14:7:**
+```roc
+    '',
+```
+    ^^
+
+
+**SINGLE QUOTE TOO LONG**
+Single-quoted literals must contain exactly one valid UTF-8 codepoint.
+
+**unicode_single_quotes.md:15:5:15:11:**
+```roc
+    'long',
+```
+    ^^^^^^
+
+
+**UNCLOSED SINGLE QUOTE**
+This single-quoted literal is missing a closing quote.
+
+**unicode_single_quotes.md:16:5:16:9:**
+```roc
+    '\',
+```
+    ^^^^
+
+
+**UNCLOSED SINGLE QUOTE**
+This single-quoted literal is missing a closing quote.
+
+**unicode_single_quotes.md:19:5:19:7:**
+```roc
+y = 'u
+```
+    ^^
+
+
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.
 
-**unicode_single_quotes.md:21:2:22:1:**
+**unicode_single_quotes.md:22:2:23:1:**
 ```roc
 '\
 
 ```
+
+
+**UNCLOSED SINGLE QUOTE**
+This single-quoted literal is missing a closing quote.
+
+**unicode_single_quotes.md:22:1:22:3:**
+```roc
+'\
+```
+^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -159,54 +217,32 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u(K)'** is not expected in an expression.
+The token **'\u(EDA0B5)'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:10:5:10:12:**
+**unicode_single_quotes.md:10:5:10:17:**
 ```roc
-    '\u(K)',
+    '\u(EDA0B5)'
 ```
-    ^^^^^^^
+    ^^^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **''** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `expected_expr_close_round_or_comma`
+This is an unexpected parsing error. Please check your syntax.
 
-**unicode_single_quotes.md:13:5:13:7:**
+**unicode_single_quotes.md:17:1:17:2:**
 ```roc
-    '',
+)
 ```
-    ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'long'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**unicode_single_quotes.md:14:5:14:11:**
-```roc
-    'long',
-```
-    ^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\',** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**unicode_single_quotes.md:15:5:15:9:**
-```roc
-    '\',
-```
-    ^^^^
+^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **'u** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:18:5:18:7:**
+**unicode_single_quotes.md:19:5:19:7:**
 ```roc
 y = 'u
 ```
@@ -217,41 +253,28 @@ y = 'u
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**unicode_single_quotes.md:21:1:21:3:**
+**unicode_single_quotes.md:22:1:22:3:**
 ```roc
 '\
 ```
 ^^
 
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**unicode_single_quotes.md:17:1:17:2:**
+```roc
+)
+```
+^
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
-
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
-
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
-
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
-
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
-
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
-**unicode_single_quotes.md:18:5:18:7:**
+**unicode_single_quotes.md:19:5:19:7:**
 ```roc
 y = 'u
 ```
@@ -265,20 +288,21 @@ LowerIdent,OpAssign,OpenRound,
 SingleQuote,Comma,
 SingleQuote,Comma,
 SingleQuote,Comma,
-MalformedSingleQuoteInvalidEscapeSequence,Comma,
-MalformedSingleQuoteInvalidEscapeSequence,Comma,
-MalformedSingleQuoteInvalidEscapeSequence,Comma,
-MalformedSingleQuoteInvalidEscapeSequence,Comma,
+MalformedSingleQuote,Comma,
+MalformedSingleQuote,Comma,
+MalformedSingleQuote,Comma,
+MalformedSingleQuote,Comma,
 SingleQuote,Comma,
-MalformedSingleQuoteInvalidEscapeSequence,Comma,
+MalformedSingleQuote,
+MalformedSingleQuote,Comma,
 SingleQuote,Comma,
 SingleQuote,Comma,
-MalformedSingleQuoteEmpty,Comma,
-MalformedSingleQuoteTooLong,Comma,
-MalformedSingleQuoteUnclosed,
+MalformedSingleQuote,Comma,
+MalformedSingleQuote,Comma,
+MalformedSingleQuote,
 CloseRound,
-LowerIdent,OpAssign,MalformedSingleQuoteUnclosed,
-MalformedSingleQuoteUnclosed,
+LowerIdent,OpAssign,MalformedSingleQuote,
+MalformedSingleQuote,
 EndOfFile,
 ~~~
 # PARSE
@@ -288,21 +312,7 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
-			(e-tuple
-				(e-single-quote (raw "'a'"))
-				(e-single-quote (raw "'é'"))
-				(e-single-quote (raw "'🚀'"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-single-quote (raw "'\u(1F680)'"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-single-quote (raw "'\\'"))
-				(e-single-quote (raw "'\''"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))))
+			(e-malformed (reason "expected_expr_close_round_or_comma")))
 		(s-decl
 			(p-ident (raw "y"))
 			(e-malformed (reason "expr_unexpected_token")))
@@ -310,22 +320,8 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-x = (
-	'a',
-	'é',
-	'🚀',
-	,
-	,
-	,
-	,
-	'\u(1F680)',
-	,
-	'\\',
-	'\'',
-	,
-	,
-	,
-)
+x = 
+	
 
 y = 
 
@@ -336,22 +332,7 @@ y =
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-tuple
-			(elems
-				(e-num (value "97"))
-				(e-num (value "233"))
-				(e-num (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-num (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-num (value "92"))
-				(e-num (value "39"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))
@@ -360,9 +341,9 @@ y =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
+		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~
