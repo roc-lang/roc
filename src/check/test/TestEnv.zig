@@ -411,9 +411,7 @@ pub fn deinit(self: *TestEnv) void {
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
 
@@ -445,9 +443,7 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
@@ -471,6 +467,13 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
     const last_def_idx = defs_slice[defs_slice.len - 1];
 
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
+}
+
+/// Assert that there were no parse, canonicalization, or type checking errors.
+pub fn assertNoErrors(self: *TestEnv) !void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertNoTypeProblems();
 }
 
 /// Assert that there was a single type error when checking the input. Assert
