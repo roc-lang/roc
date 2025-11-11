@@ -3580,7 +3580,6 @@ pub const Interpreter = struct {
         var false_idx: ?usize = null;
         var true_idx: ?usize = null;
         for (tags, 0..) |tag, i| {
-            // Use env to look up tag names - works for both Bool module and copied Bool types
             const name_text = self.env.getIdent(tag.name);
             if (std.mem.eql(u8, name_text, "False")) {
                 false_idx = i;
@@ -4663,8 +4662,11 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
+                                // Translate the tag name identifier from the source module to the current module
+                                const name_str = module.getIdent(tag.name);
+                                const translated_name = try self.env.insertIdent(base_pkg.Ident.for_text(name_str));
                                 tag.* = .{
-                                    .name = tag.name,
+                                    .name = translated_name,
                                     .args = rt_args_range,
                                 };
                             }

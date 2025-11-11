@@ -678,22 +678,21 @@ test "interpreter: match bool patterns" {
 }
 
 test "interpreter: match result tag payload" {
-    return error.SkipZigTest; // TODO: fix string interner issue
-    // const roc_src = "match Ok(3) { Ok(n) => n + 1, Err(_) => 0 }";
-    // const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    // defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const roc_src = "match Ok(3) { Ok(n) => n + 1, Err(_) => 0 }";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    // var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    // defer interp2.deinit();
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
 
-    // var host = TestHost.init(std.testing.allocator);
-    // defer host.deinit();
-    // var ops = host.makeOps();
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
-    // const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    // const rendered = try interp2.renderValueRoc(result);
-    // defer std.testing.allocator.free(rendered);
-    // try std.testing.expectEqualStrings("4", rendered);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("4", rendered);
 }
 
 test "interpreter: match record destructures fields" {
@@ -772,41 +771,39 @@ test "interpreter: render Result.Ok tuple payload" {
 }
 
 test "interpreter: match tuple payload tag" {
-    return error.SkipZigTest; // TODO: fix string interner issue
-    // const roc_src = "match Ok((1, 2)) { Ok((a, b)) => a + b, Err(_) => 0 }";
-    // const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    // defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const roc_src = "match Ok((1, 2)) { Ok((a, b)) => a + b, Err(_) => 0 }";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    // var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    // defer interp2.deinit();
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
 
-    // var host = TestHost.init(std.testing.allocator);
-    // defer host.deinit();
-    // var ops = host.makeOps();
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
-    // const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    // const rendered = try interp2.renderValueRoc(result);
-    // defer std.testing.allocator.free(rendered);
-    // try std.testing.expectEqualStrings("3", rendered);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("3", rendered);
 }
 
 test "interpreter: match record payload tag" {
-    return error.SkipZigTest; // TODO: fix string interner issue
-    // const roc_src = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg }) => code, Ok(_) => 0 }";
-    // const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    // defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const roc_src = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg }) => code, Ok(_) => 0 }";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    // var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    // defer interp2.deinit();
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
 
-    // var host = TestHost.init(std.testing.allocator);
-    // defer host.deinit();
-    // var ops = host.makeOps();
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
-    // const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    // const rendered = try interp2.renderValueRoc(result);
-    // defer std.testing.allocator.free(rendered);
-    // try std.testing.expectEqualStrings("1", rendered);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("1", rendered);
 }
 
 test "interpreter: match list pattern destructures" {
