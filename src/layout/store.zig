@@ -1318,7 +1318,7 @@ pub const Store = struct {
                     // For now, default to I64 for numeric flex vars.
                     break :blk Layout.int(.i64);
                 },
-                .rigid => |rigid| blk: {
+                .rigid => blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1339,10 +1339,6 @@ pub const Store = struct {
                     //
                     // Unlike flex vars, rigid vars represent type parameters that should
                     // have been instantiated. This is a bug that should be fixed.
-                    std.debug.print("DEBUG BugUnboxedRigidVar: var={}, rigid name={s}\n", .{
-                        current.var_,
-                        self.env.common.getIdentStore().getText(rigid.name),
-                    });
                     return LayoutError.BugUnboxedRigidVar;
                 },
                 .alias => |alias| {

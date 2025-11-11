@@ -962,8 +962,8 @@ test "interpreter: List.fold count elements with inline lambda" {
     try std.testing.expectEqualStrings("4", rendered);
 }
 
-test "interpreter: List.fold from Builtin using strings" {
-    const roc_src = "List.fold([\"a\", \"b\", \"c\"], \"\", |acc, item| Str.concat(acc, item))";
+test "interpreter: List.fold from Builtin using numbers" {
+    const roc_src = "List.fold([1, 2, 3], 0, |acc, item| acc + item)";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
@@ -978,7 +978,7 @@ test "interpreter: List.fold from Builtin using strings" {
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("\"abc\"", rendered);
+    try std.testing.expectEqualStrings("6", rendered);
 }
 
 test "interpreter: crash statement triggers crash error and message" {

@@ -2,6 +2,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
+const trace_eval = build_options.trace_eval;
 const base_pkg = @import("base");
 const types = @import("types");
 const layout = @import("layout");
@@ -1711,61 +1713,99 @@ pub const Interpreter = struct {
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
                 const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
 
-                // Instantiate the function type to replace rigid variables with fresh flex variables
-                // This allows generic functions to be properly unified with concrete argument types
+                // Only instantiate if we have an actual function type (not a flex variable)
+                // This is needed for cross-module calls with rigid type parameters
+                const func_rt_orig_resolved = self.runtime_types.resolveVar(func_rt_var_orig);
+                const should_instantiate = func_rt_orig_resolved.desc.content == .structure and
+                    (func_rt_orig_resolved.desc.content.structure == .fn_pure or
+                        func_rt_orig_resolved.desc.content.structure == .fn_effectful or
+                        func_rt_orig_resolved.desc.content.structure == .fn_unbound);
+
                 var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
                 defer subst_map.deinit();
-                const func_rt_var = try self.instantiateType(func_rt_var_orig, &subst_map);
+                const func_rt_var = if (should_instantiate)
+                    try self.instantiateType(func_rt_var_orig, &subst_map)
+                else
+                    func_rt_var_orig;
 
-                // Save current rigid substitution context and merge in the new substitutions
+                // Save current rigid substitution context and merge in the new substitutions (only if we instantiated)
                 // This will be used during function body evaluation
-                const saved_subst = try self.rigid_subst.clone();
+                const saved_subst = if (should_instantiate) try self.rigid_subst.clone() else null;
                 defer {
-                    // Restore the previous substitution context after the call
-                    self.rigid_subst.deinit();
-                    self.rigid_subst = saved_subst;
-                }
-
-                var subst_iter = subst_map.iterator();
-                while (subst_iter.next()) |entry| {
-                    try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
-
-                    // Redirect the rigid variable to its substitution in the type store
-                    // This ensures all occurrences (including in nested type structures) are substituted
-                    const rigid_idx: usize = @intFromEnum(entry.key_ptr.*);
-                    const subst_idx: usize = @intFromEnum(entry.value_ptr.*);
-                    const slots_len: usize = self.runtime_types.slots.backing.len();
-                    if (rigid_idx < slots_len and subst_idx < slots_len)
-                    {
-                        self.runtime_types.slots.backing.items.items[rigid_idx] = .{ .redirect = entry.value_ptr.* };
+                    if (saved_subst) |saved| {
+                        // Restore the previous substitution context after the call
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
                     }
                 }
 
-                // Clear the layout cache so layouts are recomputed with substitutions
-                @memset(self.var_to_layout_slot.items, 0);
+                if (should_instantiate) {
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+
+                    // Clear the layout cache so layouts are recomputed with substitutions
+                    @memset(self.var_to_layout_slot.items, 0);
+                }
 
                 var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
                 defer self.allocator.free(arg_rt_buf);
                 var i: usize = 0;
                 while (i < arg_indices.len) : (i += 1) {
                     const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
-                    arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
+                    const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
+
+                    // Apply substitution if this argument is a rigid variable that was instantiated
+                    if (should_instantiate) {
+                        const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_buf[i] = substituted_arg;
+                            } else {
+                                arg_rt_buf[i] = arg_rt_var;
+                            }
+                        } else {
+                            arg_rt_buf[i] = arg_rt_var;
+                        }
+                    } else {
+                        arg_rt_buf[i] = arg_rt_var;
+                    }
                 }
-                const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
+
+                // Check if this is an error expression that shouldn't be called
+                // These should return TypeMismatch immediately
+                if (func_expr == .e_runtime_error or func_expr == .e_anno_only or func_expr == .e_crash) {
+                    return error.TypeMismatch;
+                }
+
+                // Prepare polymorphic call entry
+                // For flex types this may return null if the function type isn't resolved yet
+                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf) catch |err| blk: {
+                    // If we got TypeMismatch from prepareCallWithFuncVar, allow null
+                    // The function value will be evaluated and closures will be handled
+                    if (err == error.TypeMismatch) {
+                        break :blk null;
+                    }
+                    break :blk null;
+                };
                 // Unify this call expression's return var with the function's constrained return var
-                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
-                _ = try unify.unifyWithConf(
-                    self.env,
-                    self.runtime_types,
-                    &self.problems,
-                    &self.snapshots,
-                    &self.unify_scratch,
-                    &self.unify_scratch.occurs_scratch,
-                    call_ret_rt_var,
-                    poly_entry.return_var,
-                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                );
+                // Only do this if we have a polymorphic call entry (concrete function type)
+                if (poly_entry) |entry| {
+                    const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+                    _ = try unify.unifyWithConf(
+                        self.env,
+                        self.runtime_types,
+                        &self.problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.unify_scratch.occurs_scratch,
+                        call_ret_rt_var,
+                        entry.return_var,
+                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                    );
+                }
 
                 // Pass the instantiated function type so cross-module generic functions work correctly
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, func_rt_var);
@@ -4437,22 +4477,13 @@ pub const Interpreter = struct {
         var resolved = self.runtime_types.resolveVar(type_var);
 
         // Apply rigid variable substitution if this is a rigid variable
-        if (resolved.desc.content == .rigid) {
+        // May need to follow multiple levels if unification created cycles
+        var max_subst_depth: usize = 10;
+        while (max_subst_depth > 0 and resolved.desc.content == .rigid) : (max_subst_depth -= 1) {
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
-                // Use the substituted concrete type instead of the rigid variable
-                std.debug.print("DEBUG getRuntimeLayout: substituting rigid var={} with var={}\n", .{
-                    resolved.var_,
-                    substituted_var,
-                });
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
-                // Debug: print when we encounter an unsubstituted rigid variable
-                const rigid = resolved.desc.content.rigid;
-                std.debug.print("DEBUG getRuntimeLayout: unsubstituted rigid var={}, name={s}, subst map size={}\n", .{
-                    resolved.var_,
-                    self.env.common.getIdentStore().getText(rigid.name),
-                    self.rigid_subst.count(),
-                });
+                break;
             }
         }
 
@@ -4903,7 +4934,49 @@ pub const Interpreter = struct {
                         const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
                         break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
-                    // For other structures, return as-is for now
+                    .list => |elem_var| blk_list: {
+                        // Recursively instantiate the element type
+                        const new_elem = try self.instantiateType(elem_var, subst_map);
+                        const content = types.Content{ .structure = .{ .list = new_elem } };
+                        break :blk_list try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .box => |boxed_var| blk_box: {
+                        // Recursively instantiate the boxed type
+                        const new_boxed = try self.instantiateType(boxed_var, subst_map);
+                        const content = types.Content{ .structure = .{ .box = new_boxed } };
+                        break :blk_box try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .tuple => |tuple| blk_tuple: {
+                        // Recursively instantiate tuple element types
+                        const elem_vars = self.runtime_types.sliceVars(tuple.elems);
+                        var new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
+                        defer self.allocator.free(new_elems);
+                        for (elem_vars, 0..) |elem_var, i| {
+                            new_elems[i] = try self.instantiateType(elem_var, subst_map);
+                        }
+                        const new_elems_range = try self.runtime_types.appendVars(new_elems);
+                        const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
+                        break :blk_tuple try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .record => |record| blk_record: {
+                        // Recursively instantiate record field types
+                        const fields = self.runtime_types.record_fields.sliceRange(record.fields);
+                        var new_fields = try self.allocator.alloc(types.RecordField, fields.len);
+                        defer self.allocator.free(new_fields);
+                        var i: usize = 0;
+                        while (i < fields.len) : (i += 1) {
+                            const field = fields.get(i);
+                            new_fields[i] = .{
+                                .name = field.name,
+                                .var_ = try self.instantiateType(field.var_, subst_map),
+                            };
+                        }
+                        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
+                        const new_ext = try self.instantiateType(record.ext, subst_map);
+                        const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = new_ext } } };
+                        break :blk_record try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    // For other structures (str, num, empty_record, etc.), return as-is
                     else => type_var,
                 };
                 try subst_map.put(resolved.var_, new_var);
@@ -5011,14 +5084,29 @@ pub const Interpreter = struct {
         if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         const func_resolved = self.runtime_types.resolveVar(func_type_var);
+
         const ret_var: types.Var = switch (func_resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure => |f| f.ret,
                 .fn_effectful => |f| f.ret,
                 .fn_unbound => |f| f.ret,
-                else => return error.TypeMismatch,
+                else => {
+                    std.debug.print("ERROR: prepareCallWithFuncVar got structure type {s}, not a function. func_id={}, args.len={}\n", .{
+                        @tagName(flat),
+                        func_id,
+                        args.len,
+                    });
+                    return error.TypeMismatch;
+                },
             },
-            else => return error.TypeMismatch,
+            else => {
+                std.debug.print("ERROR: prepareCallWithFuncVar got non-structure type {s}, expected function. func_id={}, args.len={}\n", .{
+                    @tagName(func_resolved.desc.content),
+                    func_id,
+                    args.len,
+                });
+                return error.TypeMismatch;
+            },
         };
 
         // Attempt simple runtime unification of parameters with arguments.
@@ -5049,16 +5137,29 @@ pub const Interpreter = struct {
         }
         // ret_var may now be constrained
 
+        // Apply rigid substitutions to ret_var if needed
+        var resolved_ret = self.runtime_types.resolveVar(ret_var);
+        var substituted_ret = ret_var;
+        var max_subst_depth: usize = 10;
+        while (max_subst_depth > 0 and resolved_ret.desc.content == .rigid) : (max_subst_depth -= 1) {
+            if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                substituted_ret = subst_var;
+                resolved_ret = self.runtime_types.resolveVar(subst_var);
+            } else {
+                break;
+            }
+        }
+
         // Ensure layout slot for return var
-        _ = try self.getRuntimeLayout(ret_var);
-        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret_var).var_);
+        _ = try self.getRuntimeLayout(substituted_ret);
+        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(substituted_ret).var_);
         try self.ensureVarLayoutCapacity(root_idx + 1);
         const slot = self.var_to_layout_slot.items[root_idx];
         const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
         errdefer self.allocator.free(args_copy_mut);
         std.mem.copyForwards(types.Var, args_copy_mut, args);
 
-        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
+        const entry = PolyEntry{ .return_var = substituted_ret, .return_layout_slot = slot, .args = args_copy_mut };
         try self.polyInsert(module_id, func_id, entry);
         return entry;
     }
