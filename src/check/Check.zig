@@ -2199,17 +2199,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     else
                         self.cir.from_int_digits_ident;
 
-                    // First, create the constrained flex variable that will be the literal's type
-                    // We'll fill in the constraint afterward
-                    const constrained_var = try self.fresh(env, expr_region);
+                    // Create return type for constraint function (unconstrained placeholder)
+                    const ret_var = try self.fresh(env, expr_region);
 
                     // Create constraint function: List U8 -> Try Self [OutOfRange]
-                    // The return type is the constrained_var (the "Self" type)
                     const arg_var = try self.fresh(env, expr_region); // List U8
                     const args_range = try self.types.appendVars(&.{arg_var});
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = args_range,
-                        .ret = constrained_var, // Return type is the constrained literal type
+                        .ret = ret_var,
                         .needs_instantiation = false,
                     } } }, env, expr_region);
 
@@ -2221,10 +2219,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                    // Now add the constraint to the constrained_var
-                    try self.unifyWith(constrained_var, .{ .flex = Flex{ .name = null, .constraints = constraint_range } }, env);
+                    // Create a constrained flex variable
+                    const constrained_var = try self.freshFromContent(
+                        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                        env,
+                        expr_region,
+                    );
 
                     // Unify expr_var with the constrained var
+                    // Do NOT unify constrained_var with ret_var to avoid cycles
                     _ = try self.unify(expr_var, constrained_var, env);
                 },
                 else => {
