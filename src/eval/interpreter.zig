@@ -2958,13 +2958,45 @@ pub const Interpreter = struct {
         const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
         const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
 
-        var result_layout = self.getRuntimeLayout(result_rt_var) catch |err| {
-            if (err == layout.LayoutError.BugUnboxedFlexVar) {
-                @panic("COMPILER BUG: Arithmetic operation has unresolved flex return type at runtime! This means the type checker failed to resolve a flex type variable before code generation.");
-            } else if (err == layout.LayoutError.BugUnboxedRigidVar) {
-                @panic("COMPILER BUG: Arithmetic operation has unresolved rigid return type at runtime! This means the type checker failed to resolve a rigid type variable before code generation.");
+        // Check if result type is an unresolved flex var
+        const result_resolved = self.runtime_types.resolveVar(result_rt_var);
+        const needs_numeric_resolution = result_resolved.desc.content == .flex or
+            (result_resolved.desc.content == .structure and
+             result_resolved.desc.content.structure == .num and
+             result_resolved.desc.content.structure.num == .num_poly);
+
+        var result_layout = blk: {
+            if (needs_numeric_resolution) {
+                // Try to infer the numeric type from operands
+                const lhs_kind_opt = self.numericKindFromLayout(lhs.layout);
+                const rhs_kind_opt = self.numericKindFromLayout(rhs.layout);
+
+                if (lhs_kind_opt == null or rhs_kind_opt == null) {
+                    @panic("COMPILER BUG: Arithmetic operation has unresolved flex return type and non-numeric operands at runtime! Type checker should have resolved this or reported an error.");
+                }
+
+                const desired_kind = unifyNumericKinds(lhs_kind_opt.?, rhs_kind_opt.?) orelse return error.TypeMismatch;
+
+                // Find which operand has the desired type and copy its type content
+                const source_rt_var = blk2: {
+                    if (lhs_kind_opt.? == desired_kind) break :blk2 lhs_rt_var;
+                    if (rhs_kind_opt.? == desired_kind) break :blk2 rhs_rt_var;
+                    @panic("COMPILER BUG: Arithmetic operation has unresolved flex return type and both operands need type conversion! Type checker should have resolved this.");
+                };
+
+                const source_resolved = self.runtime_types.resolveVar(source_rt_var);
+                try self.runtime_types.setVarContent(result_rt_var, source_resolved.desc.content);
+                self.invalidateRuntimeLayoutCache(result_rt_var);
+                break :blk try self.getRuntimeLayout(result_rt_var);
+            } else {
+                // Normal case - just get the layout
+                break :blk self.getRuntimeLayout(result_rt_var) catch |err| {
+                    if (err == layout.LayoutError.BugUnboxedFlexVar or err == layout.LayoutError.BugUnboxedRigidVar) {
+                        @panic("COMPILER BUG: Non-numeric operation has unresolved type variable at runtime! This should have been caught by the type checker.");
+                    }
+                    return err;
+                };
             }
-            return err;
         };
 
         result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);

@@ -1314,12 +1314,10 @@ pub const Store = struct {
                     }
 
                     // Flex vars should not appear unboxed during layout computation.
-                    // Return undefined as a placeholder - if this value is ever actually used,
-                    // it will crash in dev builds, exposing the real problem.
-                    // In practice, this should be immediately overridden by adjustNumericResultLayout
-                    // or similar runtime type resolution.
+                    // This indicates the type checker failed to resolve a polymorphic type
+                    // to a concrete type before evaluation.
                     _ = flex_data;
-                    break :blk undefined;
+                    return LayoutError.BugUnboxedFlexVar;
                 },
                 .rigid => blk: {
                     // First, check if this rigid var is mapped in the TypeScope
