@@ -3759,16 +3759,23 @@ fn checkBinopExpr(
             } else if (should_use_static_dispatch) {
                 // Nominal types or flex/rigid variables: use static dispatch to create method constraints
 
-                // Create the constraint function type using the ACTUAL operand vars
-                // (matching how method calls work - see e_method_call around line 3025)
-                const ret_var = try self.fresh(env, expr_region);
-                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+                // Create fresh variables for the constraint function signature
+                // This avoids circular dependencies when unifying constrained flex vars
+                const constraint_arg1 = try self.fresh(env, expr_region);
+                const constraint_arg2 = try self.fresh(env, expr_region);
+                const constraint_ret = try self.fresh(env, expr_region);
+                try env.var_pool.addVarToRank(constraint_arg1, env.rank());
+                try env.var_pool.addVarToRank(constraint_arg2, env.rank());
+                try env.var_pool.addVarToRank(constraint_ret, env.rank());
+
+                const args_range = try self.types.appendVars(&.{ constraint_arg1, constraint_arg2 });
 
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
-                    .ret = ret_var,
+                    .ret = constraint_ret,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
+                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
                 // Create the static dispatch constraint
                 const constraint = StaticDispatchConstraint{
@@ -3778,26 +3785,21 @@ fn checkBinopExpr(
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                // Create a constrained flex and unify it with the lhs (receiver)
+                // Constrain ONLY the LHS (receiver) to have the required method
                 const constrained_var = try self.freshFromContent(
                     .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
                     env,
                     expr_region,
                 );
+                try env.var_pool.addVarToRank(constrained_var, env.rank());
+
                 _ = try self.unify(constrained_var, lhs_var, env);
 
-                // FIX: Also add the constraint to the return variable
-                // This ensures the result type has the same constraint (e.g., 'plus')
-                // so that layout computation can infer a default type for unconstrained flex vars
-                const constrained_ret_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                    env,
-                    expr_region,
-                );
-                _ = try self.unify(constrained_ret_var, ret_var, env);
-
-                // Unify the expression with the constrained return type (matching method call pattern at line 3064)
-                _ = try self.unify(expr_var, constrained_ret_var, env);
+                // Connect call site variables to constraint function parameters
+                // This allows type information to flow without creating circular references
+                _ = try self.unify(lhs_var, constraint_arg1, env);
+                _ = try self.unify(rhs_var, constraint_arg2, env);
+                _ = try self.unify(expr_var, constraint_ret, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
                 // This path is for unknown types that need to be constrained to numbers
