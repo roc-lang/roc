@@ -478,34 +478,6 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
 }
 
-/// Get the inferred type descriptor of a specific definition by name
-///
-/// Also assert that there were no problems processing the source code.
-pub fn getDefType(self: *TestEnv, target_def_name: []const u8) !types.Descriptor {
-    try self.assertNoParseProblems();
-    try self.assertNoTypeProblems();
-
-    try testing.expect(self.module_env.all_defs.span.len > 0);
-
-    const idents = self.module_env.getIdentStoreConst();
-    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = self.module_env.store.getDef(def_idx);
-        const ptrn = self.module_env.store.getPattern(def.pattern);
-
-        switch (ptrn) {
-            .assign => |assign| {
-                const def_name = idents.getText(assign.ident);
-                if (std.mem.eql(u8, target_def_name, def_name)) {
-                    return self.module_env.types.resolveVar(ModuleEnv.varFrom(def_idx)).desc;
-                }
-            },
-            else => continue,
-        }
-    }
-    return error.TestUnexpectedResult;
-}
-
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
 pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {

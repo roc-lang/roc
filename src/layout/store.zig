@@ -928,6 +928,25 @@ pub const Store = struct {
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
                                     } else if (next_type == .flex) {
+                                        // Check flex var constraints to determine appropriate default
+                                        const flex_data = next_type.flex;
+                                        if (!flex_data.constraints.isEmpty()) {
+                                            const constraints = self.types_store.sliceStaticDispatchConstraints(flex_data.constraints);
+                                            const ident_store = self.env.getIdentStoreConst();
+
+                                            var has_dec_literal = false;
+                                            for (constraints) |constraint| {
+                                                const name = ident_store.getText(constraint.fn_name);
+                                                if (std.mem.eql(u8, name, "from_dec_digits")) {
+                                                    has_dec_literal = true;
+                                                    break;
+                                                }
+                                            }
+
+                                            if (has_dec_literal) {
+                                                break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
+                                            }
+                                        }
                                         break :flat_type Layout.int(types.Num.Int.Precision.default);
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
@@ -1313,10 +1332,30 @@ pub const Store = struct {
                         }
                     }
 
+                    // Check if this flex var has constraints
+                    // Constrained flex vars can have default types inferred from their constraints
+                    if (!flex_data.constraints.isEmpty()) {
+                        const constraints = self.types_store.sliceStaticDispatchConstraints(flex_data.constraints);
+                        const ident_store = self.env.getIdentStoreConst();
+
+                        // Check for decimal literal constraint
+                        for (constraints) |constraint| {
+                            const name = ident_store.getText(constraint.fn_name);
+                            if (std.mem.eql(u8, name, "from_dec_digits")) {
+                                // Decimal literal - use Dec precision
+                                break :blk Layout.frac(types.Num.Frac.Precision.dec);
+                            }
+                        }
+
+                        // All other numeric constraints default to I128
+                        // This includes integer literals (from_int_digits) and arithmetic operations
+                        break :blk Layout.int(types.Num.Int.Precision.i128);
+                    }
+
+                    // No constraints - this is truly an unconstrained flex var
                     // Flex vars should not appear unboxed during layout computation.
                     // This indicates the type checker failed to resolve a polymorphic type
                     // to a concrete type before evaluation.
-                    _ = flex_data;
                     return LayoutError.BugUnboxedFlexVar;
                 },
                 .rigid => blk: {
