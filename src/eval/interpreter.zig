@@ -2958,37 +2958,11 @@ pub const Interpreter = struct {
         const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
         const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
 
-        // Try to get the result layout. If it fails (e.g., because result_rt_var is a flex var
-        // with static dispatch constraints), infer it from the operands instead.
-        var result_layout = self.getRuntimeLayout(result_rt_var) catch |err| blk: {
-            // For flex/rigid vars (from static dispatch), infer the result type from operands
-            if (err == layout.LayoutError.BugUnboxedFlexVar or err == layout.LayoutError.BugUnboxedRigidVar) {
-                // Use the layout from lhs if both operands have compatible layouts
-                if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-                    // Prefer wider types (f64 over f32, i64 over i32, etc.)
-                    const lhs_scalar = lhs.layout.data.scalar;
-                    const rhs_scalar = rhs.layout.data.scalar;
-
-                    if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
-                        // Both fracs - prefer dec, then f64, then f32
-                        const lhs_prec = lhs_scalar.data.frac;
-                        const rhs_prec = rhs_scalar.data.frac;
-                        if (lhs_prec == .dec or rhs_prec == .dec) {
-                            break :blk if (lhs_prec == .dec) lhs.layout else rhs.layout;
-                        } else if (lhs_prec == .f64 or rhs_prec == .f64) {
-                            break :blk if (lhs_prec == .f64) lhs.layout else rhs.layout;
-                        }
-                        break :blk lhs.layout; // Both f32, use lhs
-                    } else if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
-                        // Both ints - use lhs (they should be the same size after type checking)
-                        break :blk lhs.layout;
-                    } else if (lhs_scalar.tag == .frac or rhs_scalar.tag == .frac) {
-                        // Mixed int/frac - use the frac layout
-                        break :blk if (lhs_scalar.tag == .frac) lhs.layout else rhs.layout;
-                    }
-                }
-                // Fall back to lhs layout if we can't determine better
-                break :blk lhs.layout;
+        var result_layout = self.getRuntimeLayout(result_rt_var) catch |err| {
+            if (err == layout.LayoutError.BugUnboxedFlexVar) {
+                @panic("COMPILER BUG: Arithmetic operation has unresolved flex return type at runtime! This means the type checker failed to resolve a flex type variable before code generation.");
+            } else if (err == layout.LayoutError.BugUnboxedRigidVar) {
+                @panic("COMPILER BUG: Arithmetic operation has unresolved rigid return type at runtime! This means the type checker failed to resolve a rigid type variable before code generation.");
             }
             return err;
         };
@@ -4612,46 +4586,6 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Check if a flex/rigid type with static dispatch constraints should be resolved to a concrete numeric type
-    /// Returns the concrete runtime type var if it should be resolved, null otherwise
-    fn tryResolveNumericFlexToConcreteType(
-        self: *Interpreter,
-        module: *can.ModuleEnv,
-        constraints_range: types.StaticDispatchConstraint.SafeList.Range,
-    ) Error!?types.Var {
-        if (constraints_range.len() == 0) return null;
-
-        const constraints = module.types.sliceStaticDispatchConstraints(constraints_range);
-
-        // Check if all constraints are numeric operations (regardless of origin)
-        var all_numeric = true;
-        for (constraints) |constraint| {
-            // Check if the function name is a numeric operation
-            const fn_name_text = module.getIdentStoreConst().getText(constraint.fn_name);
-            const is_numeric_op = std.mem.eql(u8, fn_name_text, "plus") or
-                std.mem.eql(u8, fn_name_text, "minus") or
-                std.mem.eql(u8, fn_name_text, "mul") or
-                std.mem.eql(u8, fn_name_text, "times") or // Multiplication method name
-                std.mem.eql(u8, fn_name_text, "div") or
-                std.mem.eql(u8, fn_name_text, "div_trunc") or
-                std.mem.eql(u8, fn_name_text, "rem") or
-                std.mem.eql(u8, fn_name_text, "pow");
-
-            if (!is_numeric_op) {
-                all_numeric = false;
-                break;
-            }
-        }
-
-        if (!all_numeric) return null;
-
-        // All constraints are numeric operations
-        // Resolve to I64 as the default concrete integer type
-        // This matches the behavior of integer literals without explicit type annotations
-        const num_content = types.Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } };
-        return try self.runtime_types.freshFromContent(num_content);
-    }
-
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
@@ -4890,12 +4824,6 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
                 .flex => |flex| {
-                    // Check if this flex type with static dispatch constraints should be resolved
-                    // to a concrete numeric type for layout computation
-                    if (try self.tryResolveNumericFlexToConcreteType(module, flex.constraints)) |concrete_var| {
-                        break :blk concrete_var;
-                    }
-
                     // Translate static dispatch constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
@@ -4920,12 +4848,6 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .rigid => |rigid| {
-                    // Check if this rigid type with static dispatch constraints should be resolved
-                    // to a concrete numeric type for layout computation
-                    if (try self.tryResolveNumericFlexToConcreteType(module, rigid.constraints)) |concrete_var| {
-                        break :blk concrete_var;
-                    }
-
                     // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
