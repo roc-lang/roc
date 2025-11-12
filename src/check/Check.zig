@@ -3746,8 +3746,8 @@ fn checkBinopExpr(
                 );
                 _ = try self.unify(constrained_var, lhs_var, env);
 
-                // Set the expression to redirect to the return type
-                try self.types.setVarRedirect(expr_var, ret_var);
+                // Unify the expression with the return type (matching method call pattern at line 3064)
+                _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
                 // This path is for unknown types that need to be constrained to numbers
