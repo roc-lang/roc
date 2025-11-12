@@ -22,7 +22,8 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try checkTypesExpr(source, .pass, "Num(_size)");
+    // Numeric literals now have from_int_digits constraints
+    try checkTypesExpr(source, .pass, "a where [_b.from_int_digits : _arg -> a]");
 }
 
 test "check type - num - int suffix 1" {

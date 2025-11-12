@@ -2199,8 +2199,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     else
                         self.cir.from_int_digits_ident;
 
-                    // Create a fresh variable for the constraint function type
-                    const constraint_fn_var = try self.fresh(env, expr_region);
+                    // First, create the constrained flex variable that will be the literal's type
+                    // We'll fill in the constraint afterward
+                    const constrained_var = try self.fresh(env, expr_region);
+
+                    // Create constraint function: List U8 -> Try Self [OutOfRange]
+                    // The return type is the constrained_var (the "Self" type)
+                    const arg_var = try self.fresh(env, expr_region); // List U8
+                    const args_range = try self.types.appendVars(&.{arg_var});
+                    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                        .args = args_range,
+                        .ret = constrained_var, // Return type is the constrained literal type
+                        .needs_instantiation = false,
+                    } } }, env, expr_region);
 
                     // Create the static dispatch constraint
                     const constraint = StaticDispatchConstraint{
@@ -2210,15 +2221,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                    // Create a constrained flex variable with the constraint
-                    // This is the polymorphic numeric literal type that can unify with any numeric type
-                    const constrained_var = try self.freshFromContent(
-                        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                        env,
-                        expr_region,
-                    );
+                    // Now add the constraint to the constrained_var
+                    try self.unifyWith(constrained_var, .{ .flex = Flex{ .name = null, .constraints = constraint_range } }, env);
 
-                    // Unify expr_var with the constrained variable
+                    // Unify expr_var with the constrained var
                     _ = try self.unify(expr_var, constrained_var, env);
                 },
                 else => {
@@ -2238,7 +2244,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
                             .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
                             .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
-                            else => unreachable, // num_unbound and int_unbound are handled above
+                            .num_unbound, .int_unbound => {
+                                @panic("BUG: num_unbound or int_unbound reached inner switch - should have been handled by outer switch");
+                            },
                         }
                     };
 
