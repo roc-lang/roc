@@ -2187,36 +2187,65 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // nums //
         .e_num => |num| {
-            const num_type = blk: {
-                switch (num.kind) {
-                    .num_unbound => {
-                        const int_reqs = num.value.toIntRequirements();
-                        const frac_reqs = num.value.toFracRequirements();
-                        break :blk Num{ .num_unbound = .{ .int_requirements = int_reqs, .frac_requirements = frac_reqs } };
-                    },
-                    .int_unbound => {
-                        const int_reqs = num.value.toIntRequirements();
-                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = int_reqs } } }, env, expr_region);
-                        break :blk Num{ .num_poly = int_var };
-                    },
-                    .u8 => break :blk Num{ .num_compact = Num.Compact{ .int = .u8 } },
-                    .i8 => break :blk Num{ .num_compact = Num.Compact{ .int = .i8 } },
-                    .u16 => break :blk Num{ .num_compact = Num.Compact{ .int = .u16 } },
-                    .i16 => break :blk Num{ .num_compact = Num.Compact{ .int = .i16 } },
-                    .u32 => break :blk Num{ .num_compact = Num.Compact{ .int = .u32 } },
-                    .i32 => break :blk Num{ .num_compact = Num.Compact{ .int = .i32 } },
-                    .u64 => break :blk Num{ .num_compact = Num.Compact{ .int = .u64 } },
-                    .i64 => break :blk Num{ .num_compact = Num.Compact{ .int = .i64 } },
-                    .u128 => break :blk Num{ .num_compact = Num.Compact{ .int = .u128 } },
-                    .i128 => break :blk Num{ .num_compact = Num.Compact{ .int = .i128 } },
-                    .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
-                    .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
-                    .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
-                }
-            };
+            // Handle num_unbound and int_unbound specially to add static dispatch constraints
+            switch (num.kind) {
+                .num_unbound, .int_unbound => {
+                    const frac_reqs = num.value.toFracRequirements();
 
-            // Update the expr var
-            try self.unifyWith(expr_var, .{ .structure = .{ .num = num_type } }, env);
+                    // Determine if this is an integer or decimal literal
+                    const is_decimal = frac_reqs.fits_in_dec and !frac_reqs.fits_in_f32;
+                    const constraint_name = if (is_decimal)
+                        self.cir.from_dec_digits_ident
+                    else
+                        self.cir.from_int_digits_ident;
+
+                    // Create a fresh variable for the constraint function type
+                    const constraint_fn_var = try self.fresh(env, expr_region);
+
+                    // Create the static dispatch constraint
+                    const constraint = StaticDispatchConstraint{
+                        .fn_name = constraint_name,
+                        .fn_var = constraint_fn_var,
+                        .origin = .numeric_literal,
+                    };
+                    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                    // Create a constrained flex variable with the constraint
+                    // This is the polymorphic numeric literal type that can unify with any numeric type
+                    const constrained_var = try self.freshFromContent(
+                        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                        env,
+                        expr_region,
+                    );
+
+                    // Unify expr_var with the constrained variable
+                    _ = try self.unify(expr_var, constrained_var, env);
+                },
+                else => {
+                    // For concrete numeric types (u8, i8, etc.), use the original behavior
+                    const num_type = blk: {
+                        switch (num.kind) {
+                            .u8 => break :blk Num{ .num_compact = Num.Compact{ .int = .u8 } },
+                            .i8 => break :blk Num{ .num_compact = Num.Compact{ .int = .i8 } },
+                            .u16 => break :blk Num{ .num_compact = Num.Compact{ .int = .u16 } },
+                            .i16 => break :blk Num{ .num_compact = Num.Compact{ .int = .i16 } },
+                            .u32 => break :blk Num{ .num_compact = Num.Compact{ .int = .u32 } },
+                            .i32 => break :blk Num{ .num_compact = Num.Compact{ .int = .i32 } },
+                            .u64 => break :blk Num{ .num_compact = Num.Compact{ .int = .u64 } },
+                            .i64 => break :blk Num{ .num_compact = Num.Compact{ .int = .i64 } },
+                            .u128 => break :blk Num{ .num_compact = Num.Compact{ .int = .u128 } },
+                            .i128 => break :blk Num{ .num_compact = Num.Compact{ .int = .i128 } },
+                            .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
+                            .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
+                            .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
+                            else => unreachable, // num_unbound and int_unbound are handled above
+                        }
+                    };
+
+                    // Update the expr var
+                    try self.unifyWith(expr_var, .{ .structure = .{ .num = num_type } }, env);
+                },
+            }
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
@@ -3746,8 +3775,18 @@ fn checkBinopExpr(
                 );
                 _ = try self.unify(constrained_var, lhs_var, env);
 
-                // Unify the expression with the return type (matching method call pattern at line 3064)
-                _ = try self.unify(expr_var, ret_var, env);
+                // FIX: Also add the constraint to the return variable
+                // This ensures the result type has the same constraint (e.g., 'plus')
+                // so that layout computation can infer a default type for unconstrained flex vars
+                const constrained_ret_var = try self.freshFromContent(
+                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                    env,
+                    expr_region,
+                );
+                _ = try self.unify(constrained_ret_var, ret_var, env);
+
+                // Unify the expression with the constrained return type (matching method call pattern at line 3064)
+                _ = try self.unify(expr_var, constrained_ret_var, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
                 // This path is for unknown types that need to be constrained to numbers

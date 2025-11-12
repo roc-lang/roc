@@ -114,7 +114,7 @@ test "subtraction result should have 'minus' constraint" {
     try testing.expect(has_minus);
 }
 
-test "multiplication result should have 'mul' constraint" {
+test "multiplication result should have 'times' constraint" {
     const source =
         \\f = |x, y| x * y
     ;
@@ -127,14 +127,14 @@ test "multiplication result should have 'mul' constraint" {
     const func_content = f_resolved.desc.content.unwrapFunc() orelse return error.NotAFunction;
 
     const ident_store = test_env.module_env.getIdentStoreConst();
-    const has_mul = hasConstraint(
+    const has_times = hasConstraint(
         &test_env.module_env.types,
         ident_store,
         func_content.ret,
-        "mul",
+        "times",
     );
 
-    try testing.expect(has_mul);
+    try testing.expect(has_times);
 }
 
 test "division result should have 'div' or 'div_trunc' constraint" {
