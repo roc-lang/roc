@@ -14,22 +14,21 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:27:3:29
+TYPE DOES NOT HAVE METHODS - lambda_annotation_mismatch_error.md:3:27:3:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
 **lambda_annotation_mismatch_error.md:3:27:3:29:**
 ```roc
 string_function = |x| x + 42
 ```
                           ^^
 
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
+This type doesn't support methods:
     _Str_
+
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -123,9 +122,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Str"))
 		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Str"))
 		(expr (type "Error -> Error"))))
 ~~~

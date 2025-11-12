@@ -166,11 +166,11 @@ NO CHANGE
 	(defs
 		(patt (type "a, b -> c where [a.times : a, b -> c]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, Num(_size) -> _ret]"))
+		(patt (type "a -> Error where [a.times : a, _arg -> _ret]"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a, b -> c where [a.times : a, b -> c]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, Num(_size) -> _ret]"))
+		(expr (type "a -> Error where [a.times : a, _arg -> _ret]"))
 		(expr (type "Error"))))
 ~~~

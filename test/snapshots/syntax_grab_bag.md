@@ -2458,7 +2458,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Bool -> _ret where [_d.from_int_digits : _arg -> _ret2]"))
 		(patt (type "Error -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2504,7 +2504,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Bool -> _ret where [_d.from_int_digits : _arg -> _ret2]"))
 		(expr (type "Error -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

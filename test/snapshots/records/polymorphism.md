@@ -25,7 +25,7 @@ You're calling the method `to_str` on a type that doesn't support methods:
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This type doesn't support methods:
-    _{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }_
+    _{ pair1: { first: _field, second: Str }, pair2: { first: Str, second: _field2 }, pair3: { first: [True]_others, second: [False]_others2 } } where [{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]c, second: [False]d } }.from_int_digits : { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]c, second: [False]d } }, { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]c, second: [False]d } }.from_int_digits : { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]c, second: [False]d } }]_
 
 
 

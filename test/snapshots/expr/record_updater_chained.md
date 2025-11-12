@@ -119,13 +119,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(_size), city: Str, name: Str }"))
-		(patt (type "{ age: Num(_size), city: Str, name: Str }"))
-		(patt (type "{ age: Num(_size), city: Str, name: Str }"))
-		(patt (type "{ age: Num(_size), city: Str, name: Str }")))
+		(patt (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "{ age: Num(_size), city: Str, name: Str }"))
-		(expr (type "{ age: Num(_size), city: Str, name: Str }"))
-		(expr (type "{ age: Num(_size), city: Str, name: Str }"))
-		(expr (type "{ age: Num(_size), city: Str, name: Str }"))))
+		(expr (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ age: _field, city: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))))
 ~~~

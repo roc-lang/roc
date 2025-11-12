@@ -111,7 +111,7 @@ myNum = Foo.Bar.baz
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
+		(patt (type "_a where [_b.from_int_digits : _arg -> _ret]"))
 		(patt (type "Foo.Bar"))
 		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
@@ -120,7 +120,7 @@ myNum = Foo.Bar.baz
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Num(_size)"))
+		(expr (type "_a where [_b.from_int_digits : _arg -> _ret]"))
 		(expr (type "Foo.Bar"))
 		(expr (type "Num(Int(Unsigned64))"))))
 ~~~

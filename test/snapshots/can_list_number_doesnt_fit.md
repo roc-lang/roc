@@ -8,19 +8,9 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-NUMBER DOES NOT FIT IN TYPE - can_list_number_doesnt_fit.md:1:12:1:15
+NIL
 # PROBLEMS
-**NUMBER DOES NOT FIT IN TYPE**
-The number **300** does not fit in its inferred type:
-**can_list_number_doesnt_fit.md:1:12:1:15:**
-```roc
-[1u8, 2u8, 300]
-```
-           ^^^
-
-Its inferred type is:
-    _Num(Int(Unsigned8))_
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,
@@ -47,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(Num(Int(Unsigned8)))"))
 ~~~

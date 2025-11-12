@@ -27,6 +27,7 @@ const runExpectInt = helpers.runExpectInt;
 const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
+const runExpectDec = helpers.runExpectDec;
 
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
@@ -43,6 +44,18 @@ test "eval simple number" {
     try runExpectInt("1", 1, .no_trace);
     try runExpectInt("42", 42, .no_trace);
     try runExpectInt("-1234", -1234, .no_trace);
+}
+
+test "minimal repro: integer addition with default type" {
+    // This should evaluate to 3 using I128 as the default type
+    // (because no explicit type was specified)
+    try runExpectInt("1 + 2", 3, .no_trace);
+}
+
+test "minimal repro: decimal addition with default type" {
+    // This should evaluate to 0.3 using Dec as the default type
+    // (because no explicit type was specified)
+    try runExpectDec("0.1 + 0.2", 300000000000000000, .no_trace);
 }
 
 test "eval boolean literals" {
@@ -422,7 +435,6 @@ test "lambdas with unary minus" {
     try runExpectInt("(|x| if True -x else 0)(5)", -5, .no_trace);
     try runExpectInt("(|x| if True -10 else x)(999)", -10, .no_trace);
 }
-
 
 test "lambdas closures" {
     // Curried functions still have interpreter issues with TypeMismatch

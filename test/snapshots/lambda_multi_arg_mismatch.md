@@ -28,6 +28,7 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:5
+TYPE DOES NOT HAVE METHODS - lambda_multi_arg_mismatch.md:9:5:9:7
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
@@ -66,23 +67,38 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 
 
 **TYPE MISMATCH**
-The first and third arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
+The first and fifth arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
 **lambda_multi_arg_mismatch.md:9:5:**
 ```roc
     42,        # x1: U64 (type 'a')
     "hello",   # x2: Str (type 'b') - correct
     "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+    1.5,       # x4: F64 (type 'c') - correct
+    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
 ```
     ^^
-    ^^^^^^^
+    ^^^^
 
 The first argument has the type:
-    _Num(_size)_
-
-But the third argument has the type:
     _Str_
 
+But the fifth argument has the type:
+    _Num(Frac(_size))_
+
 `multi_arg_fn` needs these arguments to have compatible types.
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
+**lambda_multi_arg_mismatch.md:9:5:9:7:**
+```roc
+    42,        # x1: U64 (type 'a')
+```
+    ^^
+
+This type doesn't support methods:
+    _Str_
+
+
 
 # TOKENS
 ~~~zig

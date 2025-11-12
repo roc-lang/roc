@@ -13,21 +13,34 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - tuple_type.md:5:7:5:13
+TYPE DOES NOT HAVE METHODS - tuple_type.md:5:8:5:9
+TYPE DOES NOT HAVE METHODS - tuple_type.md:5:11:5:12
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**tuple_type.md:5:7:5:13:**
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
+**tuple_type.md:5:8:5:9:**
 ```roc
     f((1, 2))
 ```
-      ^^^^^^
+       ^
 
-This argument has the type:
-    _(Num(_size), Num(_size2))_
+This type doesn't support methods:
+    _Str_
 
-But `f` needs the first argument to be:
-    _(Str, Str)_
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
+**tuple_type.md:5:11:5:12:**
+```roc
+    f((1, 2))
+```
+          ^
+
+This type doesn't support methods:
+    _Str_
+
+
 
 # TOKENS
 ~~~zig
@@ -91,5 +104,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "(Str, Str)"))
 ~~~

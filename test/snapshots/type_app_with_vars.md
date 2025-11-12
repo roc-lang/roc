@@ -38,7 +38,7 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _List(Num(_size)) -> _ret_
+    _List(_elem) -> _ret where [List(c) -> d.from_int_digits : List(c) -> d]_
 
 But I expected it to be:
     _List(a), (a -> b) -> Error_

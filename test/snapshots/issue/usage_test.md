@@ -15,7 +15,7 @@ value = 42
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
-TYPE MISMATCH - usage_test.md:6:9:6:11
+MISSING METHOD - usage_test.md:6:9:6:11
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -39,19 +39,16 @@ UnusedType := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**MISSING METHOD**
+This **from_int_digits** method is being called on the type **UsedType**, which has no method with that name:
 **usage_test.md:6:9:6:11:**
 ```roc
 value = 42
 ```
         ^^
 
-It has the type:
-    _Num(_size)_
 
-But the type annotation says it should have the type:
-    _UsedType_
+**Hint: **For this to work, the type would need to have a method named **from_int_digits** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -103,12 +100,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "UsedType")))
 	(type_decls
 		(nominal (type "UnusedType")
 			(ty-header (name "UnusedType")))
 		(nominal (type "UsedType")
 			(ty-header (name "UsedType"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "UsedType"))))
 ~~~

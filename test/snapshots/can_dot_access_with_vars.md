@@ -23,7 +23,7 @@ You're calling the method `map` on a type that doesn't support methods:
     ^^^^^^^^^^^^
 
 This type doesn't support methods:
-    _List(Num(_size))_
+    _List(_elem) where [List(a).from_int_digits : List(a)]_
 
 
 

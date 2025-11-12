@@ -44,23 +44,22 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - Adv.md:17:13:17:32
+TYPE DOES NOT HAVE METHODS - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Adv.md:17:13:17:32:**
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
+**Adv.md:17:28:17:31:**
 ```roc
 	next_val = val.update_str(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^
+	                          ^^^
 
-It has the type:
-    _Adv, Num(_size) -> _ret_
+This type doesn't support methods:
+    _Str_
 
-But I expected it to be:
-    _Adv, Str -> Adv_
+
 
 **MISSING METHOD**
 This **update_strr** method is being called on the type **Adv**, which has no method with that name:
@@ -505,7 +504,7 @@ main = {
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv"))
-		(patt (type "Error"))
+		(patt (type "Adv"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "(Str, Num(Int(Unsigned64)))")))
@@ -517,7 +516,7 @@ main = {
 		(expr (type "Adv -> Num(Int(Unsigned64))"))
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))
-		(expr (type "Error"))
+		(expr (type "Adv"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "(Str, Num(Int(Unsigned64)))"))))

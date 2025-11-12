@@ -49,22 +49,21 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
+TYPE DOES NOT HAVE METHODS - let_polymorphism_records.md:26:47:26:49
 TYPE MISMATCH - let_polymorphism_records.md:38:6:38:17
 # PROBLEMS
-**TYPE MISMATCH**
-The second argument being passed to this function has the wrong type:
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
 **let_polymorphism_records.md:26:47:26:49:**
 ```roc
 updated_mismatch = update_data(str_container, 99)
 ```
                                               ^^
 
-This argument has the type:
-    _Num(_size)_
-
-But `update_data` needs the second argument to be:
+This type doesn't support methods:
     _Str_
+
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -402,41 +401,41 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
+		(patt (type "_a where [_b.from_int_digits : _arg -> _ret]"))
 		(patt (type "Num(Frac(_size))"))
 		(patt (type "Str"))
 		(patt (type "List(_elem)"))
 		(patt (type "List(Num(Frac(_size)))"))
-		(patt (type "a -> { count: Num(_size), data: a }"))
-		(patt (type "{ count: Num(_size), data: Num(_size2) }"))
-		(patt (type "{ count: Num(_size), data: Str }"))
-		(patt (type "{ count: Num(_size), data: List(_elem) }"))
+		(patt (type "a -> { count: _field, data: a } where [_b.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ count: _field, data: _field2 } where [_a.from_int_digits : _arg -> _ret, _b.from_int_digits : _arg2 -> _ret2]"))
+		(patt (type "{ count: _field, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ count: _field, data: List(_elem) } where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(patt (type "{ count: Num(_size), data: Num(_size2) }"))
-		(patt (type "{ count: Num(_size), data: Str }"))
-		(patt (type "Error"))
+		(patt (type "{ count: _field, data: _field2 } where [_a.from_int_digits : _arg -> _ret, _b.from_int_digits : _arg2 -> _ret2]"))
+		(patt (type "{ count: _field, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ count: _field, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: Num(_size) }"))
+		(patt (type "{ value: _field } where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(Num(_size)) }"))
+		(patt (type "{ value: List(_elem) } where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "_arg -> Num(_size)")))
 	(expressions
-		(expr (type "Num(_size)"))
+		(expr (type "_a where [_b.from_int_digits : _arg -> _ret]"))
 		(expr (type "Num(Frac(_size))"))
 		(expr (type "Str"))
 		(expr (type "List(_elem)"))
 		(expr (type "List(Num(Frac(_size)))"))
-		(expr (type "a -> { count: Num(_size), data: a }"))
-		(expr (type "{ count: Num(_size), data: Num(_size2) }"))
-		(expr (type "{ count: Num(_size), data: Str }"))
-		(expr (type "{ count: Num(_size), data: List(_elem) }"))
+		(expr (type "a -> { count: _field, data: a } where [_b.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ count: _field, data: _field2 } where [_a.from_int_digits : _arg -> _ret, _b.from_int_digits : _arg2 -> _ret2]"))
+		(expr (type "{ count: _field, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ count: _field, data: List(_elem) } where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(expr (type "{ count: Num(_size), data: Num(_size2) }"))
-		(expr (type "{ count: Num(_size), data: Str }"))
-		(expr (type "Error"))
+		(expr (type "{ count: _field, data: _field2 } where [_a.from_int_digits : _arg -> _ret, _b.from_int_digits : _arg2 -> _ret2]"))
+		(expr (type "{ count: _field, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ count: _field, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: Num(_size) }"))
+		(expr (type "{ value: _field } where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(Num(_size)) }"))
+		(expr (type "{ value: List(_elem) } where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "_arg -> Num(_size)"))))
 ~~~

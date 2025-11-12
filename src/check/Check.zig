@@ -3759,20 +3759,16 @@ fn checkBinopExpr(
             } else if (should_use_static_dispatch) {
                 // Nominal types or flex/rigid variables: use static dispatch to create method constraints
 
-                // Create fresh variables for the constraint function signature
-                // This avoids circular dependencies when unifying constrained flex vars
-                const constraint_arg1 = try self.fresh(env, expr_region);
-                const constraint_arg2 = try self.fresh(env, expr_region);
-                const constraint_ret = try self.fresh(env, expr_region);
-                try env.var_pool.addVarToRank(constraint_arg1, env.rank());
-                try env.var_pool.addVarToRank(constraint_arg2, env.rank());
-                try env.var_pool.addVarToRank(constraint_ret, env.rank());
+                // Create the constraint function type with actual operand vars as arguments
+                // and fresh return var to avoid circular dependency
+                const ret_var = try self.fresh(env, expr_region);
+                try env.var_pool.addVarToRank(ret_var, env.rank());
 
-                const args_range = try self.types.appendVars(&.{ constraint_arg1, constraint_arg2 });
+                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
-                    .ret = constraint_ret,
+                    .ret = ret_var,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
                 try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
@@ -3795,11 +3791,8 @@ fn checkBinopExpr(
 
                 _ = try self.unify(constrained_var, lhs_var, env);
 
-                // Connect call site variables to constraint function parameters
-                // This allows type information to flow without creating circular references
-                _ = try self.unify(lhs_var, constraint_arg1, env);
-                _ = try self.unify(rhs_var, constraint_arg2, env);
-                _ = try self.unify(expr_var, constraint_ret, env);
+                // Set expression result to the return type (don't constrain it)
+                _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
                 // This path is for unknown types that need to be constrained to numbers
@@ -4153,7 +4146,25 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const original_env: *const ModuleEnv = blk: {
                 if (is_this_module) {
                     break :blk self.cir;
+                } else if (self.common_idents.builtin_module) |builtin_env| {
+                    // Check if this is from the Builtin module
+                    const is_builtin_module = std.mem.eql(
+                        u8,
+                        self.cir.getIdent(original_module_ident),
+                        builtin_env.module_name,
+                    );
+                    if (is_builtin_module) {
+                        break :blk builtin_env;
+                    } else {
+                        // Get the module env from module_envs
+                        std.debug.assert(self.module_envs != null);
+                        const module_envs = self.module_envs.?;
+                        const mb_original_module_env = module_envs.get(original_module_ident);
+                        std.debug.assert(mb_original_module_env != null);
+                        break :blk mb_original_module_env.?.env;
+                    }
                 } else {
+                    // Builtin module is null (we're compiling Builtin itself)
                     // Get the module env from module_envs
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;

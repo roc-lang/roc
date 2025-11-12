@@ -29,39 +29,65 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:16:28:16:28
-INVALID NOMINAL TAG - annotations.md:19:22:19:41
+TYPE MISMATCH - annotations.md:16:21:16:35
+TYPE DOES NOT HAVE METHODS - annotations.md:16:33:16:34
+TYPE MISMATCH - annotations.md:19:22:19:41
+TYPE DOES NOT HAVE METHODS - annotations.md:19:32:19:33
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
-The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
-**annotations.md:16:28:**
+This expression is used in an unexpected way:
+**annotations.md:16:21:16:35:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                           ^^^  ^
+                    ^^^^^^^^^^^^^^
 
-The first argument has the type:
+It has the type:
+    _Pair(Str)_
+
+But the type annotation says it should have the type:
+    _Pair(Num(Int(Unsigned8)))_
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
+**annotations.md:16:33:16:34:**
+```roc
+failPairDiffTypes = mkPair("1", 2)
+```
+                                ^
+
+This type doesn't support methods:
     _Str_
 
-But the second argument has the type:
-    _Num(_size)_
 
-`mkPair` needs these arguments to have compatible types.
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **annotations.md:19:22:19:41:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                      ^^^^^^^^^^^^^^^^^^^
 
-The tag is:
-    _Pair(Num(_size), Str)_
+It has the type:
+    _Pair(Str)_
 
-But the nominal type needs it to be:
-    _Pair(Num(_size), Num(_size2))_
+But the type annotation says it should have the type:
+    _Pair(Num(Int(Unsigned64)))_
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_int_digits` on a type that doesn't support methods:
+**annotations.md:19:32:19:33:**
+```roc
+failPairDiffTypes2 = Pair.Pair(1, "str")
+```
+                               ^
+
+This type doesn't support methods:
+    _Str_
+
+
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:

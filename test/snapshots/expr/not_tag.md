@@ -19,7 +19,7 @@ This expression is used in an unexpected way:
   ^^^^
 
 It has the type:
-    _[C(Num(_size))][False, True]_
+    _[C(_a)][False, True] where [[C(b)][False, True].from_int_digits : [C(b)][False, True]]_
 
 But I expected it to be:
     _Bool_

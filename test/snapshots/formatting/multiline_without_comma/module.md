@@ -110,9 +110,9 @@ b = 'a'
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(_size))"))
-		(patt (type "Num(Int(_size))")))
+		(patt (type "_c where [_d.from_int_digits : _arg -> _ret]"))
+		(patt (type "_c where [_d.from_int_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "Num(Int(_size))"))
-		(expr (type "Num(Int(_size))"))))
+		(expr (type "_c where [_d.from_int_digits : _arg -> _ret]"))
+		(expr (type "_c where [_d.from_int_digits : _arg -> _ret]"))))
 ~~~
