@@ -86,7 +86,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     problems.* = .{};
 
     // Create and run comptime evaluator with real builtins
-    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
 
     return .{
@@ -183,7 +183,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     const other_envs_slice = try gpa.dupe(*const ModuleEnv, imported_envs.items);
 
     // Create and run comptime evaluator with real builtins
-    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types);
 
     return .{

@@ -404,6 +404,24 @@ test "tuples" {
     try helpers.runExpectTuple("(5 + 1, 5 * 3)", expected_elements3, .no_trace);
 }
 
+test "I128 explicit plus method call" {
+    // Test static dispatch on I128's plus method directly
+    // Use a simple block expression with the method call
+    try runExpectInt(
+        \\{
+        \\    x : I128
+        \\    x = 42
+        \\    x.plus(7)
+        \\}
+    , 49, .no_trace);
+}
+
+test "simple lambda with explicit method call - NO SUGAR" {
+    // This test uses explicit .plus() method call, not the + operator
+    // This helps us test the core method dispatch without operator desugaring
+    try runExpectInt("(|x| x.plus(x))(7)", 14, .no_trace);
+}
+
 test "simple lambdas" {
     try runExpectInt("(|x| x + 1)(5)", 6, .no_trace);
     try runExpectInt("(|x| x * 2 + 1)(10)", 21, .no_trace);
@@ -840,7 +858,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+        const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
         var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
@@ -907,7 +925,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+            const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
             var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, &[_]*const can.ModuleEnv{});
             defer interpreter.deinit();
 

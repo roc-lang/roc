@@ -695,21 +695,52 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                if (b_flex.constraints.len() > 0) {
-                    // Don't defer constraints for num types - they inherently support arithmetic operations
-                    const is_num = a_flat_type == .num;
-                    if (!is_num) {
-                        // Record that we need to check constraints later
-                        _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                            .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
-                            .constraints = b_flex.constraints,
-                        }) catch return Error.AllocatorError;
-                    }
+                // Extract constraints from num type if present
+                const num_constraints: types_mod.StaticDispatchConstraint.SafeList.Range = if (a_flat_type == .num) switch (a_flat_type.num) {
+                    .num_unbound => |reqs| reqs.constraints,
+                    .int_unbound => |reqs| reqs.constraints,
+                    .frac_unbound => |reqs| reqs.constraints,
+                    .num_poly, .int_poly, .frac_poly => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                } else types_mod.StaticDispatchConstraint.SafeList.Range.empty();
+
+                // Merge num constraints with flex constraints
+                if (num_constraints.len() > 0 or b_flex.constraints.len() > 0) {
+                    const merged = try self.unifyStaticDispatchConstraints(
+                        num_constraints,
+                        b_flex.constraints,
+                    );
+
+                    // Defer constraint checking
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_,
+                        .constraints = merged,
+                    }) catch return Error.AllocatorError;
                 }
 
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
-            .rigid => return error.TypeMismatch,
+            .rigid => |b_rigid| {
+                // Extract constraints from num
+                const num_constraints: types_mod.StaticDispatchConstraint.SafeList.Range = if (a_flat_type == .num) switch (a_flat_type.num) {
+                    .num_unbound => |reqs| reqs.constraints,
+                    .int_unbound => |reqs| reqs.constraints,
+                    .frac_unbound => |reqs| reqs.constraints,
+                    else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                } else types_mod.StaticDispatchConstraint.SafeList.Range.empty();
+
+                if (num_constraints.len() > 0) {
+                    // Defer constraint checking for rigid
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_,
+                        .constraints = num_constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
+                // Rigid types with structures usually don't unify
+                _ = b_rigid;
+                return error.TypeMismatch;
+            },
             .alias => |b_alias| {
                 // When unifying an alias with a concrete structure, we
                 // want to preserve the alias for display while ensuring the
@@ -1341,14 +1372,34 @@ const Unifier = struct {
                         try self.unifyUnboundAndPolyNums(vars, a_reqs, b_poly);
                     },
                     .num_unbound => |b_requirements| {
+                        // Merge numeric requirements
+                        const merged_int = a_reqs.int_requirements.unify(b_requirements.int_requirements);
+                        const merged_frac = a_reqs.frac_requirements.unify(b_requirements.frac_requirements);
+
+                        // Merge constraints (just like flex vars)
+                        const merged_constraints = try self.unifyStaticDispatchConstraints(
+                            a_reqs.constraints,
+                            b_requirements.constraints,
+                        );
+
                         self.merge(vars, .{ .structure = .{ .num = .{
                             .num_unbound = .{
-                                .int_requirements = a_reqs.int_requirements.unify(b_requirements.int_requirements),
-                                .frac_requirements = a_reqs.frac_requirements.unify(b_requirements.frac_requirements),
+                                .int_requirements = merged_int,
+                                .frac_requirements = merged_frac,
+                                .constraints = merged_constraints,
                             },
                         } } });
                     },
                     .num_compact => |b_num_compact| {
+                        // When unifying with concrete type, validate constraints
+                        if (a_reqs.constraints.len() > 0) {
+                            // Defer constraint checking
+                            _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                                .var_ = vars.b.var_,
+                                .constraints = a_reqs.constraints,
+                            }) catch return Error.AllocatorError;
+                        }
+
                         try self.unifyUnboundAndCompactNums(
                             vars,
                             a_reqs,
@@ -1563,6 +1614,7 @@ const Unifier = struct {
             .num_unbound => |a_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
                 .int_requirements = b_reqs.int_requirements.unify(a_reqs.int_requirements),
                 .frac_requirements = b_reqs.frac_requirements.unify(a_reqs.frac_requirements),
+                .constraints = b_reqs.constraints,
             } } } }),
             .int_unbound => |a_reqs| {
                 const poly_unbound = self.fresh(vars, .{ .structure = .{
@@ -1640,6 +1692,7 @@ const Unifier = struct {
             .num_unbound => |b_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
                 .int_requirements = a_reqs.int_requirements.unify(b_reqs.int_requirements),
                 .frac_requirements = a_reqs.frac_requirements.unify(b_reqs.frac_requirements),
+                .constraints = a_reqs.constraints,
             } } } }),
             .int_unbound => |b_reqs| {
                 const poly_unbound = self.fresh(vars, .{ .structure = .{

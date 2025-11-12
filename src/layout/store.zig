@@ -910,18 +910,38 @@ pub const Store = struct {
                                 },
                                 .int_precision => |precision| break :flat_type Layout.int(precision),
                                 .frac_precision => |precision| break :flat_type Layout.frac(precision),
-                                // For polymorphic types, use default precision
-                                .num_unbound => |_| {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                // For polymorphic types, default based on requirements and constraints
+                                .num_unbound => |reqs| {
+                                    // At runtime, we should default to I128 for integers, Dec for fractions
+                                    const is_decimal = reqs.frac_requirements.fits_in_dec and !reqs.frac_requirements.fits_in_f32 and reqs.int_requirements.bits_needed == 0;
+
+                                    // If there are constraints, they MUST be checked
+                                    // Numeric literals should always have constraints
+                                    if (reqs.constraints.isEmpty()) {
+                                        @panic("COMPILER BUG: num_unbound at runtime with no constraints! Where did this come from? Numeric literals should always have constraints.");
+                                    }
+
+                                    // Default to concrete type
+                                    break :flat_type if (is_decimal)
+                                        Layout.frac(types.Num.Frac.Precision.dec)
+                                    else
+                                        Layout.int(types.Num.Int.Precision.i128);
                                 },
-                                .int_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                .int_unbound => |reqs| {
+                                    // Default to I128
+                                    if (reqs.constraints.isEmpty()) {
+                                        @panic("COMPILER BUG: int_unbound at runtime with no constraints!");
+                                    }
+
+                                    break :flat_type Layout.int(types.Num.Int.Precision.i128);
                                 },
-                                .frac_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.frac(types.Num.Frac.Precision.default);
+                                .frac_unbound => |reqs| {
+                                    // Default to Dec
+                                    if (reqs.constraints.isEmpty()) {
+                                        @panic("COMPILER BUG: frac_unbound at runtime with no constraints!");
+                                    }
+
+                                    break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
                                 },
                                 .num_poly => |var_| {
                                     const next_type = self.types_store.resolveVar(var_).desc.content;
@@ -1338,18 +1358,19 @@ pub const Store = struct {
                         const constraints = self.types_store.sliceStaticDispatchConstraints(flex_data.constraints);
                         const ident_store = self.env.getIdentStoreConst();
 
-                        // Check for decimal literal constraint
+                        // Check for numeric literal constraints - these should NOT be on flex vars!
                         for (constraints) |constraint| {
-                            const name = ident_store.getText(constraint.fn_name);
-                            if (std.mem.eql(u8, name, "from_dec_digits")) {
-                                // Decimal literal - use Dec precision
-                                break :blk Layout.frac(types.Num.Frac.Precision.dec);
+                            const fn_name_text = ident_store.getText(constraint.fn_name);
+                            if (std.mem.eql(u8, fn_name_text, "from_int_digits") or
+                                std.mem.eql(u8, fn_name_text, "from_dec_digits"))
+                            {
+                                @panic("COMPILER BUG: Found numeric literal constraint on flex var at runtime! Numeric literals should create num types with constraints, not flex vars.");
                             }
                         }
 
-                        // All other numeric constraints default to I128
-                        // This includes integer literals (from_int_digits) and arithmetic operations
-                        break :blk Layout.int(types.Num.Int.Precision.i128);
+                        // All other constraints (for nominal types etc.) should cause an error
+                        // since we don't know how to default them
+                        return LayoutError.BugUnboxedFlexVar;
                     }
 
                     // No constraints - this is truly an unconstrained flex var

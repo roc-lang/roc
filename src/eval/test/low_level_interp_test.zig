@@ -107,7 +107,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     const problems = try gpa.create(check.problem.Store);
     problems.* = .{};
 
-    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
 
     return .{

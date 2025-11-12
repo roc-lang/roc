@@ -46,6 +46,7 @@ pub const BuiltinModules = struct {
             self.builtin_module.env,
             self.builtin_module.env,
             self.builtin_module.env,
+            self.builtin_module.env,
         );
     }
 

@@ -3076,13 +3076,22 @@ const NumTypeUnbound = union(enum) {
     }
 
     pub fn fracLiteral(fits_f32: bool, fits_dec: bool) NumTypeUnbound {
-        return .{ .frac = .{ .fits_in_f32 = fits_f32, .fits_in_dec = fits_dec } };
+        return .{ .frac = .{
+            .fits_in_f32 = fits_f32,
+            .fits_in_dec = fits_dec,
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        } };
     }
 
     pub fn numLiteral(int_value: u128, is_negative: bool, fits_f32: bool, fits_dec: bool) NumTypeUnbound {
         return .{ .num = .{
             .int_requirements = Num.IntRequirements.fromIntLiteral(int_value, is_negative),
-            .frac_requirements = .{ .fits_in_f32 = fits_f32, .fits_in_dec = fits_dec },
+            .frac_requirements = .{
+                .fits_in_f32 = fits_f32,
+                .fits_in_dec = fits_dec,
+                .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+            },
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
         } };
     }
 };

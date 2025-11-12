@@ -346,7 +346,7 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
     defer interpreter.deinitAndFreeOtherEnvs();
 

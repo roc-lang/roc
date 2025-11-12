@@ -799,55 +799,30 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
 const NumPrecType = enum { precision, compacted };
 
 fn writeIntType(self: *TypeWriter, prec: Num.Int.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-    switch (num_type) {
-        .compacted => {
-            _ = switch (prec) {
-                .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
-                .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
-                .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
-                .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
-                .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
-                .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
-                .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
-                .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
-                .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
-                .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
-            };
-        },
-        .precision => {
-            _ = switch (prec) {
-                .u8 => try self.buf.writer().write("Unsigned8"),
-                .i8 => try self.buf.writer().write("Signed8"),
-                .u16 => try self.buf.writer().write("Unsigned16"),
-                .i16 => try self.buf.writer().write("Signed16"),
-                .u32 => try self.buf.writer().write("Unsigned32"),
-                .i32 => try self.buf.writer().write("Signed32"),
-                .u64 => try self.buf.writer().write("Unsigned64"),
-                .i64 => try self.buf.writer().write("Signed64"),
-                .u128 => try self.buf.writer().write("Unsigned128"),
-                .i128 => try self.buf.writer().write("Signed128"),
-            };
-        },
-    }
+    // Always print the modern type name (U8, I128, etc), not the old Num(Int(Signed128)) syntax
+    _ = num_type;
+    _ = switch (prec) {
+        .u8 => try self.buf.writer().write("U8"),
+        .i8 => try self.buf.writer().write("I8"),
+        .u16 => try self.buf.writer().write("U16"),
+        .i16 => try self.buf.writer().write("I16"),
+        .u32 => try self.buf.writer().write("U32"),
+        .i32 => try self.buf.writer().write("I32"),
+        .u64 => try self.buf.writer().write("U64"),
+        .i64 => try self.buf.writer().write("I64"),
+        .u128 => try self.buf.writer().write("U128"),
+        .i128 => try self.buf.writer().write("I128"),
+    };
 }
 
 fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-    switch (num_type) {
-        .compacted => {
-            _ = switch (prec) {
-                .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
-                .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
-                .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
-            };
-        },
-        .precision => {
-            _ = switch (prec) {
-                .f32 => try self.buf.writer().write("Float32"),
-                .f64 => try self.buf.writer().write("Float64"),
-                .dec => try self.buf.writer().write("Decimal"),
-            };
-        },
-    }
+    // Always print the modern type name (F32, F64, Dec), not the old Num(Frac(Float32)) syntax
+    _ = num_type;
+    _ = switch (prec) {
+        .f32 => try self.buf.writer().write("F32"),
+        .f64 => try self.buf.writer().write("F64"),
+        .dec => try self.buf.writer().write("Dec"),
+    };
 }
 
 /// Append a constraint to the list, if it doesn't already exist

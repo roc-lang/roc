@@ -2056,7 +2056,11 @@ fn checkPatternHelp(
                     .num_unbound => {
                         const int_reqs = num.value.toIntRequirements();
                         const frac_reqs = num.value.toFracRequirements();
-                        break :blk Num{ .num_unbound = .{ .int_requirements = int_reqs, .frac_requirements = frac_reqs } };
+                        break :blk Num{ .num_unbound = .{
+                            .int_requirements = int_reqs,
+                            .frac_requirements = frac_reqs,
+                            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        } };
                     },
                     .int_unbound => {
                         const int_reqs = num.value.toIntRequirements();
@@ -2096,6 +2100,7 @@ fn checkPatternHelp(
                 const requirements = types_mod.Num.FracRequirements{
                     .fits_in_f32 = can.CIR.fitsInF32(f64_val),
                     .fits_in_dec = can.CIR.fitsInDec(f64_val),
+                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -2187,23 +2192,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // nums //
         .e_num => |num| {
-            // Handle num_unbound and int_unbound specially to add static dispatch constraints
+            // Handle num_unbound and int_unbound specially to create num types with constraints
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
+                    const int_reqs = num.value.toIntRequirements();
                     const frac_reqs = num.value.toFracRequirements();
 
-                    // Determine if this is an integer or decimal literal
+                    // Determine constraint name based on whether it's a decimal or integer
                     const is_decimal = frac_reqs.fits_in_dec and !frac_reqs.fits_in_f32;
                     const constraint_name = if (is_decimal)
                         self.cir.from_dec_digits_ident
                     else
                         self.cir.from_int_digits_ident;
 
-                    // Create return type for constraint function (unconstrained placeholder)
-                    const ret_var = try self.fresh(env, expr_region);
-
                     // Create constraint function: List U8 -> Try Self [OutOfRange]
-                    const arg_var = try self.fresh(env, expr_region); // List U8
+                    const ret_var = try self.fresh(env, expr_region);
+                    const arg_var = try self.fresh(env, expr_region);
                     const args_range = try self.types.appendVars(&.{arg_var});
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = args_range,
@@ -2211,7 +2215,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .needs_instantiation = false,
                     } } }, env, expr_region);
 
-                    // Create the static dispatch constraint
                     const constraint = StaticDispatchConstraint{
                         .fn_name = constraint_name,
                         .fn_var = constraint_fn_var,
@@ -2219,16 +2222,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                    // Create a constrained flex variable
-                    const constrained_var = try self.freshFromContent(
-                        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                        env,
-                        expr_region,
-                    );
+                    // Create num type with embedded constraints (NOT flex var!)
+                    const num_type: Num = if (num.kind == .num_unbound) .{
+                        .num_unbound = .{
+                            .int_requirements = int_reqs,
+                            .frac_requirements = frac_reqs,
+                            .constraints = constraint_range,
+                        },
+                    } else .{
+                        .int_unbound = .{
+                            .sign_needed = int_reqs.sign_needed,
+                            .bits_needed = int_reqs.bits_needed,
+                            .is_minimum_signed = int_reqs.is_minimum_signed,
+                            .constraints = constraint_range,
+                        },
+                    };
 
-                    // Unify expr_var with the constrained var
-                    // Do NOT unify constrained_var with ret_var to avoid cycles
-                    _ = try self.unify(expr_var, constrained_var, env);
+                    try self.unifyWith(expr_var, .{ .structure = .{ .num = num_type } }, env);
                 },
                 else => {
                     // For concrete numeric types (u8, i8, etc.), use the original behavior
@@ -2265,6 +2275,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const requirements = types_mod.Num.FracRequirements{
                     .fits_in_f32 = true,
                     .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
+                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -2282,6 +2293,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const requirements = types_mod.Num.FracRequirements{
                     .fits_in_f32 = can.CIR.fitsInF32(@floatCast(frac.value)),
                     .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
+                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -2300,6 +2312,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const requirements = types_mod.Num.FracRequirements{
                     .fits_in_f32 = can.CIR.fitsInF32(f64_val),
                     .fits_in_dec = can.CIR.fitsInDec(f64_val),
+                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -2643,6 +2656,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check the final expression
             does_fx = try self.checkExpr(block.final_expr, env, expected) or does_fx;
+
+            // Check any accumulated static dispatch constraints from the final expression
+            try self.checkDeferredStaticDispatchConstraints(env);
 
             // Link the root expr with the final expr
             _ = try self.unify(expr_var, ModuleEnv.varFrom(block.final_expr), env);
@@ -3598,6 +3614,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
         .num_unbound = .{
             .int_requirements = Num.IntRequirements.init(),
             .frac_requirements = Num.FracRequirements.init(),
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
         },
     } } };
     const num_var = try self.freshFromContent(num_content, env, expr_region);
@@ -3739,6 +3756,7 @@ fn checkBinopExpr(
                             .num_unbound = .{
                                 .int_requirements = Num.IntRequirements.init(),
                                 .frac_requirements = Num.FracRequirements.init(),
+                                .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                             },
                         } } };
                         const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
@@ -3757,23 +3775,17 @@ fn checkBinopExpr(
                 // num, otherwise the propgate error
                 try self.types.setVarRedirect(expr_var, lhs_var);
             } else if (should_use_static_dispatch) {
-                // Nominal types or flex/rigid variables: use static dispatch to create method constraints
+                // All types use static dispatch: a + b desugars to a.plus(b)
+                // Type unification will propagate types through the constraint function
 
-                // Create the constraint function type with actual operand vars as arguments
-                // and fresh return var to avoid circular dependency
                 const ret_var = try self.fresh(env, expr_region);
-                try env.var_pool.addVarToRank(ret_var, env.rank());
-
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
-
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
                     .ret = ret_var,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
-                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
-                // Create the static dispatch constraint
                 const constraint = StaticDispatchConstraint{
                     .fn_name = method_name,
                     .fn_var = constraint_fn_var,
@@ -3781,17 +3793,12 @@ fn checkBinopExpr(
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                // Constrain ONLY the LHS (receiver) to have the required method
                 const constrained_var = try self.freshFromContent(
                     .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
                     env,
                     expr_region,
                 );
-                try env.var_pool.addVarToRank(constrained_var, env.rank());
-
                 _ = try self.unify(constrained_var, lhs_var, env);
-
-                // Set expression result to the return type (don't constrain it)
                 _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
@@ -3815,6 +3822,7 @@ fn checkBinopExpr(
                             .num_unbound = .{
                                 .int_requirements = Num.IntRequirements.init(),
                                 .frac_requirements = Num.FracRequirements.init(),
+                                .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                             },
                         } } };
                         const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
@@ -4128,6 +4136,123 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         } else if (dispatcher_content == .flex) {
             // If the root type is aa flex, then we there's nothing to check
             continue;
+        } else if (dispatcher_content == .structure and dispatcher_content.structure == .num) {
+            // Handle numeric types (.int_precision, .frac_precision, etc.)
+            // These are builtin types that need to be mapped to their nominal representations
+            const num = dispatcher_content.structure.num;
+
+            // For unbound/poly numeric types, skip constraint checking (like flex vars)
+            switch (num) {
+                .num_unbound, .num_poly, .int_unbound, .int_poly, .frac_unbound, .frac_poly => {
+                    continue;
+                },
+                .int_precision, .frac_precision, .num_compact => {},
+            }
+
+            // Map precision to the appropriate builtin nominal type name
+            // .int_precision, .frac_precision, and .num_compact are all memory optimizations
+            // that should be treated identically to the corresponding builtin nominal types
+            const builtin_type_name: []const u8 = switch (num) {
+                .int_precision => |prec| switch (prec) {
+                    .u8 => "U8",
+                    .i8 => "I8",
+                    .u16 => "U16",
+                    .i16 => "I16",
+                    .u32 => "U32",
+                    .i32 => "I32",
+                    .u64 => "U64",
+                    .i64 => "I64",
+                    .u128 => "U128",
+                    .i128 => "I128",
+                },
+                .frac_precision => |prec| switch (prec) {
+                    .f32 => "F32",
+                    .f64 => "F64",
+                    .dec => "Dec",
+                },
+                .num_compact => |compact| switch (compact) {
+                    .int => |prec| switch (prec) {
+                        .u8 => "U8",
+                        .i8 => "I8",
+                        .u16 => "U16",
+                        .i16 => "I16",
+                        .u32 => "U32",
+                        .i32 => "I32",
+                        .u64 => "U64",
+                        .i64 => "I64",
+                        .u128 => "U128",
+                        .i128 => "I128",
+                    },
+                    .frac => |prec| switch (prec) {
+                        .f32 => "F32",
+                        .f64 => "F64",
+                        .dec => "Dec",
+                    },
+                },
+                else => unreachable, // Already handled above
+            };
+
+            // Get the Builtin module environment
+            const builtin_env = self.common_idents.builtin_module orelse {
+                // No builtin module available (shouldn't happen in normal compilation)
+                continue;
+            };
+
+            // Get the constraints
+            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+
+            // For each constraint (e.g., plus, minus, etc.), look up the method on the builtin type
+            for (constraints) |constraint| {
+                // Extract the function and return type from the constraint
+                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                std.debug.assert(mb_resolved_func != null);
+                const resolved_func = mb_resolved_func.?;
+
+                // Get the name of the constraint function (e.g., "plus")
+                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
+
+                // Construct the fully qualified method name: Builtin.Num.{TypeName}.{method}
+                self.static_dispatch_method_name_buf.clearRetainingCapacity();
+                try self.static_dispatch_method_name_buf.print(
+                    self.gpa,
+                    "{s}.Num.{s}.{s}",
+                    .{ builtin_env.module_name, builtin_type_name, constraint_fn_name_bytes },
+                );
+                const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
+
+                // Get the ident of this method in the builtin env
+                const ident_in_builtin_env = builtin_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
+                    continue;
+                };
+
+                // Get the def index in the builtin env
+                const node_idx_in_builtin_env = builtin_env.getExposedNodeIndexById(ident_in_builtin_env) orelse {
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
+                    continue;
+                };
+
+                const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_builtin_env)));
+                const def_var: Var = ModuleEnv.varFrom(def_idx);
+
+                // The builtin module should already be processed, so we can just get the type
+                const result = try self.unify(def_var, constraint.fn_var, env);
+                if (result.isProblem()) {
+                    try self.unifyWith(deferred_constraint.var_, .err, env);
+                    try self.unifyWith(resolved_func.ret, .err, env);
+                }
+            }
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // TODO: Internal types like Str, Result, List, etc are not
             // technically nominal types. So in those cases, we should lookup

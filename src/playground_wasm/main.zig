@@ -1008,7 +1008,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
     result.bool_stmt = bool_stmt_in_builtin_module;
-    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),

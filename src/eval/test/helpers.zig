@@ -50,7 +50,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -78,7 +78,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -104,7 +104,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -139,7 +139,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -171,7 +171,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -205,7 +205,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -235,7 +235,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -284,7 +284,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -328,7 +328,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
@@ -499,7 +499,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         // Pass Bool and Result as imported modules
         const imported_envs = [_]*const ModuleEnv{builtin_module.env};
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
-        const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+        const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -524,7 +524,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);
 
-    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
@@ -565,7 +565,7 @@ test "eval tag - already primitive" {
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 

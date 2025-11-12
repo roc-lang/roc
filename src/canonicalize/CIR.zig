@@ -343,6 +343,7 @@ pub const SmallDecValue = struct {
         return types_mod.Num.FracRequirements{
             .fits_in_f32 = fitsInF32(f64_val),
             .fits_in_dec = fitsInDec(f64_val),
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
         };
     }
 
@@ -490,6 +491,7 @@ pub const IntValue = struct {
             .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
             .bits_needed = bits_needed.toBits(),
             .is_minimum_signed = is_minimum_signed,
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
         };
     }
 
@@ -527,6 +529,7 @@ pub const IntValue = struct {
         return types_mod.Num.FracRequirements{
             .fits_in_f32 = fits_in_f32,
             .fits_in_dec = fits_in_dec,
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
         };
     }
 };

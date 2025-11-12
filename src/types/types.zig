@@ -22,8 +22,10 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(32, @sizeOf(Descriptor));
-    try std.testing.expectEqual(24, @sizeOf(Content));
+    // Updated from 32 to 52 bytes when adding constraints field to Requirements structs
+    try std.testing.expectEqual(52, @sizeOf(Descriptor));
+    // Updated from 24 to 44 bytes when adding constraints field to Requirements structs
+    try std.testing.expectEqual(44, @sizeOf(Content));
     try std.testing.expectEqual(12, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
@@ -391,7 +393,11 @@ pub const Num = union(enum) {
     num_compact: Compact,
 
     /// Represents requirements for number
-    pub const NumRequirements = struct { int_requirements: IntRequirements, frac_requirements: FracRequirements };
+    pub const NumRequirements = struct {
+        int_requirements: IntRequirements,
+        frac_requirements: FracRequirements,
+        constraints: StaticDispatchConstraint.SafeList.Range,
+    };
 
     /// Represents a compact number
     pub const Compact = union(enum) {
@@ -441,20 +447,27 @@ pub const Num = union(enum) {
         // When unifying multiple literals, we AND this flag to remain conservative.
         is_minimum_signed: bool,
 
+        // Static dispatch constraints (e.g., from_int_digits for numeric literals)
+        constraints: StaticDispatchConstraint.SafeList.Range,
+
         pub fn init() @This() {
             return .{
                 .sign_needed = false,
                 .bits_needed = 0,
                 .is_minimum_signed = false,
+                .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
             };
         }
 
         /// Unifies two IntRequirements, returning the most restrictive combination
+        /// NOTE: Constraint unification happens at a higher level (in unify.zig)
+        /// This just carries one set forward
         pub fn unify(self: IntRequirements, other: IntRequirements) IntRequirements {
             return IntRequirements{
                 .sign_needed = self.sign_needed or other.sign_needed,
                 .bits_needed = @max(self.bits_needed, other.bits_needed),
                 .is_minimum_signed = self.is_minimum_signed and other.is_minimum_signed,
+                .constraints = self.constraints,
             };
         }
 
@@ -465,6 +478,7 @@ pub const Num = union(enum) {
                 .sign_needed = is_negated,
                 .bits_needed = bits_need.toBits(),
                 .is_minimum_signed = is_negated and IntRequirements.isMinimumSigned(val),
+                .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
             };
         }
 
@@ -501,15 +515,25 @@ pub const Num = union(enum) {
         fits_in_f32: bool,
         fits_in_dec: bool,
 
+        // Static dispatch constraints (e.g., from_dec_digits for decimal literals)
+        constraints: StaticDispatchConstraint.SafeList.Range,
+
         pub fn init() @This() {
-            return .{ .fits_in_f32 = true, .fits_in_dec = true };
+            return .{
+                .fits_in_f32 = true,
+                .fits_in_dec = true,
+                .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
+            };
         }
 
         /// Unifies two FracRequirements, returning the intersection of capabilities
+        /// NOTE: Constraint unification happens at a higher level (in unify.zig)
+        /// This just carries one set forward
         pub fn unify(self: FracRequirements, other: FracRequirements) FracRequirements {
             return FracRequirements{
                 .fits_in_f32 = self.fits_in_f32 and other.fits_in_f32,
                 .fits_in_dec = self.fits_in_dec and other.fits_in_dec,
+                .constraints = self.constraints,
             };
         }
     };
