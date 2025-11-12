@@ -80,7 +80,8 @@ When writing Roc code in tests or examples, remember these syntax rules:
 
 - **Naming Convention**: Roc uses `snake_case` for identifiers, not `camelCase`
 - **Boolean Operators**: Use `and` and `or` keywords, not `&&` or `||`
-- **Lambda Syntax**: Anonymous functions use bars: `my_fn = |arg1, arg2| other_fn(arg1, arg2)`
+- **Function Syntax**: Functions in Roc are called with parentheses and commas, not whitespace: `my_fn = |arg1, arg2| other_fn(arg1, arg2)` NOT `my_fn = \arg1, arg2 -> other_fn arg1 arg2`
+- **Lambda Syntax**: Functions in Roc are written with pipes (never backslashes) and are called with parentheses and commas (never whitespace). This is valid: `my_fn = |arg1, arg2| other_fn(arg1, arg2)` and this is NOT valid: `my_fn = \arg1, arg2 -> other_fn arg1 arg2`
 - **If Expressions**: The syntax is `if condition then_branch else else_branch` with no `then` keyword
 - **Blocks**: Use curly braces to define inline variables. The last expression in the block is its return value:
   ```
@@ -92,3 +93,10 @@ When writing Roc code in tests or examples, remember these syntax rules:
       answer
   }
   ```
+
+## Development Priorities
+
+1. **No std.debug.print or std.debug.panic in production** - This code base compiles to WebAssembly. That means if you ever leave std.debug.print or std.debug.panic calls in production code (both are fine in tests), CI will fail on the WebAssembly build. It's fine to use these for debugging, but if you want a production panic, use `@panic`, and if you want to write to stderr in production, use a normal stderr writer.
+1. **No excuses** - It is always incorrect to think "this is a pre-existing test failure, so I don't need to address it." All projects in this repository begin with completely passing tests, and this is strictly enforced by CI. If there is a test failure, you have not completed your task until it has been addressed. No excuses!
+2. **Ignore pass rate** - Test pass rate is something you should ignore completely. It doesn't matter how many tests are passing or how many are failing. All that matters is the binary "are all tests passing?" If you make a change and more tests pass than before, that does NOT necessarily mean you made progress. Likewise, if you make a change and fewer tests pass than before, that does NOT necessarily mean you regressed progress. You need to look at feedback like compiler output, debug logging, and individual test failure messages to determine whether you are making progress or not; completely disregard the number of passing or failing tests as a measure of incremental progress. The only way the number of failing tests is relevant is that you know you are not done with the project until the number of failures has reached zero.
+3. **No hacks, workarounds, placeholders, or fallbacks** - This is a production code base with an emphasis on high quality. Never give up and write code like "// For now, ..." or which silently swallows errors, or which uses fallbacks like "// If that didn't work, try..."
