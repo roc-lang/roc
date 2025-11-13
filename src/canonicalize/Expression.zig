@@ -386,6 +386,7 @@ pub const Expr = union(enum) {
     pub const LowLevel = enum {
         // String operations
         str_is_empty,
+        str_concat,
 
         // List operations
         list_len,

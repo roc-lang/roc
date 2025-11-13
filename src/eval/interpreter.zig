@@ -2369,6 +2369,56 @@ pub const Interpreter = struct {
 
                 return try self.makeSimpleBoolValue(result);
             },
+            .str_concat => {
+                // Str.concat : Str, Str -> Str
+                std.debug.assert(args.len == 2); // low-level .str_concat expects 2 arguments
+
+                const str_a_arg = args[0];
+                const str_b_arg = args[1];
+
+                std.debug.assert(str_a_arg.ptr != null);
+                std.debug.assert(str_b_arg.ptr != null);
+
+                // Both arguments must be strings
+                std.debug.assert(str_a_arg.layout.tag == .scalar and str_a_arg.layout.data.scalar.tag == .str);
+                std.debug.assert(str_b_arg.layout.tag == .scalar and str_b_arg.layout.data.scalar.tag == .str);
+
+                const roc_str_a_ptr: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
+                const roc_str_b_ptr: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+                const roc_str_a = roc_str_a_ptr.*;
+                const roc_str_b = roc_str_b_ptr.*;
+
+                const len_a = roc_str_a.len();
+                const len_b = roc_str_b.len();
+                const total_len: usize = len_a + len_b;
+
+                // Build the concatenated RocStr by copying bytes from both inputs.
+                const runtime_str: RocStr = if (total_len == 0)
+                    RocStr.empty()
+                else blk: {
+                    const buffer = try self.allocator.alloc(u8, total_len);
+                    defer self.allocator.free(buffer);
+
+                    const slice_a = roc_str_a.asSlice();
+                    const slice_b = roc_str_b.asSlice();
+
+                    std.mem.copyForwards(u8, buffer[0..len_a], slice_a);
+                    std.mem.copyForwards(u8, buffer[len_a .. len_a + len_b], slice_b);
+
+                    break :blk RocStr.fromSlice(buffer, roc_ops);
+                };
+
+                // Allocate space for the result string in the interpreter stack
+                const result_layout = str_a_arg.layout; // Same layout as input
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = runtime_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

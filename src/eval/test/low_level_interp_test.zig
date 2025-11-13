@@ -16,6 +16,7 @@ const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const StackValue = @import("../mod.zig").StackValue;
 
 const Can = can.Can;
 const Check = check.Check;
@@ -130,6 +131,34 @@ fn cleanupEvalModule(result: anytype) void {
 
     var builtin_module_mut = result.builtin_module;
     builtin_module_mut.deinit();
+}
+
+fn expectBindingStr(result: anytype, binding_name: []const u8, expected: []const u8) !void {
+    const interpreter = &result.evaluator.interpreter;
+
+    var maybe_value: ?StackValue = null;
+    for (interpreter.bindings.items) |binding| {
+        const pat = interpreter.env.store.getPattern(binding.pattern_idx);
+        switch (pat) {
+            .assign => |assign| {
+                const name = interpreter.env.getIdent(assign.ident);
+                if (std.mem.eql(u8, name, binding_name)) {
+                    maybe_value = binding.value;
+                    break;
+                }
+            },
+            else => {},
+        }
+        if (maybe_value != null) break;
+    }
+
+    const value = maybe_value orelse @panic("binding not found");
+    try testing.expect(value.layout.tag == .scalar);
+    try testing.expect(value.layout.data.scalar.tag == .str);
+
+    const roc_str = value.asRocStr();
+    const slice = roc_str.asSlice();
+    try testing.expectEqualStrings(expected, slice);
 }
 
 test "e_low_level_lambda - Str.is_empty returns True for empty string" {
@@ -377,4 +406,76 @@ test "e_low_level_lambda - List.concat with empty string list" {
 
     try testing.expect(len_expr == .e_num);
     try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+}
+
+test "e_low_level_lambda - Str.concat with two non-empty strings" {
+    const src =
+        \\x = Str.concat("hello", " world")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is "hello world"
+    try expectBindingStr(&result, "x", "hello world");
+}
+
+test "e_low_level_lambda - Str.concat with empty and non-empty string" {
+    const src =
+        \\x = Str.concat("", "abc")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is "abc"
+    try expectBindingStr(&result, "x", "abc");
+}
+
+test "e_low_level_lambda - Str.concat with two empty strings" {
+    const src =
+        \\x = Str.concat("", "")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is the empty string
+    try expectBindingStr(&result, "x", "");
+}
+
+test "e_low_level_lambda - Str.concat preserves order" {
+    const src =
+        \\x = Str.concat("foo", "bar")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is "foobar"
+    try expectBindingStr(&result, "x", "foobar");
 }

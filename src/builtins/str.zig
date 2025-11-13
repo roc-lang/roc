@@ -779,22 +779,69 @@ pub fn strConcatC(
     return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO
+/// strConcat implementation
 pub fn strConcat(
     arg1: RocStr,
     arg2: RocStr,
     roc_ops: *RocOps,
 ) RocStr {
     // NOTE: we don't special-case the first argument being empty. That is because it is owned and
-    // may have sufficient capacity to store the rest of the list.
-    if (arg2.isEmpty()) {
-        // the first argument is owned, so we can return it without cloning
-        return arg1;
-    } else {
-        const combined_length = arg1.len() + arg2.len();
+    // may have sufficient capacity to store the rest of the string.
+    var string_a = arg1;
+    var string_b = arg2;
 
-        var result = arg1.reallocate(combined_length, roc_ops);
-        @memcpy(result.asU8ptrMut()[arg1.len()..combined_length], arg2.asU8ptr()[0..arg2.len()]);
+    const len_a = string_a.len();
+    const len_b = string_b.len();
+
+    if (len_b == 0) {
+        // Second argument is empty; nothing to append. Consume it and return the first.
+        string_b.decref(roc_ops);
+        return string_a;
+    }
+
+    const total_length: usize = len_a + len_b;
+
+    if (string_a.isUnique()) {
+        // Grow the first string in place when possible.
+        var result = string_a.reallocate(total_length, roc_ops);
+
+        const dest = result.asU8ptrMut();
+        const src_b = string_b.asU8ptr();
+        @memcpy(dest[len_a..total_length], src_b[0..len_b]);
+
+        // The second string is no longer needed.
+        string_b.decref(roc_ops);
+
+        return result;
+    } else if (string_b.isUnique()) {
+        // Otherwise, try to grow the second string in place and prepend the first.
+        var result = string_b.reallocate(total_length, roc_ops);
+
+        const dest = result.asU8ptrMut();
+
+        // Move the existing contents of `string_b` to the end to make room for `string_a`.
+        mem.copyBackwards(u8, dest[len_a .. len_a + len_b], dest[0..len_b]);
+
+        const src_a = string_a.asU8ptr();
+        @memcpy(dest[0..len_a], src_a[0..len_a]);
+
+        // The first string is now fully copied into `result`.
+        string_a.decref(roc_ops);
+
+        return result;
+    } else {
+        // Neither string is unique; allocate a fresh string and copy both.
+        var result = RocStr.allocate(total_length, roc_ops);
+        const dest = result.asU8ptrMut();
+
+        const src_a = string_a.asU8ptr();
+        const src_b = string_b.asU8ptr();
+
+        @memcpy(dest[0..len_a], src_a[0..len_a]);
+        @memcpy(dest[len_a..total_length], src_b[0..len_b]);
+
+        string_a.decref(roc_ops);
+        string_b.decref(roc_ops);
 
         return result;
     }
