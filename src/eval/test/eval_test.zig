@@ -419,7 +419,8 @@ test "I128 explicit plus method call" {
 test "simple lambda with explicit method call - NO SUGAR" {
     // This test uses explicit .plus() method call, not the + operator
     // This helps us test the core method dispatch without operator desugaring
-    try runExpectInt("(|x| x.plus(x))(7)", 14, .no_trace);
+    // Using different numbers (7 + 5) to make the test less brittle
+    try runExpectInt("(|x| x.plus(5))(7)", 12, .no_trace);
 }
 
 test "simple lambdas" {

@@ -1896,13 +1896,14 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_dot_access => |dot_access| {
+                const field_name = self.env.getIdent(dot_access.field_name);
+
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
                 const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
                 var receiver_value = try self.evalExprMinimal(dot_access.receiver, roc_ops, receiver_rt_var);
                 defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                 const method_args = dot_access.args;
-                const field_name = self.env.getIdent(dot_access.field_name);
                 const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
                 const is_list_receiver = resolved_receiver.desc.content == .structure and switch (resolved_receiver.desc.content.structure) {
                     .list, .list_unbound => true,
@@ -1930,9 +1931,8 @@ pub const Interpreter = struct {
                 defer if (arg_values.len > 0) self.allocator.free(arg_values);
 
                 if (method_args) |span| {
-                    var i: usize = 0;
-                    while (i < arg_values.len) : (i += 1) {
-                        const arg_expr_idx: can.CIR.Expr.Idx = @enumFromInt(span.span.start + i);
+                    const arg_exprs = self.env.store.sliceExpr(span);
+                    for (arg_exprs, 0..) |arg_expr_idx, i| {
                         const arg_ct_var = can.ModuleEnv.varFrom(arg_expr_idx);
                         const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
                         arg_values[i] = try self.evalExprMinimal(arg_expr_idx, roc_ops, arg_rt_var);
@@ -2029,11 +2029,12 @@ pub const Interpreter = struct {
                 const NominalInfo = struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx };
                 const nominal_info: NominalInfo = blk: {
                     switch (receiver_resolved.desc.content) {
-                        .structure => |s| switch (s) {
-                            .nominal_type => |nom| break :blk NominalInfo{
-                                .origin = nom.origin_module,
-                                .ident = nom.ident.ident_idx,
-                            },
+                        .structure => |s| {
+                            switch (s) {
+                                .nominal_type => |nom| break :blk NominalInfo{
+                                    .origin = nom.origin_module,
+                                    .ident = nom.ident.ident_idx,
+                                },
                             .num => |num| {
                                 // Numeric types are builtin structure types, not nominal types
                                 // Default to I128 for integer types, Dec for fractional types
@@ -2093,15 +2094,27 @@ pub const Interpreter = struct {
                                 const numeric_stmt = self.builtins.builtin_env.store.getStatement(default_numeric_stmt);
                                 const numeric_ident = switch (numeric_stmt) {
                                     .s_nominal_decl => |decl| self.builtins.builtin_env.store.getTypeHeader(decl.header).name,
-                                    else => return error.InvalidMethodReceiver,
+                                    else => {
+                                        return error.InvalidMethodReceiver;
+                                    },
+                                };
+
+                                const numeric_name = self.builtins.builtin_env.getIdent(numeric_ident);
+
+                                // Insert the type name into the current module's interner so resolveMethodFunction can look it up
+                                const numeric_ident_in_current_module = self.env.common.findIdent(numeric_name) orelse find_or_insert: {
+                                    // Type name doesn't exist in current module's interner yet, insert it
+                                    const new_ident = try self.env.insertIdent(base_pkg.Ident.for_text(numeric_name));
+                                    break :find_or_insert new_ident;
                                 };
 
                                 break :blk NominalInfo{
                                     .origin = self.env.builtin_module_ident,
-                                    .ident = numeric_ident,
+                                    .ident = numeric_ident_in_current_module,
                                 };
                             },
-                            else => return error.InvalidMethodReceiver,
+                                else => return error.InvalidMethodReceiver,
+                            }
                         },
                         // Flex/rigid vars should have been specialized to nominal types before runtime
                         .flex, .rigid => {
@@ -2322,8 +2335,7 @@ pub const Interpreter = struct {
                 const truthy = try self.boolValueIsTrue(operand, operand_rt_var);
                 return try self.makeBoolValue(result_rt_var, !truthy);
             },
-            .e_runtime_error => |rt_err| {
-                _ = rt_err;
+            .e_runtime_error => |_| {
                 self.triggerCrash("runtime error", false, roc_ops);
                 return error.Crash;
             },
@@ -4523,6 +4535,9 @@ pub const Interpreter = struct {
         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
         const target_def = origin_env.store.getDef(target_def_idx);
 
+        // Get the def expr to check if it's e_anno_only
+        const def_expr = origin_env.store.getExpr(target_def.expr);
+
         // Save current environment and bindings
         const saved_env = self.env;
         const saved_bindings_len = self.bindings.items.len;
@@ -4534,7 +4549,16 @@ pub const Interpreter = struct {
         }
 
         // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
+        // For e_anno_only expressions, the type comes from the annotation, not the expression
+        const def_var = if (def_expr == .e_anno_only and target_def.annotation != null) blk: {
+            const anno_idx = target_def.annotation.?;
+            // The annotation's type variable can be obtained directly from its index
+            const anno_var = can.ModuleEnv.varFrom(anno_idx);
+            break :blk anno_var;
+        } else blk: {
+            break :blk can.ModuleEnv.varFrom(target_def.expr);
+        };
+
         const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
 
         // Evaluate the method's expression

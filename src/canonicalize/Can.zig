@@ -6363,15 +6363,13 @@ fn canonicalizeTypeAnnoBasicType(
     const type_name_region = self.parse_ir.tokens.resolve(ty.token);
 
     if (qualifier_toks.len == 0) {
-        // First, check if the type is a builtin type
-        // There are always automatically in-scope
-        if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(type_name_ident))) |builtin_type| {
-            return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                .name = type_name_ident,
-                .base = .{ .builtin = builtin_type },
-            } }, region);
-        } else {
-            // If it's not a builtin, look up in scope using unified type bindings
+        // Special case: In the Builtin module, allow local type declarations to shadow builtin primitives.
+        // This is necessary for nominal types like `I128 := [].{ plus : ... }` where the nominal type
+        // needs to wrap the primitive and define methods on it.
+        const is_builtin_module = std.mem.eql(u8, self.env.module_name, "Builtin");
+
+        if (is_builtin_module) {
+            // In Builtin module: Check local bindings FIRST to allow shadowing
             if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
                 const binding = binding_location.binding.*;
                 return switch (binding) {
@@ -6422,78 +6420,141 @@ fn canonicalizeTypeAnnoBasicType(
                     },
                 };
             }
+        }
 
-            // Check if this is an auto-imported type from module_envs
-            if (self.module_envs) |envs_map| {
-                if (envs_map.get(type_name_ident)) |auto_imported_type| {
-                    // This is an auto-imported type like Bool or Result
-                    // We need to create an import for it and return the type annotation
-                    const module_name_text = auto_imported_type.env.module_name;
-                    const import_idx = try self.getOrCreateAutoImport(module_name_text);
+        // Check if the type is a builtin primitive type
+        // In non-Builtin modules, this check happens first to prevent shadowing
+        if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(type_name_ident))) |builtin_type| {
+            return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                .name = type_name_ident,
+                .base = .{ .builtin = builtin_type },
+            } }, region);
+        }
 
-                    // Get the target node index using the pre-computed statement_idx
-                    const stmt_idx = auto_imported_type.statement_idx orelse {
-                        // Str doesn't have a statement_idx because it's a primitive builtin type
-                        // It should be detected as a builtin type before reaching this code path
-                        std.debug.panic("AutoImportedType for '{s}' from module '{s}' is missing required statement_idx", .{ self.env.getIdent(type_name_ident), module_name_text });
-                    };
-                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                        std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
-                    };
-
-                    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+        // If not in Builtin module, check local scope bindings now (after builtin check)
+        if (!is_builtin_module) {
+            if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
+                const binding = binding_location.binding.*;
+                return switch (binding) {
+                    .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
-                        .base = .{ .external = .{
-                            .module_idx = import_idx,
-                            .target_node_idx = target_node_idx,
-                        } },
-                    } }, region);
-                }
-            }
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region),
+                    .local_alias => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region),
+                    .associated_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region),
+                    .external_nominal => |external| blk: {
+                        const import_idx = external.import_idx orelse {
+                            break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+                                .module_name = external.module_ident,
+                                .region = type_name_region,
+                            } });
+                        };
 
-            // Not in type_decls, check if it's an exposed item from an imported module
-            if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
-                const module_name_text = self.env.getIdent(exposed_info.module_name);
-                if (self.scopeLookupImportedModule(module_name_text)) |import_idx| {
-                    // Get the node index from the imported module
-                    if (self.module_envs) |envs_map| {
-                        if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
-                            // Convert identifier from current module to target module's interner
-                            const original_name_text = self.env.getIdent(exposed_info.original_name);
-                            const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
-                                // Type identifier doesn't exist in the target module
-                                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                                    .module_name = exposed_info.module_name,
+                        const target_node_idx = external.target_node_idx orelse {
+                            // Check if the module was not found
+                            if (external.module_not_found) {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_from_missing_module = .{
+                                    .module_name = external.module_ident,
                                     .type_name = type_name_ident,
                                     .region = type_name_region,
                                 } });
-                            };
-                            const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
-                                // Type is not exposed by the imported module
-                                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                                    .module_name = exposed_info.module_name,
+                            } else {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
+                                    .module_name = external.module_ident,
                                     .type_name = type_name_ident,
                                     .region = type_name_region,
                                 } });
-                            };
-                            return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                                .name = type_name_ident,
-                                .base = .{ .external = .{
-                                    .module_idx = import_idx,
-                                    .target_node_idx = target_node_idx,
-                                } },
-                            } }, region);
-                        }
+                            }
+                        };
+
+                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                            } },
+                        } }, region);
+                    },
+                };
+            }
+        }
+
+        // Check if this is an auto-imported type from module_envs
+        if (self.module_envs) |envs_map| {
+            if (envs_map.get(type_name_ident)) |auto_imported_type| {
+                // This is an auto-imported type like Bool or Result
+                // We need to create an import for it and return the type annotation
+                const module_name_text = auto_imported_type.env.module_name;
+                const import_idx = try self.getOrCreateAutoImport(module_name_text);
+
+                // Get the target node index using the pre-computed statement_idx
+                const stmt_idx = auto_imported_type.statement_idx orelse {
+                    // Str doesn't have a statement_idx because it's a primitive builtin type
+                    // It should be detected as a builtin type before reaching this code path
+                    std.debug.panic("AutoImportedType for '{s}' from module '{s}' is missing required statement_idx", .{ self.env.getIdent(type_name_ident), module_name_text });
+                };
+                const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                    std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                };
+
+                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                    .name = type_name_ident,
+                    .base = .{ .external = .{
+                        .module_idx = import_idx,
+                        .target_node_idx = target_node_idx,
+                    } },
+                } }, region);
+            }
+        }
+
+        // Not in type_decls, check if it's an exposed item from an imported module
+        if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
+            const module_name_text = self.env.getIdent(exposed_info.module_name);
+            if (self.scopeLookupImportedModule(module_name_text)) |import_idx| {
+                // Get the node index from the imported module
+                if (self.module_envs) |envs_map| {
+                    if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
+                        // Convert identifier from current module to target module's interner
+                        const original_name_text = self.env.getIdent(exposed_info.original_name);
+                        const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
+                            // Type identifier doesn't exist in the target module
+                            return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                                .module_name = exposed_info.module_name,
+                                .type_name = type_name_ident,
+                                .region = type_name_region,
+                            } });
+                        };
+                        const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                            // Type is not exposed by the imported module
+                            return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                                .module_name = exposed_info.module_name,
+                                .type_name = type_name_ident,
+                                .region = type_name_region,
+                            } });
+                        };
+                        return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                            } },
+                        } }, region);
                     }
                 }
             }
-
-            // Not found anywhere - undeclared type
-            return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
-                .name = type_name_ident,
-                .region = type_name_region,
-            } });
         }
+
+        // Not found anywhere - undeclared type
+        return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
+            .name = type_name_ident,
+            .region = type_name_region,
+        } });
     } else {
         // First, check if this is a qualified name for an associated type (e.g., Foo.Bar)
         // Build the full qualified name

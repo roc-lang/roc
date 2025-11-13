@@ -1146,7 +1146,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     _ = try self.unify(anno_var, builtin_var, env);
                 },
                 .local => |local| {
-
                     // Check if we're in a declaration or an annotation
                     switch (ctx) {
                         .type_decl => |this_decl| {
