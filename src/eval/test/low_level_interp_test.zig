@@ -395,4 +395,35 @@ test "e_low_level_lambda - List.concat with empty string list" {
 
     try testing.expect(len_expr == .e_num);
     try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+
+}
+
+test "e_low_level_lambda - List.concat nested lists refcounting stress" {
+    const src =
+        \\a = [[1, 2], [3]]
+        \\b = [[4, 5, 6]]
+        \\x = List.concat(a, b)
+        \\y = List.concat(x, b)
+        \\z = List.concat(y, y)
+        \\len_z = List.len(z)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 6 declarations with 0 crashes
+    try testing.expectEqual(@as(u32, 6), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the final length is as expected:
+    // a has 2 elements, b has 1; x = concat(a, b) => 3
+    // y = concat(x, b) => 4, z = concat(y, y) => 8
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const len_def = result.module_env.store.getDef(defs[5]);
+    const len_expr = result.module_env.store.getExpr(len_def.expr);
+
+    try testing.expect(len_expr == .e_num);
+    try testing.expectEqual(@as(u64, 8), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
 }
