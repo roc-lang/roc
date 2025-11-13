@@ -289,6 +289,14 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     if (value.layout.tag == .scalar) {
         const scalar = value.layout.data.scalar;
         switch (scalar.tag) {
+            .bool => {
+                std.debug.assert(value.ptr != null);
+                const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
+                return if (b.* != 0)
+                    try gpa.dupe(u8, "True")
+                else
+                    try gpa.dupe(u8, "False");
+            },
             .str => {
                 const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
                 const s = rs.asSlice();
