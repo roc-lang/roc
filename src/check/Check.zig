@@ -3980,7 +3980,7 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
 }
 
 fn resolveNominalMethodVarCallback(ctx: ?*const anyopaque, request: unifier.MethodRequest) std.mem.Allocator.Error!?Var {
-    const self: *Self = @constCast(@ptrCast(@alignCast(ctx.?)));
+    const self: *Self = @ptrCast(@alignCast(@constCast(ctx.?)));
     return self.resolveNominalMethodVar(request);
 }
 
@@ -4050,18 +4050,18 @@ fn findMethodIdent(
     return ident_store.findByString(method_name);
 }
 
-    fn buildQualifiedMethodName(
-        self: *Self,
-        module_name: []const u8,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) error{AllocatorError}![]u8 {
-        if (std.mem.eql(u8, type_name, module_name)) {
-            return std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return error.AllocatorError;
-        } else {
-            return std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name }) catch return error.AllocatorError;
-        }
+fn buildQualifiedMethodName(
+    self: *Self,
+    module_name: []const u8,
+    type_name: []const u8,
+    method_name: []const u8,
+) error{AllocatorError}![]u8 {
+    if (std.mem.eql(u8, type_name, module_name)) {
+        return std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return error.AllocatorError;
+    } else {
+        return std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name }) catch return error.AllocatorError;
     }
+}
 
 fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
     const defs = origin_env.store.sliceDefs(origin_env.all_defs);

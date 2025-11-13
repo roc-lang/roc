@@ -4379,7 +4379,7 @@ pub const Interpreter = struct {
     }
 
     fn resolveNominalMethodVarCallback(ctx: ?*const anyopaque, request: unify.MethodRequest) std.mem.Allocator.Error!?types.Var {
-        const self: *Interpreter = @constCast(@ptrCast(@alignCast(ctx.?)));
+        const self: *Interpreter = @ptrCast(@alignCast(@constCast(ctx.?)));
         return self.resolveNominalMethodVar(request);
     }
 

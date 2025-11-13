@@ -156,12 +156,14 @@ pub const Conf = struct {
     pub const Ctx = enum { anon, anno };
 };
 
+/// Describes a nominal method lookup request sent to the host resolver.
 pub const MethodRequest = struct {
     types: *types_mod.Store,
     nominal_type: NominalType,
     method_ident: Ident.Idx,
 };
 
+/// Callback used by the host to supply cross-module method definitions.
 pub const MethodResolver = struct {
     ctx: ?*const anyopaque = null,
     get: *const fn (?*const anyopaque, MethodRequest) std.mem.Allocator.Error!?Var,
@@ -171,6 +173,7 @@ fn defaultMethodResolver(_: ?*const anyopaque, _: MethodRequest) std.mem.Allocat
     return null;
 }
 
+/// Configuration required by the unifier that the embedding checker provides.
 pub const Env = struct {
     gpa: std.mem.Allocator,
     ident_store: *const Ident.Store,
