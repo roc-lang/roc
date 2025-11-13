@@ -3817,9 +3817,7 @@ fn checkBinopExpr(
             } else if (should_use_static_dispatch) {
                 std.debug.print("TAKING STATIC DISPATCH PATH for binop\n", .{});
                 // All types use static dispatch: a + b desugars to a.plus(b)
-                // The constraint uses a fresh ret_var, but for binary operators,
-                // we know the result type should be the same as the receiver type (lhs_var)
-                // This matches the behavior of the numeric path and ensures |x| x + x has type a -> a
+                // Type unification will propagate types through the constraint function
 
                 const ret_var = try self.fresh(env, expr_region);
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
@@ -3844,10 +3842,7 @@ fn checkBinopExpr(
                 std.debug.print("Created constraint, attaching to lhs_var. Before unify: {} deferred\n", .{env.deferred_static_dispatch_constraints.items.items.len});
                 _ = try self.unify(constrained_var, lhs_var, env);
                 std.debug.print("After unify: {} deferred\n", .{env.deferred_static_dispatch_constraints.items.items.len});
-                // For binary operators, the expression result is the same type as the receiver
-                // This ensures |x| x + x has type a -> a, not a -> b
-                // The ret_var will be unified with lhs_var when the constraint is checked
-                _ = try self.unify(expr_var, lhs_var, env);
+                _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
                 // This path is for unknown types that need to be constrained to numbers
