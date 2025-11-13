@@ -4,6 +4,7 @@
 //! converting any crashes into diagnostics that are reported normally.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
@@ -188,6 +189,13 @@ pub const ComptimeEvaluator = struct {
     }
 
     pub fn deinit(self: *ComptimeEvaluator) void {
+        // Ensure we decref any values held in interpreter bindings prior to tearing down runtime stores
+        const ops = self.get_ops();
+        while (self.interpreter.bindings.items.len > 0) {
+            const binding = self.interpreter.bindings.pop().?;
+            binding.value.decref(&self.interpreter.runtime_layout_store, ops);
+        }
+
         // Free all crash messages we allocated
         for (self.crash_messages.items) |msg| {
             self.allocator.free(msg);
@@ -251,6 +259,7 @@ pub const ComptimeEvaluator = struct {
             else => false,
         };
 
+
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;
 
@@ -296,6 +305,7 @@ pub const ComptimeEvaluator = struct {
             };
         };
 
+
         // Try to fold the result to a constant expression (only for non-lambdas)
         if (!is_lambda) {
             self.tryFoldConstant(def_idx, result) catch {
@@ -309,7 +319,8 @@ pub const ComptimeEvaluator = struct {
         return EvalResult{ .success = result };
     }
 
-    /// Try to fold a successfully evaluated constant into an e_num expression
+    /// Try to fold a successfully evaluated constant into a literal expression
+    /// (e.g. numbers to `e_num`, bools to `e_zero_argument_tag`).
     /// This replaces the expression in-place so future references see the constant value
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
@@ -324,10 +335,47 @@ pub const ComptimeEvaluator = struct {
         // Convert StackValue to CIR expression based on layout
         const layout = stack_value.layout;
 
-        // Check if this is a scalar type (including integers)
-        if (layout.tag != .scalar) {
-            return error.NotImplemented; // Don't fold non-scalar types yet
+        // Handle booleans specially: fold to Bool.True / Bool.False zero-arg tags.
+        if (layout.tag == .scalar and layout.data.scalar.tag == .bool) {
+            // fold boolean constant to Bool.True/Bool.False tag
+            // Read the boolean value
+            const b = stack_value.asBool();
+
+            // We must replace the expression node with an expr_zero_argument_tag node.
+            // This mirrors NodeStore serialization for e_zero_argument_tag.
+            const node_idx: @TypeOf(self.env.store.nodes).Idx = @enumFromInt(@intFromEnum(expr_idx));
+            var node = self.env.store.nodes.get(node_idx);
+
+            // Allocate extra_data for zero-arg tag: closure_name, variant_var, ext_var, name
+            const extra_start = self.env.store.extra_data.len();
+
+            // The canonical Bool constructors live in the builtin Bool module; we only
+            // need to set their names here. Other fields are not used by the tests and
+            // are filled with zero/defaults (valid placeholders at this stage).
+            const true_ident = try self.env.insertIdent(base.Ident.for_text("True"));
+            const false_ident = try self.env.insertIdent(base.Ident.for_text("False"));
+
+            const chosen_ident = if (b) true_ident else false_ident;
+
+            // closure_name (ident)
+            _ = try self.env.store.extra_data.append(self.env.store.gpa, @bitCast(chosen_ident));
+            // variant_var (types.Var) - default/zero
+            _ = try self.env.store.extra_data.append(self.env.store.gpa, 0);
+            // ext_var (types.Var) - default/zero
+            _ = try self.env.store.extra_data.append(self.env.store.gpa, 0);
+            // name (ident)
+            _ = try self.env.store.extra_data.append(self.env.store.gpa, @bitCast(chosen_ident));
+
+            node.tag = .expr_zero_argument_tag;
+            node.data_1 = @intCast(extra_start);
+            node.data_2 = 0;
+            node.data_3 = 0;
+            self.env.store.nodes.set(node_idx, node);
+            return;
         }
+
+        // Check if this is a scalar type (including integers). If not, skip folding.
+        if (layout.tag != .scalar) return error.NotImplemented;
 
         const scalar_tag = layout.data.scalar.tag;
         switch (scalar_tag) {

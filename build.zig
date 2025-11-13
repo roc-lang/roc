@@ -241,24 +241,10 @@ pub fn build(b: *std.Build) void {
     // CI always rebuilds from scratch, so it's not affected by this caching.
     const builtin_roc_path = "src/build/roc/Builtin.roc";
 
-    // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps
-    const should_rebuild_builtins = blk: {
-        const builtin_bin_path = "zig-out/builtins/Builtin.bin";
-
-        const roc_stat = std.fs.cwd().statFile(builtin_roc_path) catch break :blk true;
-        const bin_stat = std.fs.cwd().statFile(builtin_bin_path) catch break :blk true;
-
-        // If .roc file is newer than .bin file, rebuild
-        if (roc_stat.mtime > bin_stat.mtime) {
-            break :blk true;
-        }
-
-        // Check if builtin_indices.bin exists
-        _ = std.fs.cwd().statFile("zig-out/builtins/builtin_indices.bin") catch break :blk true;
-
-        // Builtin.bin exists and is up-to-date
-        break :blk false;
-    };
+    // Always rebuild builtins. This ensures changes to the builtin compiler or
+    // low-level op mappings are reflected in the generated Builtin.bin used by tests.
+    // The Zig build cache will avoid unnecessary work if nothing changed.
+    const should_rebuild_builtins = true;
 
     const write_compiled_builtins = b.addWriteFiles();
 

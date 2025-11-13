@@ -150,7 +150,7 @@ test "e_low_level_lambda - Str.is_empty returns True for empty string" {
     const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
     const def = result.module_env.store.getDef(defs[0]);
     const expr = result.module_env.store.getExpr(def.expr);
-
+    // no-op
     try testing.expect(expr == .e_zero_argument_tag);
     const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
     try testing.expectEqualStrings("True", tag_name);

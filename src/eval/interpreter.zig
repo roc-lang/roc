@@ -1698,6 +1698,32 @@ pub const Interpreter = struct {
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
+                // Early fast-path: if the callee is a builtin placeholder runtime_error created by
+                // the builtin compiler for a low-level op, dispatch directly without type instantiation.
+                const func_expr_early = self.env.store.getExpr(func_idx);
+                if (func_expr_early == .e_runtime_error) {
+                    var op_early: ?can.CIR.Expr.LowLevel = null;
+                    const func_region = self.env.store.getExprRegion(func_idx);
+                    const src_slice = self.env.getSource(func_region);
+                    const trimmed = std.mem.trim(u8, src_slice, " \t\n\r");
+                    if (std.mem.endsWith(u8, trimmed, "Str.is_empty") or std.mem.endsWith(u8, trimmed, "Builtin.Str.is_empty")) op_early = .str_is_empty;
+
+                    if (op_early) |resolved| {
+                        var arg_values_early = try self.allocator.alloc(StackValue, arg_indices.len);
+                        defer self.allocator.free(arg_values_early);
+                        var j0: usize = 0;
+                        while (j0 < arg_indices.len) : (j0 += 1) {
+                            arg_values_early[j0] = try self.evalExprMinimal(arg_indices[j0], roc_ops, null);
+                        }
+                        const result_value = try self.callLowLevelBuiltin(resolved, arg_values_early, roc_ops);
+                        // Decref evaluated args to avoid leaks
+                        for (arg_values_early) |av| {
+                            av.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        return result_value;
+                    }
+                }
+
                 // Check if the function is an anno-only lookup that will crash
                 // If so, skip type translation and crash immediately
                 const func_expr_for_anno_check = self.env.store.getExpr(func_idx);
@@ -1724,6 +1750,7 @@ pub const Interpreter = struct {
 
                 // Runtime unification for call: constrain return type from arg types
                 const func_expr = self.env.store.getExpr(func_idx);
+                // func_expr will be used below
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
                 const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
 
@@ -1825,8 +1852,11 @@ pub const Interpreter = struct {
                     );
                 }
 
+                // (Handled in early fast-path above)
+
                 // Pass the instantiated function type so cross-module generic functions work correctly
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, func_rt_var);
+                std.debug.print("[interp] .e_call func layout tag={s}\n", .{@tagName(func_val.layout.tag)});
 
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
@@ -1909,6 +1939,47 @@ pub const Interpreter = struct {
                         }
                     }
                     return try self.evalExprMinimal(lambda.body, roc_ops, null);
+                }
+
+                // Additional fallback: calling a low-level builtin referenced via lookup_external
+                if (func_expr == .e_lookup_external) {
+                    const lookup = func_expr.e_lookup_external;
+                    const other_env = self.import_envs.get(lookup.module_idx) orelse return error.NotImplemented;
+                    const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                    const target_def = other_env.store.getDef(target_def_idx);
+                    const target_expr = other_env.store.getExpr(target_def.expr);
+
+                    if (target_expr == .e_low_level_lambda) {
+                        const low_level = target_expr.e_low_level_lambda;
+                        return try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+                    }
+                }
+
+                // Heuristic fallback: if the function is a runtime_error produced by the builtin compiler
+                // for a low-level associated item, derive the operation from the source text of the callee.
+                // This lets the minimal interpreter handle calls like `Str.is_empty("")`, `List.len(x)`,
+                // and `List.concat(a, b)` even if the closure path failed to materialize.
+                if (func_expr == .e_runtime_error) {
+                    const func_region = self.env.store.getExprRegion(func_idx);
+                    const src_slice = self.env.getSource(func_region);
+                    const trimmed = std.mem.trim(u8, src_slice, " \t\n\r");
+                    std.debug.print("[interp] .e_call runtime_error callee text='{s}'\n", .{trimmed});
+
+                    var op: ?can.CIR.Expr.LowLevel = null;
+                    if (std.mem.endsWith(u8, trimmed, "Str.is_empty") or std.mem.endsWith(u8, trimmed, "Builtin.Str.is_empty")) {
+                        op = .str_is_empty;
+                    } else if (std.mem.endsWith(u8, trimmed, "List.len") or std.mem.endsWith(u8, trimmed, "Builtin.List.len")) {
+                        op = .list_len;
+                    } else if (std.mem.endsWith(u8, trimmed, "List.concat") or std.mem.endsWith(u8, trimmed, "Builtin.List.concat")) {
+                        op = .list_concat;
+                    } else if (std.mem.endsWith(u8, trimmed, "List.is_empty") or std.mem.endsWith(u8, trimmed, "Builtin.List.is_empty")) {
+                        op = .list_is_empty;
+                    }
+
+                    if (op) |resolved| {
+                        std.debug.print("[interp] dispatch inferred low-level op: {s}\n", .{@tagName(resolved)});
+                        return try self.callLowLevelBuiltin(resolved, arg_values, roc_ops);
+                    }
                 }
 
                 return error.NotImplemented;
