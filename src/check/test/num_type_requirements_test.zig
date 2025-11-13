@@ -34,7 +34,7 @@ test "U8: 255 fits" {
 
     var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefType("Num(Int(Unsigned8))");
+    try test_env.assertLastDefType("U8");
 }
 
 test "U8: 256 does not fit" {
@@ -79,7 +79,7 @@ test "I8: -128 fits" {
 
     var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefType("Num(Int(Signed8))");
+    try test_env.assertLastDefType("I8");
 }
 
 test "I8: -129 does not fit" {
@@ -109,7 +109,7 @@ test "F32: fits" {
 
     var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefType("Num(Frac(Float32))");
+    try test_env.assertLastDefType("F32");
 }
 
 // TODO: Move these to unify

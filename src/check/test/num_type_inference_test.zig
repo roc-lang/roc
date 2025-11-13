@@ -19,18 +19,18 @@ const Content = types.Content;
 
 test "infers type for small nums" {
     const test_cases = [_]struct { source: []const u8, expected: []const u8 }{
-        .{ .source = "1", .expected = "Num(_size)" },
-        .{ .source = "-1", .expected = "Num(_size)" },
-        .{ .source = "10", .expected = "Num(_size)" },
-        .{ .source = "-10", .expected = "Num(_size)" },
-        .{ .source = "255", .expected = "Num(_size)" },
-        .{ .source = "-128", .expected = "Num(_size)" },
-        .{ .source = "256", .expected = "Num(_size)" },
-        .{ .source = "-129", .expected = "Num(_size)" },
-        .{ .source = "32767", .expected = "Num(_size)" },
-        .{ .source = "-32768", .expected = "Num(_size)" },
-        .{ .source = "65535", .expected = "Num(_size)" },
-        .{ .source = "-32769", .expected = "Num(_size)" },
+        .{ .source = "1", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "-1", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "10", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "-10", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "255", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "-128", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "256", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "-129", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "32767", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "-32768", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "65535", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
+        .{ .source = "-32769", .expected = "_size where [_a.from_int_digits : _arg -> _ret]" },
     };
 
     inline for (test_cases) |tc| {

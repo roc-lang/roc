@@ -62,6 +62,7 @@ name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
+implicit_numeric_constraints: std.array_list.Managed([]const u8),
 scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
@@ -89,6 +90,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(types_mod.StaticDispatchConstraint).initCapacity(gpa, 32),
+        .implicit_numeric_constraints = try std.array_list.Managed([]const u8).initCapacity(gpa, 4),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
     };
@@ -102,6 +104,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
+    self.implicit_numeric_constraints.deinit();
     self.scratch_record_fields.deinit();
     self.import_mapping.deinit();
 }
@@ -114,6 +117,7 @@ pub fn reset(self: *TypeWriter) void {
     self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
+    self.implicit_numeric_constraints.clearRetainingCapacity();
     self.scratch_record_fields.clearRetainingCapacity();
 
     self.next_name_index = 0;
@@ -138,12 +142,17 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
     self.reset();
     try self.writeVar(var_, var_);
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.static_dispatch_constraints.items.len > 0 or self.implicit_numeric_constraints.items.len > 0) {
         _ = try self.buf.writer().write(" where [");
-        for (self.static_dispatch_constraints.items, 0..) |constraint, i| {
-            if (i > 0) {
+
+        var need_comma = false;
+
+        // Write explicit constraints from the type system
+        for (self.static_dispatch_constraints.items) |constraint| {
+            if (need_comma) {
                 _ = try self.buf.writer().write(", ");
             }
+            need_comma = true;
 
             // TODO: Find a better way to do this
             const dispatcher_var = blk: {
@@ -170,6 +179,22 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
             _ = try self.buf.writer().write(" : ");
             try self.writeVar(constraint.fn_var, var_);
         }
+
+        // Write implicit numeric constraints (from_int_digits, from_dec_digits)
+        for (self.implicit_numeric_constraints.items) |fn_name| {
+            if (need_comma) {
+                _ = try self.buf.writer().write(", ");
+            }
+            need_comma = true;
+
+            // Generate placeholder names for the constraint
+            _ = try self.buf.writer().write("_");
+            try self.generateContextualName(.General);
+            _ = try self.buf.writer().write(".");
+            _ = try self.buf.writer().write(fn_name);
+            _ = try self.buf.writer().write(" : _arg -> _ret");
+        }
+
         _ = try self.buf.writer().write("]");
     }
 }
@@ -748,34 +773,31 @@ fn writeTag(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error!
 fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!void {
     switch (num) {
         .num_poly => |poly_var| {
-            _ = try self.buf.writer().write("Num(");
-            try self.writeVarWithContext(poly_var, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
+            try self.writeVar(poly_var, root_var);
+            try self.addImplicitNumericConstraint("from_int_digits");
         },
         .int_poly => |poly| {
-            _ = try self.buf.writer().write("Int(");
-            try self.writeVarWithContext(poly, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
+            try self.writeVar(poly, root_var);
+            try self.addImplicitNumericConstraint("from_int_digits");
         },
         .frac_poly => |poly| {
-            _ = try self.buf.writer().write("Frac(");
-            try self.writeVarWithContext(poly, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
+            try self.writeVar(poly, root_var);
+            try self.addImplicitNumericConstraint("from_dec_digits");
         },
         .num_unbound => |_| {
-            _ = try self.buf.writer().write("Num(_");
+            _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
+            try self.addImplicitNumericConstraint("from_int_digits");
         },
         .int_unbound => |_| {
-            _ = try self.buf.writer().write("Int(_");
+            _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
+            try self.addImplicitNumericConstraint("from_int_digits");
         },
         .frac_unbound => |_| {
-            _ = try self.buf.writer().write("Frac(_");
+            _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
+            try self.addImplicitNumericConstraint("from_dec_digits");
         },
         .int_precision => |prec| {
             try self.writeIntType(prec, .precision);
@@ -833,6 +855,17 @@ fn appendStaticDispatchConstraint(self: *TypeWriter, constraint_to_add: types_mo
         }
     }
     _ = try self.static_dispatch_constraints.append(constraint_to_add);
+}
+
+/// Add an implicit numeric constraint (from_int_digits or from_dec_digits)
+fn addImplicitNumericConstraint(self: *TypeWriter, fn_name: []const u8) std.mem.Allocator.Error!void {
+    // Check if already added
+    for (self.implicit_numeric_constraints.items) |existing| {
+        if (std.mem.eql(u8, existing, fn_name)) {
+            return;
+        }
+    }
+    _ = try self.implicit_numeric_constraints.append(fn_name);
 }
 
 /// Generate a name for a flex var that may appear multiple times in the type

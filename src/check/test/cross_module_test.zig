@@ -107,7 +107,7 @@ test "cross-module - check type - polymorphic function with multiple uses passes
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertLastDefType("Num(Int(Unsigned64))");
+    try test_env_b.assertLastDefType("U64");
 }
 
 test "cross-module - check type - static dispatch" {
