@@ -526,6 +526,16 @@ const Unifier = struct {
                 };
 
                 const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
+
+                // If we have constraints after merging, defer them for checking
+                // This is necessary for cases like |x| x + x where both operands are flex
+                if (merged_constraints.len() > 0) {
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_, // Since the vars are merged, we arbitrarily choose b
+                        .constraints = merged_constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
                 self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
