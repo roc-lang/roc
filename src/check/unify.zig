@@ -3566,6 +3566,10 @@ pub const Scratch = struct {
 
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
+        // Fresh variables created during the previous unification pass
+        // should not leak into the next. Clear the list while retaining
+        // capacity to avoid reallocations across calls.
+        self.fresh_vars.items.clearRetainingCapacity();
         self.gathered_fields.items.clearRetainingCapacity();
         self.only_in_a_fields.items.clearRetainingCapacity();
         self.only_in_b_fields.items.clearRetainingCapacity();
