@@ -27,7 +27,8 @@ test {
     // Updated from 24 to 44 bytes when adding constraints field to Requirements structs
     try std.testing.expectEqual(44, @sizeOf(Content));
     try std.testing.expectEqual(12, @sizeOf(Alias));
-    try std.testing.expectEqual(20, @sizeOf(FlatType));
+    // Updated from 20 to 40 bytes when adding constraints field to Int/Frac/NumRequirements structs
+    try std.testing.expectEqual(40, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
     try std.testing.expectEqual(12, @sizeOf(StaticDispatchConstraint));
