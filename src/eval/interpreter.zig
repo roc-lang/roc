@@ -1698,8 +1698,8 @@ pub const Interpreter = struct {
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
-                // Early fast-path: if the callee is a builtin placeholder runtime_error created by
-                // the builtin compiler for a low-level op, dispatch directly without type instantiation.
+                // Early fast-path: if the callee is a known low-level builtin,
+                // dispatch directly without going through the full polymorphic call machinery.
                 const func_expr_early = self.env.store.getExpr(func_idx);
                 if (func_expr_early == .e_runtime_error) {
                     var op_early: ?can.CIR.Expr.LowLevel = null;
@@ -1715,6 +1715,39 @@ pub const Interpreter = struct {
                         while (j0 < arg_indices.len) : (j0 += 1) {
                             arg_values_early[j0] = try self.evalExprMinimal(arg_indices[j0], roc_ops, null);
                         }
+                        const result_value = try self.callLowLevelBuiltin(resolved, arg_values_early, roc_ops);
+                        // Decref evaluated args to avoid leaks
+                        for (arg_values_early) |av| {
+                            av.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        return result_value;
+                    }
+                } else if (func_expr_early == .e_lookup_external) {
+                    // Some low-level associated items (e.g. List.len, List.concat) may
+                    // still appear as e_lookup_external to Builtin definitions that only
+                    // have type annotations. In that case, dispatch directly based on the
+                    // callee's source text, similar to the runtime_error heuristic below.
+                    var op_early: ?can.CIR.Expr.LowLevel = null;
+                    const func_region = self.env.store.getExprRegion(func_idx);
+                    const src_slice = self.env.getSource(func_region);
+                    const trimmed = std.mem.trim(u8, src_slice, " \t\n\r");
+
+                    if (std.mem.endsWith(u8, trimmed, "List.len") or std.mem.endsWith(u8, trimmed, "Builtin.List.len")) {
+                        op_early = .list_len;
+                    } else if (std.mem.endsWith(u8, trimmed, "List.concat") or std.mem.endsWith(u8, trimmed, "Builtin.List.concat")) {
+                        op_early = .list_concat;
+                    } else if (std.mem.endsWith(u8, trimmed, "List.is_empty") or std.mem.endsWith(u8, trimmed, "Builtin.List.is_empty")) {
+                        op_early = .list_is_empty;
+                    }
+
+                    if (op_early) |resolved| {
+                        var arg_values_early = try self.allocator.alloc(StackValue, arg_indices.len);
+                        defer self.allocator.free(arg_values_early);
+                        var j0: usize = 0;
+                        while (j0 < arg_indices.len) : (j0 += 1) {
+                            arg_values_early[j0] = try self.evalExprMinimal(arg_indices[j0], roc_ops, null);
+                        }
+
                         const result_value = try self.callLowLevelBuiltin(resolved, arg_values_early, roc_ops);
                         // Decref evaluated args to avoid leaks
                         for (arg_values_early) |av| {
@@ -1856,7 +1889,6 @@ pub const Interpreter = struct {
 
                 // Pass the instantiated function type so cross-module generic functions work correctly
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, func_rt_var);
-                std.debug.print("[interp] .e_call func layout tag={s}\n", .{@tagName(func_val.layout.tag)});
 
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
@@ -1963,7 +1995,6 @@ pub const Interpreter = struct {
                     const func_region = self.env.store.getExprRegion(func_idx);
                     const src_slice = self.env.getSource(func_region);
                     const trimmed = std.mem.trim(u8, src_slice, " \t\n\r");
-                    std.debug.print("[interp] .e_call runtime_error callee text='{s}'\n", .{trimmed});
 
                     var op: ?can.CIR.Expr.LowLevel = null;
                     if (std.mem.endsWith(u8, trimmed, "Str.is_empty") or std.mem.endsWith(u8, trimmed, "Builtin.Str.is_empty")) {
@@ -1977,7 +2008,6 @@ pub const Interpreter = struct {
                     }
 
                     if (op) |resolved| {
-                        std.debug.print("[interp] dispatch inferred low-level op: {s}\n", .{@tagName(resolved)});
                         return try self.callLowLevelBuiltin(resolved, arg_values, roc_ops);
                     }
                 }
@@ -2531,54 +2561,85 @@ pub const Interpreter = struct {
                 std.debug.assert(list_a_arg.ptr != null);
                 std.debug.assert(list_b_arg.ptr != null);
 
-                // Extract element layout from List(a)
+                // Both arguments must be lists with the same element layout
                 std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
                 std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
 
-                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
-                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+                const list_a_header: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
+                const list_b_header: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+                const len_a = list_a_header.len();
+                const len_b = list_b_header.len();
+                const total_len: usize = len_a + len_b;
 
-                // Get element layout
+                // Extract element layout from List(a)
                 const elem_layout_idx = list_a_arg.layout.data.list;
                 const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_size: usize = self.runtime_layout_store.layoutSize(elem_layout);
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
-
-                // Determine if elements are refcounted
                 const elements_refcounted = elem_layout.isRefcounted();
 
-                // Set up context for refcount callbacks
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .roc_ops = roc_ops,
+                // Build the concatenated RocList by copying elements from both inputs.
+                const runtime_list: builtins.list.RocList = if (total_len == 0) builtins.list.RocList.empty() else blk: {
+                    var list = builtins.list.RocList.allocateExact(
+                        elem_alignment_u32,
+                        total_len,
+                        elem_size,
+                        elements_refcounted,
+                        roc_ops,
+                    );
+
+                    if (elem_size > 0) {
+                        if (list.bytes) |buffer| {
+                            var offset: usize = 0;
+
+                            // Copy elements from first list
+                            if (len_a > 0) {
+                                const src_a = list_a_header.bytes orelse unreachable;
+                                var idx: usize = 0;
+                                while (idx < len_a) : (idx += 1) {
+                                    const elem_ptr = src_a + idx * elem_size;
+                                    const elem_value = StackValue{
+                                        .layout = elem_layout,
+                                        .ptr = @ptrCast(elem_ptr),
+                                        .is_initialized = true,
+                                    };
+                                    const dest_ptr = buffer + offset * elem_size;
+                                    try elem_value.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    offset += 1;
+                                }
+                            }
+
+                            // Copy elements from second list
+                            if (len_b > 0) {
+                                const src_b = list_b_header.bytes orelse unreachable;
+                                var idx: usize = 0;
+                                while (idx < len_b) : (idx += 1) {
+                                    const elem_ptr = src_b + idx * elem_size;
+                                    const elem_value = StackValue{
+                                        .layout = elem_layout,
+                                        .ptr = @ptrCast(elem_ptr),
+                                        .is_initialized = true,
+                                    };
+                                    const dest_ptr = buffer + offset * elem_size;
+                                    try elem_value.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    offset += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    markListElementCount(&list, elements_refcounted);
+                    break :blk list;
                 };
 
-                // Call listConcat with proper inc/dec callbacks.
-                // If elements are refcounted, pass callbacks that will inc/dec each element.
-                // Otherwise, pass no-op callbacks.
-                const result_list = builtins.list.listConcat(
-                    list_a.*,
-                    list_b.*,
-                    elem_alignment_u32,
-                    elem_size,
-                    elements_refcounted,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
-                    roc_ops,
-                );
-
-                // Allocate space for the result list
+                // Allocate space for the result list in the interpreter stack
                 const result_layout = list_a_arg.layout; // Same layout as input
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
 
-                // Copy the result list structure to the output
                 const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                result_ptr.* = runtime_list;
 
                 out.is_initialized = true;
                 return out;

@@ -16,6 +16,7 @@ const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const StackValue = @import("../mod.zig").StackValue;
 
 const Can = can.Can;
 const Check = check.Check;
@@ -108,7 +109,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types);
 
     return .{
         .module_env = module_env,
@@ -284,7 +285,6 @@ test "e_low_level_lambda - List.concat with two empty lists" {
 test "e_low_level_lambda - List.concat preserves order" {
     const src =
         \\x = List.concat([10, 20], [30, 40, 50])
-        \\first = List.first(x)
     ;
 
     var result = try parseCheckAndEvalModule(src);
@@ -292,19 +292,37 @@ test "e_low_level_lambda - List.concat preserves order" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Verify the first element is 10 (wrapped in Try.Ok)
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const first_def = result.module_env.store.getDef(defs[1]);
-    const first_expr = result.module_env.store.getExpr(first_def.expr);
+    // Verify the first element of the concatenated list is 10
+    const interpreter = &result.evaluator.interpreter;
 
-    // Should be a Try.Ok tag with value 10
-    try testing.expect(first_expr == .e_tag);
-    const tag_name = result.module_env.getIdent(first_expr.e_tag.name);
-    try testing.expectEqualStrings("Ok", tag_name);
+    var maybe_x_value: ?StackValue = null;
+    for (interpreter.bindings.items) |binding| {
+        const pat = interpreter.env.store.getPattern(binding.pattern_idx);
+        switch (pat) {
+            .assign => |assign| {
+                const name = interpreter.env.getIdent(assign.ident);
+                if (std.mem.eql(u8, name, "x")) {
+                    maybe_x_value = binding.value;
+                    break;
+                }
+            },
+            else => {},
+        }
+        if (maybe_x_value != null) break;
+    }
+
+    const x_value = maybe_x_value orelse @panic("binding for `x` not found");
+    try testing.expect(x_value.layout.tag == .list or x_value.layout.tag == .list_of_zst);
+
+    const elem_layout = interpreter.runtime_layout_store.getLayout(x_value.layout.data.list);
+    const list_acc = try x_value.asList(&interpreter.runtime_layout_store, elem_layout);
+    const first_elem = try list_acc.getElement(0);
+
+    try testing.expectEqual(@as(i128, 10), first_elem.asI128());
 }
 
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
