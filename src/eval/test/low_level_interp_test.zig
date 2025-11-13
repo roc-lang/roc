@@ -395,7 +395,6 @@ test "e_low_level_lambda - List.concat with empty string list" {
 
     try testing.expect(len_expr == .e_num);
     try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
-
 }
 
 test "e_low_level_lambda - List.concat nested lists refcounting stress" {

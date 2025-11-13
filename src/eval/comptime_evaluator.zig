@@ -259,7 +259,6 @@ pub const ComptimeEvaluator = struct {
             else => false,
         };
 
-
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;
 
@@ -304,7 +303,6 @@ pub const ComptimeEvaluator = struct {
                 },
             };
         };
-
 
         // Try to fold the result to a constant expression (only for non-lambdas)
         if (!is_lambda) {
