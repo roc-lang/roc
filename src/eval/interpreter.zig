@@ -2167,20 +2167,9 @@ pub const Interpreter = struct {
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
-                const params = self.env.store.slicePatterns(closure_header.params);
-                if (params.len != all_args.len) {
-                    // Decref all args before returning error
-                    for (all_args) |arg| {
-                        arg.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                    return error.TypeMismatch;
-                }
-
-                // Provide closure context for capture lookup during body eval
-                try self.active_closures.append(method_func);
-                defer _ = self.active_closures.pop();
-
                 // Check if this is a low-level lambda - if so, dispatch to builtin implementation
+                // Do this check BEFORE parameter count validation because low-level builtins
+                // handle their own argument validation
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
                 if (lambda_expr == .e_low_level_lambda) {
                     const low_level = lambda_expr.e_low_level_lambda;
@@ -2195,6 +2184,20 @@ pub const Interpreter = struct {
 
                     return result;
                 }
+
+                // For regular lambdas, check parameter count matches argument count
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != all_args.len) {
+                    // Decref all args before returning error
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context for capture lookup during body eval
+                try self.active_closures.append(method_func);
+                defer _ = self.active_closures.pop();
 
                 var bind_count: usize = 0;
                 while (bind_count < params.len) : (bind_count += 1) {

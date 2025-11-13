@@ -6,37 +6,23 @@ Builtin := [].{
 		contains = |_str, _other| True
 	}
 
-	List := [ProvidedByCompiler].{
+	List(_item) := [ProvidedByCompiler].{
 		len : List(_item) -> U64
 		is_empty : List(_item) -> Bool
 		concat : List(item), List(item) -> List(item)
 
 		first : List(item) -> Try(item, [ListWasEmpty])
-		first = |list| List.get(list, 0)
+		first = |list| get(list, 0)
 
 		get : List(item), U64 -> Try(item, [ListWasEmpty])
-		get = |list, index| if index < List.len(list) {
-			Try.Ok(list_get_unsafe(list, index))
-		} else {
-			Try.Err(ListWasEmpty)
-		}
+		get = |_list, _index| Err(ListWasEmpty)
 
 		map : List(a), (a -> b) -> List(b)
-		map = |_, _| []
 
 		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |_, _| []
 
 		fold : List(item), state, (state, item -> state) -> state
-		fold = |list, init, step| {
-			var $state = init
-
-			for item in list {
-				$state = step($state, item)
-			}
-
-			$state
-		}
+		fold = |_list, init, _step| init
 	}
 
 	Bool := [True, False].{

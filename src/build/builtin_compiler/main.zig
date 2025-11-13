@@ -316,22 +316,57 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // DEBUG: Show what we're looking for
+    std.debug.print("\n=== DEBUG: Builtin Compiler Method Transformation ===\n", .{});
+    std.debug.print("Looking for {d} low-level operations to transform:\n", .{low_level_map.count()});
+    {
+        var iter = low_level_map.iterator();
+        var count: usize = 0;
+        while (iter.next()) |entry| {
+            const ident_text = env.getIdentText(entry.key_ptr.*);
+            const op_name = @tagName(entry.value_ptr.*);
+            if (count < 10 or std.mem.indexOf(u8, ident_text, "I128") != null) {
+                std.debug.print("  - {s} -> .{s}\n", .{ ident_text, op_name });
+            }
+            count += 1;
+        }
+        if (count > 10) {
+            std.debug.print("  ... and {d} more\n", .{count - 10});
+        }
+    }
+    std.debug.print("\n", .{});
+
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     const all_defs = env.store.sliceDefs(env.all_defs);
+    std.debug.print("Examining {d} total defs for .e_anno_only expressions...\n", .{all_defs.len});
+
+    var anno_only_count: usize = 0;
+    var matched_count: usize = 0;
+
     for (all_defs) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
 
         // Check if this is an anno-only def (e_anno_only expression)
         if (expr == .e_anno_only and def.annotation != null) {
+            anno_only_count += 1;
+
             // Get the identifier from the pattern
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {
                 const ident = pattern.assign.ident;
+                const ident_text = env.getIdentText(ident);
+
+                // DEBUG: Show first few anno_only defs and all I128 ones
+                if (anno_only_count <= 5 or std.mem.indexOf(u8, ident_text, "I128") != null) {
+                    std.debug.print("  Found .e_anno_only def: {s}\n", .{ident_text});
+                }
 
                 // Check if this identifier matches a low-level operation
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
+                    matched_count += 1;
+                    std.debug.print("    -> MATCHED! Transforming to .{s}\n", .{@tagName(low_level_op)});
 
                     // Create a dummy parameter pattern for the lambda
                     // Use the identifier "_arg" for the parameter
@@ -359,12 +394,28 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // We need to modify the def's expr field to point to our new expression
-                    // CIR.Def.Idx and Node.Idx have the same underlying representation
+                    // The def stores its fields in extra_data:
+                    //   extra_data[0] = pattern
+                    //   extra_data[1] = expr  <- This is what we need to modify!
+                    //   extra_data[2..3] = kind
+                    //   extra_data[4] = annotation
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
-                    var def_node = env.store.nodes.get(def_node_idx);
-                    def_node.data_2 = @intFromEnum(expr_idx);
-                    env.store.nodes.set(def_node_idx, def_node);
+                    const def_node = env.store.nodes.get(def_node_idx);
+                    const extra_start = def_node.data_1;
+                    // Modify the expr field (at offset 1 from extra_start)
+                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+
+                    // DEBUG STEP 1: Verify the transformation actually happened
+                    if (std.mem.indexOf(u8, ident_text, "I128.plus") != null) {
+                        const updated_def = env.store.getDef(def_idx);
+                        const updated_expr = env.store.getExpr(updated_def.expr);
+                        std.debug.print("    [STEP 1 VERIFY] After transformation, expr tag for {s}: {s}\n", .{ ident_text, @tagName(updated_expr) });
+                        if (updated_expr == .e_low_level_lambda) {
+                            std.debug.print("    [STEP 1 VERIFY] ✓ Transformation succeeded in memory!\n", .{});
+                        } else {
+                            std.debug.print("    [STEP 1 VERIFY] ✗ PROBLEM: Still {s}, transformation failed!\n", .{@tagName(updated_expr)});
+                        }
+                    }
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -372,6 +423,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             }
         }
     }
+
+    // DEBUG: Show summary
+    std.debug.print("\n=== Transformation Summary ===\n", .{});
+    std.debug.print("Total .e_anno_only defs found: {d}\n", .{anno_only_count});
+    std.debug.print("Successfully transformed: {d}\n", .{matched_count});
+    std.debug.print("Operations still not found: {d}\n", .{low_level_map.count()});
+    std.debug.print("==========================================\n\n", .{});
 
     // Verify all low-level operations were found in the builtins
     if (low_level_map.count() > 0) {
@@ -854,7 +912,18 @@ fn compileModule(
         std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (checker.problems.problems.items) |prob| {
-            std.debug.print("  - Problem: {any}\n", .{prob});
+            // Enhanced debug output for type application mismatch errors
+            if (prob == .type_apply_mismatch_arities) {
+                const type_name = prob.type_apply_mismatch_arities.type_name;
+                const type_name_text = module_env.getIdentText(type_name);
+                std.debug.print("  - type_apply_mismatch_arities:\n", .{});
+                std.debug.print("      type_name: {s} (idx: {})\n", .{ type_name_text, type_name.idx });
+                std.debug.print("      expected args: {}\n", .{prob.type_apply_mismatch_arities.num_expected_args});
+                std.debug.print("      actual args: {}\n", .{prob.type_apply_mismatch_arities.num_actual_args});
+                std.debug.print("      region: {any}\n", .{prob.type_apply_mismatch_arities.region});
+            } else {
+                std.debug.print("  - Problem: {any}\n", .{prob});
+            }
         }
 
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
