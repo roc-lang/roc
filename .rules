@@ -1,8 +1,8 @@
 # Roc Compiler
 
-This repository contains the source code for the Roc compiler -- both the original prototype written in Rust, and the new production version written in Zig.
+This repo contains the source code for the Roc compiler and related tools. There is the original prototype written in Rust (crates folder), and the new version written in Zig.
 
-All discussion, unless otherwise explicitly requested, is regarding the new Zig production version. Therefore, ONLY files under the `src/` directory should be considered moving forward.
+All discussion, unless otherwise explicitly requested, is regarding the new version in zig. Ignore everything in the crates folder at the root of the repo, always exclude it from searches.
 
 ## Documentation
 
@@ -19,7 +19,7 @@ Roc uses two different test strategies to Verify Correctness, and Validate Behav
 1. **Verify Correctness:** Where necessary, we add unit tests to ensure low-level or specific implementation details remain correct. These are written in `.zig` files using the `test` keyword alongside the code they are testing. These tests are typically limited in scope to a single function.
 2. **Validate Behaviour:** More commonly, we add snapshot tests to provide assurance that the compiler continues to behave as expected. Snapshot files `.md` concurrently exercise many parts of the compiler by presenting the output of each stage for a given snippet of Roc code. Unlike unit tests, this has relevant debug-level information depth and multiple-compiler stage breadth.
 
-### Usage
+### Common Commands
 
 - Run all tests: `zig build test`. To run a specific test: `zig build test -- --test-filter "name of test"`. NEVER use the standard `zig test`, it does not work with our project.
 - Generate or update all snapshots files: `zig build snapshot`
