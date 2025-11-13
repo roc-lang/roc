@@ -797,19 +797,6 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**syntax_grab_bag.md:70:5:**
-```roc
-	if num {
-```
-    ^^^
-
-Right now, it has the type:
-    _U64_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
 **syntax_grab_bag.md:84:2:**
@@ -2459,7 +2446,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2505,7 +2492,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
-		(expr (type "Error -> U64"))
+		(expr (type "U64 -> U64"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

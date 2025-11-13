@@ -203,6 +203,17 @@ The unused variable is declared here:
              ^^^^^^^^^^^^^
 
 
+**MISSING METHOD**
+This **to_frac** method is being called on the type **U8**, which has no method with that name:
+**Color.md:22:15:22:26:**
+```roc
+    rounded = a.to_frac() / 255.0
+```
+              ^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
+
 **TYPE DOES NOT HAVE METHODS**
 You're calling the method `to_utf8` on a type that doesn't support methods:
 **Color.md:29:13:29:26:**

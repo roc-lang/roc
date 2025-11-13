@@ -659,126 +659,21 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_binop => |binop| {
-                if (binop.op == .add) {
-                    // Desugar `a + b` to `a.plus(b)` using method lookup
-                    // For built-in numeric types (represented as .num), fall back to direct arithmetic
+                if (binop.op == .add or binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
+                    // Desugar arithmetic operators to method calls:
+                    // `a + b` -> `a.plus(b)`, `a - b` -> `a.minus(b)`, etc.
+                    // This ensures a single source of truth: all arithmetic goes through Builtin.roc/e_low_level_lambda
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
-                    // Check if lhs is a numeric type (could be .num structure or flex/rigid with numeric content)
-                    // For built-in numeric types, use direct arithmetic; for user nominal types, use method dispatch
-                    const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-                    const is_user_nominal = switch (lhs_resolved.desc.content) {
-                        .structure => |s| s == .nominal_type,
-                        else => false,
-                    };
-
-                    if (!is_user_nominal) {
-                        // For built-in numeric types (or any non-nominal type), use direct arithmetic evaluation
-                        // This includes .num, flex vars, rigid vars, etc.
-                        const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                        const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                        return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
-                    }
-
-                    // For user-defined nominal types with plus methods, use method dispatch
                     var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                     defer lhs.decref(&self.runtime_layout_store, roc_ops);
                     var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
                     defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Get the nominal type information from lhs
-                    const nominal_info = switch (lhs_resolved.desc.content) {
-                        .structure => |s| switch (s) {
-                            .nominal_type => |nom| .{
-                                .origin = nom.origin_module,
-                                .ident = nom.ident.ident_idx,
-                            },
-                            else => return error.InvalidMethodReceiver,
-                        },
-                        else => return error.InvalidMethodReceiver,
-                    };
-
-                    // Get the pre-cached "plus" identifier from the ModuleEnv
-                    const method_name = self.env.plus_ident;
-
-                    // Resolve the plus method function
-                    const method_func = try self.resolveMethodFunction(
-                        nominal_info.origin,
-                        nominal_info.ident,
-                        method_name,
-                        roc_ops,
-                    );
-                    defer method_func.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Prepare arguments: lhs (receiver) + rhs
-                    var args = [2]StackValue{ lhs, rhs };
-
-                    // Call the method closure
-                    if (method_func.layout.tag != .closure) {
-                        return error.TypeMismatch;
-                    }
-
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-                    // Switch to the closure's source module
-                    const saved_env = self.env;
-                    const saved_bindings_len = self.bindings.items.len;
-                    self.env = @constCast(closure_header.source_env);
-                    defer {
-                        self.env = saved_env;
-                        self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-                    }
-
-                    const params = self.env.store.slicePatterns(closure_header.params);
-                    if (params.len != args.len) {
-                        return error.TypeMismatch;
-                    }
-
-                    // Provide closure context for capture lookup
-                    try self.active_closures.append(method_func);
-                    defer _ = self.active_closures.pop();
-
-                    // Check if this is a low-level lambda - if so, dispatch to builtin
-                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-                        // Dispatch to actual low-level builtin implementation
-                        return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops);
-                    }
-
-                    // Bind parameters
-                    for (params, 0..) |param, i| {
-                        try self.bindings.append(.{
-                            .pattern_idx = param,
-                            .value = args[i],
-                            .expr_idx = @enumFromInt(0),
-                        });
-                    }
-
-                    // Evaluate the method body
-                    const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
-
-                    // Clean up bindings
-                    var k = params.len;
-                    while (k > 0) {
-                        k -= 1;
-                        _ = self.bindings.pop();
-                    }
-
-                    return result;
-                } else if (binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-
-                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
+                    return try self.evalBinopViaMethodDispatch(binop.op, lhs, rhs, lhs_rt_var, roc_ops);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
                     // Comparison operators - evaluate both sides and compare
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -3028,156 +2923,196 @@ pub const Interpreter = struct {
         return updated_layout;
     }
 
-    fn evalArithmeticBinop(
+    fn evalBinopViaMethodDispatch(
         self: *Interpreter,
         op: can.CIR.Expr.Binop.Op,
-        expr_idx: can.CIR.Expr.Idx,
         lhs: StackValue,
         rhs: StackValue,
         lhs_rt_var: types.Var,
-        rhs_rt_var: types.Var,
         roc_ops: *RocOps,
     ) !StackValue {
-        const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-        const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+        // Map binary operator to method name
+        const method_ident = switch (op) {
+            .add => self.env.plus_ident,
+            .sub => self.env.common.findIdent("minus") orelse return error.MethodNotFound,
+            .mul => self.env.common.findIdent("times") orelse return error.MethodNotFound,
+            .div, .div_trunc => self.env.common.findIdent("div") orelse return error.MethodNotFound,
+            .rem => self.env.common.findIdent("rem") orelse return error.MethodNotFound,
+            else => return error.NotImplemented,
+        };
 
-        var result_layout = self.getRuntimeLayout(result_rt_var) catch |err| {
-            if (err == layout.LayoutError.BugUnboxedFlexVar) {
-                @panic("COMPILER BUG: Arithmetic operation has unresolved flex return type at runtime! This means the type checker failed to resolve a flex type variable before code generation.");
-            } else if (err == layout.LayoutError.BugUnboxedRigidVar) {
-                @panic("COMPILER BUG: Arithmetic operation has unresolved rigid return type at runtime! This means the type checker failed to resolve a rigid type variable before code generation.");
+        // Resolve the LHS type and map it to a nominal type
+        // This handles num_unbound/num_poly by defaulting to I128, num_compact by mapping to the specific type, etc.
+        const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+        const NominalInfo = struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx };
+        const nominal_info: NominalInfo = blk: {
+            switch (lhs_resolved.desc.content) {
+                .structure => |s| {
+                    switch (s) {
+                        .nominal_type => |nom| break :blk NominalInfo{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        .num => |num| {
+                            // Numeric types are builtin structure types, not nominal types
+                            // Default to I128 for integer types, Dec for fractional types
+
+                            // Determine which builtin numeric type to dispatch to based on the num variant
+                            const default_numeric_stmt = switch (num) {
+                                .num_unbound, .num_poly => self.builtins.i128_stmt,
+                                .int_unbound, .int_poly => self.builtins.i128_stmt,
+                                .frac_unbound, .frac_poly => self.builtins.dec_stmt,
+
+                                // Map each int precision to its specific type
+                                .int_precision => |prec| switch (prec) {
+                                    .u8 => self.builtins.u8_stmt,
+                                    .i8 => self.builtins.i8_stmt,
+                                    .u16 => self.builtins.u16_stmt,
+                                    .i16 => self.builtins.i16_stmt,
+                                    .u32 => self.builtins.u32_stmt,
+                                    .i32 => self.builtins.i32_stmt,
+                                    .u64 => self.builtins.u64_stmt,
+                                    .i64 => self.builtins.i64_stmt,
+                                    .u128 => self.builtins.u128_stmt,
+                                    .i128 => self.builtins.i128_stmt,
+                                },
+
+                                // Map each frac precision to its specific type
+                                .frac_precision => |prec| switch (prec) {
+                                    .f32 => self.builtins.f32_stmt,
+                                    .f64 => self.builtins.f64_stmt,
+                                    .dec => self.builtins.dec_stmt,
+                                },
+
+                                // Map each num_compact precision to its specific type
+                                // .num_compact is a memory optimization that should be treated
+                                // identically to .int_precision and .frac_precision
+                                .num_compact => |compact| switch (compact) {
+                                    .int => |prec| switch (prec) {
+                                        .u8 => self.builtins.u8_stmt,
+                                        .i8 => self.builtins.i8_stmt,
+                                        .u16 => self.builtins.u16_stmt,
+                                        .i16 => self.builtins.i16_stmt,
+                                        .u32 => self.builtins.u32_stmt,
+                                        .i32 => self.builtins.i32_stmt,
+                                        .u64 => self.builtins.u64_stmt,
+                                        .i64 => self.builtins.i64_stmt,
+                                        .u128 => self.builtins.u128_stmt,
+                                        .i128 => self.builtins.i128_stmt,
+                                    },
+                                    .frac => |prec| switch (prec) {
+                                        .f32 => self.builtins.f32_stmt,
+                                        .f64 => self.builtins.f64_stmt,
+                                        .dec => self.builtins.dec_stmt,
+                                    },
+                                },
+                            };
+
+                            // Get the identifier from the statement
+                            const numeric_stmt = self.builtins.builtin_env.store.getStatement(default_numeric_stmt);
+                            const numeric_ident = switch (numeric_stmt) {
+                                .s_nominal_decl => |decl| self.builtins.builtin_env.store.getTypeHeader(decl.header).name,
+                                else => {
+                                    return error.InvalidMethodReceiver;
+                                },
+                            };
+
+                            const numeric_name = self.builtins.builtin_env.getIdent(numeric_ident);
+
+                            // Insert the type name into the current module's interner so resolveMethodFunction can look it up
+                            const numeric_ident_in_current_module = self.env.common.findIdent(numeric_name) orelse find_or_insert: {
+                                // Type name doesn't exist in current module's interner yet, insert it
+                                const new_ident = try self.env.insertIdent(base_pkg.Ident.for_text(numeric_name));
+                                break :find_or_insert new_ident;
+                            };
+
+                            break :blk NominalInfo{
+                                .origin = self.env.builtin_module_ident,
+                                .ident = numeric_ident_in_current_module,
+                            };
+                        },
+                        else => return error.InvalidMethodReceiver,
+                    }
+                },
+                // Flex/rigid vars should have been specialized to nominal types before runtime
+                .flex, .rigid => {
+                    // If we reach here, the receiver wasn't properly monomorphized
+                    return error.InvalidMethodReceiver;
+                },
+                else => return error.InvalidMethodReceiver,
             }
-            return err;
         };
 
-        result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);
+        // Resolve and evaluate the method function
+        const method_func = try self.resolveMethodFunction(
+            nominal_info.origin,
+            nominal_info.ident,
+            method_ident,
+            roc_ops,
+        );
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
-        if (result_layout.tag != .scalar) return error.TypeMismatch;
+        // Prepare arguments: lhs (receiver) + rhs
+        var args = [2]StackValue{ lhs, rhs };
 
-        // Map binary operator to low-level operation
-        const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
-            .add => .num_plus,
-            .sub => .num_minus,
-            .mul => .num_times,
-            .div, .div_trunc => .num_div_by,
-            .rem => .num_rem_by,
-            else => return error.NotImplemented,
-        };
-
-        // Call the low-level builtin with both arguments
-        var args = [_]StackValue{ lhs, rhs };
-        return try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
-    }
-
-    fn evalIntBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        result_layout: Layout,
-        lhs: StackValue,
-        rhs: StackValue,
-    ) !StackValue {
-        if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-        if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-
-        const lhs_val = lhs.asI128();
-        const rhs_val = rhs.asI128();
-
-        const result_val: i128 = switch (op) {
-            .add => lhs_val + rhs_val,
-            .sub => lhs_val - rhs_val,
-            .mul => lhs_val * rhs_val,
-            .div, .div_trunc => blk: {
-                if (rhs_val == 0) return error.DivisionByZero;
-                break :blk @divTrunc(lhs_val, rhs_val);
-            },
-            .rem => blk: {
-                if (rhs_val == 0) return error.DivisionByZero;
-                break :blk @rem(lhs_val, rhs_val);
-            },
-            else => return error.NotImplemented,
-        };
-
-        var out = try self.pushRaw(result_layout, 0);
-        out.is_initialized = false;
-        out.setInt(result_val);
-        out.is_initialized = true;
-        return out;
-    }
-
-    fn evalDecBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        result_layout: Layout,
-        lhs: StackValue,
-        rhs: StackValue,
-    ) !StackValue {
-        const lhs_dec = try self.stackValueToDecimal(lhs);
-        const rhs_dec = try self.stackValueToDecimal(rhs);
-
-        const result_dec: RocDec = switch (op) {
-            .add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
-            .sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
-            .mul => RocDec{ .num = @divTrunc(lhs_dec.num * rhs_dec.num, RocDec.one_point_zero_i128) },
-            .div, .div_trunc => blk: {
-                if (rhs_dec.num == 0) return error.DivisionByZero;
-                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                break :blk RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
-            },
-            .rem => blk: {
-                if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
-            },
-            else => return error.NotImplemented,
-        };
-
-        var out = try self.pushRaw(result_layout, 0);
-        out.is_initialized = true;
-        if (out.ptr) |ptr| {
-            const dest: *RocDec = @ptrCast(@alignCast(ptr));
-            dest.* = result_dec;
+        // Call the method closure
+        if (method_func.layout.tag != .closure) {
+            return error.TypeMismatch;
         }
-        return out;
-    }
 
-    fn evalFloatBinop(
-        self: *Interpreter,
-        comptime FloatT: type,
-        op: can.CIR.Expr.Binop.Op,
-        result_layout: Layout,
-        lhs: StackValue,
-        rhs: StackValue,
-    ) !StackValue {
-        const lhs_float = try self.stackValueToFloat(FloatT, lhs);
-        const rhs_float = try self.stackValueToFloat(FloatT, rhs);
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
 
-        const result_float: FloatT = switch (op) {
-            .add => lhs_float + rhs_float,
-            .sub => lhs_float - rhs_float,
-            .mul => lhs_float * rhs_float,
-            .div => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                break :blk lhs_float / rhs_float;
-            },
-            .div_trunc => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                const quotient = lhs_float / rhs_float;
-                break :blk std.math.trunc(quotient);
-            },
-            .rem => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                break :blk @rem(lhs_float, rhs_float);
-            },
-            else => return error.NotImplemented,
-        };
-
-        var out = try self.pushRaw(result_layout, 0);
-        out.is_initialized = true;
-        if (out.ptr) |ptr| {
-            const dest: *FloatT = @ptrCast(@alignCast(ptr));
-            dest.* = result_float;
+        // Switch to the closure's source module
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
         }
-        return out;
+
+        // Check if this is a low-level lambda - if so, dispatch to builtin
+        // Do this BEFORE parameter count validation because low-level builtins handle their own argument validation
+        const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+        if (lambda_expr == .e_low_level_lambda) {
+            const low_level = lambda_expr.e_low_level_lambda;
+            // Dispatch to actual low-level builtin implementation
+            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops);
+        }
+
+        // For regular lambdas, check parameter count matches argument count
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != args.len) {
+            std.debug.print("Method param count mismatch: expected {}, got {} args\n", .{ params.len, args.len });
+            return error.TypeMismatch;
+        }
+
+        // Provide closure context for capture lookup
+        try self.active_closures.append(method_func);
+        defer _ = self.active_closures.pop();
+
+        // Bind parameters
+        for (params, 0..) |param, i| {
+            try self.bindings.append(.{
+                .pattern_idx = param,
+                .value = args[i],
+                .expr_idx = @enumFromInt(0),
+            });
+        }
+
+        // Evaluate the method body
+        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+
+        // Clean up bindings
+        var k = params.len;
+        while (k > 0) {
+            k -= 1;
+            _ = self.bindings.pop();
+        }
+
+        return result;
     }
+
 
     fn stackValueToDecimal(self: *Interpreter, value: StackValue) !RocDec {
         _ = self;
