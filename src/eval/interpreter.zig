@@ -1983,6 +1983,11 @@ pub const Interpreter = struct {
 
                     if (target_expr == .e_low_level_lambda) {
                         const low_level = target_expr.e_low_level_lambda;
+                        defer {
+                            for (arg_values) |arg| {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
                         return try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
                     }
                 }
@@ -2008,6 +2013,11 @@ pub const Interpreter = struct {
                     }
 
                     if (op) |resolved| {
+                        defer {
+                            for (arg_values) |arg| {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
                         return try self.callLowLevelBuiltin(resolved, arg_values, roc_ops);
                     }
                 }
