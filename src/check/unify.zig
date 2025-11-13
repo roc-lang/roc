@@ -45,17 +45,10 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const can = @import("can");
-const copy_import = @import("copy_import.zig");
-const Check = @import("check").Check;
 
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
-
-const ModuleEnv = can.ModuleEnv;
-const AutoImportedType = can.Can.AutoImportedType;
-const CIR = can.CIR;
 
 const Region = base.Region;
 const Ident = base.Ident;
@@ -130,26 +123,24 @@ pub const Result = union(enum) {
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
-    module_env: *ModuleEnv,
+    env: Env,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     /// The "expected" variable
     a: Var,
     /// The "actual" variable
     b: Var,
 ) std.mem.Allocator.Error!Result {
     return unifyWithConf(
-        module_env,
+        env,
         types,
         problems,
         snapshots,
         unify_scratch,
         occurs_scratch,
-        module_lookup,
         a,
         b,
         Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -165,27 +156,36 @@ pub const Conf = struct {
     pub const Ctx = enum { anon, anno };
 };
 
-/// Provides access to module environments needed for cross-module method lookups
-pub const ModuleEnvLookup = struct {
-    /// Auto-imported modules available during type checking (e.g. Bool, Result, Builtin)
-    auto_imported: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
-    /// Optional interpreter callback for resolving module envs at runtime
-    interpreter_lookup_ctx: ?*const anyopaque = null,
-    interpreter_lookup_fn: ?*const fn (?*const anyopaque, Ident.Idx) ?*const ModuleEnv = null,
+pub const MethodRequest = struct {
+    types: *types_mod.Store,
+    nominal_type: NominalType,
+    method_ident: Ident.Idx,
+};
 
-    pub fn get(self: ModuleEnvLookup, module_ident: Ident.Idx) ?*const ModuleEnv {
-        if (self.auto_imported) |map| {
-            if (map.get(module_ident)) |entry| {
-                return entry.env;
-            }
-        }
-        if (self.interpreter_lookup_fn) |getter| {
-            if (getter(self.interpreter_lookup_ctx, module_ident)) |env| {
-                return env;
-            }
-        }
-        return null;
-    }
+pub const MethodResolver = struct {
+    ctx: ?*const anyopaque = null,
+    get: *const fn (?*const anyopaque, MethodRequest) std.mem.Allocator.Error!?Var,
+};
+
+fn defaultMethodResolver(_: ?*const anyopaque, _: MethodRequest) std.mem.Allocator.Error!?Var {
+    return null;
+}
+
+pub const Env = struct {
+    gpa: std.mem.Allocator,
+    ident_store: *const Ident.Store,
+    builtin_module_ident: Ident.Idx,
+    try_ident: Ident.Idx,
+    builtin_try_ident: ?Ident.Idx = null,
+    out_of_range_ident: Ident.Idx,
+    from_int_digits_ident: Ident.Idx,
+    from_dec_digits_ident: Ident.Idx,
+    before_dot_ident: ?Ident.Idx = null,
+    after_dot_ident: ?Ident.Idx = null,
+    method_resolver: MethodResolver = .{
+        .ctx = null,
+        .get = defaultMethodResolver,
+    },
 };
 
 /// Unify two type variables
@@ -197,13 +197,12 @@ pub const ModuleEnvLookup = struct {
 ///
 /// This function accepts a context and optional constraint origin var (for better error reporting)
 pub fn unifyWithConf(
-    module_env: *ModuleEnv,
+    env: Env,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     /// The "expected" variable
     a: Var,
     /// The "actual" variable
@@ -217,7 +216,7 @@ pub fn unifyWithConf(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch, module_lookup);
+    var unifier = Unifier.init(env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -358,7 +357,7 @@ pub fn unifyWithConf(
                 },
             }
         };
-        const problem_idx = try problems.appendProblem(module_env.gpa, problem);
+        const problem_idx = try problems.appendProblem(env.gpa, problem);
         types.union_(a, b, .{
             .content = .err,
             .rank = Rank.generalized,
@@ -391,28 +390,25 @@ pub fn unifyWithConf(
 const Unifier = struct {
     const Self = @This();
 
-    module_env: *ModuleEnv,
+    env: Env,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     depth: u8,
     skip_depth_check: bool,
 
     /// Init unifier
     pub fn init(
-        module_env: *ModuleEnv,
+        env: Env,
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
-        module_lookup: ModuleEnvLookup,
     ) Unifier {
         return .{
-            .module_env = module_env,
+            .env = env,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
-            .module_lookup = module_lookup,
             .depth = 0,
             .skip_depth_check = false,
         };
@@ -647,7 +643,7 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (TypeIdent.eql(self.module_env.getIdentStore(), a_alias.ident, b_alias.ident)) {
+                if (TypeIdent.eql(self.env.ident_store, a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
                     try self.unifyGuarded(backing_var, b_backing_var);
@@ -1187,7 +1183,9 @@ const Unifier = struct {
         self: *Self,
         nominal_type: NominalType,
     ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.from_int_digits_ident) orelse return false;
+        const method_var = (self.resolveNominalMethodVar(nominal_type, self.env.from_int_digits_ident) catch |err| switch (err) {
+            error.OutOfMemory => return error.AllocatorError,
+        }) orelse return false;
         const resolved = self.types_store.resolveVar(method_var);
 
         const func = switch (resolved.desc.content) {
@@ -1234,7 +1232,9 @@ const Unifier = struct {
         self: *Self,
         nominal_type: NominalType,
     ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.from_dec_digits_ident) orelse return false;
+        const method_var = (self.resolveNominalMethodVar(nominal_type, self.env.from_dec_digits_ident) catch |err| switch (err) {
+            error.OutOfMemory => return error.AllocatorError,
+        }) orelse return false;
         const resolved = self.types_store.resolveVar(method_var);
 
         const func = switch (resolved.desc.content) {
@@ -1262,8 +1262,8 @@ const Unifier = struct {
         const args_slice = self.types_store.sliceVars(func.args);
         if (args_slice.len != 1) return false;
 
-        const before_ident = self.module_env.common.findIdent("before_dot") orelse return false;
-        const after_ident = self.module_env.common.findIdent("after_dot") orelse return false;
+        const before_ident = self.env.before_dot_ident orelse return false;
+        const after_ident = self.env.after_dot_ident orelse return false;
 
         const record_desc = self.types_store.resolveVar(args_slice[0]);
         const record = switch (record_desc.desc.content) {
@@ -1306,110 +1306,28 @@ const Unifier = struct {
         return true;
     }
 
+    fn resolveNominalMethodVar(
+        self: *Self,
+        nominal_type: NominalType,
+        method_ident: Ident.Idx,
+    ) std.mem.Allocator.Error!?Var {
+        const request = MethodRequest{
+            .types = self.types_store,
+            .nominal_type = nominal_type,
+            .method_ident = method_ident,
+        };
+        const start_slots = self.types_store.len();
+        const result = try self.env.method_resolver.get(self.env.method_resolver.ctx, request);
+        self.trackNewVars(start_slots) catch return error.OutOfMemory;
+        return result;
+    }
+
     fn nominalSupportsResolvedNum(self: *Self, resolved: ResolvedNum, nominal_type: NominalType) Error!bool {
         return switch (resolved) {
             .frac_unbound, .frac_resolved, .frac_flex, .frac_rigid => self.nominalTypeHasFromDecDigits(nominal_type),
             .int_unbound, .int_resolved, .int_flex, .int_rigid => self.nominalTypeHasFromIntDigits(nominal_type),
             else => false,
         };
-    }
-
-    fn getNominalMethodVar(
-        self: *Self,
-        nominal_type: NominalType,
-        method_ident: Ident.Idx,
-    ) Error!?Var {
-        const origin_env = if (nominal_type.origin_module == self.module_env.module_name_idx)
-            self.module_env
-        else
-            self.module_lookup.get(nominal_type.origin_module) orelse return null;
-
-        const method_name = self.module_env.common.getIdent(method_ident);
-        const type_name = self.module_env.common.getIdent(nominal_type.ident.ident_idx);
-
-        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, method_name) orelse return null;
-
-        const method_def_idx: CIR.Def.Idx = blk: {
-            if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {
-                break :blk @enumFromInt(@as(u32, node_idx));
-            }
-
-            if (Self.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
-                break :blk def_idx;
-            }
-
-            return null;
-        };
-
-        const ident_store = origin_env.getIdentStoreConst();
-        const origin_var = ModuleEnv.varFrom(method_def_idx);
-
-        var mapping = std.AutoHashMap(Var, Var).init(self.module_env.gpa);
-        defer mapping.deinit();
-
-        const start_slots = self.types_store.len();
-        const copied_var = copy_import.copyVar(
-            &origin_env.types,
-            self.types_store,
-            origin_var,
-            &mapping,
-            ident_store,
-            self.module_env.getIdentStore(),
-            self.module_env.gpa,
-        ) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return copied_var;
-    }
-
-    fn buildQualifiedMethodName(
-        self: *Self,
-        module_name: []const u8,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) std.mem.Allocator.Error![]u8 {
-        if (std.mem.eql(u8, type_name, module_name)) {
-            return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ type_name, method_name });
-        } else {
-            return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name });
-        }
-    }
-
-    fn findMethodIdent(
-        self: *Self,
-        origin_env: *const ModuleEnv,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) error{AllocatorError}!?Ident.Idx {
-        const ident_store = origin_env.getIdentStoreConst();
-
-        const primary = self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(primary);
-        if (ident_store.findByString(primary)) |ident| return ident;
-
-        const module_type = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name }) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(module_type);
-        if (ident_store.findByString(module_type)) |ident| return ident;
-
-        const module_method = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ origin_env.module_name, method_name }) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(module_method);
-        if (ident_store.findByString(module_method)) |ident| return ident;
-
-        return ident_store.findByString(method_name);
-    }
-
-    fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
-        const defs = origin_env.store.sliceDefs(origin_env.all_defs);
-        for (defs) |def_idx| {
-            const def = origin_env.store.getDef(def_idx);
-            const pattern = origin_env.store.getPattern(def.pattern);
-
-            if (pattern == .assign and pattern.assign.ident == ident_idx) {
-                return def_idx;
-            }
-        }
-
-        return null;
     }
 
     fn createListU8Var(self: *Self) Error!Var {
@@ -1444,15 +1362,15 @@ const Unifier = struct {
     }
 
     fn isBuiltinTryNominal(self: *Self, nominal: NominalType) bool {
-        if (nominal.origin_module != self.module_env.builtin_module_ident) {
+        if (nominal.origin_module != self.env.builtin_module_ident) {
             return false;
         }
 
-        if (nominal.ident.ident_idx == self.module_env.try_ident) {
+        if (nominal.ident.ident_idx == self.env.try_ident) {
             return true;
         }
 
-        if (self.module_env.common.findIdent("Builtin.Try")) |builtin_try_ident| {
+        if (self.env.builtin_try_ident) |builtin_try_ident| {
             return nominal.ident.ident_idx == builtin_try_ident;
         }
 
@@ -1462,7 +1380,7 @@ const Unifier = struct {
     fn createOutOfRangeTagUnion(self: *Self) Error!Var {
         const start_slots = self.types_store.len();
         const tag = Tag{
-            .name = self.module_env.out_of_range_ident,
+            .name = self.env.out_of_range_ident,
             .args = Var.SafeList.Range.empty(),
         };
         const tags_range = self.types_store.appendTags(&[_]Tag{tag}) catch return error.AllocatorError;
@@ -2353,7 +2271,7 @@ const Unifier = struct {
             return;
         }
 
-        if (!TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident)) {
+        if (!TypeIdent.eql(self.env.ident_store, a_type.ident, b_type.ident)) {
             return error.TypeMismatch;
         }
 
@@ -2568,7 +2486,7 @@ const Unifier = struct {
 
         // Then partition the fields
         const partitioned = Self.partitionFields(
-            self.module_env.getIdentStore(),
+            self.env.ident_store,
             self.scratch,
             a_gathered_fields.range,
             b_gathered_fields.range,
@@ -3025,7 +2943,7 @@ const Unifier = struct {
 
         // Then partition the tags
         const partitioned = Self.partitionTags(
-            self.module_env.getIdentStore(),
+            self.env.ident_store,
             self.scratch,
             a_gathered_tags.range,
             b_gathered_tags.range,
@@ -3424,7 +3342,7 @@ const Unifier = struct {
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
         b_constraints_range: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!PartitionedStaticDispatchConstraints {
-        const ident_store = self.module_env.getIdentStore();
+        const ident_store = self.env.ident_store;
         const scratch = self.scratch;
 
         // First sort the fields

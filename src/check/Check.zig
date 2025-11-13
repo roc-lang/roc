@@ -331,13 +331,12 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
 
     // Unify
     const result = try unifier.unifyWithConf(
-        self.cir,
+        self.makeUnifyEnv(),
         self.types,
         &self.problems,
         &self.snapshots,
         &self.unify_scratch,
         &self.occurs_scratch,
-        unifier.ModuleEnvLookup{ .auto_imported = self.module_envs },
         a,
         b,
         unifier.Conf{
@@ -386,6 +385,26 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     self.debugAssertArraysInSync();
 
     return result;
+}
+
+fn makeUnifyEnv(self: *Self) unifier.Env {
+    const resolver_ctx = @as(?*const anyopaque, @ptrCast(self));
+    return .{
+        .gpa = self.gpa,
+        .ident_store = self.cir.getIdentStoreConst(),
+        .builtin_module_ident = self.cir.builtin_module_ident,
+        .try_ident = self.cir.try_ident,
+        .builtin_try_ident = self.cir.common.findIdent("Builtin.Try"),
+        .out_of_range_ident = self.cir.out_of_range_ident,
+        .from_int_digits_ident = self.cir.from_int_digits_ident,
+        .from_dec_digits_ident = self.cir.from_dec_digits_ident,
+        .before_dot_ident = self.cir.common.findIdent("before_dot"),
+        .after_dot_ident = self.cir.common.findIdent("after_dot"),
+        .method_resolver = .{
+            .ctx = resolver_ctx,
+            .get = Self.resolveNominalMethodVarCallback,
+        },
+    };
 }
 
 /// Find constraint origins for variables, checking resolved forms
@@ -3958,6 +3977,104 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
     self.debugAssertArraysInSync();
 
     return copied_var;
+}
+
+fn resolveNominalMethodVarCallback(ctx: ?*const anyopaque, request: unifier.MethodRequest) std.mem.Allocator.Error!?Var {
+    const self: *Self = @constCast(@ptrCast(@alignCast(ctx.?)));
+    return self.resolveNominalMethodVar(request);
+}
+
+fn resolveNominalMethodVar(self: *Self, request: unifier.MethodRequest) std.mem.Allocator.Error!?Var {
+    std.debug.assert(request.types == self.types);
+
+    const origin_env = self.getModuleEnvFor(request.nominal_type.origin_module) orelse return null;
+
+    const type_name = self.cir.getIdent(request.nominal_type.ident.ident_idx);
+    const method_name = self.cir.getIdent(request.method_ident);
+
+    const method_ident_in_origin = (self.findMethodIdent(origin_env, type_name, method_name) catch |err| switch (err) {
+        error.AllocatorError => return error.OutOfMemory,
+    }) orelse return null;
+
+    const method_def_idx: CIR.Def.Idx = blk: {
+        if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {
+            break :blk @enumFromInt(@as(u32, node_idx));
+        }
+
+        if (Self.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
+            break :blk def_idx;
+        }
+
+        return null;
+    };
+
+    const origin_var = ModuleEnv.varFrom(method_def_idx);
+    const copied_var = try self.copyVar(origin_var, origin_env, null);
+    return copied_var;
+}
+
+fn getModuleEnvFor(self: *Self, module_ident: Ident.Idx) ?*const ModuleEnv {
+    if (module_ident == self.common_idents.module_name) {
+        return self.cir;
+    }
+
+    if (self.module_envs) |envs| {
+        if (envs.get(module_ident)) |entry| {
+            return entry.env;
+        }
+    }
+
+    return null;
+}
+
+fn findMethodIdent(
+    self: *Self,
+    origin_env: *const ModuleEnv,
+    type_name: []const u8,
+    method_name: []const u8,
+) error{AllocatorError}!?Ident.Idx {
+    const ident_store = origin_env.getIdentStoreConst();
+
+    const primary = try self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name);
+    defer self.gpa.free(primary);
+    if (ident_store.findByString(primary)) |ident| return ident;
+
+    const module_type = std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name }) catch return error.AllocatorError;
+    defer self.gpa.free(module_type);
+    if (ident_store.findByString(module_type)) |ident| return ident;
+
+    const module_method = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ origin_env.module_name, method_name }) catch return error.AllocatorError;
+    defer self.gpa.free(module_method);
+    if (ident_store.findByString(module_method)) |ident| return ident;
+
+    return ident_store.findByString(method_name);
+}
+
+    fn buildQualifiedMethodName(
+        self: *Self,
+        module_name: []const u8,
+        type_name: []const u8,
+        method_name: []const u8,
+    ) error{AllocatorError}![]u8 {
+        if (std.mem.eql(u8, type_name, module_name)) {
+            return std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return error.AllocatorError;
+        } else {
+            return std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name }) catch return error.AllocatorError;
+        }
+    }
+
+fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
+    const defs = origin_env.store.sliceDefs(origin_env.all_defs);
+    for (defs) |def_idx| {
+        const def = origin_env.store.getDef(def_idx);
+        const pattern = origin_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign and pattern.assign.ident == ident_idx) {
+            return def_idx;
+        }
+    }
+
+    return null;
 }
 
 // validate static dispatch constraints //

@@ -105,16 +105,30 @@ const TestEnv = struct {
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         return try unify_mod.unify(
-            self.module_env,
+            self.makeUnifyEnv(),
             &self.module_env.types,
             &self.problems,
             &self.snapshots,
             &self.scratch,
             &self.occurs_scratch,
-            unify_mod.ModuleEnvLookup{},
             a,
             b,
         );
+    }
+
+    fn makeUnifyEnv(self: *Self) unify_mod.Env {
+        return .{
+            .gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStore(),
+            .builtin_module_ident = self.module_env.builtin_module_ident,
+            .try_ident = self.module_env.try_ident,
+            .builtin_try_ident = self.module_env.common.findIdent("Builtin.Try"),
+            .out_of_range_ident = self.module_env.out_of_range_ident,
+            .from_int_digits_ident = self.module_env.from_int_digits_ident,
+            .from_dec_digits_ident = self.module_env.from_dec_digits_ident,
+            .before_dot_ident = self.module_env.common.findIdent("before_dot"),
+            .after_dot_ident = self.module_env.common.findIdent("after_dot"),
+        };
     }
 
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };

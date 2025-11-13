@@ -13,6 +13,8 @@ const compile = @import("compile");
 
 /// **Hindley-Milner+ Unification**
 pub const unifier = @import("unify.zig");
+/// **Cross-module type copying**
+pub const copy_import = @import("copy_import.zig");
 /// **Type Snapshot**
 pub const snapshot = @import("snapshot.zig");
 /// **Recursion Checking**

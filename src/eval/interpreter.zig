@@ -11,7 +11,9 @@ const can = @import("can");
 const TypeScope = types.TypeScope;
 const Content = types.Content;
 const HashMap = std.hash_map.HashMap;
-const unify = @import("check").unifier;
+const check_mod = @import("check");
+const unify = check_mod.unifier;
+const copy_import = check_mod.copy_import;
 const problem_mod = @import("check").problem;
 const snapshot_mod = @import("check").snapshot;
 const stack = @import("stack.zig");
@@ -58,20 +60,6 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
         .is_initialized = true,
     };
     elem_value.decref(context.layout_store, context.roc_ops);
-}
-
-fn interpreterLookupModuleEnv(
-    ctx: ?*const anyopaque,
-    module_ident: base_pkg.Ident.Idx,
-) ?*const can.ModuleEnv {
-    const map_ptr = ctx orelse return null;
-    const map: *const std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv) =
-        @ptrCast(@alignCast(map_ptr));
-
-    if (map.*.get(module_ident)) |entry| {
-        return entry;
-    }
-    return null;
 }
 
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
@@ -1809,16 +1797,12 @@ pub const Interpreter = struct {
                     const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                     const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
                     _ = try unify.unifyWithConf(
-                        self.env,
+                        self.makeUnifyEnv(),
                         self.runtime_types,
                         &self.problems,
                         &self.snapshots,
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
-                        unify.ModuleEnvLookup{
-                            .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                            .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                        },
                         call_ret_rt_var,
                         entry.return_var,
                         unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -4374,6 +4358,120 @@ pub const Interpreter = struct {
         return self.module_envs.get(origin_module);
     }
 
+    fn makeUnifyEnv(self: *Interpreter) unify.Env {
+        const resolver_ctx = @as(?*const anyopaque, @ptrCast(self));
+        return .{
+            .gpa = self.allocator,
+            .ident_store = self.env.getIdentStoreConst(),
+            .builtin_module_ident = self.env.builtin_module_ident,
+            .try_ident = self.env.try_ident,
+            .builtin_try_ident = self.env.common.findIdent("Builtin.Try"),
+            .out_of_range_ident = self.env.out_of_range_ident,
+            .from_int_digits_ident = self.env.from_int_digits_ident,
+            .from_dec_digits_ident = self.env.from_dec_digits_ident,
+            .before_dot_ident = self.env.common.findIdent("before_dot"),
+            .after_dot_ident = self.env.common.findIdent("after_dot"),
+            .method_resolver = .{
+                .ctx = resolver_ctx,
+                .get = Interpreter.resolveNominalMethodVarCallback,
+            },
+        };
+    }
+
+    fn resolveNominalMethodVarCallback(ctx: ?*const anyopaque, request: unify.MethodRequest) std.mem.Allocator.Error!?types.Var {
+        const self: *Interpreter = @constCast(@ptrCast(@alignCast(ctx.?)));
+        return self.resolveNominalMethodVar(request);
+    }
+
+    fn resolveNominalMethodVar(self: *Interpreter, request: unify.MethodRequest) std.mem.Allocator.Error!?types.Var {
+        std.debug.assert(request.types == self.runtime_types);
+
+        const origin_env = self.getModuleEnvForOrigin(request.nominal_type.origin_module) orelse return null;
+        const type_name = self.env.common.getIdent(request.nominal_type.ident.ident_idx);
+        const method_name = self.env.common.getIdent(request.method_ident);
+
+        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, method_name) orelse return null;
+
+        const method_def_idx: can.CIR.Def.Idx = blk: {
+            if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {
+                break :blk @enumFromInt(@as(u32, node_idx));
+            }
+
+            if (Interpreter.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
+                break :blk def_idx;
+            }
+
+            return null;
+        };
+
+        const origin_var = can.ModuleEnv.varFrom(method_def_idx);
+
+        var mapping = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+        defer mapping.deinit();
+
+        const copied_var = copy_import.copyVar(
+            &origin_env.types,
+            self.runtime_types,
+            origin_var,
+            &mapping,
+            origin_env.getIdentStoreConst(),
+            self.env.getIdentStore(),
+            self.allocator,
+        ) catch return error.OutOfMemory;
+
+        return copied_var;
+    }
+
+    fn findMethodIdent(
+        self: *Interpreter,
+        origin_env: *const can.ModuleEnv,
+        type_name: []const u8,
+        method_name: []const u8,
+    ) std.mem.Allocator.Error!?base_pkg.Ident.Idx {
+        const ident_store = origin_env.getIdentStoreConst();
+
+        const primary = try self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name);
+        defer self.allocator.free(primary);
+        if (ident_store.findByString(primary)) |ident| return ident;
+
+        const module_type = try std.fmt.allocPrint(self.allocator, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name });
+        defer self.allocator.free(module_type);
+        if (ident_store.findByString(module_type)) |ident| return ident;
+
+        const module_method = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ origin_env.module_name, method_name });
+        defer self.allocator.free(module_method);
+        if (ident_store.findByString(module_method)) |ident| return ident;
+
+        return ident_store.findByString(method_name);
+    }
+
+    fn buildQualifiedMethodName(
+        self: *Interpreter,
+        module_name: []const u8,
+        type_name: []const u8,
+        method_name: []const u8,
+    ) std.mem.Allocator.Error![]u8 {
+        if (std.mem.eql(u8, type_name, module_name)) {
+            return try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, method_name });
+        } else {
+            return try std.fmt.allocPrint(self.allocator, "{s}.{s}.{s}", .{ module_name, type_name, method_name });
+        }
+    }
+
+    fn findDefIdxByIdent(origin_env: *const can.ModuleEnv, ident_idx: base_pkg.Ident.Idx) ?can.CIR.Def.Idx {
+        const defs = origin_env.store.sliceDefs(origin_env.all_defs);
+        for (defs) |def_idx| {
+            const def = origin_env.store.getDef(def_idx);
+            const pattern = origin_env.store.getPattern(def.pattern);
+
+            if (pattern == .assign and pattern.assign.ident == ident_idx) {
+                return def_idx;
+            }
+        }
+
+        return null;
+    }
+
     /// Get the numeric module ID for a given origin module identifier.
     /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
@@ -5130,16 +5228,12 @@ pub const Interpreter = struct {
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
             _ = try unify.unifyWithConf(
-                self.env,
+                self.makeUnifyEnv(),
                 self.runtime_types,
                 &self.problems,
                 &self.snapshots,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
-                unify.ModuleEnvLookup{
-                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                },
                 params[i],
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
