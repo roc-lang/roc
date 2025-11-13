@@ -3746,20 +3746,6 @@ fn checkBinopExpr(
 
             std.debug.print("Binary operator operand types: lhs={s}, rhs={s}\n", .{ @tagName(lhs_content), @tagName(rhs_content) });
 
-            // Check if either operand is a known builtin number type
-            // If so, use numeric constraints instead of static dispatch
-            const lhs_is_known_number = switch (lhs_content) {
-                .structure => |s| s == .num,
-                else => false,
-            };
-            const rhs_is_known_number = switch (rhs_content) {
-                .structure => |s| s == .num,
-                else => false,
-            };
-            const is_known_number = lhs_is_known_number or rhs_is_known_number;
-
-            std.debug.print("  is_known_number={}\n", .{is_known_number});
-
             // Check if we should use static dispatch (nominal types, or flex/rigid types)
             // For flex/rigid, we always use static dispatch to get the more general constrained type
             // (e.g., `|a, b| a + b` becomes `a, b -> c where [ a.plus : a -> b -> c ]`)
@@ -3773,48 +3759,7 @@ fn checkBinopExpr(
 
             std.debug.print("  should_use_static_dispatch={}\n", .{should_use_static_dispatch});
 
-            if (is_known_number) {
-                std.debug.print("TAKING NUMERIC PATH for binop\n", .{});
-                // Builtin numeric type: use standard numeric constraints (optimized path)
-                // This is the same as the other arithmetic operators
-                switch (expected) {
-                    .expected => |expectation| {
-                        const lhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
-                        const rhs_instantiated = try self.instantiateVar(expectation.var_, env, .{ .explicit = expr_region });
-
-                        if (expectation.from_annotation) {
-                            _ = try self.unifyWithCtx(lhs_instantiated, lhs_var, env, .anno);
-                            _ = try self.unifyWithCtx(rhs_instantiated, rhs_var, env, .anno);
-                        } else {
-                            _ = try self.unify(lhs_instantiated, lhs_var, env);
-                            _ = try self.unify(rhs_instantiated, rhs_var, env);
-                        }
-                    },
-                    .no_expectation => {
-                        // Start with empty requirements that can be constrained by operands
-                        const num_content = Content{ .structure = .{ .num = .{
-                            .num_unbound = .{
-                                .int_requirements = Num.IntRequirements.init(),
-                                .frac_requirements = Num.FracRequirements.init(),
-                                .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
-                            },
-                        } } };
-                        const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-                        const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-
-                        // Unify left and right operands with num
-                        _ = try self.unify(lhs_num_var, lhs_var, env);
-                        _ = try self.unify(rhs_num_var, rhs_var, env);
-                    },
-                }
-
-                // Unify left and right together
-                _ = try self.unify(lhs_var, rhs_var, env);
-
-                // Set root expr. If unifications succeeded this will the the
-                // num, otherwise the propgate error
-                try self.types.setVarRedirect(expr_var, lhs_var);
-            } else if (should_use_static_dispatch) {
+            if (should_use_static_dispatch) {
                 std.debug.print("TAKING STATIC DISPATCH PATH for binop\n", .{});
                 // All types use static dispatch: a + b desugars to a.plus(b)
                 // Type unification will propagate types through the constraint function

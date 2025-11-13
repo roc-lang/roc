@@ -2000,3 +2000,117 @@ test "check type - lambda x + x (same variable twice)" {
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "a -> a where [a.plus : a, a -> b]");
 }
+
+test "desugaring verification: x + x should desugar to x.plus(x)" {
+    // Test that |x| x + x and |x| x.plus(x) produce identical types
+
+    // Type-check |x| x.plus(x)
+    var explicit_env = try TestEnv.init("Test", "f = |x| x.plus(x)");
+    defer explicit_env.deinit();
+
+    const explicit_defs = explicit_env.module_env.store.sliceDefs(explicit_env.module_env.all_defs);
+    const explicit_var = ModuleEnv.varFrom(explicit_defs[explicit_defs.len - 1]);
+    try explicit_env.type_writer.write(explicit_var);
+    const explicit_type = explicit_env.type_writer.get();
+
+    std.debug.print("\n>>> Explicit method call type: |x| x.plus(x) => {s}\n", .{explicit_type});
+
+    const explicit_desc = explicit_env.module_env.types.resolveVar(explicit_var).desc;
+    std.debug.print("    Structure: {}\n", .{explicit_desc.content});
+
+    // Type-check |x| x + x
+    var desugared_env = try TestEnv.init("Test", "f = |x| x + x");
+    defer desugared_env.deinit();
+
+    const desugared_defs = desugared_env.module_env.store.sliceDefs(desugared_env.module_env.all_defs);
+    const desugared_var = ModuleEnv.varFrom(desugared_defs[desugared_defs.len - 1]);
+    try desugared_env.type_writer.write(desugared_var);
+    const desugared_type = desugared_env.type_writer.get();
+
+    std.debug.print(">>> Binary operator type:      |x| x + x     => {s}\n", .{desugared_type});
+
+    const desugared_desc = desugared_env.module_env.types.resolveVar(desugared_var).desc;
+    std.debug.print("    Structure: {}\n\n", .{desugared_desc.content});
+
+    // String representations should be identical
+    try testing.expectEqualStrings(explicit_type, desugared_type);
+
+    // Now compare the actual structure
+    // Both should be functions
+    const explicit_func = switch (explicit_desc.content) {
+        .structure => |s| switch (s) {
+            .fn_unbound => |f| f,
+            else => {
+                std.debug.print("ERROR: Explicit is not fn_unbound, it's {}\n", .{s});
+                return error.NotAFunction;
+            },
+        },
+        else => {
+            std.debug.print("ERROR: Explicit is not structure, it's {}\n", .{explicit_desc.content});
+            return error.NotAFunction;
+        },
+    };
+
+    const desugared_func = switch (desugared_desc.content) {
+        .structure => |s| switch (s) {
+            .fn_unbound => |f| f,
+            else => {
+                std.debug.print("ERROR: Desugared is not fn_unbound, it's {}\n", .{s});
+                return error.NotAFunction;
+            },
+        },
+        else => {
+            std.debug.print("ERROR: Desugared is not structure, it's {}\n", .{desugared_desc.content});
+            return error.NotAFunction;
+        },
+    };
+
+    // Compare argument count
+    try testing.expectEqual(explicit_func.args.count, desugared_func.args.count);
+
+    // Compare argument types
+    const explicit_args = explicit_env.module_env.types.sliceVars(explicit_func.args);
+    const desugared_args = desugared_env.module_env.types.sliceVars(desugared_func.args);
+
+    for (explicit_args, desugared_args, 0..) |exp_arg, des_arg, i| {
+        const exp_arg_desc = explicit_env.module_env.types.resolveVar(exp_arg).desc;
+        const des_arg_desc = desugared_env.module_env.types.resolveVar(des_arg).desc;
+
+        std.debug.print("  Arg {}: explicit = {}, desugared = {}\n", .{i, exp_arg_desc.content, des_arg_desc.content});
+    }
+
+    // Compare return types
+    const exp_ret_desc = explicit_env.module_env.types.resolveVar(explicit_func.ret).desc;
+    const des_ret_desc = desugared_env.module_env.types.resolveVar(desugared_func.ret).desc;
+
+    std.debug.print("  Return: explicit = {}, desugared = {}\n", .{exp_ret_desc.content, des_ret_desc.content});
+}
+
+test "desugaring verification: (x + 5)(7) should desugar to (x.plus(5))(7)" {
+    // Test that (|x| x + 5)(7) and (|x| x.plus(5))(7) produce identical types
+
+    // Type-check (|x| x.plus(5))(7)
+    var explicit_env = try TestEnv.init("Test", "f = (|x| x.plus(5))(7)");
+    defer explicit_env.deinit();
+
+    const explicit_defs = explicit_env.module_env.store.sliceDefs(explicit_env.module_env.all_defs);
+    const explicit_var = ModuleEnv.varFrom(explicit_defs[explicit_defs.len - 1]);
+    try explicit_env.type_writer.write(explicit_var);
+    const explicit_type = explicit_env.type_writer.get();
+
+    std.debug.print("\n>>> Explicit applied:  (|x| x.plus(5))(7) => {s}\n", .{explicit_type});
+
+    // Type-check (|x| x + 5)(7)
+    var desugared_env = try TestEnv.init("Test", "f = (|x| x + 5)(7)");
+    defer desugared_env.deinit();
+
+    const desugared_defs = desugared_env.module_env.store.sliceDefs(desugared_env.module_env.all_defs);
+    const desugared_var = ModuleEnv.varFrom(desugared_defs[desugared_defs.len - 1]);
+    try desugared_env.type_writer.write(desugared_var);
+    const desugared_type = desugared_env.type_writer.get();
+
+    std.debug.print(">>> Binary operator:   (|x| x + 5)(7)       => {s}\n\n", .{desugared_type});
+
+    // They should be identical
+    try testing.expectEqualStrings(explicit_type, desugared_type);
+}
