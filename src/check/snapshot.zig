@@ -606,6 +606,7 @@ pub const SnapshotWriter = struct {
     flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
     flex_var_names: std.array_list.Managed(u8),
     static_dispatch_constraints: std.array_list.Managed(SnapshotStaticDispatchConstraint),
+    implicit_numeric_constraints: std.array_list.Managed([]const u8),
     scratch_record_fields: std.array_list.Managed(SnapshotRecordField),
     count_seen_idxs: std.array_list.Managed(SnapshotContentIdx),
 
@@ -625,6 +626,7 @@ pub const SnapshotWriter = struct {
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
             .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
+            .implicit_numeric_constraints = std.array_list.Managed([]const u8).init(gpa),
             .scratch_record_fields = std.array_list.Managed(SnapshotRecordField).init(gpa),
             .count_seen_idxs = std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
@@ -642,6 +644,7 @@ pub const SnapshotWriter = struct {
             .buf = std.array_list.Managed(u8).init(gpa),
             .snapshots = snapshots,
             .idents = idents,
+            .import_mapping = undefined,
             .current_module_name = current_module_name,
             .can_ir = can_ir,
             .other_modules = other_modules,
@@ -650,6 +653,7 @@ pub const SnapshotWriter = struct {
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
             .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
+            .implicit_numeric_constraints = std.array_list.Managed([]const u8).init(gpa),
             .scratch_record_fields = std.array_list.Managed(SnapshotRecordField).init(gpa),
             .count_seen_idxs = try std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
@@ -660,6 +664,7 @@ pub const SnapshotWriter = struct {
         self.flex_var_names_map.deinit();
         self.flex_var_names.deinit();
         self.static_dispatch_constraints.deinit();
+        self.implicit_numeric_constraints.deinit();
         self.scratch_record_fields.deinit();
         self.count_seen_idxs.deinit();
     }
@@ -671,6 +676,7 @@ pub const SnapshotWriter = struct {
         self.flex_var_names_map.clearRetainingCapacity();
         self.flex_var_names.clearRetainingCapacity();
         self.static_dispatch_constraints.clearRetainingCapacity();
+        self.implicit_numeric_constraints.clearRetainingCapacity();
         self.scratch_record_fields.clearRetainingCapacity();
         self.count_seen_idxs.clearRetainingCapacity();
     }
@@ -1232,36 +1238,34 @@ pub const SnapshotWriter = struct {
 
     /// Convert a num type to a type string
     fn writeNum(self: *Self, num: SnapshotNum, root_idx: SnapshotContentIdx) Allocator.Error!void {
+        // Match TypeWriter.zig formatting exactly - this is the source of truth
         switch (num) {
             .num_poly => |sub_var| {
-                _ = try self.buf.writer().write("Num(");
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
-                _ = try self.buf.writer().write(")");
+                try self.addImplicitNumericConstraint("from_int_digits");
             },
             .int_poly => |sub_var| {
-                _ = try self.buf.writer().write("Int(");
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
-                _ = try self.buf.writer().write(")");
+                try self.addImplicitNumericConstraint("from_int_digits");
             },
             .frac_poly => |sub_var| {
-                _ = try self.buf.writer().write("Frac(");
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
-                _ = try self.buf.writer().write(")");
+                try self.addImplicitNumericConstraint("from_dec_digits");
             },
             .num_unbound => |_| {
-                _ = try self.buf.writer().write("Num(_");
+                _ = try self.buf.writer().write("_");
                 try self.generateContextualName(.NumContent);
-                _ = try self.buf.writer().write(")");
+                try self.addImplicitNumericConstraint("from_int_digits");
             },
             .int_unbound => |_| {
-                _ = try self.buf.writer().write("Int(_");
+                _ = try self.buf.writer().write("_");
                 try self.generateContextualName(.NumContent);
-                _ = try self.buf.writer().write(")");
+                try self.addImplicitNumericConstraint("from_int_digits");
             },
             .frac_unbound => |_| {
-                _ = try self.buf.writer().write("Frac(_");
+                _ = try self.buf.writer().write("_");
                 try self.generateContextualName(.NumContent);
-                _ = try self.buf.writer().write(")");
+                try self.addImplicitNumericConstraint("from_dec_digits");
             },
             .int_precision => |prec| {
                 try self.writeIntType(prec, .precision);
@@ -1285,55 +1289,30 @@ pub const SnapshotWriter = struct {
     const NumPrecType = enum { precision, compacted };
 
     fn writeIntType(self: *Self, prec: types.Num.Int.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-        switch (num_type) {
-            .compacted => {
-                _ = switch (prec) {
-                    .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
-                    .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
-                    .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
-                    .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
-                    .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
-                    .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
-                    .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
-                    .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
-                    .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
-                    .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
-                };
-            },
-            .precision => {
-                _ = switch (prec) {
-                    .u8 => try self.buf.writer().write("Unsigned8"),
-                    .i8 => try self.buf.writer().write("Signed8"),
-                    .u16 => try self.buf.writer().write("Unsigned16"),
-                    .i16 => try self.buf.writer().write("Signed16"),
-                    .u32 => try self.buf.writer().write("Unsigned32"),
-                    .i32 => try self.buf.writer().write("Signed32"),
-                    .u64 => try self.buf.writer().write("Unsigned64"),
-                    .i64 => try self.buf.writer().write("Signed64"),
-                    .u128 => try self.buf.writer().write("Unsigned128"),
-                    .i128 => try self.buf.writer().write("Signed128"),
-                };
-            },
-        }
+        // Match TypeWriter.zig formatting exactly - always print modern type names (U8, I128, etc)
+        _ = num_type;
+        _ = switch (prec) {
+            .u8 => try self.buf.writer().write("U8"),
+            .i8 => try self.buf.writer().write("I8"),
+            .u16 => try self.buf.writer().write("U16"),
+            .i16 => try self.buf.writer().write("I16"),
+            .u32 => try self.buf.writer().write("U32"),
+            .i32 => try self.buf.writer().write("I32"),
+            .u64 => try self.buf.writer().write("U64"),
+            .i64 => try self.buf.writer().write("I64"),
+            .u128 => try self.buf.writer().write("U128"),
+            .i128 => try self.buf.writer().write("I128"),
+        };
     }
 
     fn writeFracType(self: *Self, prec: types.Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-        switch (num_type) {
-            .compacted => {
-                _ = switch (prec) {
-                    .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
-                    .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
-                    .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
-                };
-            },
-            .precision => {
-                _ = switch (prec) {
-                    .f32 => try self.buf.writer().write("Float32"),
-                    .f64 => try self.buf.writer().write("Float64"),
-                    .dec => try self.buf.writer().write("Decimal"),
-                };
-            },
-        }
+        // Match TypeWriter.zig formatting exactly - always print modern type names (F32, F64, Dec)
+        _ = num_type;
+        _ = switch (prec) {
+            .f32 => try self.buf.writer().write("F32"),
+            .f64 => try self.buf.writer().write("F64"),
+            .dec => try self.buf.writer().write("Dec"),
+        };
     }
 
     /// Append a constraint to the list, if it doesn't already exist
@@ -1344,6 +1323,17 @@ pub const SnapshotWriter = struct {
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
+    }
+
+    /// Add an implicit numeric constraint (matches TypeWriter.zig)
+    fn addImplicitNumericConstraint(self: *Self, fn_name: []const u8) std.mem.Allocator.Error!void {
+        // Check if already added
+        for (self.implicit_numeric_constraints.items) |existing| {
+            if (std.mem.eql(u8, existing, fn_name)) {
+                return;
+            }
+        }
+        _ = try self.implicit_numeric_constraints.append(fn_name);
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type

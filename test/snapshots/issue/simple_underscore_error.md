@@ -12,7 +12,7 @@ foo = 42
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
-MISSING METHOD - simple_underscore_error.md:4:7:4:9
+TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -25,16 +25,19 @@ BadType := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**MISSING METHOD**
-This **from_int_digits** method is being called on the type **BadType**, which has no method with that name:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **simple_underscore_error.md:4:7:4:9:**
 ```roc
 foo = 42
 ```
       ^^
 
+It has the type:
+    __size_
 
-**Hint: **For this to work, the type would need to have a method named **from_int_digits** associated with it in the type's declaration.
+But the type annotation says it should have the type:
+    _BadType_
 
 # TOKENS
 ~~~zig
@@ -78,10 +81,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "BadType")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "BadType")
 			(ty-header (name "BadType"))))
 	(expressions
-		(expr (type "BadType"))))
+		(expr (type "Error"))))
 ~~~

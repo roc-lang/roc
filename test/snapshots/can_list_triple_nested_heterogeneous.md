@@ -8,20 +8,26 @@ type=expr
 [[], [[], [1]], [[], ["hello"]]]
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - can_list_triple_nested_heterogeneous.md:1:12:1:13
+INCOMPATIBLE LIST ELEMENTS - can_list_triple_nested_heterogeneous.md:1:6:1:6
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**can_list_triple_nested_heterogeneous.md:1:12:1:13:**
+**INCOMPATIBLE LIST ELEMENTS**
+The second and third elements in this list have incompatible types:
+**can_list_triple_nested_heterogeneous.md:1:6:**
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
-           ^
+     ^^^^^^^^^  ^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
+The second element has this type:
+    _List(List(_size))_
 
+However, the third element has this type:
+    _List(List(Str))_
 
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -67,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(List(Str)))"))
+(expr (type "List(Error)"))
 ~~~

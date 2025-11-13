@@ -44,22 +44,23 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - Adv.md:17:28:17:31
+TYPE MISMATCH - Adv.md:17:13:17:32
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**Adv.md:17:28:17:31:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:17:13:17:32:**
 ```roc
 	next_val = val.update_str(100)
 ```
-	                          ^^^
+	           ^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
+It has the type:
+    _Adv, _size -> _ret_
 
-
+But I expected it to be:
+    _Adv, Str -> Adv_
 
 **MISSING METHOD**
 This **update_strr** method is being called on the type **Adv**, which has no method with that name:
@@ -501,23 +502,23 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "Adv -> Str"))
-		(patt (type "Adv -> Num(Int(Unsigned64))"))
+		(patt (type "Adv -> U64"))
 		(patt (type "Adv, Str -> Adv"))
-		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv"))
-		(patt (type "Adv"))
+		(patt (type "Adv, U64 -> Adv"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "(Str, Num(Int(Unsigned64)))")))
+		(patt (type "Error"))
+		(patt (type "(Str, U64)")))
 	(type_decls
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
 	(expressions
 		(expr (type "Adv -> Str"))
-		(expr (type "Adv -> Num(Int(Unsigned64))"))
+		(expr (type "Adv -> U64"))
 		(expr (type "Adv, Str -> Adv"))
-		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))
-		(expr (type "Adv"))
+		(expr (type "Adv, U64 -> Adv"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "(Str, Num(Int(Unsigned64)))"))))
+		(expr (type "Error"))
+		(expr (type "(Str, U64)"))))
 ~~~

@@ -19,7 +19,7 @@ The second and third elements in this list have incompatible types:
      ^^^  ^^^^^^^
 
 The second element has this type:
-    _Num(Frac(_size))_
+    __size_
 
 However, the third element has this type:
     _Str_

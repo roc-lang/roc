@@ -69,5 +69,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(_elem)) where [_a.from_int_digits : _arg -> _ret]"))
+(expr (type "List(List(_size)) where [_a.from_int_digits : _arg -> _ret]"))
 ~~~

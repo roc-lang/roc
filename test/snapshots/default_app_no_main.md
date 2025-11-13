@@ -64,7 +64,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [a.plus : a, _arg -> b]")))
+		(patt (type "_size -> _size2 where [_a.from_int_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "a -> b where [a.plus : a, _arg -> b]"))))
+		(expr (type "_size -> _size2 where [_a.from_int_digits : _arg -> _ret]"))))
 ~~~

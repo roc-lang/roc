@@ -1984,7 +1984,7 @@ test "check type - lambda with + operator on flex types" {
     const source =
         \\addFn = |x, y| x + y
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a, b -> c where [a.plus : a, b -> c]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a, a -> a where [a.plus : a, a -> b]");
 }
 
 test "check type - lambda with .plus method call on flex types" {
@@ -1992,4 +1992,11 @@ test "check type - lambda with .plus method call on flex types" {
         \\addFn = |x, y| x.plus(y)
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "a, b -> c where [a.plus : a, b -> c]");
+}
+
+test "check type - lambda x + x (same variable twice)" {
+    const source =
+        \\f = |x| x + x
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> a where [a.plus : a, a -> b]");
 }

@@ -29,65 +29,39 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:16:21:16:35
-TYPE DOES NOT HAVE METHODS - annotations.md:16:33:16:34
-TYPE MISMATCH - annotations.md:19:22:19:41
-TYPE DOES NOT HAVE METHODS - annotations.md:19:32:19:33
+TYPE MISMATCH - annotations.md:16:28:16:28
+INVALID NOMINAL TAG - annotations.md:19:22:19:41
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:16:21:16:35:**
+The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
+**annotations.md:16:28:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                    ^^^^^^^^^^^^^^
+                           ^^^  ^
 
-It has the type:
-    _Pair(Str)_
-
-But the type annotation says it should have the type:
-    _Pair(Num(Int(Unsigned8)))_
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**annotations.md:16:33:16:34:**
-```roc
-failPairDiffTypes = mkPair("1", 2)
-```
-                                ^
-
-This type doesn't support methods:
+The first argument has the type:
     _Str_
 
+But the second argument has the type:
+    __size_
 
+`mkPair` needs these arguments to have compatible types.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
 **annotations.md:19:22:19:41:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                      ^^^^^^^^^^^^^^^^^^^
 
-It has the type:
-    _Pair(Str)_
+The tag is:
+    _Pair(_size, Str)_
 
-But the type annotation says it should have the type:
-    _Pair(Num(Int(Unsigned64)))_
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**annotations.md:19:32:19:33:**
-```roc
-failPairDiffTypes2 = Pair.Pair(1, "str")
-```
-                               ^
-
-This type doesn't support methods:
-    _Str_
-
-
+But the nominal type needs it to be:
+    _Pair(_size, _size2)_
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -338,10 +312,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Pair(Num(Int(Unsigned64)))"))
+		(patt (type "Pair(U64)"))
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
-		(patt (type "Pair(Num(Int(Unsigned8)))"))
+		(patt (type "Pair(U8)"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "a, b -> Error")))
@@ -351,10 +325,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Pair(Num(Int(Unsigned64)))"))
+		(expr (type "Pair(U64)"))
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
-		(expr (type "Pair(Num(Int(Unsigned8)))"))
+		(expr (type "Pair(U8)"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "a, b -> Error"))))

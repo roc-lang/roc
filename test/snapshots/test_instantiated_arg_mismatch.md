@@ -13,20 +13,23 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - test_instantiated_arg_mismatch.md:5:10:5:12
+TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:10:5:10
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**test_instantiated_arg_mismatch.md:5:10:5:12:**
+**TYPE MISMATCH**
+The first and second arguments to `pair` must have compatible types, but they are incompatible in this call:
+**test_instantiated_arg_mismatch.md:5:10:**
 ```roc
     pair(42, "hello")
 ```
-         ^^
+         ^^  ^^^^^^^
 
-This type doesn't support methods:
+The first argument has the type:
+    __size_
+
+But the second argument has the type:
     _Str_
 
-
+`pair` needs these arguments to have compatible types.
 
 # TOKENS
 ~~~zig
@@ -96,5 +99,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Str, Str)"))
+(expr (type "Error"))
 ~~~

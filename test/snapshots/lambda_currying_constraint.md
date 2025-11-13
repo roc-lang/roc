@@ -210,10 +210,10 @@ NO CHANGE
 		(patt (type "Error -> (Error -> Error)"))
 		(patt (type "Error -> Error"))
 		(patt (type "(a -> a), a -> a"))
-		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))")))
+		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "Error -> (Error -> Error)"))
 		(expr (type "Error -> Error"))
 		(expr (type "(a -> a), a -> a"))
-		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))))
+		(expr (type "I64 -> I64"))))
 ~~~

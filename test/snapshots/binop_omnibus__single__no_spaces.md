@@ -9,7 +9,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
-MISSING METHOD - binop_omnibus__single__no_spaces.md:1:32:1:34
+INVALID BOOL OPERATION - binop_omnibus__single__no_spaces.md:1:21:1:21
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -22,16 +22,18 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
     ^^^
 
 
-**MISSING METHOD**
-This **from_int_digits** method is being called on the type **Bool**, which has no method with that name:
-**binop_omnibus__single__no_spaces.md:1:32:1:34:**
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**binop_omnibus__single__no_spaces.md:1:21:**
 ```roc
 Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
                                ^^
 
+Both sides of `and` must be _Bool_ values, but the right side is:
+    __size_
 
-**Hint: **For this to work, the type would need to have a method named **from_int_digits** associated with it in the type's declaration.
+Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
 
 # TOKENS
 ~~~zig
@@ -84,5 +86,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Bool"))
+(expr (type "Error"))
 ~~~

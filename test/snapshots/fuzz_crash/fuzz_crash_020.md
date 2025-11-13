@@ -878,7 +878,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    __f where [j.from_int_digits : j]_
+    __size_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -951,7 +951,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(_field, Str, Error, [O]_others, (Error, Error), List(_elem)) where [(f, Str, Error, [O]j, (Error, Error), List(k)).from_int_digits : (f, Str, Error, [O]j, (Error, Error), List(k)), (f, Str, Error, [O]j, (Error, Error), List(k)).from_int_digits : (f, Str, Error, [O]j, (Error, Error), List(k))]_
+    _(_size, Str, Error, [O]_others, (Error, Error), List(_size2))_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1977,7 +1977,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> _ret where [_f.from_int_digits : _arg -> _ret2]"))
+		(patt (type "Bool -> _size where [_f.from_int_digits : _arg -> _ret]"))
 		(patt (type "Error"))
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue]_others -> Error"))
@@ -2014,7 +2014,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> _ret where [_f.from_int_digits : _arg -> _ret2]"))
+		(expr (type "Bool -> _size where [_f.from_int_digits : _arg -> _ret]"))
 		(expr (type "Error"))
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue]_others -> Error"))

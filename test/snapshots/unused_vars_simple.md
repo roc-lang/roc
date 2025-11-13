@@ -254,15 +254,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _ret where [_e.from_int_digits : _arg2 -> _ret2]"))
+		(patt (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
 		(patt (type "e -> e"))
-		(patt (type "_arg -> _ret where [_e.from_int_digits : _arg2 -> _ret2]"))
-		(patt (type "e -> f where [e.plus : e, _arg -> f]"))
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
+		(patt (type "_size -> _size2 where [_e.from_int_digits : _arg -> _ret]"))
+		(patt (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "_arg -> _ret where [_e.from_int_digits : _arg2 -> _ret2]"))
+		(expr (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
 		(expr (type "e -> e"))
-		(expr (type "_arg -> _ret where [_e.from_int_digits : _arg2 -> _ret2]"))
-		(expr (type "e -> f where [e.plus : e, _arg -> f]"))
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
+		(expr (type "_size -> _size2 where [_e.from_int_digits : _arg -> _ret]"))
+		(expr (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))))
 ~~~

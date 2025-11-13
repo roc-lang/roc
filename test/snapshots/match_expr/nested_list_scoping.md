@@ -38,7 +38,7 @@ It has the type:
     _List(_elem)_
 
 But I expected it to be:
-    _Num(_size)_
+    __size_
 
 # TOKENS
 ~~~zig

@@ -97,14 +97,14 @@ result = myBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a where [_b.from_int_digits : _arg -> _ret]"))
-		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "U64"))
+		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "_a where [_b.from_int_digits : _arg -> _ret]"))
-		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "U64"))
+		(expr (type "U64"))))
 ~~~

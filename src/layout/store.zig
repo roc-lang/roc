@@ -886,9 +886,51 @@ pub const Store = struct {
                         return idx;
                     },
                     .nominal_type => |nominal_type| {
-                        // TODO special-case the builtin Num type here.
-                        // If we have one of those, then convert it to a Num layout,
-                        // or to a runtime error if it's an invalid elem type.
+                        // Special-case builtin Num types - they should use primitive layouts
+                        const ident_store = self.env.getIdentStore();
+                        const name = ident_store.getText(nominal_type.ident.ident_idx);
+
+                        if (std.mem.startsWith(u8, name, "Builtin.Num.")) {
+                            // This is a builtin numeric type - convert to primitive layout
+                            const type_name = name["Builtin.Num.".len..];
+                            const layout: Layout = if (std.mem.eql(u8, type_name, "I128"))
+                                Layout.int(.i128)
+                            else if (std.mem.eql(u8, type_name, "U128"))
+                                Layout.int(.u128)
+                            else if (std.mem.eql(u8, type_name, "I64"))
+                                Layout.int(.i64)
+                            else if (std.mem.eql(u8, type_name, "U64"))
+                                Layout.int(.u64)
+                            else if (std.mem.eql(u8, type_name, "I32"))
+                                Layout.int(.i32)
+                            else if (std.mem.eql(u8, type_name, "U32"))
+                                Layout.int(.u32)
+                            else if (std.mem.eql(u8, type_name, "I16"))
+                                Layout.int(.i16)
+                            else if (std.mem.eql(u8, type_name, "U16"))
+                                Layout.int(.u16)
+                            else if (std.mem.eql(u8, type_name, "I8"))
+                                Layout.int(.i8)
+                            else if (std.mem.eql(u8, type_name, "U8"))
+                                Layout.int(.u8)
+                            else if (std.mem.eql(u8, type_name, "F64"))
+                                Layout.frac(.f64)
+                            else if (std.mem.eql(u8, type_name, "F32"))
+                                Layout.frac(.f32)
+                            else if (std.mem.eql(u8, type_name, "Dec"))
+                                Layout.frac(.dec)
+                            else {
+                                // Unknown builtin numeric type - fall through to backing
+                                const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+                                const resolved = self.types_store.resolveVar(backing_var);
+                                current = resolved;
+                                continue;
+                            };
+
+                            const idx = try self.insertLayout(layout);
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                            return idx;
+                        }
 
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.

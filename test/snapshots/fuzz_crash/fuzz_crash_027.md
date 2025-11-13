@@ -859,7 +859,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num(Int(Unsigned64))_
+    _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -2250,8 +2250,8 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> _ret where [_d.from_int_digits : _arg -> _ret2]"))
-		(patt (type "Error -> Num(Int(Unsigned64))"))
+		(patt (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2287,8 +2287,8 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> _ret where [_d.from_int_digits : _arg -> _ret2]"))
-		(expr (type "Error -> Num(Int(Unsigned64))"))
+		(expr (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

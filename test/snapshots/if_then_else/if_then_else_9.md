@@ -15,9 +15,8 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
-MISSING METHOD - if_then_else_9.md:3:11:3:13
-TYPE DOES NOT HAVE METHODS - if_then_else_9.md:2:2:2:3
-TYPE DOES NOT HAVE METHODS - if_then_else_9.md:6:2:6:3
+INVALID IF CONDITION - if_then_else_9.md:3:11:3:11
+INCOMPATIBLE IF BRANCHES - if_then_else_9.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -30,42 +29,43 @@ if bool {
    ^^^^
 
 
-**MISSING METHOD**
-This **from_int_digits** method is being called on the type **Bool**, which has no method with that name:
-**if_then_else_9.md:3:11:3:13:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**if_then_else_9.md:3:11:**
 ```roc
 } else if 10 { # Comment after else open
 ```
           ^^
 
+Right now, it has the type:
+    __size_
 
-**Hint: **For this to work, the type would need to have a method named **from_int_digits** associated with it in the type's declaration.
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**if_then_else_9.md:2:2:2:3:**
+**INCOMPATIBLE IF BRANCHES**
+The type of the second branch of this `if` does not match the previous branches:
+**if_then_else_9.md:1:1:**
 ```roc
+if bool {
 	1
-```
-	^
-
-This type doesn't support methods:
-    _[A]_others_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**if_then_else_9.md:6:2:6:3:**
-```roc
+} else if 10 { # Comment after else open
+	A
+} else { # Comment after else open
 	3
+}
 ```
-	^
+ ^
 
-This type doesn't support methods:
+The second branch has this type:
     _[A]_others_
 
+But the previous branch has this type:
+    __size_
 
+All branches in an `if` must have compatible types.
+
+Note: You can wrap branches in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -116,5 +116,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A]_others"))
+(expr (type "Error"))
 ~~~

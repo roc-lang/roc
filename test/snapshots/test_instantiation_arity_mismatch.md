@@ -24,7 +24,7 @@ This expression is used in an unexpected way:
     ^^^^^^^^^^^^^^
 
 It has the type:
-    __arg, _arg2 -> _ret where [c, d -> e.from_int_digits : c, d -> e, c, d -> e.from_int_digits : c, d -> e]_
+    __size, _size2 -> _ret_
 
 But I expected it to be:
     _(a, b) -> (a, b)_

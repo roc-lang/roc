@@ -69,7 +69,7 @@ It has the type:
     _Str_
 
 But I expected it to be:
-    _Num(_size)_
+    __size_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

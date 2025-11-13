@@ -1203,8 +1203,8 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(patt (type "U8, U8, U8 -> Color"))
+		(patt (type "U8, U8, U8, U8 -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Color -> Error"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
@@ -1213,8 +1213,8 @@ is_named_color = |str| {
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(expr (type "U8, U8, U8 -> Color"))
+		(expr (type "U8, U8, U8, U8 -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Color -> Error"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))

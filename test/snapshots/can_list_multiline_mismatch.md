@@ -12,34 +12,28 @@ type=expr
 ]
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - can_list_multiline_mismatch.md:2:5:2:7
-TYPE DOES NOT HAVE METHODS - can_list_multiline_mismatch.md:4:5:4:8
+INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**can_list_multiline_mismatch.md:2:5:2:7:**
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**can_list_multiline_mismatch.md:2:5:**
 ```roc
     42,
+    "hello world",
 ```
     ^^
+    ^^^^^^^^^^^^^
 
-This type doesn't support methods:
+The first element has this type:
+    __size_
+
+However, the second element has this type:
     _Str_
 
+All elements in a list must have compatible types.
 
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**can_list_multiline_mismatch.md:4:5:4:8:**
-```roc
-    100
-```
-    ^^^
-
-This type doesn't support methods:
-    _Str_
-
-
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -77,5 +71,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Error)"))
 ~~~

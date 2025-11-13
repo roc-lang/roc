@@ -19,20 +19,28 @@ type=expr
 ]
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - tag_applications_simple.md:2:10:2:12
+INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:9:5:9:5
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**tag_applications_simple.md:2:10:2:12:**
+**INCOMPATIBLE LIST ELEMENTS**
+The eighth and ninth elements in this list have incompatible types:
+**tag_applications_simple.md:9:5:**
 ```roc
-    Some(42),
+    Right(2),
+    Some(Ok(Just(42))),
 ```
-         ^^
+    ^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _[Ok([Just(_a)]_others)]_others2 where [[Ok([Just(b)]c)]d.from_int_digits : [Ok([Just(b)]c)]d]_
+The eighth element has this type:
+    _[Err(Str), Just(_size), Left(_size2), None, Nothing, Ok(Str), Some(_size3), Right(_size4)]_others_
 
+However, the ninth element has this type:
+    _[Some([Ok([Just(_size)]_others)]_others2)][Err(Str), Just(_size2), Left(_size3), None, Nothing, Ok(Str), Right(_size4)]_others3_
 
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -148,5 +156,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List([Err(Str), Just(_a), Left(_b), None, Nothing, Ok(Str), Right(_c), Some([Ok([Just(_d)]_others)]_others2), Result([Ok([Some([True]_others3)]_others4)]_others5)]_others6) where [_e.from_int_digits : _arg -> _ret, _f.from_int_digits : _arg2 -> _ret2, _g.from_int_digits : _arg3 -> _ret3, _h.from_int_digits : _arg4 -> _ret4]"))
+(expr (type "List(Error)"))
 ~~~

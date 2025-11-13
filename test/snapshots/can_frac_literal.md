@@ -56,11 +56,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Frac(_size))"))
-		(patt (type "Num(Frac(_size))"))
-		(patt (type "Num(Frac(_size))")))
+		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "Num(Frac(_size))"))
-		(expr (type "Num(Frac(_size))"))
-		(expr (type "Num(Frac(_size))"))))
+		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))))
 ~~~

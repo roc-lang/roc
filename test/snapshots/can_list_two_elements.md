@@ -8,20 +8,26 @@ type=expr
 [1, "hello"]
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - can_list_two_elements.md:1:2:1:3
+INCOMPATIBLE LIST ELEMENTS - can_list_two_elements.md:1:2:1:2
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**can_list_two_elements.md:1:2:1:3:**
+**INCOMPATIBLE LIST ELEMENTS**
+The two elements in this list have incompatible types:
+**can_list_two_elements.md:1:2:**
 ```roc
 [1, "hello"]
 ```
- ^
+ ^  ^^^^^^^
 
-This type doesn't support methods:
+The first element has this type:
+    __size_
+
+However, the second element has this type:
     _Str_
 
+All elements in a list must have compatible types.
 
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -49,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Error)"))
 ~~~

@@ -6,7 +6,7 @@ Builtin := [].{
 		contains = |_str, _other| True
 	}
 
-	List(_item) := [ProvidedByCompiler].{
+	List(item) := [ProvidedByCompiler].{
 		len : List(_item) -> U64
 		is_empty : List(_item) -> Bool
 		concat : List(item), List(item) -> List(item)

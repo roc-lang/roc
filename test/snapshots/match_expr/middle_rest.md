@@ -156,5 +156,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_c where [_d.from_int_digits : _arg -> _ret]"))
+(expr (type "_size where [_c.from_int_digits : _arg -> _ret]"))
 ~~~

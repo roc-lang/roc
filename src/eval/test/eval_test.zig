@@ -423,6 +423,19 @@ test "simple lambda with explicit method call - NO SUGAR" {
     try runExpectInt("(|x| x.plus(5))(7)", 12, .no_trace);
 }
 
+test "lambda x.plus(x) - same variable twice" {
+    // Test if x.plus(x) works when both arguments are the same variable
+    try runExpectInt("(|x| x.plus(x))(7)", 14, .no_trace);
+}
+
+// test "two param lambda - y + x" {
+//     try runExpectInt("(|y, x| y + x)(7, 7)", 14, .no_trace);
+// }
+
+// test "two param lambda - y + y" {
+//     try runExpectInt("(|y, x| y + y)(7, 99)", 14, .no_trace);
+// }
+
 test "simple lambdas" {
     try runExpectInt("(|x| x + 1)(5)", 6, .no_trace);
     try runExpectInt("(|x| x * 2 + 1)(10)", 21, .no_trace);

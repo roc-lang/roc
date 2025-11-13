@@ -787,6 +787,11 @@ fn compileModule(
                     const nested = module_env.getIdentText(d.nested_name);
                     std.debug.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested });
                 },
+                .malformed_type_annotation => |d| {
+                    const region = d.region;
+                    const text = source[region.start.offset..region.end.offset];
+                    std.debug.print("  - Malformed type annotation at offset {d}-{d}: '{s}'\n", .{ region.start.offset, region.end.offset, text });
+                },
                 else => {
                     std.debug.print("  - Diagnostic: {any}\n", .{diag});
                 },

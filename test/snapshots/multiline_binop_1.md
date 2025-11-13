@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(_size)"))
+(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
 ~~~

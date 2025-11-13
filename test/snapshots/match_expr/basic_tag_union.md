@@ -13,7 +13,7 @@ match color {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
-TYPE DOES NOT HAVE METHODS - basic_tag_union.md:3:10:3:11
+INCOMPATIBLE MATCH BRANCHES - basic_tag_union.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
@@ -26,18 +26,27 @@ match color {
       ^^^^^
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**basic_tag_union.md:3:10:3:11:**
+**INCOMPATIBLE MATCH BRANCHES**
+The third branch's type in this `match` is different from the previous ones:
+**basic_tag_union.md:1:1:**
 ```roc
+match color {
+	Red => 1
 	Blue => 2
+	Green => "3"
 ```
-	        ^
+          ^^^
 
-This type doesn't support methods:
+The third branch has this type;
     _Str_
 
+But all the previous branches have this type:
+    __size_
 
+All branches in an `match` must have compatible types.
+
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -97,5 +106,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

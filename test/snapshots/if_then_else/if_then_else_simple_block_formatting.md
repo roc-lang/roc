@@ -11,7 +11,7 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
-TYPE DOES NOT HAVE METHODS - if_then_else_simple_block_formatting.md:3:8:3:9
+INCOMPATIBLE IF BRANCHES - if_then_else_simple_block_formatting.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -24,18 +24,26 @@ if bool {
    ^^^^
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_int_digits` on a type that doesn't support methods:
-**if_then_else_simple_block_formatting.md:3:8:3:9:**
+**INCOMPATIBLE IF BRANCHES**
+This `if` has an `else` branch with a different type from it's `then` branch:
+**if_then_else_simple_block_formatting.md:1:1:**
 ```roc
+if bool {
+	A
 } else 2
 ```
        ^
 
-This type doesn't support methods:
+The `else` branch has the type:
+    __size_
+
+But the `then` branch has the type:
     _[A]_others_
 
+All branches in an `if` must have compatible types.
 
+Note: You can wrap branches in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -70,5 +78,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A]_others"))
+(expr (type "Error"))
 ~~~

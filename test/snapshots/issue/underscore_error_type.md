@@ -38,7 +38,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
-MISSING METHOD - underscore_error_type.md:4:7:4:9
+TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:14:7:14:32
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
@@ -121,16 +121,19 @@ BadTuple := (_, U32)
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**MISSING METHOD**
-This **from_int_digits** method is being called on the type **BadType**, which has no method with that name:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **underscore_error_type.md:4:7:4:9:**
 ```roc
 foo = 42
 ```
       ^^
 
+It has the type:
+    __size_
 
-**Hint: **For this to work, the type would need to have a method named **from_int_digits** associated with it in the type's declaration.
+But the type annotation says it should have the type:
+    _BadType_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -141,7 +144,7 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(_elem) where [List(a).from_int_digits : List(a)]_
+    _List(_size)_
 
 But the type annotation says it should have the type:
     _BadList_
@@ -155,7 +158,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: _field2 } where [{ field: Str, other: a }.from_int_digits : { field: Str, other: a }]_
+    _{ field: Str, other: _size }_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -183,7 +186,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, _field2) where [(Str, a).from_int_digits : (Str, a)]_
+    _(Str, _size)_
 
 But the type annotation says it should have the type:
     _BadTuple_
@@ -384,7 +387,7 @@ quux = ("hello", 42)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "BadType"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -401,7 +404,7 @@ quux = ("hello", 42)
 		(nominal (type "BadTuple")
 			(ty-header (name "BadTuple"))))
 	(expressions
-		(expr (type "BadType"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

@@ -553,18 +553,58 @@ const Unifier = struct {
             },
             .structure => |b_structure| {
                 if (a_flex.constraints.len() > 0) {
-                    // Don't defer constraints for num types - they inherently support arithmetic operations
-                    const is_num = b_structure == .num;
-                    if (!is_num) {
-                        // Record that we need to check constraints later
-                        _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                            .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
-                            .constraints = a_flex.constraints,
-                        }) catch return Error.AllocatorError;
-                    }
+                    // Record that we need to check constraints later
+                    // This is necessary even for num types because the static dispatch path
+                    // creates a separate return type variable that needs to be resolved
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
+                        .constraints = a_flex.constraints,
+                    }) catch return Error.AllocatorError;
                 }
 
-                self.merge(vars, b_content);
+                // Check if this is a builtin nominal numeric type that should use its backing instead
+                // Builtin numeric nominal types don't have proper layout, but their backing (num) does
+                const content_to_merge: Content = if (b_structure == .nominal_type) blk: {
+                    const ident_store = self.module_env.getIdentStore();
+                    const name = ident_store.getText(b_structure.nominal_type.ident.ident_idx);
+                    if (std.mem.startsWith(u8, name, "Builtin.Num.")) {
+                        // This is a builtin numeric type - convert to num_compact representation
+                        const type_name = name["Builtin.Num.".len..];
+                        const num_content: types_mod.FlatType = if (std.mem.eql(u8, type_name, "I128"))
+                            .{ .num = .{ .num_compact = .{ .int = .i128 } } }
+                        else if (std.mem.eql(u8, type_name, "U128"))
+                            .{ .num = .{ .num_compact = .{ .int = .u128 } } }
+                        else if (std.mem.eql(u8, type_name, "I64"))
+                            .{ .num = .{ .num_compact = .{ .int = .i64 } } }
+                        else if (std.mem.eql(u8, type_name, "U64"))
+                            .{ .num = .{ .num_compact = .{ .int = .u64 } } }
+                        else if (std.mem.eql(u8, type_name, "I32"))
+                            .{ .num = .{ .num_compact = .{ .int = .i32 } } }
+                        else if (std.mem.eql(u8, type_name, "U32"))
+                            .{ .num = .{ .num_compact = .{ .int = .u32 } } }
+                        else if (std.mem.eql(u8, type_name, "I16"))
+                            .{ .num = .{ .num_compact = .{ .int = .i16 } } }
+                        else if (std.mem.eql(u8, type_name, "U16"))
+                            .{ .num = .{ .num_compact = .{ .int = .u16 } } }
+                        else if (std.mem.eql(u8, type_name, "I8"))
+                            .{ .num = .{ .num_compact = .{ .int = .i8 } } }
+                        else if (std.mem.eql(u8, type_name, "U8"))
+                            .{ .num = .{ .num_compact = .{ .int = .u8 } } }
+                        else if (std.mem.eql(u8, type_name, "F64"))
+                            .{ .num = .{ .num_compact = .{ .frac = .f64 } } }
+                        else if (std.mem.eql(u8, type_name, "F32"))
+                            .{ .num = .{ .num_compact = .{ .frac = .f32 } } }
+                        else if (std.mem.eql(u8, type_name, "Dec"))
+                            .{ .num = .{ .num_compact = .{ .frac = .dec } } }
+                        else
+                            b_structure; // Unknown builtin numeric type, keep nominal
+
+                        break :blk .{ .structure = num_content };
+                    }
+                    break :blk b_content;
+                } else b_content;
+
+                self.merge(vars, content_to_merge);
             },
             .err => self.merge(vars, .err),
         }
@@ -864,9 +904,19 @@ const Unifier = struct {
                                     return error.TypeMismatch;
                                 }
                             },
-                            else => {
-                                // Concrete numeric types (U8, F64, etc.) don't unify with nominal types
-                                return error.TypeMismatch;
+                            .int_precision, .frac_precision, .num_compact => {
+                                // Concrete numeric types CAN unify with their corresponding nominal types
+                                // This is necessary for method dispatch on concrete numeric types
+                                // e.g., when x : I128 and we call x.plus(y), we need I128 (as num_compact)
+                                // to unify with the nominal Builtin.Num.I128 type
+                                //
+                                // Let the NUM type win - nominal types don't have proper layout info
+                                self.merge(vars, vars.a.desc.content);
+                            },
+                            .num_poly, .int_poly, .frac_poly => {
+                                // Polymorphic numeric types can unify with any nominal numeric type
+                                // Let the nominal type (more specific) win
+                                self.merge(vars, vars.b.desc.content);
                             },
                         }
                     },
@@ -916,9 +966,21 @@ const Unifier = struct {
                         // based on whether it has the appropriate from_*_digits method
                         switch (b_num) {
                             .int_unbound, .num_unbound => {
-                                // Integer literal - check for from_int_digits
-                                if (try self.nominalTypeHasFromIntDigits(a_type)) {
-                                    // The nominal type can accept integer literals
+                                // Integer literal - check for from_int_digits OR if it's a builtin numeric type
+                                // Builtin numeric types from Builtin.Num module don't expose from_int_digits in their
+                                // type representation but they inherently accept integer literals
+                                const is_builtin_numeric = blk: {
+                                    // Check if this nominal type's name matches a known builtin numeric type
+                                    const ident_store = self.module_env.getIdentStore();
+                                    const name = ident_store.getText(a_type.ident.ident_idx);
+                                    // Builtin numeric types have qualified names like "Builtin.Num.I128"
+                                    if (std.mem.startsWith(u8, name, "Builtin.Num.")) {
+                                        break :blk true;
+                                    }
+                                    break :blk false;
+                                };
+
+                                if (is_builtin_numeric or try self.nominalTypeHasFromIntDigits(a_type)) {
                                     self.merge(vars, vars.a.desc.content);
                                 } else {
                                     return error.TypeMismatch;
@@ -933,9 +995,15 @@ const Unifier = struct {
                                     return error.TypeMismatch;
                                 }
                             },
-                            else => {
-                                // Concrete numeric types don't unify with nominal types
-                                return error.TypeMismatch;
+                            .int_precision, .frac_precision, .num_compact => {
+                                // Concrete numeric types CAN unify with their corresponding nominal types
+                                // Let the NUM type win - it has the concrete size info and proper layout
+                                self.merge(vars, vars.b.desc.content);
+                            },
+                            .num_poly, .int_poly, .frac_poly => {
+                                // Polymorphic numeric types can unify with nominal numeric types
+                                // Let the nominal type (more specific) win - it narrows the type
+                                self.merge(vars, vars.a.desc.content);
                             },
                         }
                     },
