@@ -12,6 +12,7 @@ const can = @import("can");
 const builtins = @import("builtins");
 
 const copy_import = @import("copy_import.zig");
+const method_utils = @import("method_utils.zig");
 const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
@@ -3992,8 +3993,8 @@ fn resolveNominalMethodVar(self: *Self, request: unifier.MethodRequest) std.mem.
     const type_name = self.cir.getIdent(request.nominal_type.ident.ident_idx);
     const method_name = self.cir.getIdent(request.method_ident);
 
-    const method_ident_in_origin = (self.findMethodIdent(origin_env, type_name, method_name) catch |err| switch (err) {
-        error.AllocatorError => return error.OutOfMemory,
+    const method_ident_in_origin = (method_utils.findMethodIdent(self.gpa, origin_env, type_name, method_name) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
     }) orelse return null;
 
     const method_def_idx: CIR.Def.Idx = blk: {
@@ -4001,7 +4002,7 @@ fn resolveNominalMethodVar(self: *Self, request: unifier.MethodRequest) std.mem.
             break :blk @enumFromInt(@as(u32, node_idx));
         }
 
-        if (Self.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
+        if (method_utils.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
             break :blk def_idx;
         }
 
@@ -4021,56 +4022,6 @@ fn getModuleEnvFor(self: *Self, module_ident: Ident.Idx) ?*const ModuleEnv {
     if (self.module_envs) |envs| {
         if (envs.get(module_ident)) |entry| {
             return entry.env;
-        }
-    }
-
-    return null;
-}
-
-fn findMethodIdent(
-    self: *Self,
-    origin_env: *const ModuleEnv,
-    type_name: []const u8,
-    method_name: []const u8,
-) error{AllocatorError}!?Ident.Idx {
-    const ident_store = origin_env.getIdentStoreConst();
-
-    const primary = try self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name);
-    defer self.gpa.free(primary);
-    if (ident_store.findByString(primary)) |ident| return ident;
-
-    const module_type = std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name }) catch return error.AllocatorError;
-    defer self.gpa.free(module_type);
-    if (ident_store.findByString(module_type)) |ident| return ident;
-
-    const module_method = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ origin_env.module_name, method_name }) catch return error.AllocatorError;
-    defer self.gpa.free(module_method);
-    if (ident_store.findByString(module_method)) |ident| return ident;
-
-    return ident_store.findByString(method_name);
-}
-
-fn buildQualifiedMethodName(
-    self: *Self,
-    module_name: []const u8,
-    type_name: []const u8,
-    method_name: []const u8,
-) error{AllocatorError}![]u8 {
-    if (std.mem.eql(u8, type_name, module_name)) {
-        return std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return error.AllocatorError;
-    } else {
-        return std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name }) catch return error.AllocatorError;
-    }
-}
-
-fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
-    const defs = origin_env.store.sliceDefs(origin_env.all_defs);
-    for (defs) |def_idx| {
-        const def = origin_env.store.getDef(def_idx);
-        const pattern = origin_env.store.getPattern(def.pattern);
-
-        if (pattern == .assign and pattern.assign.ident == ident_idx) {
-            return def_idx;
         }
     }
 

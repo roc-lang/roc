@@ -15,6 +15,8 @@ const compile = @import("compile");
 pub const unifier = @import("unify.zig");
 /// **Cross-module type copying**
 pub const copy_import = @import("copy_import.zig");
+/// **Shared helpers for method name/def lookups**
+pub const method_utils = @import("method_utils.zig");
 /// **Type Snapshot**
 pub const snapshot = @import("snapshot.zig");
 /// **Recursion Checking**

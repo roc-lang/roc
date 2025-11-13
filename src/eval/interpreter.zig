@@ -4390,14 +4390,14 @@ pub const Interpreter = struct {
         const type_name = self.env.common.getIdent(request.nominal_type.ident.ident_idx);
         const method_name = self.env.common.getIdent(request.method_ident);
 
-        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, method_name) orelse return null;
+        const method_ident_in_origin = try check_mod.method_utils.findMethodIdent(self.allocator, origin_env, type_name, method_name) orelse return null;
 
         const method_def_idx: can.CIR.Def.Idx = blk: {
             if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {
                 break :blk @enumFromInt(@as(u32, node_idx));
             }
 
-            if (Interpreter.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
+            if (check_mod.method_utils.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
                 break :blk def_idx;
             }
 
@@ -4420,56 +4420,6 @@ pub const Interpreter = struct {
         ) catch return error.OutOfMemory;
 
         return copied_var;
-    }
-
-    fn findMethodIdent(
-        self: *Interpreter,
-        origin_env: *const can.ModuleEnv,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) std.mem.Allocator.Error!?base_pkg.Ident.Idx {
-        const ident_store = origin_env.getIdentStoreConst();
-
-        const primary = try self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name);
-        defer self.allocator.free(primary);
-        if (ident_store.findByString(primary)) |ident| return ident;
-
-        const module_type = try std.fmt.allocPrint(self.allocator, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name });
-        defer self.allocator.free(module_type);
-        if (ident_store.findByString(module_type)) |ident| return ident;
-
-        const module_method = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ origin_env.module_name, method_name });
-        defer self.allocator.free(module_method);
-        if (ident_store.findByString(module_method)) |ident| return ident;
-
-        return ident_store.findByString(method_name);
-    }
-
-    fn buildQualifiedMethodName(
-        self: *Interpreter,
-        module_name: []const u8,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) std.mem.Allocator.Error![]u8 {
-        if (std.mem.eql(u8, type_name, module_name)) {
-            return try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, method_name });
-        } else {
-            return try std.fmt.allocPrint(self.allocator, "{s}.{s}.{s}", .{ module_name, type_name, method_name });
-        }
-    }
-
-    fn findDefIdxByIdent(origin_env: *const can.ModuleEnv, ident_idx: base_pkg.Ident.Idx) ?can.CIR.Def.Idx {
-        const defs = origin_env.store.sliceDefs(origin_env.all_defs);
-        for (defs) |def_idx| {
-            const def = origin_env.store.getDef(def_idx);
-            const pattern = origin_env.store.getPattern(def.pattern);
-
-            if (pattern == .assign and pattern.assign.ident == ident_idx) {
-                return def_idx;
-            }
-        }
-
-        return null;
     }
 
     /// Get the numeric module ID for a given origin module identifier.
