@@ -20,7 +20,7 @@ get_data : { field: _, other: U32 } -> U32
 get_data = |record| record.other
 
 # Pattern matching with underscore type annotation
-handle_result : Result(_, Str) -> Str
+handle_result : Try(_, Str) -> Str
 handle_result = |result|
     match result {
         Ok(_) => "success",
@@ -156,7 +156,7 @@ EndOfFile,
 		(s-type-anno (name "handle_result")
 			(ty-fn
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(_)
 					(ty (name "Str")))
 				(ty (name "Str"))))
@@ -226,7 +226,7 @@ get_data : { field : _, other : U32 } -> U32
 get_data = |record| record.other
 
 # Pattern matching with underscore type annotation
-handle_result : Result(_, Str) -> Str
+handle_result : Try(_, Str) -> Str
 handle_result = |result|
 	match result {
 		Ok(_) => "success"
@@ -326,7 +326,7 @@ transform = |_, b| b
 										(p-assign (ident "msg"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-underscore)
 					(ty-lookup (name "Str") (builtin)))
 				(ty-lookup (name "Str") (builtin)))))

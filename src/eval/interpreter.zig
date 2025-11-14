@@ -188,7 +188,7 @@ pub const Interpreter = struct {
     canonical_bool_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
-    /// Builtin types required by the interpreter (Bool, Result, etc.)
+    /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
@@ -5210,8 +5210,8 @@ test "interpreter: Var->Layout slot caches computed layout" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5247,8 +5247,8 @@ test "interpreter: translateTypeVar for str" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5277,8 +5277,8 @@ test "interpreter: translateTypeVar for int64" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5315,8 +5315,8 @@ test "interpreter: translateTypeVar for f64" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5353,8 +5353,8 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5409,8 +5409,8 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5479,8 +5479,8 @@ test "interpreter: translateTypeVar for alias of Str" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5518,8 +5518,8 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5562,8 +5562,8 @@ test "interpreter: translateTypeVar for flex var" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5590,8 +5590,8 @@ test "interpreter: translateTypeVar for rigid var" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5620,8 +5620,8 @@ test "interpreter: translateTypeVar for flex var with static dispatch constraint
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5696,8 +5696,8 @@ test "interpreter: translateTypeVar for flex var with multiple static dispatch c
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5778,8 +5778,8 @@ test "interpreter: translateTypeVar for rigid var with static dispatch constrain
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5838,8 +5838,8 @@ test "interpreter: getStaticDispatchConstraint finds method on flex var" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5899,8 +5899,8 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5931,8 +5931,8 @@ test "interpreter: poly cache insert and lookup" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -5979,8 +5979,8 @@ test "interpreter: prepareCall miss then hit" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -6021,8 +6021,8 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -6063,8 +6063,8 @@ test "interpreter: unification constrains (a->a) with Str" {
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -6111,8 +6111,8 @@ test "interpreter: cross-module method resolution should find methods in origin 
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
@@ -6166,8 +6166,8 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
     defer result_module.deinit();
     const str_source = compiled_builtins.builtin_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);

@@ -67,7 +67,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **fuzz_crash_032.md:1:34:1:35:**
@@ -90,7 +90,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **fuzz_crash_032.md:1:44:1:45:**

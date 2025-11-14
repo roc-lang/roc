@@ -1683,7 +1683,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
     _ = self; // Not needed for this simplified implementation
 
-    // For auto-imported builtin types (Bool, Result, etc.), the statement index
+    // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
     // indexed by their statement index, not by their position in arrays.
     const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));

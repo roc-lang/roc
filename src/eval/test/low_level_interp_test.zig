@@ -64,7 +64,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs_map.deinit();
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
@@ -73,7 +73,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .env = builtin_module.env,
         .statement_idx = builtin_indices.bool_type,
     });
-    try module_envs_map.put(result_ident, .{
+    try module_envs_map.put(try_ident, .{
         .env = builtin_module.env,
         .statement_idx = builtin_indices.try_type,
     });

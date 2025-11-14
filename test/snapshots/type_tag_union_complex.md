@@ -11,18 +11,18 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 Status : [Loading, Complete, Failed]
 
 # Tag union with mixed argument types
-Result : [Success(Str), Error(Str), Warning(Str, I32)]
+Try : [Success(Str), Error(Str), Warning(Str, I32)]
 
 # Nested tag unions
-Response : [Ok(Result), NetworkError, ParseError]
+Response : [Ok(Try), NetworkError, ParseError]
 
 # Multiple tag unions using similar tag names
 UserState : [Active(Str), Inactive, Suspended(Str)]
 ConnectionState : [Active, Disconnected, Connecting(Str)]
 
 # Function using tag unions
-processResult : Result -> Str
-processResult = |_result| "processed"
+processTry : Try -> Str
+processTry = |_result| "processed"
 
 # Function with nested tag union
 handleResponse : Response -> Str
@@ -31,19 +31,19 @@ handleResponse = |_response| "handled"
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
+TYPE REDECLARED - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
 **TYPE REDECLARED**
-The type _Result_ is being redeclared.
+The type _Try_ is being redeclared.
 
 The redeclaration is here:
-**type_tag_union_complex.md:7:1:7:55:**
+**type_tag_union_complex.md:7:1:7:52:**
 ```roc
-Result : [Success(Str), Error(Str), Warning(Str, I32)]
+Try : [Success(Str), Error(Str), Warning(Str, I32)]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But _Result_ was already declared here:
+But _Try_ was already declared here:
 **type_tag_union_complex.md:1:1:1:1:**
 ```roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
@@ -90,7 +90,7 @@ EndOfFile,
 					(ty (name "Complete"))
 					(ty (name "Failed")))))
 		(s-type-decl
-			(header (name "Result")
+			(header (name "Try")
 				(args))
 			(ty-tag-union
 				(tags
@@ -111,7 +111,7 @@ EndOfFile,
 				(tags
 					(ty-apply
 						(ty (name "Ok"))
-						(ty (name "Result")))
+						(ty (name "Try")))
 					(ty (name "NetworkError"))
 					(ty (name "ParseError")))))
 		(s-type-decl
@@ -136,12 +136,12 @@ EndOfFile,
 					(ty-apply
 						(ty (name "Connecting"))
 						(ty (name "Str"))))))
-		(s-type-anno (name "processResult")
+		(s-type-anno (name "processTry")
 			(ty-fn
-				(ty (name "Result"))
+				(ty (name "Try"))
 				(ty (name "Str"))))
 		(s-decl
-			(p-ident (raw "processResult"))
+			(p-ident (raw "processTry"))
 			(e-lambda
 				(args
 					(p-ident (raw "_result")))
@@ -173,7 +173,7 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "processResult"))
+		(p-assign (ident "processTry"))
 		(e-lambda
 			(args
 				(p-assign (ident "_result")))
@@ -181,7 +181,7 @@ NO CHANGE
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Result") (builtin))
+				(ty-lookup (name "Try") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -207,7 +207,7 @@ NO CHANGE
 			(ty-tag-name (name "Complete"))
 			(ty-tag-name (name "Failed"))))
 	(s-alias-decl
-		(ty-header (name "Result"))
+		(ty-header (name "Try"))
 		(ty-tag-union
 			(ty-tag-name (name "Success")
 				(ty-lookup (name "Str") (builtin)))
@@ -220,7 +220,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (builtin)))
+				(ty-lookup (name "Try") (builtin)))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl
@@ -249,8 +249,8 @@ NO CHANGE
 	(type_decls
 		(alias (type "Status")
 			(ty-header (name "Status")))
-		(alias (type "Result")
-			(ty-header (name "Result")))
+		(alias (type "Try")
+			(ty-header (name "Try")))
 		(alias (type "Response")
 			(ty-header (name "Response")))
 		(alias (type "UserState")

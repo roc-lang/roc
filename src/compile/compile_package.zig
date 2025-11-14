@@ -156,7 +156,7 @@ pub const PackageEnv = struct {
     schedule_hook: ScheduleHook,
     /// Compiler version for cache invalidation
     compiler_version: []const u8,
-    /// Builtin modules (Bool, Result, Str) for auto-importing in canonicalization (not owned)
+    /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
 
     lock: Mutex = .{},
@@ -592,7 +592,7 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Populate module_envs with Bool, Result, Dict, Set using shared function
+        // Populate module_envs with Bool, Try, Dict, Set using shared function
         // This ensures production and tests use identical logic
         try Can.populateModuleEnvs(
             &module_envs_map,
@@ -790,7 +790,7 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Populate module_envs with Bool, Result, Dict, Set using shared function
+        // Populate module_envs with Bool, Try, Dict, Set using shared function
         try Can.populateModuleEnvs(
             &module_envs_map,
             env,

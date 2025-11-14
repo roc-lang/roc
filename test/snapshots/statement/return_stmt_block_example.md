@@ -5,7 +5,7 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-foo : U64 -> Result(Str, [TooBig])
+foo : U64 -> Try(Str, [TooBig])
 foo = |num| {
     str = if (num > 10) {
         return Err(TooBig)
@@ -63,7 +63,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "U64"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Str"))
 					(ty-tag-union
 						(tags
@@ -98,7 +98,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-foo : U64 -> Result(Str, [TooBig])
+foo : U64 -> Try(Str, [TooBig])
 foo = |num| {
 	str = if (num > 10) {
 		return Err(TooBig)
@@ -141,7 +141,7 @@ foo = |num| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Str") (builtin))
 					(ty-tag-union
 						(ty-tag-name (name "TooBig"))))))))

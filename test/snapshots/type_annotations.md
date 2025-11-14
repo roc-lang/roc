@@ -9,7 +9,7 @@ foo : U64
 bar : Thing(_a, _b, _)
 baz : (_a, _b, _c)
 add_one : (U8, U16 -> U32)
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
 # EXPECTED
@@ -34,7 +34,7 @@ The type _String_ is not declared in this scope.
 This type is referenced here:
 **type_annotations.md:5:14:5:20:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
 
@@ -89,7 +89,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "String")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-record)
 					(_))))
 		(s-type-anno (name "tag_tuple")
@@ -141,7 +141,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let

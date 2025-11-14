@@ -147,7 +147,7 @@ pub const Statement = union(enum) {
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
     /// ```roc
-    /// print! : Str => Result({}, [IOErr])
+    /// print! : Str => Try({}, [IOErr])
     /// ```
     ///
     /// Typically an annotation will be stored on the `Def` and will not be

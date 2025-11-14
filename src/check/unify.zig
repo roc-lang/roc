@@ -168,7 +168,7 @@ pub const Conf = struct {
 
 /// Provides access to module environments needed for cross-module method lookups
 pub const ModuleEnvLookup = struct {
-    /// Auto-imported modules available during type checking (e.g. Bool, Result, Builtin)
+    /// Auto-imported modules available during type checking (e.g. Bool, Try, Builtin)
     auto_imported: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
     /// Optional interpreter callback for resolving module envs at runtime
     interpreter_lookup_ctx: ?*const anyopaque = null,

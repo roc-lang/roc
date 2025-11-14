@@ -5,15 +5,15 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-MyResult(ok, err) := [Ok(ok), Err(err)]
+MyTry(ok, err) := [Ok(ok), Err(err)]
 
-ok : ok -> MyResult(ok, _)
-ok = |a| MyResult.Ok(a)
+ok : ok -> MyTry(ok, _)
+ok = |a| MyTry.Ok(a)
 
-is_ok : MyResult(_ok, _err) -> Bool
+is_ok : MyTry(_ok, _err) -> Bool
 is_ok = |result| match result {
-    MyResult.Ok(_) => Bool.True
-    MyResult.Err(_) => Bool.False
+    MyTry.Ok(_) => Bool.True
+    MyTry.Err(_) => Bool.False
 }
 ~~~
 # EXPECTED
@@ -38,7 +38,7 @@ EndOfFile,
 	(type-module)
 	(statements
 		(s-type-decl
-			(header (name "MyResult")
+			(header (name "MyTry")
 				(args
 					(ty-var (raw "ok"))
 					(ty-var (raw "err"))))
@@ -54,7 +54,7 @@ EndOfFile,
 			(ty-fn
 				(ty-var (raw "ok"))
 				(ty-apply
-					(ty (name "MyResult"))
+					(ty (name "MyTry"))
 					(ty-var (raw "ok"))
 					(_))))
 		(s-decl
@@ -63,12 +63,12 @@ EndOfFile,
 				(args
 					(p-ident (raw "a")))
 				(e-apply
-					(e-tag (raw "MyResult.Ok"))
+					(e-tag (raw "MyTry.Ok"))
 					(e-ident (raw "a")))))
 		(s-type-anno (name "is_ok")
 			(ty-fn
 				(ty-apply
-					(ty (name "MyResult"))
+					(ty (name "MyTry"))
 					(underscore-ty-var (raw "_ok"))
 					(underscore-ty-var (raw "_err")))
 				(ty (name "Bool"))))
@@ -91,15 +91,15 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-MyResult(ok, err) := [Ok(ok), Err(err)]
+MyTry(ok, err) := [Ok(ok), Err(err)]
 
-ok : ok -> MyResult(ok, _)
-ok = |a| MyResult.Ok(a)
+ok : ok -> MyTry(ok, _)
+ok = |a| MyTry.Ok(a)
 
-is_ok : MyResult(_ok, _err) -> Bool
+is_ok : MyTry(_ok, _err) -> Bool
 is_ok = |result| match result {
-	MyResult.Ok(_) => Bool.True
-	MyResult.Err(_) => Bool.False
+	MyTry.Ok(_) => Bool.True
+	MyTry.Err(_) => Bool.False
 }
 ~~~
 # CANONICALIZE
@@ -110,7 +110,7 @@ is_ok = |result| match result {
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-nominal (nominal "MyResult")
+			(e-nominal (nominal "MyTry")
 				(e-tag (name "Ok")
 					(args
 						(e-lookup-local
@@ -118,7 +118,7 @@ is_ok = |result| match result {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "ok"))
-				(ty-apply (name "MyResult") (local)
+				(ty-apply (name "MyTry") (local)
 					(ty-rigid-var-lookup (ty-rigid-var (name "ok")))
 					(ty-underscore)))))
 	(d-let
@@ -152,12 +152,12 @@ is_ok = |result| match result {
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "MyResult") (local)
+				(ty-apply (name "MyTry") (local)
 					(ty-rigid-var (name "_ok"))
 					(ty-rigid-var (name "_err")))
 				(ty-lookup (name "Bool") (builtin)))))
 	(s-nominal-decl
-		(ty-header (name "MyResult")
+		(ty-header (name "MyTry")
 			(ty-args
 				(ty-rigid-var (name "ok"))
 				(ty-rigid-var (name "err"))))
@@ -171,15 +171,15 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "ok -> MyResult(ok, err)"))
-		(patt (type "MyResult(_ok, _err) -> Bool")))
+		(patt (type "ok -> MyTry(ok, err)"))
+		(patt (type "MyTry(_ok, _err) -> Bool")))
 	(type_decls
-		(nominal (type "MyResult(ok, err)")
-			(ty-header (name "MyResult")
+		(nominal (type "MyTry(ok, err)")
+			(ty-header (name "MyTry")
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err"))))))
 	(expressions
-		(expr (type "ok -> MyResult(ok, err)"))
-		(expr (type "MyResult(_ok, _err) -> Bool"))))
+		(expr (type "ok -> MyTry(ok, err)"))
+		(expr (type "MyTry(_ok, _err) -> Bool"))))
 ~~~

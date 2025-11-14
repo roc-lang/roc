@@ -5,12 +5,12 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-MyResult(ok, err) := [Ok(ok), Err(err)]
+MyTry(ok, err) := [Ok(ok), Err(err)]
 
-myResult : MyResult(Str, I32)
-myResult = Ok("success")
+myTry : MyTry(Str, I32)
+myTry = Ok("success")
 
-isOk : MyResult(ok, err) -> Bool
+isOk : MyTry(ok, err) -> Bool
 isOk = |result| match result {
     Ok(_) => Bool.True
     Err(_) => Bool.False
@@ -38,7 +38,7 @@ EndOfFile,
 	(type-module)
 	(statements
 		(s-type-decl
-			(header (name "MyResult")
+			(header (name "MyTry")
 				(args
 					(ty-var (raw "ok"))
 					(ty-var (raw "err"))))
@@ -50,13 +50,13 @@ EndOfFile,
 					(ty-apply
 						(ty (name "Err"))
 						(ty-var (raw "err"))))))
-		(s-type-anno (name "myResult")
+		(s-type-anno (name "myTry")
 			(ty-apply
-				(ty (name "MyResult"))
+				(ty (name "MyTry"))
 				(ty (name "Str"))
 				(ty (name "I32"))))
 		(s-decl
-			(p-ident (raw "myResult"))
+			(p-ident (raw "myTry"))
 			(e-apply
 				(e-tag (raw "Ok"))
 				(e-string
@@ -64,7 +64,7 @@ EndOfFile,
 		(s-type-anno (name "isOk")
 			(ty-fn
 				(ty-apply
-					(ty (name "MyResult"))
+					(ty (name "MyTry"))
 					(ty-var (raw "ok"))
 					(ty-var (raw "err")))
 				(ty (name "Bool"))))
@@ -87,12 +87,12 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-MyResult(ok, err) := [Ok(ok), Err(err)]
+MyTry(ok, err) := [Ok(ok), Err(err)]
 
-myResult : MyResult(Str, I32)
-myResult = Ok("success")
+myTry : MyTry(Str, I32)
+myTry = Ok("success")
 
-isOk : MyResult(ok, err) -> Bool
+isOk : MyTry(ok, err) -> Bool
 isOk = |result| match result {
 	Ok(_) => Bool.True
 	Err(_) => Bool.False
@@ -102,13 +102,13 @@ isOk = |result| match result {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "myResult"))
+		(p-assign (ident "myTry"))
 		(e-tag (name "Ok")
 			(args
 				(e-string
 					(e-literal (string "success")))))
 		(annotation
-			(ty-apply (name "MyResult") (local)
+			(ty-apply (name "MyTry") (local)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "I32") (builtin)))))
 	(d-let
@@ -140,12 +140,12 @@ isOk = |result| match result {
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "MyResult") (local)
+				(ty-apply (name "MyTry") (local)
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))
 				(ty-lookup (name "Bool") (builtin)))))
 	(s-nominal-decl
-		(ty-header (name "MyResult")
+		(ty-header (name "MyTry")
 			(ty-args
 				(ty-rigid-var (name "ok"))
 				(ty-rigid-var (name "err"))))
@@ -159,15 +159,15 @@ isOk = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyResult(Str, Num(Int(Signed32)))"))
-		(patt (type "MyResult(ok, err) -> Bool")))
+		(patt (type "MyTry(Str, Num(Int(Signed32)))"))
+		(patt (type "MyTry(ok, err) -> Bool")))
 	(type_decls
-		(nominal (type "MyResult(ok, err)")
-			(ty-header (name "MyResult")
+		(nominal (type "MyTry(ok, err)")
+			(ty-header (name "MyTry")
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err"))))))
 	(expressions
-		(expr (type "MyResult(Str, Num(Int(Signed32)))"))
-		(expr (type "MyResult(ok, err) -> Bool"))))
+		(expr (type "MyTry(Str, Num(Int(Signed32)))"))
+		(expr (type "MyTry(ok, err) -> Bool"))))
 ~~~

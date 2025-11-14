@@ -461,7 +461,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addAnnotated("Result(a, Str)", .dimmed);
+            try report.document.addAnnotated("Try(a, Str)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);

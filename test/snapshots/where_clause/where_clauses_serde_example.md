@@ -5,8 +5,8 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-deserialize : List(U8) -> Result(a, [DecodeErr])
-	where [a.decode : List(U8) -> Result(a, [DecodeErr])]
+deserialize : List(U8) -> Try(a, [DecodeErr])
+	where [a.decode : List(U8) -> Try(a, [DecodeErr])]
 deserialize = |_| ...
 ~~~
 # EXPECTED
@@ -31,7 +31,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "U8")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-var (raw "a"))
 					(ty-tag-union
 						(tags
@@ -43,7 +43,7 @@ EndOfFile,
 							(ty (name "List"))
 							(ty (name "U8"))))
 					(ty-apply
-						(ty (name "Result"))
+						(ty (name "Try"))
 						(ty-var (raw "a"))
 						(ty-tag-union
 							(tags
@@ -72,7 +72,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "U8") (builtin)))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-tag-union
 						(ty-tag-name (name "DecodeErr")))))
@@ -81,7 +81,7 @@ NO CHANGE
 					(args
 						(ty-apply (name "List") (builtin)
 							(ty-lookup (name "U8") (builtin))))
-					(ty-apply (name "Result") (builtin)
+					(ty-apply (name "Try") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-tag-union
 							(ty-tag-name (name "DecodeErr")))))))))

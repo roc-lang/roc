@@ -392,27 +392,27 @@ pub const Repl = struct {
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
 
-        // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
-        // These refer to the actual statements in the Bool/Result modules
+        // Get Bool and Try statement indices from the IMPORTED modules (not copied!)
+        // These refer to the actual statements in the Bool/Try modules
         const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
-        const try_stmt_in_result_module = self.builtin_indices.try_type;
+        const try_stmt_in_try_module = self.builtin_indices.try_type;
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = bool_stmt_in_bool_module,
-            .try_stmt = try_stmt_in_result_module,
+            .try_stmt = try_stmt_in_try_module,
             .builtin_module = self.builtin_module.env,
         };
 
         // Create canonicalizer with nested types available for qualified name resolution
-        // Register Bool, Result, Str, Dict, and Set individually so qualified access works (e.g., Bool.True)
+        // Register Bool, Try, Str, Dict, and Set individually so qualified access works (e.g., Bool.True)
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
 
         const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
-        const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
+        const try_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Try"));
         const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
         const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
         const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
@@ -421,7 +421,7 @@ pub const Repl = struct {
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.bool_type,
         });
-        try module_envs_map.put(result_ident, .{
+        try module_envs_map.put(try_ident, .{
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.try_type,
         });
@@ -443,7 +443,7 @@ pub const Repl = struct {
         };
         defer czer.deinit();
 
-        // NOTE: True/False/Ok/Err are now just anonymous tags that unify with Bool/Result automatically!
+        // NOTE: True/False/Ok/Err are now just anonymous tags that unify with Bool/Try automatically!
         // No need to register unqualified_nominal_tags - the type system handles it.
 
         // Since we're always parsing as expressions now, handle them the same way

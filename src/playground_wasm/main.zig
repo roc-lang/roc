@@ -212,12 +212,12 @@ const ReplSession = struct {
 var repl_session: ?ReplSession = null;
 
 /// REPL result types
-const ReplResultType = enum {
+const ReplTryType = enum {
     expression,
     definition,
     @"error",
 
-    pub fn jsonStringify(self: ReplResultType, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplTryType, writer: anytype) !void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -245,7 +245,7 @@ const ReplErrorStage = enum {
 /// Structured REPL result
 const ReplStepResult = struct {
     output: []const u8,
-    try_type: ReplResultType,
+    try_type: ReplTryType,
     error_stage: ?ReplErrorStage = null,
     error_details: ?[]const u8 = null,
     compiler_available: bool = true,

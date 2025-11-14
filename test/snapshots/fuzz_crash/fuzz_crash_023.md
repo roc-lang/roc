@@ -147,7 +147,7 @@ match_time = |
 expect # Comment after expect keyword
 	blah == 1 # Comment after expect statement
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
 	var number = 123
@@ -655,7 +655,7 @@ The type _String_ is not declared in this scope.
 This type is referenced here:
 **fuzz_crash_023.md:143:14:143:20:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
 
@@ -1555,7 +1555,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "String")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-record)
 					(_))))
 		(s-decl
@@ -1897,7 +1897,7 @@ match_time = |
 expect # Comment after expect keyword
 	blah == 1 # Comment after expect statement
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
 	var number = 123
@@ -2429,7 +2429,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let

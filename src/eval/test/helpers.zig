@@ -390,7 +390,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     builtin_indices: CIR.BuiltinIndices,
     builtin_types: BuiltinTypes,
 } {
-    // Load Builtin module once - Bool, Result, and Str are all types within this module
+    // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
@@ -426,10 +426,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
-    // Register Builtin as import so Bool, Result, and Str are available
+    // Register Builtin as import so Bool, Try, and Str are available
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
 
-    // Get Bool and Result statement indices from Builtin module
+    // Get Bool and Try statement indices from Builtin module
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
 
@@ -446,7 +446,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
@@ -496,7 +496,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass Bool and Result as imported modules
+        // Pass Bool and Try as imported modules
         const imported_envs = [_]*const ModuleEnv{builtin_module.env};
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
         const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);

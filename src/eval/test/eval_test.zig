@@ -765,7 +765,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
 
-    // Get Bool and Result statement indices from builtin module
+    // Get Bool and Try statement indices from builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
     const try_stmt_in_builtin_module = builtin_indices.try_type;
 

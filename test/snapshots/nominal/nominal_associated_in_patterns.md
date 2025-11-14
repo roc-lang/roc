@@ -6,10 +6,10 @@ type=file:Foo.roc
 # SOURCE
 ~~~roc
 Foo := [Whatever].{
-    Result := [Success(U64), Failure(Str)]
+    Try := [Success(U64), Failure(Str)]
 }
 
-handleSuccess : Foo.Result -> Str
+handleSuccess : Foo.Try -> Str
 handleSuccess = |res| "success"
 ~~~
 # EXPECTED
@@ -49,7 +49,7 @@ EndOfFile,
 					(ty (name "Whatever"))))
 			(associated
 				(s-type-decl
-					(header (name "Result")
+					(header (name "Try")
 						(args))
 					(ty-tag-union
 						(tags
@@ -61,7 +61,7 @@ EndOfFile,
 								(ty (name "Str"))))))))
 		(s-type-anno (name "handleSuccess")
 			(ty-fn
-				(ty (name "Foo.Result"))
+				(ty (name "Foo.Try"))
 				(ty (name "Str"))))
 		(s-decl
 			(p-ident (raw "handleSuccess"))
@@ -74,10 +74,10 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Foo := [Whatever].{
-	Result := [Success(U64), Failure(Str)]
+	Try := [Success(U64), Failure(Str)]
 }
 
-handleSuccess : Foo.Result -> Str
+handleSuccess : Foo.Try -> Str
 handleSuccess = |res| "success"
 ~~~
 # CANONICALIZE
@@ -92,14 +92,14 @@ handleSuccess = |res| "success"
 				(e-literal (string "success"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Foo.Result") (local))
+				(ty-lookup (name "Foo.Try") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "Foo.Result"))
+		(ty-header (name "Foo.Try"))
 		(ty-tag-union
 			(ty-tag-name (name "Success")
 				(ty-lookup (name "U64") (builtin)))
@@ -110,12 +110,12 @@ handleSuccess = |res| "success"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Foo.Result -> Str")))
+		(patt (type "Foo.Try -> Str")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Result")
-			(ty-header (name "Foo.Result"))))
+		(nominal (type "Foo.Try")
+			(ty-header (name "Foo.Try"))))
 	(expressions
-		(expr (type "Foo.Result -> Str"))))
+		(expr (type "Foo.Try -> Str"))))
 ~~~
