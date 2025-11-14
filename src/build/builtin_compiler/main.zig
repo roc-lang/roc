@@ -917,17 +917,31 @@ fn compileModule(
         std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (checker.problems.problems.items) |prob| {
-            // Enhanced debug output for type application mismatch errors
-            if (prob == .type_apply_mismatch_arities) {
-                const type_name = prob.type_apply_mismatch_arities.type_name;
-                const type_name_text = module_env.getIdentText(type_name);
-                std.debug.print("  - type_apply_mismatch_arities:\n", .{});
-                std.debug.print("      type_name: {s} (idx: {})\n", .{ type_name_text, type_name.idx });
-                std.debug.print("      expected args: {}\n", .{prob.type_apply_mismatch_arities.num_expected_args});
-                std.debug.print("      actual args: {}\n", .{prob.type_apply_mismatch_arities.num_actual_args});
-                std.debug.print("      region: {any}\n", .{prob.type_apply_mismatch_arities.region});
-            } else {
-                std.debug.print("  - Problem: {any}\n", .{prob});
+            std.debug.print("  - Problem: {any}\n", .{prob});
+
+            // If it's a type mismatch, try to show more details
+            if (prob == .type_mismatch) {
+                const mismatch = prob.type_mismatch;
+                std.debug.print("    Detailed type mismatch info:\n", .{});
+                std.debug.print("      expected_var: {}, actual_var: {}\n", .{
+                    @intFromEnum(mismatch.types.expected_var),
+                    @intFromEnum(mismatch.types.actual_var),
+                });
+
+                // Try to get the actual type content from snapshots
+                const expected_content = checker.snapshots.getContent(mismatch.types.expected_snapshot);
+                const actual_content = checker.snapshots.getContent(mismatch.types.actual_snapshot);
+
+                std.debug.print("      expected content: {s}\n", .{@tagName(expected_content)});
+                std.debug.print("      actual content: {s}\n", .{@tagName(actual_content)});
+
+                // Show more details for structure types
+                if (expected_content == .structure) {
+                    std.debug.print("      expected structure: {s}\n", .{@tagName(expected_content.structure)});
+                }
+                if (actual_content == .structure) {
+                    std.debug.print("      actual structure: {s}\n", .{@tagName(actual_content.structure)});
+                }
             }
         }
 
