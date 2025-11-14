@@ -19,6 +19,7 @@ pub const Alias = types.Alias;
 pub const Flex = types.Flex;
 pub const Rigid = types.Rigid;
 pub const RecursionVar = types.RecursionVar;
+pub const RecursionInfo = types.RecursionInfo;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;
 pub const Func = types.Func;

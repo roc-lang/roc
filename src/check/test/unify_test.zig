@@ -28,6 +28,7 @@ const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
+const RecursionVar = types_mod.RecursionVar;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -4344,4 +4345,83 @@ test "unify - flex vs nominal type captures constraint" {
         env.module_env.types.resolveVar(deferred.var_).var_,
     );
     try std.testing.expectEqual(constraints, deferred.constraints);
+}
+
+// RecursionVar tests
+
+test "recursion_var - can be created and points to structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a structure variable (e.g., a Str type)
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create a RecursionVar pointing to the structure
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Verify the recursion var was created correctly
+    const resolved = env.module_env.types.resolveVar(rec_var);
+    try std.testing.expect(resolved.desc.content == .recursion_var);
+
+    const rec_var_content = resolved.desc.content.recursion_var;
+    try std.testing.expectEqual(structure_var, rec_var_content.structure);
+}
+
+test "recursion_var - unifies with its structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a structure variable
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create a RecursionVar pointing to the structure
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Unify the recursion var with its structure - this should succeed
+    // because RecursionVar represents equirecursive types
+    const result = try env.unify(rec_var, structure_var);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "recursion_var - does not cause infinite loop during resolution" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a circular structure: rec_var -> structure_var -> rec_var
+    const structure_var = try env.module_env.types.fresh();
+
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Make structure_var point back to rec_var to create a cycle
+    // This tests that resolveVar and other operations handle cycles properly
+    _ = try env.unify(structure_var, rec_var);
+
+    // If we get here without hanging, the test passed
+    // Just verify the vars are connected
+    const resolved_rec = env.module_env.types.resolveVar(rec_var);
+    const resolved_structure = env.module_env.types.resolveVar(structure_var);
+
+    // Both should resolve to the same root var
+    try std.testing.expectEqual(resolved_rec.var_, resolved_structure.var_);
 }

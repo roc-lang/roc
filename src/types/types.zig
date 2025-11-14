@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(12, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(40, @sizeOf(StaticDispatchConstraint)); // Increased due to recursion_info field
 }
 
 /// A type variable
@@ -1008,6 +1008,20 @@ test "BitsNeeded.fromValue calculates correct bits for various values" {
 
 // content //
 
+/// Information about a recursive static dispatch constraint
+///
+/// When we detect that a constraint refers to itself (e.g., through a chain
+/// of constraints), we create a RecursionVar to prevent infinite loops and
+/// store metadata about the recursion here.
+pub const RecursionInfo = struct {
+    /// The recursion variable created to represent this recursive constraint
+    recursion_var: Var,
+
+    /// The depth in the constraint check stack where recursion was detected
+    /// This helps with debugging and understanding the recursion structure
+    depth: usize,
+};
+
 /// Represents a static dispatch constraints on a variable
 ///
 /// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
@@ -1021,6 +1035,8 @@ pub const StaticDispatchConstraint = struct {
     fn_var: Var,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
+    /// Optional recursion information if this constraint is recursive
+    recursion_info: ?RecursionInfo = null,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u2) {

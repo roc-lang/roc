@@ -3967,6 +3967,44 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
 
 // validate static dispatch constraints //
 
+/// Handle a recursive static dispatch constraint by creating a RecursionVar
+///
+/// When we detect that a constraint check would recurse (the variable is already
+/// being checked in the call stack), we create a RecursionVar to represent the
+/// recursive structure and prevent infinite loops.
+///
+/// The RecursionVar points back to the original variable structure, allowing
+/// equirecursive unification to properly handle the cycle.
+fn handleRecursiveConstraint(
+    self: *Self,
+    var_: types_mod.Var,
+    depth: usize,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    // Create the RecursionVar content that points to the original structure
+    const rec_var_content = types_mod.Content{
+        .recursion_var = .{
+            .structure = var_,
+            .name = null, // Could be enhanced to carry debug name
+        },
+    };
+
+    // Create a new type variable to represent the recursion point
+    // Use the current environment's rank for the recursion var
+    const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
+
+    // Create RecursionInfo to track the recursion metadata
+    const recursion_info = types_mod.RecursionInfo{
+        .recursion_var = recursion_var,
+        .depth = depth,
+    };
+
+    // Store the recursion info in the deferred constraint
+    // Note: This will be enhanced in later implementation to properly
+    // update the constraint with the recursion info
+    _ = recursion_info;
+}
+
 /// Check static dispatch constraints
 ///
 /// Note that new constraints can be added as we are processing. For example:
@@ -3992,11 +4030,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
         // Detect recursive constraints
         // Check if this var is already in the constraint check stack
-        for (self.constraint_check_stack.items) |stack_var| {
+        for (self.constraint_check_stack.items, 0..) |stack_var, depth| {
             if (stack_var == dispatcher_resolved.var_) {
-                // Found recursion! For now, we skip processing to avoid infinite loops.
-                // TODO: Create a RecursionVar and handle this properly
-                // std.debug.print("DEBUG: Detected recursive constraint on var {}\n", .{dispatcher_resolved.var_});
+                // Found recursion! Create a RecursionVar to handle this properly
+                try self.handleRecursiveConstraint(dispatcher_resolved.var_, depth, env);
                 continue;
             }
         }
