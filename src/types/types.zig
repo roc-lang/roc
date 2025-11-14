@@ -160,6 +160,7 @@ pub const Content = union(enum) {
     rigid: Rigid,
     alias: Alias,
     structure: FlatType,
+    recursion_var: RecursionVar,
     err,
 
     // helpers //
@@ -238,6 +239,22 @@ pub const Content = union(enum) {
             else => return null,
         }
     }
+
+    /// Unwrap a recursion var or return null
+    pub fn unwrapRecursionVar(content: Self) ?RecursionVar {
+        switch (content) {
+            .recursion_var => |rec_var| return rec_var,
+            else => return null,
+        }
+    }
+
+    /// Check if content is a recursion var
+    pub fn isRecursionVar(content: Self) bool {
+        return switch (content) {
+            .recursion_var => true,
+            else => false,
+        };
+    }
 };
 
 // flex //
@@ -289,6 +306,30 @@ pub const Rigid = struct {
             .constraints = constraints,
         };
     }
+};
+
+// recursion var //
+
+/// A recursion variable marks a point in a type where recursion occurs.
+/// This is used to implement equirecursive unification for static dispatch constraints.
+///
+/// When a type has recursive constraints (e.g., `a.plus : a, Int -> a`), the return type `a`
+/// would normally require checking the same constraints infinitely. Instead, we create a
+/// RecursionVar that points back to the original structure, creating a circular reference
+/// that prevents infinite expansion during unification.
+///
+/// Example: For `(|x| x.plus(5))(7)`, the type checker would normally:
+/// 1. Check x.plus(5) creates constraint: x.plus : x_type, arg_type -> ret_type
+/// 2. ret_type needs the same numeric constraints as x_type
+/// 3. Those constraints reference ret_type, leading to infinite recursion
+///
+/// With RecursionVar: When we detect the recursion (step 3), we create a RecursionVar
+/// that points back to the original type (x_type), breaking the infinite loop.
+pub const RecursionVar = struct {
+    /// The type variable containing the actual structure this recursion var points to
+    structure: Var,
+    /// Optional name for debugging and pretty-printing
+    name: ?Ident.Idx,
 };
 
 // alias //

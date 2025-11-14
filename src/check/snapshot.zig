@@ -118,6 +118,11 @@ pub const Store = struct {
             .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, flat_type) },
+            .recursion_var => |rec_var| blk: {
+                // Snapshot the recursion var by snapshotting the structure it points to
+                const structure_snapshot = try self.deepCopyVar(store, rec_var.structure);
+                break :blk SnapshotContent{ .recursion_var = .{ .structure = structure_snapshot, .name = rec_var.name } };
+            },
             .err => SnapshotContent.err,
         };
 
@@ -458,8 +463,14 @@ pub const SnapshotContent = union(enum) {
     rigid: SnapshotRigid,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
+    recursion_var: SnapshotRecursionVar,
     recursive,
     err,
+};
+
+pub const SnapshotRecursionVar = struct {
+    structure: SnapshotContentIdx,
+    name: ?base.Ident.Idx,
 };
 
 /// TODO
@@ -883,6 +894,11 @@ pub const SnapshotWriter = struct {
                 if (should_wrap_in_parens) {
                     _ = try self.buf.writer().write(")");
                 }
+            },
+            .recursion_var => |rec_var| {
+                // Write the recursion var by writing the structure it points to
+                const structure_content = self.snapshots.getContent(rec_var.structure);
+                try self.writeContent(structure_content, context, rec_var.structure, root_idx);
             },
             .recursive => {
                 _ = try self.buf.writer().write("RecursiveType");
@@ -1434,6 +1450,10 @@ pub const SnapshotWriter = struct {
             },
             .structure => |flat_type| {
                 try self.countInFlatType(search_flex_var, flat_type, count);
+            },
+            .recursion_var => |rec_var| {
+                // Count the structure the recursion var points to
+                try self.countContent(search_flex_var, rec_var.structure, count);
             },
             .recursive, .err => {},
         }

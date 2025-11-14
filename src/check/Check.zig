@@ -1380,8 +1380,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     try self.unifyWith(anno_var, .err, env);
                                     return;
                                 },
-                                .flex, .rigid => {
-                                    // External type resolved to a flex or rigid var.
+                                .flex, .rigid, .recursion_var => {
+                                    // External type resolved to a flex, rigid, or recursion var.
                                     // This can happen when the external type is polymorphic but hasn't been
                                     // instantiated yet. We need to use the variable as-is, but this means
                                     // we can't get the arity/name information. This is likely a bug in how

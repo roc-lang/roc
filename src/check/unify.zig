@@ -74,6 +74,7 @@ const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
+const RecursionVar = types_mod.RecursionVar;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -505,6 +506,9 @@ const Unifier = struct {
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
+            .recursion_var => |a_rec_var| {
+                try self.unifyRecursionVar(vars, a_rec_var, vars.b.desc.content);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -594,6 +598,17 @@ const Unifier = struct {
 
                 self.merge(vars, b_content);
             },
+            .recursion_var => {
+                if (a_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_,
+                        .constraints = a_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
+                self.merge(vars, b_content);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -620,6 +635,7 @@ const Unifier = struct {
             .rigid => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
             .structure => return error.TypeMismatch,
+            .recursion_var => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
     }
@@ -669,6 +685,10 @@ const Unifier = struct {
                 const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
                 self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
                 self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+            },
+            .recursion_var => |_| {
+                // Unify alias backing var with recursion var
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .err => self.merge(vars, .err),
         }
@@ -755,6 +775,59 @@ const Unifier = struct {
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
+            },
+            .recursion_var => |b_rec_var| {
+                // When unifying structure with recursion var, unify with the structure
+                // the recursion var points to
+                try self.unifyGuarded(vars.a.var_, b_rec_var.structure);
+            },
+            .err => self.merge(vars, .err),
+        }
+    }
+
+    // Unify recursion var //
+
+    /// Unify when `a` is a recursion variable
+    ///
+    /// Phase 1 placeholder: This currently just unifies with the structure the recursion
+    /// var points to. In Phase 4, this will be enhanced to handle equirecursive unification
+    /// properly and prevent infinite loops.
+    fn unifyRecursionVar(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_rec_var: RecursionVar,
+        b_content: Content,
+    ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        switch (b_content) {
+            .flex => |b_flex| {
+                if (b_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_,
+                        .constraints = b_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+                self.merge(vars, vars.a.desc.content);
+            },
+            .rigid => {
+                // Recursion var cannot unify with rigid
+                return error.TypeMismatch;
+            },
+            .alias => {
+                // TODO: Handle alias case properly in Phase 4
+                return error.TypeMismatch;
+            },
+            .structure => {
+                // Unify the structure the recursion var points to with b's structure
+                try self.unifyGuarded(a_rec_var.structure, vars.b.var_);
+            },
+            .recursion_var => |b_rec_var| {
+                // Both are recursion vars - unify their structures
+                // This is the key to equirecursive unification (will be enhanced in Phase 4)
+                try self.unifyGuarded(a_rec_var.structure, b_rec_var.structure);
             },
             .err => self.merge(vars, .err),
         }
