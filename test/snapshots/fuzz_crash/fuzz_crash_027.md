@@ -850,6 +850,19 @@ The type _List_ expects  argument, but got  instead.
 
 
 
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_027.md:50:5:**
+```roc
+	if num {
+```
+    ^^^
+
+Right now, it has the type:
+    _U64_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
 **fuzz_crash_027.md:64:2:**
@@ -2238,7 +2251,7 @@ expect {
 	(defs
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
-		(patt (type "U64 -> U64"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2275,7 +2288,7 @@ expect {
 	(expressions
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
-		(expr (type "U64 -> U64"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

@@ -2819,7 +2819,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                 // Check any static dispatch constraints created in the lambda body
                 // This must happen BEFORE generalization
-                std.debug.print("After lambda body, {} deferred constraints\n", .{env.deferred_static_dispatch_constraints.items.items.len});
                 _ = try self.checkDeferredStaticDispatchConstraints(env);
 
                 // Now that we are existing the scope, we must generalize then pop this rank
@@ -2838,12 +2837,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
         },
         .e_closure => |closure| {
-            std.debug.print("CHECKING CLOSURE BODY\n", .{});
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
 
             // Check any static dispatch constraints created in the lambda body
-            std.debug.print("After closure body, {} deferred constraints\n", .{env.deferred_static_dispatch_constraints.items.items.len});
             _ = try self.checkDeferredStaticDispatchConstraints(env);
         },
         // function calling //
@@ -3046,19 +3043,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // checking `x.plus` against I128.plus.
                     var iterations: u32 = 0;
                     while (iterations < 10) : (iterations += 1) {  // Max 10 iterations to prevent infinite loops
-                        const num_deferred = env.deferred_static_dispatch_constraints.items.items.len;
-                        std.debug.print("Iteration {}: {} deferred constraints\n", .{ iterations, num_deferred });
-
                         const any_checked = try self.checkDeferredStaticDispatchConstraints(env);
 
-                        std.debug.print("  any_checked={}\n", .{any_checked});
                         if (!any_checked) {
                             // No constraints were processed this iteration (all were skipped because dispatchers are flex)
                             // This means we can't make any more progress
                             break;
                         }
                     }
-                    std.debug.print("Constraint checking done, {} iterations\n", .{iterations});
                 },
                 else => {
                     // No other call types are currently supported in czer
@@ -3748,9 +3740,6 @@ fn checkBinopExpr(
             }
 
             const lhs_content = lhs_resolved.desc.content;
-            const rhs_content = rhs_resolved.desc.content;
-
-            std.debug.print("Binary operator operand types: lhs={s}, rhs={s}\n", .{ @tagName(lhs_content), @tagName(rhs_content) });
 
             // Check if we should use static dispatch (nominal types, or flex/rigid types)
             // For flex/rigid, we always use static dispatch to get the more general constrained type
@@ -3763,10 +3752,7 @@ fn checkBinopExpr(
                 else => false,
             };
 
-            std.debug.print("  should_use_static_dispatch={}\n", .{should_use_static_dispatch});
-
             if (should_use_static_dispatch) {
-                std.debug.print("TAKING STATIC DISPATCH PATH for binop\n", .{});
                 // All types use static dispatch: a + b desugars to a.plus(b)
                 // Type unification will propagate types through the constraint function
 
@@ -3790,9 +3776,14 @@ fn checkBinopExpr(
                     env,
                     expr_region,
                 );
-                std.debug.print("Created constraint, attaching to lhs_var. Before unify: {} deferred\n", .{env.deferred_static_dispatch_constraints.items.items.len});
                 _ = try self.unify(constrained_var, lhs_var, env);
-                std.debug.print("After unify: {} deferred\n", .{env.deferred_static_dispatch_constraints.items.items.len});
+
+                // DO NOT attach constraint to return type!
+                // Attaching the same constraint to both lhs_var and ret_var causes them to be
+                // unified together because the constraint function has .ret = ret_var, creating
+                // a circular reference. This causes expr_var -> ret_var -> lhs_var, making the
+                // lambda return type equal to its parameter (BUG!).
+
                 _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // For other types (not nominal, flex, or rigid), use numeric constraints
@@ -4190,15 +4181,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // For example: when checking `x.plus` where x is unified with literal `7`, both x and 7
             // become a flex with constraints [plus, from_int_digits]. We need to resolve from_int_digits
             // first (which makes it I128), then we can check plus against I128.plus.
-            const flex = dispatcher_content.flex;
-            std.debug.print("SKIPPING flex dispatcher with {} constraints\n", .{flex.constraints.len()});
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .num) {
             // Handle numeric types (.int_precision, .frac_precision, etc.)
             // These are builtin types that need to be mapped to their nominal representations
             any_checked = true;  // We're processing numeric constraints
             const num = dispatcher_content.structure.num;
-            std.debug.print("CHECKING constraint on num type: {}\n", .{num});
 
             // For unbound/poly numeric types, skip constraint checking (like flex vars)
             switch (num) {
@@ -4324,34 +4312,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     break :blk new_copy;
                 };
 
-                std.debug.print("Unifying builtin method {s} with constraint fn_var\n", .{qualified_name_bytes});
-                const constraint_resolved = self.types.resolveVar(constraint.fn_var);
-                const builtin_resolved = self.types.resolveVar(local_def_var);
-                std.debug.print("  Constraint fn_var type: {}\n", .{constraint_resolved.desc.content});
-                std.debug.print("  Builtin def type: {}\n", .{builtin_resolved.desc.content});
-
-                // Print detailed function signatures if they're functions
-                if (constraint_resolved.desc.content.unwrapFunc()) |constraint_func| {
-                    const constraint_args = self.types.sliceVars(constraint_func.args);
-                    std.debug.print("  Constraint args ({}):\n", .{constraint_args.len});
-                    for (constraint_args, 0..) |arg, i| {
-                        std.debug.print("    arg {}: {}\n", .{i, self.types.resolveVar(arg).desc.content});
-                    }
-                    std.debug.print("  Constraint ret: {}\n", .{self.types.resolveVar(constraint_func.ret).desc.content});
-                }
-                if (builtin_resolved.desc.content.unwrapFunc()) |builtin_func| {
-                    const builtin_args = self.types.sliceVars(builtin_func.args);
-                    std.debug.print("  Builtin args ({}):\n", .{builtin_args.len});
-                    for (builtin_args, 0..) |arg, i| {
-                        std.debug.print("    arg {}: {}\n", .{i, self.types.resolveVar(arg).desc.content});
-                    }
-                    std.debug.print("  Builtin ret: {}\n", .{self.types.resolveVar(builtin_func.ret).desc.content});
-                }
                 const result = try self.unify(local_def_var, constraint.fn_var, env);
-                std.debug.print("Unification result: isProblem={}\n", .{result.isProblem()});
-                if (result.isProblem()) {
-                    std.debug.print("ERROR: Unification failed!\n", .{});
-                }
                 if (result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);

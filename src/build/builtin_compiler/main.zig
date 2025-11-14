@@ -918,31 +918,6 @@ fn compileModule(
 
         for (checker.problems.problems.items) |prob| {
             std.debug.print("  - Problem: {any}\n", .{prob});
-
-            // If it's a type mismatch, try to show more details
-            if (prob == .type_mismatch) {
-                const mismatch = prob.type_mismatch;
-                std.debug.print("    Detailed type mismatch info:\n", .{});
-                std.debug.print("      expected_var: {}, actual_var: {}\n", .{
-                    @intFromEnum(mismatch.types.expected_var),
-                    @intFromEnum(mismatch.types.actual_var),
-                });
-
-                // Try to get the actual type content from snapshots
-                const expected_content = checker.snapshots.getContent(mismatch.types.expected_snapshot);
-                const actual_content = checker.snapshots.getContent(mismatch.types.actual_snapshot);
-
-                std.debug.print("      expected content: {s}\n", .{@tagName(expected_content)});
-                std.debug.print("      actual content: {s}\n", .{@tagName(actual_content)});
-
-                // Show more details for structure types
-                if (expected_content == .structure) {
-                    std.debug.print("      expected structure: {s}\n", .{@tagName(expected_content.structure)});
-                }
-                if (actual_content == .structure) {
-                    std.debug.print("      actual structure: {s}\n", .{@tagName(actual_content.structure)});
-                }
-            }
         }
 
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});

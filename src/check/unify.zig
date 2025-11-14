@@ -959,7 +959,6 @@ const Unifier = struct {
                 }
             },
             .list => |a_var| {
-                std.debug.print("DEBUG unify: .list case, b_flat_type = {s}\n", .{@tagName(b_flat_type)});
                 switch (b_flat_type) {
                     .list => |b_var| {
                         try self.unifyGuarded(a_var, b_var);
@@ -988,7 +987,6 @@ const Unifier = struct {
                 }
             },
             .list_unbound => {
-                std.debug.print("DEBUG unify: .list_unbound case, b_flat_type = {s}\n", .{@tagName(b_flat_type)});
                 switch (b_flat_type) {
                     .list => |_| {
                         // When unifying list_unbound with list, list wins
@@ -1081,7 +1079,6 @@ const Unifier = struct {
                 }
             },
             .nominal_type => |a_type| {
-                std.debug.print("DEBUG unify: .nominal_type case, b_flat_type = {s}\n", .{@tagName(b_flat_type)});
                 const a_backing_var = self.types_store.getNominalBackingVar(a_type);
                 const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
                 if (a_backing_resolved.desc.content == .err) {
@@ -1171,18 +1168,15 @@ const Unifier = struct {
                         // Check if this is the builtin List nominal type
                         const ident_store = self.module_env.getIdentStore();
                         const name = ident_store.getText(a_type.ident.ident_idx);
-                        std.debug.print("DEBUG: nominal_type + list/list_unbound, name = {s}\n", .{name});
 
                         // Builtin.List is a nominal type that should unify with list/list_unbound
                         if (std.mem.eql(u8, name, "Builtin.List") or std.mem.endsWith(u8, name, ".List")) {
-                            std.debug.print("DEBUG: This is Builtin.List, allowing unification!\n", .{});
                             // The nominal List type can unify with structural list types
                             // Preserve the nominal type (it wins)
                             self.merge(vars, vars.a.desc.content);
                             return;
                         }
 
-                        std.debug.print("DEBUG: Not a list nominal type, returning TypeMismatch\n", .{});
                         return error.TypeMismatch;
                     },
                     else => return error.TypeMismatch,

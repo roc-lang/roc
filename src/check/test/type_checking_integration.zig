@@ -256,7 +256,19 @@ test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_d");
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+
+    const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    const last_def_var = ModuleEnv.varFrom(defs_slice[defs_slice.len - 1]);
+
+    try test_env.type_writer.write(last_def_var);
+    const actual_type = test_env.type_writer.get();
+
+    try testing.expectEqualStrings("_d", actual_type);
 }
 
 test "check type - def - forward ref" {
@@ -1742,18 +1754,18 @@ test "check type - equirecursive static dispatch - motivating example (current b
     // With RecursionVar, we detect the recursive constraint and create a circular type
     // that unifies equirecursively (structurally equal up to recursion point).
     //
-    // NOTE: The .plus method is not yet implemented on numeric types, so this currently
-    // fails with TYPE DOES NOT HAVE METHODS. Once .plus is implemented, this test should
-    // pass and return a numeric type with preserved constraints.
+    // The .plus method is implemented on numeric types via the desugar-arithmetic branch.
+    // With RecursionVar infrastructure, this now passes.
+    //
+    // The result type is unconstrained because:
+    // - The constraint is only on the receiver (x), not the return type
+    // - After const-folding, this will become a concrete number type or error
     const source = "(|x| x.plus(5))(7)";
 
-    // Current behavior: fails because Num types don't have methods yet
-    // Future behavior (once .plus is implemented): should pass with type like
-    // "ret where [ret.plus : ret, _ -> ret, ret.from_int_digits : ...]"
     try checkTypesExpr(
         source,
-        .fail,
-        "TYPE DOES NOT HAVE METHODS",
+        .pass,
+        "_a",
     );
 }
 
@@ -1776,7 +1788,7 @@ test "check type - equirecursive static dispatch - annotated motivating example"
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "fn" } },
-        "a, b -> ret where [a.plus : a, b -> ret, List(Num(Int(Unsigned8))).from_int_digits : List(Num(Int(Unsigned8))) -> Try(a, [OutOfRange]), List(Num(Int(Unsigned8))).from_int_digits : List(Num(Int(Unsigned8))) -> Try(b, [OutOfRange])]",
+        "a, b -> ret where [a.plus : a, b -> ret, List(U8).from_int_digits : List(U8) -> Try(a, [OutOfRange]), List(U8).from_int_digits : List(U8) -> Try(b, [OutOfRange])]",
     );
 }
 
