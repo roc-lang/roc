@@ -268,7 +268,8 @@ test "check type - def - nested lambda" {
     try test_env.type_writer.write(last_def_var);
     const actual_type = test_env.type_writer.get();
 
-    try testing.expectEqualStrings("_d", actual_type);
+    // With num_unbound_if_builtin, the result includes the from_int_digits constraint
+    try testing.expectEqualStrings("_size where [_d.from_int_digits : _arg -> _ret]", actual_type);
 }
 
 test "check type - def - forward ref" {

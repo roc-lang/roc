@@ -588,6 +588,13 @@ const Unifier = struct {
                 }
             },
             .structure => |b_structure| {
+                // CRITICAL: When a flex var with .plus constraints unifies with a numeric type,
+                // we need to modify those constraints by unifying the 2nd arg and return type
+                // with num_unbound_if_builtin. This is the symmetric case of the check in unifyStructure.
+                if (b_structure == .num and a_flex.constraints.len() > 0) {
+                    try self.modifyPlusConstraintForBuiltin(vars, a_flex.constraints);
+                }
+
                 if (a_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
                     // This is necessary even for num types because the static dispatch path
