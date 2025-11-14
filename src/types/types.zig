@@ -311,20 +311,48 @@ pub const Rigid = struct {
 // recursion var //
 
 /// A recursion variable marks a point in a type where recursion occurs.
-/// This is used to implement equirecursive unification for static dispatch constraints.
+/// This is used to implement **equirecursive unification** for static dispatch constraints.
+///
+/// ## The Problem
 ///
 /// When a type has recursive constraints (e.g., `a.plus : a, Int -> a`), the return type `a`
-/// would normally require checking the same constraints infinitely. Instead, we create a
-/// RecursionVar that points back to the original structure, creating a circular reference
-/// that prevents infinite expansion during unification.
+/// would normally require checking the same constraints infinitely:
+/// - `a` has constraint `a.plus : a, _ -> ret`
+/// - `ret` also needs constraint `ret.plus : ret, _ -> ret2`
+/// - `ret2` also needs constraint `ret2.plus : ret2, _ -> ret3`
+/// - ...infinitely
 ///
-/// Example: For `(|x| x.plus(5))(7)`, the type checker would normally:
-/// 1. Check x.plus(5) creates constraint: x.plus : x_type, arg_type -> ret_type
-/// 2. ret_type needs the same numeric constraints as x_type
-/// 3. Those constraints reference ret_type, leading to infinite recursion
+/// This occurs in expressions like `(|x| x.plus(5))(7)` where numeric operations return
+/// numeric types that themselves support the same operations.
 ///
-/// With RecursionVar: When we detect the recursion (step 3), we create a RecursionVar
-/// that points back to the original type (x_type), breaking the infinite loop.
+/// ## The Solution: Equirecursive Unification
+///
+/// Instead of infinitely expanding the constraint chain, we:
+/// 1. **Detect recursion** during constraint checking (via constraint_check_stack in Check.zig)
+/// 2. **Create a RecursionVar** that points back to the original structure
+/// 3. **Unify equirecursively**: Two types unify if they're structurally equal up to their recursion point
+///
+/// ## How It Works
+///
+/// A RecursionVar creates a **circular reference**:
+/// ```
+/// type_var -> RecursionVar { structure: type_var }
+/// ```
+///
+/// During unification (see unify.zig):
+/// - When we encounter a RecursionVar, we unfold one level and unify with its structure
+/// - The existing cycle detection in `unifyGuarded` (via `checkVarsEquiv`) prevents infinite recursion
+/// - Two RecursionVars unify if their structures unify
+///
+/// During type display (see TypeWriter.zig):
+/// - RecursionVar displays as its structure type
+/// - The existing `seen` tracking detects cycles and displays "..." to indicate recursion
+///
+/// ## Example
+///
+/// For `(|x| x.plus(5))(7)`:
+/// - Without RecursionVar: Infinite loop during constraint checking
+/// - With RecursionVar: Creates `a` where `a = RecursionVar { structure: a }`, terminates successfully
 pub const RecursionVar = struct {
     /// The type variable containing the actual structure this recursion var points to
     structure: Var,

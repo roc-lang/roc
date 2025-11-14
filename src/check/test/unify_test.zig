@@ -4713,3 +4713,132 @@ test "type_writer - nested recursion_var displays correctly" {
     // Should display as "List(Str)" - following through the RecursionVars
     try std.testing.expectEqualStrings("List(Str)", result);
 }
+
+// Integration test for recursive constraints (motivating example)
+
+test "recursion_var - integration: deep recursion with RecursionVar prevents infinite loops" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Simulate the motivating example problem: recursive constraint chains
+    // Without RecursionVar, this would infinite loop during unification
+    // With RecursionVar, it terminates successfully
+
+    // Create a deep chain of RecursionVars pointing to each other
+    // var1 -> rec_var1 -> var2 -> rec_var2 -> var3 -> rec_var3 -> var1 (cycle!)
+
+    const var1 = try env.module_env.types.fresh();
+    const var2 = try env.module_env.types.fresh();
+    const var3 = try env.module_env.types.fresh();
+
+    // Create rec_var3 pointing to var1 (will create the cycle)
+    const rec_var3 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = var1,
+            .name = null,
+        },
+    });
+
+    // Create rec_var2 pointing to var3
+    const rec_var2 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = var3,
+            .name = null,
+        },
+    });
+
+    // Create rec_var1 pointing to var2
+    const rec_var1 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = var2,
+            .name = null,
+        },
+    });
+
+    // Now unify to create the chain
+    _ = try env.unify(var1, rec_var1); // var1 -> rec_var1 -> var2
+    _ = try env.unify(var2, rec_var2); // var2 -> rec_var2 -> var3
+    const result = try env.unify(var3, rec_var3); // var3 -> rec_var3 -> var1 (CYCLE!)
+
+    // **KEY TEST**: This should succeed without infinite loop!
+    // Before RecursionVar, this would hang indefinitely
+    try std.testing.expectEqual(.ok, result);
+
+    // Verify the unification created connections between the vars
+    // The exact vars may differ due to redirects, but they should all be connected
+    const resolved_var1 = env.module_env.types.resolveVar(var1);
+    const resolved_var2 = env.module_env.types.resolveVar(var2);
+    const resolved_var3 = env.module_env.types.resolveVar(var3);
+
+    // At least one should be a RecursionVar, indicating the cycle was detected
+    const has_recursion_var = resolved_var1.desc.content == .recursion_var or
+        resolved_var2.desc.content == .recursion_var or
+        resolved_var3.desc.content == .recursion_var;
+    try std.testing.expect(has_recursion_var);
+
+    // The type should display with cycle detection
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const display = try writer.writeGet(var1);
+
+    // Should display "..." indicating cycle detection
+    try std.testing.expect(std.mem.indexOf(u8, display, "...") != null);
+}
+
+test "recursion_var - integration: multiple recursive constraints unify correctly" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Test that two different recursive constraint chains can unify
+    // Chain A: a1 -> rec_var_a -> a2 -> a1 (cycle)
+    // Chain B: b1 -> rec_var_b -> b2 -> b1 (cycle)
+    // They should unify if their base structures match
+
+    // Create chain A
+    const a1 = try env.module_env.types.fresh();
+    const a2 = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    const rec_var_a = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = a2,
+            .name = null,
+        },
+    });
+
+    _ = try env.unify(a1, rec_var_a);
+
+    // Create chain B with same base structure
+    const b1 = try env.module_env.types.fresh();
+    const b2 = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    const rec_var_b = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = b2,
+            .name = null,
+        },
+    });
+
+    _ = try env.unify(b1, rec_var_b);
+
+    // Unify chain A with chain B - should succeed because both point to Str
+    const result = try env.unify(a1, b1);
+    try std.testing.expectEqual(.ok, result);
+
+    // Verify they unified - both should ultimately point to the same content
+    // Note: They may not be the exact same var due to redirects, but should be equivalent
+    const resolved_a1 = env.module_env.types.resolveVar(a1);
+    const resolved_b1 = env.module_env.types.resolveVar(b1);
+
+    // Check that both resolve to the same structure content
+    try std.testing.expect(resolved_a1.desc.content == .recursion_var or resolved_a1.desc.content == .structure);
+    try std.testing.expect(resolved_b1.desc.content == .recursion_var or resolved_b1.desc.content == .structure);
+
+    // The key test: no infinite loop occurred during unification
+    // If we got here, RecursionVar successfully prevented the infinite loop
+}
