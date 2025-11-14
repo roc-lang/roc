@@ -118,6 +118,8 @@ module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 builtin_module: LoadedModule,
 // Whether this TestEnv owns the builtin_module and should deinit it
 owns_builtin_module: bool,
+/// Heap-allocated source buffer owned by this TestEnv (if any)
+owned_source: ?[]u8 = null,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -377,16 +379,23 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !TestEnv {
+    const gpa = std.testing.allocator;
+
     const source_wrapper =
         \\main =
     ;
 
-    var source: [source_wrapper.len + 1 + source_expr.len]u8 = undefined;
-    std.mem.copyForwards(u8, source[0..], source_wrapper);
-    std.mem.copyForwards(u8, source[source_wrapper.len..], " ");
+    const total_len = source_wrapper.len + 1 + source_expr.len;
+    var source = try gpa.alloc(u8, total_len);
+    errdefer gpa.free(source);
+
+    std.mem.copyForwards(u8, source[0..source_wrapper.len], source_wrapper);
+    source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    return TestEnv.init(module_name, &source);
+    var test_env = try TestEnv.init(module_name, source);
+    test_env.owned_source = source;
+    return test_env;
 }
 
 pub fn deinit(self: *TestEnv) void {
@@ -403,6 +412,10 @@ pub fn deinit(self: *TestEnv) void {
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
 
+    if (self.owned_source) |buffer| {
+        self.gpa.free(buffer);
+    }
+
     self.module_envs.deinit();
 
     // Clean up loaded Builtin module (only if we own it)
@@ -416,9 +429,7 @@ pub fn deinit(self: *TestEnv) void {
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
 
@@ -450,9 +461,7 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
@@ -476,6 +485,13 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
     const last_def_idx = defs_slice[defs_slice.len - 1];
 
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
+}
+
+/// Assert that there were no parse, canonicalization, or type checking errors.
+pub fn assertNoErrors(self: *TestEnv) !void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertNoTypeProblems();
 }
 
 /// Assert that there was a single type error when checking the input. Assert

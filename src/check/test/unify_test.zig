@@ -111,6 +111,7 @@ const TestEnv = struct {
             &self.snapshots,
             &self.scratch,
             &self.occurs_scratch,
+            unify_mod.ModuleEnvLookup{},
             a,
             b,
         );
