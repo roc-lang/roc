@@ -468,6 +468,8 @@ pub const SnapshotContent = union(enum) {
     err,
 };
 
+/// Snapshot representation of a recursion variable.
+/// See types.RecursionVar for full documentation on recursion variables.
 pub const SnapshotRecursionVar = struct {
     structure: SnapshotContentIdx,
     name: ?base.Ident.Idx,
