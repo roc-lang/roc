@@ -4142,9 +4142,40 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const num = dispatcher_content.structure.num;
             std.debug.print("CHECKING constraint on num type: {}\n", .{num});
 
-            // For unbound/poly numeric types, skip constraint checking (like flex vars)
+            // For unbound/poly numeric types, we can't check constraints yet because they're not concrete.
+            // But we need to preserve constraint information on the return types!
             switch (num) {
-                .num_unbound, .num_poly, .int_unbound, .int_poly, .frac_unbound, .frac_poly => {
+                .num_unbound => |_| {
+                    // We can't check constraints when the dispatcher is num_unbound because it's not concrete yet.
+                    // However, we need to preserve constraint information on the return types!
+                    // Attach the deferred constraints to each return type variable.
+
+                    std.debug.print("  num_unbound dispatcher - preserving constraints on return types\n", .{});
+
+                    const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+                    std.debug.print("  {} deferred constraints to attach\n", .{deferred_constraints.len});
+
+                    for (deferred_constraints) |constraint| {
+                        const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                        if (resolved_constraint.desc.content.unwrapFunc()) |func| {
+                            const ret_var = func.ret;
+                            std.debug.print("  Attaching constraints to ret_var\n", .{});
+
+                            // Attach all deferred constraints to the return type as a flex
+                            const constrained_ret = try self.freshFromContent(
+                                .{ .flex = Flex{ .name = null, .constraints = deferred_constraint.constraints } },
+                                env,
+                                resolved_constraint.desc.region,
+                            );
+                            const unify_result = try self.unify(ret_var, constrained_ret, env);
+                            std.debug.print("  Unify result: {}\n", .{unify_result});
+                        }
+                    }
+
+                    continue;
+                },
+                .int_unbound, .num_poly, .int_poly, .frac_unbound, .frac_poly => {
+                    // TODO: Handle these similarly
                     continue;
                 },
                 .int_precision, .frac_precision, .num_compact => {},
