@@ -4425,3 +4425,187 @@ test "recursion_var - does not cause infinite loop during resolution" {
     // Both should resolve to the same root var
     try std.testing.expectEqual(resolved_rec.var_, resolved_structure.var_);
 }
+
+// Equirecursive unification tests
+
+test "recursion_var - unifies with alias" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create an alias MyStr = Str
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const alias_content = try env.mkAlias("MyStr", str_var, &[_]Var{});
+    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+
+    // Create a RecursionVar pointing to str
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = str_var,
+            .name = null,
+        },
+    });
+
+    // RecursionVar should unify with alias by going through to the backing var
+    const result = try env.unify(rec_var, alias_var);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "recursion_var - cannot unify with rigid" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a rigid var
+    const rigid_content = try env.mkRigidVar("a");
+    const rigid_var = try env.module_env.types.freshFromContent(rigid_content);
+
+    // Create a RecursionVar
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // RecursionVar cannot unify with rigid
+    const result = try env.unify(rec_var, rigid_var);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "recursion_var - two recursion vars with same structure unify" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a shared structure
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create two RecursionVars both pointing to the same structure
+    const rec_var_1 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    const rec_var_2 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // They should unify successfully
+    const result = try env.unify(rec_var_1, rec_var_2);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "recursion_var - two recursion vars with different structures do not unify" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create different structures
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const num_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
+
+    // Create two RecursionVars with different structures
+    const rec_var_1 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = str_var,
+            .name = null,
+        },
+    });
+
+    const rec_var_2 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = num_var,
+            .name = null,
+        },
+    });
+
+    // They should not unify - different base structures
+    const result = try env.unify(rec_var_1, rec_var_2);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "recursion_var - equirecursive unification with nested structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a list structure: List(a) where a is flexible
+    const elem_var = try env.module_env.types.fresh();
+    const list_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .list = elem_var } });
+
+    // Create a RecursionVar that points to the list
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = list_var,
+            .name = null,
+        },
+    });
+
+    // Create another list with the same structure
+    const elem_var_2 = try env.module_env.types.fresh();
+    const list_var_2 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .list = elem_var_2 } });
+
+    // RecursionVar should unify with the list
+    const result = try env.unify(rec_var, list_var_2);
+    try std.testing.expectEqual(.ok, result);
+
+    // The element vars should also have been unified
+    const resolved_elem_1 = env.module_env.types.resolveVar(elem_var);
+    const resolved_elem_2 = env.module_env.types.resolveVar(elem_var_2);
+    try std.testing.expectEqual(resolved_elem_1.var_, resolved_elem_2.var_);
+}
+
+test "recursion_var - unifies with flex preserving constraints" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a flex var with static dispatch constraints
+    const fn_var = try env.module_env.types.freshFromContent(Content{
+        .structure = .{ .fn_pure = .{
+            .args = VarSafeList.Range.empty(),
+            .ret = try env.module_env.types.fresh(),
+            .needs_instantiation = false,
+        } },
+    });
+
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+
+    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{constraint});
+    const flex_with_constraints = try env.module_env.types.freshFromContent(Content{
+        .flex = Flex.init().withConstraints(constraints_range),
+    });
+
+    // Create a RecursionVar
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Unify - should defer the constraints
+    const result = try env.unify(rec_var, flex_with_constraints);
+    try std.testing.expectEqual(.ok, result);
+
+    // Should have deferred the constraints
+    try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
+}

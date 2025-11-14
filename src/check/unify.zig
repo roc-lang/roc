@@ -789,9 +789,14 @@ const Unifier = struct {
 
     /// Unify when `a` is a recursion variable
     ///
-    /// Placeholder: This currently just unifies with the structure the recursion
-    /// var points to. This will be enhanced to handle equirecursive unification
-    /// properly and prevent infinite loops.
+    /// Equirecursive unification: Two recursive types unify if they are structurally
+    /// equal up to their recursion points. RecursionVar marks these recursion points
+    /// and prevents infinite expansion during unification.
+    ///
+    /// The key insight: when we encounter a RecursionVar, we unify with the structure
+    /// it points to. The existing cycle detection in unifyGuarded (via checkVarsEquiv)
+    /// ensures we don't infinitely recurse - if we've already unified these exact vars,
+    /// we return early.
     fn unifyRecursionVar(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -803,6 +808,7 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
+                // RecursionVar can unify with flex - defer constraints and merge
                 if (b_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
                     _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
@@ -813,20 +819,24 @@ const Unifier = struct {
                 self.merge(vars, vars.a.desc.content);
             },
             .rigid => {
-                // Recursion var cannot unify with rigid
+                // RecursionVar cannot unify with rigid - rigid types have no structure to recurse into
                 return error.TypeMismatch;
             },
-            .alias => {
-                // TODO: Handle alias case properly in Phase 4
-                return error.TypeMismatch;
+            .alias => |b_alias| {
+                // Unify with the alias backing var to preserve the alias structure
+                // This allows RecursionVar to work through type aliases
+                const backing_var = self.types_store.getAliasBackingVar(b_alias);
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .structure => {
                 // Unify the structure the recursion var points to with b's structure
+                // This is equirecursive unification: unfold one level and continue
                 try self.unifyGuarded(a_rec_var.structure, vars.b.var_);
             },
             .recursion_var => |b_rec_var| {
-                // Both are recursion vars - unify their structures
-                // This is the key to equirecursive unification (will be enhanced in Phase 4)
+                // Both are recursion vars - the heart of equirecursive unification
+                // We unify their structures. If they form a cycle, checkVarsEquiv
+                // in unifyGuarded will detect it and prevent infinite recursion.
                 try self.unifyGuarded(a_rec_var.structure, b_rec_var.structure);
             },
             .err => self.merge(vars, .err),
