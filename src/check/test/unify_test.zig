@@ -4609,3 +4609,107 @@ test "recursion_var - unifies with flex preserving constraints" {
     // Should have deferred the constraints
     try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
 }
+
+// TypeWriter tests for RecursionVar
+
+test "type_writer - recursion_var displays structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a structure variable (Str)
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create a RecursionVar pointing to it
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Write the recursion var to a string
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const result = try writer.writeGet(rec_var);
+
+    // Should display as "Str" (the structure it points to)
+    try std.testing.expectEqualStrings("Str", result);
+}
+
+test "type_writer - recursion_var with cycle displays correctly" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a self-referential structure: rec_var -> list -> rec_var
+    const rec_var_placeholder = try env.module_env.types.fresh();
+
+    // Create a list that points to the placeholder
+    const list_var = try env.module_env.types.freshFromContent(Content{
+        .structure = .{ .list = rec_var_placeholder },
+    });
+
+    // Create a RecursionVar that points to the list
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = list_var,
+            .name = null,
+        },
+    });
+
+    // Unify the placeholder with the rec_var to create the cycle
+    _ = try env.unify(rec_var_placeholder, rec_var);
+
+    // Write the recursion var
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const result = try writer.writeGet(rec_var);
+
+    // Should display as "List(...)" - the cycle is detected and shown as "..."
+    try std.testing.expectEqualStrings("List(...)", result);
+}
+
+test "type_writer - nested recursion_var displays correctly" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nested structure: RecursionVar -> List -> RecursionVar -> Str
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    const inner_rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = str_var,
+            .name = null,
+        },
+    });
+
+    const list_var = try env.module_env.types.freshFromContent(Content{
+        .structure = .{ .list = inner_rec_var },
+    });
+
+    const outer_rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = list_var,
+            .name = null,
+        },
+    });
+
+    // Write the outer recursion var
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const result = try writer.writeGet(outer_rec_var);
+
+    // Should display as "List(Str)" - following through the RecursionVars
+    try std.testing.expectEqualStrings("List(Str)", result);
+}
