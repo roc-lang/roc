@@ -90,6 +90,9 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
+/// Stack of type variables currently being constraint-checked, used to detect recursive constraints
+/// When a var appears in this stack while we're checking its constraints, we've detected recursion
+constraint_check_stack: std.ArrayList(Var),
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -171,6 +174,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
+        .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
@@ -198,6 +202,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
+    self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
     self.static_dispatch_method_name_buf.deinit(self.gpa);
@@ -3984,6 +3989,21 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
+
+        // Detect recursive constraints
+        // Check if this var is already in the constraint check stack
+        for (self.constraint_check_stack.items) |stack_var| {
+            if (stack_var == dispatcher_resolved.var_) {
+                // Found recursion! For now, we skip processing to avoid infinite loops.
+                // TODO: Create a RecursionVar and handle this properly
+                // std.debug.print("DEBUG: Detected recursive constraint on var {}\n", .{dispatcher_resolved.var_});
+                continue;
+            }
+        }
+
+        // Not recursive - push to stack and proceed normally
+        try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
+        defer _ = self.constraint_check_stack.pop();
 
         if (dispatcher_content == .err) {
             // If the root type is an error, then skip constraint checking

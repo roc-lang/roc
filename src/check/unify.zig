@@ -789,8 +789,8 @@ const Unifier = struct {
 
     /// Unify when `a` is a recursion variable
     ///
-    /// Phase 1 placeholder: This currently just unifies with the structure the recursion
-    /// var points to. In Phase 4, this will be enhanced to handle equirecursive unification
+    /// Placeholder: This currently just unifies with the structure the recursion
+    /// var points to. This will be enhanced to handle equirecursive unification
     /// properly and prevent infinite loops.
     fn unifyRecursionVar(
         self: *Self,
