@@ -4138,61 +4138,41 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .num) {
             // Handle numeric types (.int_precision, .frac_precision, etc.)
             // These are builtin types that need to be mapped to their nominal representations
+            any_checked = true;  // We're processing numeric constraints
             const num = dispatcher_content.structure.num;
+            std.debug.print("CHECKING constraint on num type: {}\n", .{num});
 
-            // For unbound/poly numeric types, we need to default them to concrete types
-            // before we can check static dispatch constraints against them
-            const builtin_type_name: ?[]const u8 = switch (num) {
-                .num_unbound => |_| blk: {
-                    // Default num_unbound to I128 (the most general integer type)
-                    // This allows checking method constraints like .plus against I128.plus
-                    any_checked = true;
-
-                    // Convert the dispatcher var to I128 so future uses will use the defaulted type
-                    const i128_num = types_mod.Num{ .num_compact = .{ .int = .i128 } };
-                    try self.types.setVarContent(deferred_constraint.var_, .{ .structure = .{ .num = i128_num } });
-
-                    break :blk "I128";
-                },
-                .int_unbound => |_| blk: {
-                    // Default int_unbound to I128
-                    any_checked = true;
-
-                    const i128_num = types_mod.Num{ .num_compact = .{ .int = .i128 } };
-                    try self.types.setVarContent(deferred_constraint.var_, .{ .structure = .{ .num = i128_num } });
-
-                    break :blk "I128";
-                },
-                .frac_unbound => |_| blk: {
-                    // Default frac_unbound to Dec (the most general decimal type)
-                    any_checked = true;
-
-                    const dec_num = types_mod.Num{ .num_compact = .{ .frac = .dec } };
-                    try self.types.setVarContent(deferred_constraint.var_, .{ .structure = .{ .num = dec_num } });
-
-                    break :blk "Dec";
-                },
-                .num_poly, .int_poly, .frac_poly => {
-                    // Poly types can't be dispatchers for static dispatch - skip
+            // For unbound/poly numeric types, skip constraint checking (like flex vars)
+            switch (num) {
+                .num_unbound, .num_poly, .int_unbound, .int_poly, .frac_unbound, .frac_poly => {
                     continue;
                 },
-                .int_precision, .frac_precision, .num_compact => blk: {
-                    // These are already concrete types, process them normally
-                    any_checked = true;
-                    // Continue with the existing logic below to map to builtin type names
-                    break :blk null;
-                },
-            };
+                .int_precision, .frac_precision, .num_compact => {},
+            }
 
-            // For concrete types that weren't handled above, map precision to builtin type name
-            const final_builtin_type_name = if (builtin_type_name) |name|
-                name
-            else blk: {
-                // Map precision to the appropriate builtin nominal type name
-                // .int_precision, .frac_precision, and .num_compact are all memory optimizations
-                // that should be treated identically to the corresponding builtin nominal types
-                break :blk switch (num) {
-                    .int_precision => |prec| switch (prec) {
+            // Map precision to the appropriate builtin nominal type name
+            // .int_precision, .frac_precision, and .num_compact are all memory optimizations
+            // that should be treated identically to the corresponding builtin nominal types
+            const builtin_type_name: []const u8 = switch (num) {
+                .int_precision => |prec| switch (prec) {
+                    .u8 => "U8",
+                    .i8 => "I8",
+                    .u16 => "U16",
+                    .i16 => "I16",
+                    .u32 => "U32",
+                    .i32 => "I32",
+                    .u64 => "U64",
+                    .i64 => "I64",
+                    .u128 => "U128",
+                    .i128 => "I128",
+                },
+                .frac_precision => |prec| switch (prec) {
+                    .f32 => "F32",
+                    .f64 => "F64",
+                    .dec => "Dec",
+                },
+                .num_compact => |compact| switch (compact) {
+                    .int => |prec| switch (prec) {
                         .u8 => "U8",
                         .i8 => "I8",
                         .u16 => "U16",
@@ -4204,32 +4184,13 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         .u128 => "U128",
                         .i128 => "I128",
                     },
-                    .frac_precision => |prec| switch (prec) {
+                    .frac => |prec| switch (prec) {
                         .f32 => "F32",
                         .f64 => "F64",
                         .dec => "Dec",
                     },
-                    .num_compact => |compact| switch (compact) {
-                        .int => |prec| switch (prec) {
-                            .u8 => "U8",
-                            .i8 => "I8",
-                            .u16 => "U16",
-                            .i16 => "I16",
-                            .u32 => "U32",
-                            .i32 => "I32",
-                            .u64 => "U64",
-                            .i64 => "I64",
-                            .u128 => "U128",
-                            .i128 => "I128",
-                        },
-                        .frac => |prec| switch (prec) {
-                            .f32 => "F32",
-                            .f64 => "F64",
-                            .dec => "Dec",
-                        },
-                    },
-                    else => unreachable, // Already handled above
-                };
+                },
+                else => unreachable, // Already handled above
             };
 
             // Get the Builtin module environment
@@ -4257,7 +4218,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 try self.static_dispatch_method_name_buf.print(
                     self.gpa,
                     "{s}.Num.{s}.{s}",
-                    .{ builtin_env.module_name, final_builtin_type_name, constraint_fn_name_bytes },
+                    .{ builtin_env.module_name, builtin_type_name, constraint_fn_name_bytes },
                 );
                 const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
 

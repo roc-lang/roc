@@ -2098,6 +2098,8 @@ test "desugaring verification: (x + 5)(7) should desugar to (x.plus(5))(7)" {
     try explicit_env.type_writer.write(explicit_var);
     const explicit_type = explicit_env.type_writer.get();
 
+    std.debug.print("\n>>> Explicit applied:  (|x| x.plus(5))(7) => {s}\n", .{explicit_type});
+
     // Type-check (|x| x + 5)(7)
     var desugared_env = try TestEnv.init("Test", "f = (|x| x + 5)(7)");
     defer desugared_env.deinit();
