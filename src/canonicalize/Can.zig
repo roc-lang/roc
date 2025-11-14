@@ -229,7 +229,7 @@ pub fn init(
     // Top-level scope is not a function boundary
     try result.scopeEnter(gpa, false);
 
-    // Set up auto-imported builtin types (Bool, Result, Dict, Set)
+    // Set up auto-imported builtin types (Bool, Try, Dict, Set)
     try result.setupAutoImportedBuiltinTypes(env, gpa, module_envs);
 
     const scratch_statements_start = result.env.store.scratch.?.statements.top();
@@ -246,7 +246,7 @@ pub fn init(
 /// This function is called BEFORE Can.init() by both production and test environments
 /// to ensure they use identical module setup logic.
 ///
-/// Adds Bool, Result, Dict, Set, Str, and numeric types from the Builtin module to module_envs.
+/// Adds Bool, Try, Dict, Set, Str, and numeric types from the Builtin module to module_envs.
 pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
@@ -287,7 +287,7 @@ pub fn populateModuleEnvs(
     }
 }
 
-/// Set up auto-imported builtin types (Bool, Result, Dict, Set, Str, and numeric types) from the Builtin module.
+/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, and numeric types) from the Builtin module.
 /// Used for all modules EXCEPT Builtin itself.
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
@@ -306,7 +306,7 @@ pub fn setupAutoImportedBuiltinTypes(
         );
         try self.import_indices.put(gpa, "Builtin", builtin_import_idx);
 
-        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+        const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
@@ -3201,7 +3201,7 @@ pub fn canonicalizeExpr(
                             // Not in scope, check if it's an auto-imported module
                             if (self.module_envs) |envs_map| {
                                 if (envs_map.contains(module_alias)) {
-                                    // This is an auto-imported module like Bool or Result
+                                    // This is an auto-imported module like Bool or Try
                                     // Use the module_alias directly as the module_name
                                     break :blk module_alias;
                                 }
@@ -3435,8 +3435,8 @@ pub fn canonicalizeExpr(
 
                                 if (module_exists) {
                                     // The exposed item doesn't actually exist in the module
-                                    // This can happen with qualified identifiers like `Result.blah`
-                                    // where `Result` is a valid type module but `blah` doesn't exist
+                                    // This can happen with qualified identifiers like `Try.blah`
+                                    // where `Try` is a valid type module but `blah` doesn't exist
                                     return CanonicalizedExpr{
                                         .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
                                             .ident = ident,
@@ -4511,10 +4511,10 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             }
         }
 
-        // Not found locally, check if this is an auto-imported type like Bool or Result
+        // Not found locally, check if this is an auto-imported type like Bool or Try
         if (self.module_envs) |envs_map| {
             if (envs_map.get(type_tok_ident)) |auto_imported_type| {
-                // Check if this has a statement_idx - auto-imported types from Builtin (Bool, Result, etc.) have one
+                // Check if this has a statement_idx - auto-imported types from Builtin (Bool, Try, etc.) have one
                 // Regular module imports and primitive types (Str) don't have statement_idx
                 if (auto_imported_type.statement_idx) |stmt_idx| {
                     // This is an auto-imported type with a statement_idx - create the import and return e_nominal_external
@@ -6427,7 +6427,7 @@ fn canonicalizeTypeAnnoBasicType(
             // Check if this is an auto-imported type from module_envs
             if (self.module_envs) |envs_map| {
                 if (envs_map.get(type_name_ident)) |auto_imported_type| {
-                    // This is an auto-imported type like Bool or Result
+                    // This is an auto-imported type like Bool or Try
                     // We need to create an import for it and return the type annotation
                     const module_name_text = auto_imported_type.env.module_name;
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
@@ -8851,7 +8851,7 @@ fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?Import
     return null;
 }
 
-/// Get or create an import index for an auto-imported module like Bool or Result
+/// Get or create an import index for an auto-imported module like Bool or Try
 fn getOrCreateAutoImport(self: *Self, module_name_text: []const u8) std.mem.Allocator.Error!Import.Idx {
     // Check if we already have an import for this module
     if (self.import_indices.get(module_name_text)) |existing_idx| {
@@ -9121,7 +9121,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         // Module not in import scope - check if it's an auto-imported module in module_envs
         if (self.module_envs) |envs_map| {
             if (envs_map.get(module_name)) |_| {
-                // This is an auto-imported module (like Bool, Result, etc.)
+                // This is an auto-imported module (like Bool, Try, etc.)
                 // Create an import for it dynamically
                 break :blk try self.getOrCreateAutoImport(module_text);
             }

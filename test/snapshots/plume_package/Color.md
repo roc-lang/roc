@@ -30,7 +30,7 @@ rgba = |r, g, b, a| {
     Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
     bytes = str.to_utf8()
@@ -64,7 +64,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
     if str.is_named_color()
         Ok(Color.Named(str))
@@ -508,7 +508,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Color"))
 					(ty-tag-union
 						(tags
@@ -735,7 +735,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Color"))
 					(ty-tag-union
 						(tags
@@ -816,7 +816,7 @@ rgba = |r, g, b, a| {
 	Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
 	bytes = str.to_utf8()
@@ -850,7 +850,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
 	if str.is_named_color()
 		Ok(Color.Named(str))
@@ -1076,7 +1076,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
@@ -1207,7 +1207,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")

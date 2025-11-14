@@ -123,7 +123,7 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_nominal,
     /// A Type annotation
-    /// Example: `main! : List Str => Result {} _`
+    /// Example: `main! : List Str => Try {} _`
     /// Example: `colors : List Color`
     /// Example: `color : { red : U8, green: U8, blue: U8 }`
     /// * main_token - lower_ident token index

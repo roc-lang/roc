@@ -15,7 +15,7 @@ type=expr
     Left(1),
     Right(2),
     Some(Ok(Just(42))),
-    Result(Ok(Some(True))),
+    Try(Ok(Some(True))),
 ]
 ~~~
 # EXPECTED
@@ -91,7 +91,7 @@ EndOfFile,
 				(e-tag (raw "Just"))
 				(e-int (raw "42")))))
 	(e-apply
-		(e-tag (raw "Result"))
+		(e-tag (raw "Try"))
 		(e-apply
 			(e-tag (raw "Ok"))
 			(e-apply
@@ -110,7 +110,7 @@ EndOfFile,
 	Left(1),
 	Right(2),
 	Some(Ok(Just(42))),
-	Result(Ok(Some(True))),
+	Try(Ok(Some(True))),
 ]
 ~~~
 # CANONICALIZE
@@ -146,7 +146,7 @@ EndOfFile,
 						(e-tag (name "Just")
 							(args
 								(e-num (value "42"))))))))
-		(e-tag (name "Result")
+		(e-tag (name "Try")
 			(args
 				(e-tag (name "Ok")
 					(args

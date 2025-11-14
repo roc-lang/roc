@@ -868,7 +868,7 @@ pub fn main() !void {
         }
     }
 
-    // Load compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    // Load compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     const builtin_source = compiled_builtins.builtin_source;
     var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
     defer builtin_loaded.deinit();
@@ -921,7 +921,7 @@ pub fn main() !void {
 }
 
 fn checkSnapshotExpectations(gpa: Allocator) !bool {
-    // Load compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    // Load compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     const builtin_source = compiled_builtins.builtin_source;
     var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
     defer builtin_loaded.deinit();
@@ -1221,7 +1221,7 @@ fn processSnapshotContent(
         .builtin_module = config.builtin_module,
     };
 
-    // Auto-inject Bool, Result, Str, Dict, and Set as available imports (if they're loaded)
+    // Auto-inject Bool, Try, Str, Dict, and Set as available imports (if they're loaded)
     // This makes them available without needing explicit `import` statements in tests
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
@@ -1232,7 +1232,7 @@ fn processSnapshotContent(
     // in TypeAnno.Builtin.fromBytes() and should never go through module_envs
     if (config.builtin_module) |builtin_env| {
         const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
-        const result_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Result"));
+        const try_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Try"));
         const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
         const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
 
@@ -1240,7 +1240,7 @@ fn processSnapshotContent(
             .env = builtin_env,
             .statement_idx = config.builtin_indices.bool_type,
         });
-        try module_envs.put(result_ident, .{
+        try module_envs.put(try_ident, .{
             .env = builtin_env,
             .statement_idx = config.builtin_indices.try_type,
         });
@@ -1311,7 +1311,7 @@ fn processSnapshotContent(
         can_ir.evaluation_order = eval_order_ptr;
     }
 
-    // Types - include Set, Dict, Bool, Result, and Str modules in the order they appear in imports
+    // Types - include Set, Dict, Bool, Try, and Str modules in the order they appear in imports
     // The order MUST match the import order in can_ir.imports because module_idx in external
     // type references is based on the import index
     var builtin_modules = std.array_list.Managed(*const ModuleEnv).init(allocator);
@@ -1491,7 +1491,7 @@ const Config = struct {
     disable_updates: bool = false, // Disable updates for check mode
     trace_eval: bool = false,
     linecol_mode: LineColMode = .skip_linecol, // Include line/column info in output
-    // Compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    // Compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
 };
@@ -2963,7 +2963,7 @@ test "snapshot validation" {
 test "no Builtin module leaks in snapshots" {
     // IMPORTANT: The "Builtin" module is an implementation detail that should NEVER
     // appear in user-facing error messages. We consolidate all builtin types (Bool,
-    // Result, Dict, Set, Str) into a single Builtin module so they can have cyclic
+    // Try, Dict, Set, Str) into a single Builtin module so they can have cyclic
     // dependencies with each other. However, users should only see the type names
     // (e.g., "Dict", "Bool") not qualified names like "Builtin.Dict" or references
     // to the Builtin module in error messages.

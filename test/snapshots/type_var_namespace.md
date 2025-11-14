@@ -15,7 +15,7 @@ process = |list| {
 
     # type variable 'elem' still refers to the function annotation's type parameter
     result : elem
-    result = List.first(list) |> Result.withDefault(elem)
+    result = List.first(list) |> Try.withDefault(elem)
 
     result
 }
@@ -26,7 +26,7 @@ main! = |_| {}
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 DOES NOT EXIST - type_var_namespace.md:11:14:11:24
 UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
-DOES NOT EXIST - type_var_namespace.md:11:34:11:52
+DOES NOT EXIST - type_var_namespace.md:11:34:11:49
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|>** is not expected in an expression.
@@ -34,7 +34,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **type_var_namespace.md:11:31:11:33:**
 ```roc
-    result = List.first(list) |> Result.withDefault(elem)
+    result = List.first(list) |> Try.withDefault(elem)
 ```
                               ^^
 
@@ -47,7 +47,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 It's referenced here:
 **type_var_namespace.md:11:14:11:24:**
 ```roc
-    result = List.first(list) |> Result.withDefault(elem)
+    result = List.first(list) |> Try.withDefault(elem)
 ```
              ^^^^^^^^^^
 
@@ -57,20 +57,20 @@ I don't recognize this syntax.
 
 **type_var_namespace.md:11:31:11:33:**
 ```roc
-    result = List.first(list) |> Result.withDefault(elem)
+    result = List.first(list) |> Try.withDefault(elem)
 ```
                               ^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
 **DOES NOT EXIST**
-`Result.withDefault` does not exist.
+`Try.withDefault` does not exist.
 
-**type_var_namespace.md:11:34:11:52:**
+**type_var_namespace.md:11:34:11:49:**
 ```roc
-    result = List.first(list) |> Result.withDefault(elem)
+    result = List.first(list) |> Try.withDefault(elem)
 ```
-                                 ^^^^^^^^^^^^^^^^^^
+                                 ^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -126,7 +126,7 @@ EndOfFile,
 								(e-ident (raw "list"))))
 						(e-malformed (reason "expr_unexpected_token"))
 						(e-apply
-							(e-ident (raw "Result.withDefault"))
+							(e-ident (raw "Try.withDefault"))
 							(e-ident (raw "elem")))
 						(e-ident (raw "result"))))))
 		(s-decl
@@ -149,7 +149,7 @@ process = |list| {
 	# type variable 'elem' still refers to the function annotation's type parameter
 	result : elem
 	result = List.first(list)
-		Result.withDefault(elem)
+		Try.withDefault(elem)
 
 	result
 }

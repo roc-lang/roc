@@ -124,7 +124,7 @@ const TestEnv = @This();
 /// Accepts another module that should already be can'd and type checked, and will
 /// add that module as an import to this module.
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
-/// type variables from auto-imported types (Bool, Result, Str) are shared across modules.
+/// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
@@ -145,7 +145,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
     // Reuse the Builtin module from the imported module
-    // This ensures type variables for auto-imported types (Bool, Result, Str) are shared
+    // This ensures type variables for auto-imported types (Bool, Try, Str) are shared
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const builtin_env = other_test_env.builtin_module.env;
 
@@ -182,7 +182,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .statement_idx = statement_idx,
     });
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs,
@@ -205,7 +205,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     try can.canonicalizeFile();
     try can.validateForChecking();
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool and Try statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
 
@@ -284,7 +284,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-    // Load Builtin module once - Bool, Result, and Str are all types within this module
+    // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
@@ -298,7 +298,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs,
@@ -321,7 +321,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try can.canonicalizeFile();
     try can.validateForChecking();
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool and Try statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
 

@@ -1350,7 +1350,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
-    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
+    // Load builtin modules (Bool, Try, Str) for canonicalization and type checking
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
     defer builtin_modules.deinit();
 
@@ -1384,7 +1384,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs_map.deinit();
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs_map,

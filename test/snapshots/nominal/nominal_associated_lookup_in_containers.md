@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Qualified types in type applications (List, Result, etc.)
+description=Qualified types in type applications (List, Try, etc.)
 type=file:Foo.roc
 ~~~
 # SOURCE
@@ -13,7 +13,7 @@ Foo := [Whatever].{
 items : List(Foo.Bar)
 items = [A, B, C]
 
-result : Result(Foo.Bar, Foo.Error)
+result : Try(Foo.Bar, Foo.Error)
 result = Ok(A)
 
 nested : { bar : Foo.Bar, count : U64 }
@@ -76,7 +76,7 @@ EndOfFile,
 				(e-tag (raw "C"))))
 		(s-type-anno (name "result")
 			(ty-apply
-				(ty (name "Result"))
+				(ty (name "Try"))
 				(ty (name "Foo.Bar"))
 				(ty (name "Foo.Error"))))
 		(s-decl
@@ -108,7 +108,7 @@ Foo := [Whatever].{
 items : List(Foo.Bar)
 items = [A, B, C]
 
-result : Result(Foo.Bar, Foo.Error)
+result : Try(Foo.Bar, Foo.Error)
 result = Ok(A)
 
 nested : { bar : Foo.Bar, count : U64 }
@@ -133,7 +133,7 @@ nested = { bar: A, count: 1 }
 			(args
 				(e-tag (name "A"))))
 		(annotation
-			(ty-apply (name "Result") (builtin)
+			(ty-apply (name "Try") (builtin)
 				(ty-lookup (name "Foo.Bar") (local))
 				(ty-lookup (name "Foo.Error") (local)))))
 	(d-let

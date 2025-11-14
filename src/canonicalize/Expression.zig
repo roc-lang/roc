@@ -220,7 +220,7 @@ pub const Expr = union(enum) {
     /// A qualified, nominal type
     ///
     /// ```roc
-    /// Result.Ok("success")       # Tags
+    /// Try.Ok("success")       # Tags
     /// Config.{ optimize : Bool}  # Records
     /// Point.(1.0, 2.0)           # Tuples
     /// Point.(1.0)                # Values
@@ -233,7 +233,7 @@ pub const Expr = union(enum) {
     /// An external qualified, nominal type
     ///
     /// ```roc
-    /// OtherModule.Result.Ok("success")       # Tags
+    /// OtherModule.Try.Ok("success")       # Tags
     /// OtherModule.Config.{ optimize : Bool}  # Records
     /// OtherModule.Point.(1.0, 2.0)           # Tuples
     /// OtherModule.Point.(1.0)                # Values

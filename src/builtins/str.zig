@@ -892,7 +892,7 @@ inline fn strToBytes(
 }
 
 /// TODO
-pub const FromUtf8Result = extern struct {
+pub const FromUtf8Try = extern struct {
     byte_index: u64,
     string: RocStr,
     is_ok: bool,
@@ -904,7 +904,7 @@ pub fn fromUtf8C(
     list: RocList,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
-) callconv(.c) FromUtf8Result {
+) callconv(.c) FromUtf8Try {
     return fromUtf8(list, update_mode, roc_ops);
 }
 
@@ -1016,10 +1016,10 @@ pub fn fromUtf8(
     // TODO seems odd that we need this here
     // maybe we should pass in undefined or something to list.decref?
     roc_ops: *RocOps,
-) FromUtf8Result {
+) FromUtf8Try {
     if (list.len() == 0) {
         list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
-        return FromUtf8Result{
+        return FromUtf8Try{
             .is_ok = true,
             .string = RocStr.empty(),
             .byte_index = 0,
@@ -1031,7 +1031,7 @@ pub fn fromUtf8(
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
         const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode);
-        return FromUtf8Result{
+        return FromUtf8Try{
             .is_ok = true,
             .string = string,
             .byte_index = 0,
@@ -1042,7 +1042,7 @@ pub fn fromUtf8(
 
         list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
 
-        return FromUtf8Result{
+        return FromUtf8Try{
             .is_ok = false,
             .string = RocStr.empty(),
             .byte_index = @intCast(temp.index),
@@ -1162,7 +1162,7 @@ pub fn validateUtf8Bytes(
     bytes: [*]u8,
     length: usize,
     roc_ops: *RocOps,
-) FromUtf8Result {
+) FromUtf8Try {
     return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable, roc_ops);
 }
 
@@ -1170,7 +1170,7 @@ pub fn validateUtf8Bytes(
 pub fn validateUtf8BytesX(
     str: RocList,
     roc_ops: *RocOps,
-) FromUtf8Result {
+) FromUtf8Try {
     return fromUtf8(str, .Immutable, roc_ops);
 }
 
@@ -1189,8 +1189,8 @@ pub fn sliceHelp(
 }
 
 /// TODO
-pub fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
-    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
+pub fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Try {
+    return FromUtf8Try{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
 }
 
 // NOTE on memory: the validate function consumes a RC token of the input. Since
@@ -1626,7 +1626,7 @@ pub fn strReleaseExcessCapacity(
     }
 }
 
-fn expectOk(result: FromUtf8Result) !void {
+fn expectOk(result: FromUtf8Try) !void {
     try std.testing.expectEqual(result.is_ok, true);
 }
 

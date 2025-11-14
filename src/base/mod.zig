@@ -46,14 +46,14 @@ pub const CalledVia = enum {
     string_interpolation,
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
-    /// { Result.parallel <-
+    /// { Try.parallel <-
     ///     foo: get("a"),
     ///     bar: get("b"),
     /// }
     /// ```
     /// is transformed into
     /// ```roc
-    /// Result.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
+    /// Try.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
     /// ```
     record_builder,
 };

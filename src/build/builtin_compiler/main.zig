@@ -1,7 +1,7 @@
 //! Build-time compiler for Roc builtin module (Builtin.roc).
 //!
 //! This executable runs during `zig build` on the host machine to:
-//! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Result, Str, Dict, Set types)
+//! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
 //! 3. Output Builtin.bin to zig-out/builtins/ (which gets embedded in the roc binary)
 

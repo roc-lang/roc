@@ -636,7 +636,7 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
 /// Check the types for all defs
 /// Copy builtin types from their modules into the current module's type store
 /// This is necessary because type variables are module-specific - we can't use Vars from
-/// other modules directly. The Bool and Result types are used in language constructs like
+/// other modules directly. The Bool and Try types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
     const bool_stmt_idx = self.common_idents.bool_stmt;
@@ -651,7 +651,7 @@ fn copyBuiltinTypes(self: *Self) !void {
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
-    // Result type is accessed via external references, no need to copy it here
+    // Try type is accessed via external references, no need to copy it here
 }
 
 /// Check the types for all defs in a file
@@ -670,7 +670,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // don't think it _needs_ to. We reset before solving each def. We may be able
     // to save some perf by not passing `env` into the type stmt functions
 
-    // Copy builtin types (Bool, Result) into this module's type store
+    // Copy builtin types (Bool, Try) into this module's type store
     try self.copyBuiltinTypes();
 
     // First, iterate over the builtin statements, generating types for each type declaration
@@ -4053,7 +4053,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // If the root type is aa flex, then we there's nothing to check
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
-            // TODO: Internal types like Str, Result, List, etc are not
+            // TODO: Internal types like Str, Try, List, etc are not
             // technically nominal types. So in those cases, we should lookup
             // the builtin module manually and dispatch that way
 

@@ -7,12 +7,12 @@ import cli.Cmd
 # This script runs `./zig-out/bin/roc check src/PROFILING/bench_repeated_check.roc --time --no-cache` 5 times,
 # extracts timing data from the output, calculates median values, and appends results to out_file
 
-main! : List Arg => Result {} _
+main! : List Arg => Try {} _
 main! = |raw_args|
     args = List.map(raw_args, Arg.display)
 
     # get the second argument, the first is the executable's path
-    out_file = when List.get(args, 1) |> Result.map_err(|_| ZeroArgsGiven) is
+    out_file = when List.get(args, 1) |> Try.map_err(|_| ZeroArgsGiven) is
         Err(ZeroArgsGiven) ->
             Err(Exit(1, "Error ZeroArgsGiven:\n\tI expected one argument, but I got none.\n\tRun the app like this: `roc ./src/PROFILING/exec_bench.roc ./output.txt`"))?
         Ok(first_arg) ->
@@ -80,7 +80,7 @@ main! = |raw_args|
 
     Ok({})
 
-run_benchmark_command! : {} => Result Str _
+run_benchmark_command! : {} => Try Str _
 run_benchmark_command! = |{}|
     bench_output =
         Cmd.new("./zig-out/bin/roc")
@@ -89,7 +89,7 @@ run_benchmark_command! = |{}|
 
     Ok(bench_output.stdout_utf8)
 
-parse_bench_stdout : Str -> Result TimingData _
+parse_bench_stdout : Str -> Try TimingData _
 parse_bench_stdout = |output|
     lines = Str.split_on(output, "\n")
     
@@ -101,7 +101,7 @@ parse_bench_stdout = |output|
     
     Ok({ total_time_ms, phase_timings })
 
-extract_total_time : List Str -> Result Dec _
+extract_total_time : List Str -> Try Dec _
 extract_total_time = |lines|
     when List.find_first(lines, |line| Str.contains(line, "No errors found in")) is
         Ok line ->
@@ -115,7 +115,7 @@ extract_total_time = |lines|
 
         Err _ -> Err(InvalidTotalTime("Could not find line containing 'No errors found in' in:\n\t${Str.join_with(lines, "\n")}"))
 
-extract_phase_timings : List Str -> Result (List PhaseTime) _
+extract_phase_timings : List Str -> Try (List PhaseTime) _
 extract_phase_timings = |lines|
     expected_phases = [
         "tokenize + parse:",
@@ -129,7 +129,7 @@ extract_phase_timings = |lines|
     
     Ok(phase_times)
 
-extract_phase_time : List Str, Str -> Result PhaseTime _
+extract_phase_time : List Str, Str -> Try PhaseTime _
 extract_phase_time = |lines, phase_name|
     when List.find_first(lines, |line| Str.contains(line, phase_name)) is
         Ok line ->
@@ -148,7 +148,7 @@ extract_phase_time = |lines, phase_name|
 
         Err _ -> Err(InvalidPhaseTime("Could not find phase '${phase_name}' in:\n\t${Str.join_with(lines, "\n")}"))
 
-validate_phases : List TimingData -> Result {} _
+validate_phases : List TimingData -> Try {} _
 validate_phases = |all_timing_data|
     when List.first(all_timing_data) is
         Ok first_data ->
@@ -172,7 +172,7 @@ validate_phases = |all_timing_data|
                     
         Err _ -> Err(NoTimingData("No timing data found"))
 
-calculate_medians : List TimingData -> MedianResults
+calculate_medians : List TimingData -> MedianTrys
 calculate_medians = |all_timing_data|
     # Extract all total times and calculate median
     total_times = List.map(all_timing_data, |data| data.total_time_ms)
@@ -194,11 +194,11 @@ calculate_medians = |all_timing_data|
     
     {
         total_median_ms: median_total,
-        tokenize_parse_median_ns: List.get(phase_medians, 0) |> Result.with_default(0),
-        canonicalize_median_ns: List.get(phase_medians, 1) |> Result.with_default(0),
-        can_diagnostics_median_ns: List.get(phase_medians, 2) |> Result.with_default(0),
-        type_checking_median_ns: List.get(phase_medians, 3) |> Result.with_default(0),
-        type_checking_diagnostics_median_ns: List.get(phase_medians, 4) |> Result.with_default(0),
+        tokenize_parse_median_ns: List.get(phase_medians, 0) |> Try.with_default(0),
+        canonicalize_median_ns: List.get(phase_medians, 1) |> Try.with_default(0),
+        can_diagnostics_median_ns: List.get(phase_medians, 2) |> Try.with_default(0),
+        type_checking_median_ns: List.get(phase_medians, 3) |> Try.with_default(0),
+        type_checking_diagnostics_median_ns: List.get(phase_medians, 4) |> Try.with_default(0),
     }
 
 calculate_median : List Dec -> Dec
@@ -221,7 +221,7 @@ calculate_median_u64 = |values|
         Ok median -> median
         Err _ -> 0
 
-append_results_to_file! : AllBenchmarkData, Str => Result {} _
+append_results_to_file! : AllBenchmarkData, Str => Try {} _
 append_results_to_file! = |benchmark_data, output_file_path_str|
     content = 
         """
@@ -242,7 +242,7 @@ append_results_to_file! = |benchmark_data, output_file_path_str|
         """
     
     # Read existing content if file exists
-    existing_content = File.read_utf8!(output_file_path_str) |> Result.with_default("")
+    existing_content = File.read_utf8!(output_file_path_str) |> Try.with_default("")
     
     # Append new content
     new_content = Str.concat(existing_content, content)
@@ -262,7 +262,7 @@ PhaseTime : {
     time_ns : U64,
 }
 
-MedianResults : {
+MedianTrys : {
     total_median_ms : Dec,
     tokenize_parse_median_ns : U64,
     canonicalize_median_ns : U64,
@@ -276,7 +276,7 @@ AllBenchmarkData : {
     commit_hash : Str,
     zig_version : Str,
     operating_system : Str,
-    median_results : MedianResults,
+    median_results : MedianTrys,
 }
 
 # Test functions

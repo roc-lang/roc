@@ -66,7 +66,7 @@ pub const Pattern = union(enum) {
     /// Used for pattern matching nominal types.
     ///
     /// ```roc
-    /// Result.Ok("success")       # Tags
+    /// Try.Ok("success")       # Tags
     /// Config.{ optimize : Bool}  # Records
     /// Point.(1.0, 2.0)           # Tuples
     /// Point.(1.0)                # Values
@@ -80,7 +80,7 @@ pub const Pattern = union(enum) {
     /// Used for pattern matching nominal types.
     ///
     /// ```roc
-    /// MyModule.Result.Ok("success")       # Tags
+    /// MyModule.Try.Ok("success")       # Tags
     /// MyModule.Config.{ optimize : Bool}  # Records
     /// MyModule.Point.(1.0, 2.0)           # Tuples
     /// MyModule.Point.(1.0)                # Values
