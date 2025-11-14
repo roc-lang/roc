@@ -446,6 +446,51 @@ pub const Num = union(enum) {
     num_poly: Var,
     num_unbound: NumRequirements,
 
+    /// A special numeric type variant that behaves like a flex var during type checking
+    /// but defaults to I128 during evaluation.
+    ///
+    /// **Problem it solves:**
+    ///
+    /// When desugaring arithmetic operations to method calls (e.g., `x + 1` → `x.plus(1)`),
+    /// we face a constraint circularity issue. The lambda `|x| x + 1` should have type
+    /// `a -> b where [a.plus : a, c -> b]`, where only `c` (the type of `1`) is numeric.
+    /// The return type `b` must be unconstrained to avoid circular references between
+    /// the parameter type and return type (which would cause them to unify incorrectly).
+    ///
+    /// However, when we apply this lambda to a concrete value like `5`, we need the result
+    /// to be evaluatable. If `b` remains a pure flex var, the interpreter doesn't know
+    /// how to evaluate the `.plus` method call, as flex vars don't have concrete implementations.
+    ///
+    /// **How it works:**
+    ///
+    /// During unification, `num_unbound_if_builtin` acts like a flex var:
+    /// - Unifying with U32 → U32 (concrete type wins)
+    /// - Unifying with another flex var → stays num_unbound_if_builtin
+    /// - Unifying with num_unbound → becomes num_unbound (more constrained wins)
+    /// - Unifying with concrete types → concrete type wins
+    ///
+    /// When a non-numeric argument type `a` unifies with a numeric type (e.g., when the
+    /// value `5` is passed to `|x| x + 1`), the unification logic detects this transition
+    /// and modifies the `.plus` constraint by unifying both the 2nd argument type and the
+    /// return type with new `num_unbound_if_builtin` type variables.
+    ///
+    /// During evaluation, if the type is still `num_unbound_if_builtin` (i.e., it never
+    /// unified with a more concrete type), it's treated as I128 (the builtin default for
+    /// unconstrained numeric operations).
+    ///
+    /// **Why this preserves soundness:**
+    ///
+    /// This approach maintains flex var unification semantics during type checking while
+    /// providing a concrete evaluation path for builtin operations. It only applies to
+    /// constraints that originate from builtin operators (marked with origin `.desugared_binop`),
+    /// ensuring user-defined methods aren't affected.
+    ///
+    /// **Current limitations:**
+    ///
+    /// Currently only implemented for `.plus` method from arithmetic desugaring. Other
+    /// operators (`.times`, `.minus`, etc.) will need similar treatment in the future.
+    num_unbound_if_builtin: NumRequirements,
+
     // These are Num(int) or Num(frac)
     //               ^^^         ^^^^
     int_poly: Var,

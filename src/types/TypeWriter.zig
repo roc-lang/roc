@@ -796,6 +796,12 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             try self.generateContextualName(.NumContent);
             try self.addImplicitNumericConstraint("from_int_digits");
         },
+        .num_unbound_if_builtin => |_| {
+            // Display the same as num_unbound for now
+            _ = try self.buf.writer().write("_");
+            try self.generateContextualName(.NumContent);
+            try self.addImplicitNumericConstraint("from_int_digits");
+        },
         .int_unbound => |_| {
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);

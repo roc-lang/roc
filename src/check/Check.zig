@@ -4190,7 +4190,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             // For unbound/poly numeric types, skip constraint checking (like flex vars)
             switch (num) {
-                .num_unbound, .num_poly, .int_unbound, .int_poly, .frac_unbound, .frac_poly => {
+                .num_unbound, .num_unbound_if_builtin, .num_poly, .int_unbound, .int_poly, .frac_unbound, .frac_poly => {
                     continue;
                 },
                 .int_precision, .frac_precision, .num_compact => {},

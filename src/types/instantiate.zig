@@ -278,6 +278,7 @@ pub const Instantiator = struct {
             .int_precision => |precision| Num{ .int_precision = precision },
             .frac_precision => |precision| Num{ .frac_precision = precision },
             .num_unbound => |unbound| Num{ .num_unbound = unbound },
+            .num_unbound_if_builtin => |unbound| Num{ .num_unbound_if_builtin = unbound },
             .int_unbound => |unbound| Num{ .int_unbound = unbound },
             .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
             .num_compact => |compact| Num{ .num_compact = compact },

@@ -1954,7 +1954,7 @@ pub const Interpreter = struct {
 
                                 // Determine which builtin numeric type to dispatch to based on the num variant
                                 const default_numeric_stmt = switch (num) {
-                                    .num_unbound, .num_poly => self.builtins.i128_stmt,
+                                    .num_unbound, .num_unbound_if_builtin, .num_poly => self.builtins.i128_stmt,
                                     .int_unbound, .int_poly => self.builtins.i128_stmt,
                                     .frac_unbound, .frac_poly => self.builtins.dec_stmt,
 
@@ -2977,7 +2977,7 @@ pub const Interpreter = struct {
 
                             // Determine which builtin numeric type to dispatch to based on the num variant
                             const default_numeric_stmt = switch (num) {
-                                .num_unbound, .num_poly => self.builtins.i128_stmt,
+                                .num_unbound, .num_unbound_if_builtin, .num_poly => self.builtins.i128_stmt,
                                 .int_unbound, .int_poly => self.builtins.i128_stmt,
                                 .frac_unbound, .frac_poly => self.builtins.dec_stmt,
 
@@ -4670,6 +4670,10 @@ pub const Interpreter = struct {
                                         // For polymorphic types, use default precision
                                         .num_unbound => |_| {
                                             // TODO: Should we consider requirements here?
+                                            break :prec .{ .int = types.Num.Int.Precision.default };
+                                        },
+                                        .num_unbound_if_builtin => |_| {
+                                            // Default to I128 for builtin operations
                                             break :prec .{ .int = types.Num.Int.Precision.default };
                                         },
                                         .int_unbound => {

@@ -256,6 +256,7 @@ fn copyNum(
         .int_poly => |poly_var| Num{ .int_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .frac_poly => |poly_var| Num{ .frac_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .num_unbound => |unbound| Num{ .num_unbound = unbound },
+        .num_unbound_if_builtin => |unbound| Num{ .num_unbound_if_builtin = unbound },
         .int_unbound => |unbound| Num{ .int_unbound = unbound },
         .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
         .int_precision => |precision| Num{ .int_precision = precision },

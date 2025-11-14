@@ -969,6 +969,16 @@ pub const Store = struct {
                                     else
                                         Layout.int(types.Num.Int.Precision.i128);
                                 },
+                                .num_unbound_if_builtin => |reqs| {
+                                    // Like num_unbound, but allowed to be unconstrained at runtime
+                                    // Defaults to I128 for integers, Dec for fractions
+                                    const is_decimal = reqs.frac_requirements.fits_in_dec and !reqs.frac_requirements.fits_in_f32 and reqs.int_requirements.bits_needed == 0;
+
+                                    break :flat_type if (is_decimal)
+                                        Layout.frac(types.Num.Frac.Precision.dec)
+                                    else
+                                        Layout.int(types.Num.Int.Precision.i128);
+                                },
                                 .int_unbound => |reqs| {
                                     // Default to I128
                                     if (reqs.constraints.isEmpty()) {
