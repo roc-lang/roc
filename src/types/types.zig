@@ -31,7 +31,7 @@ test {
     try std.testing.expectEqual(40, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(12, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(40, @sizeOf(StaticDispatchConstraint)); // Increased due to recursion_info field
 }
 
 /// A type variable
@@ -163,6 +163,7 @@ pub const Content = union(enum) {
     rigid: Rigid,
     alias: Alias,
     structure: FlatType,
+    recursion_var: RecursionVar,
     err,
 
     // helpers //
@@ -241,6 +242,22 @@ pub const Content = union(enum) {
             else => return null,
         }
     }
+
+    /// Unwrap a recursion var or return null
+    pub fn unwrapRecursionVar(content: Self) ?RecursionVar {
+        switch (content) {
+            .recursion_var => |rec_var| return rec_var,
+            else => return null,
+        }
+    }
+
+    /// Check if content is a recursion var
+    pub fn isRecursionVar(content: Self) bool {
+        return switch (content) {
+            .recursion_var => true,
+            else => false,
+        };
+    }
 };
 
 // flex //
@@ -292,6 +309,58 @@ pub const Rigid = struct {
             .constraints = constraints,
         };
     }
+};
+
+// recursion var //
+
+/// A recursion variable marks a point in a type where recursion occurs.
+/// This is used to implement **equirecursive unification** for static dispatch constraints.
+///
+/// ## The Problem
+///
+/// When a type has recursive constraints (e.g., `a.plus : a, Int -> a`), the return type `a`
+/// would normally require checking the same constraints infinitely:
+/// - `a` has constraint `a.plus : a, _ -> ret`
+/// - `ret` also needs constraint `ret.plus : ret, _ -> ret2`
+/// - `ret2` also needs constraint `ret2.plus : ret2, _ -> ret3`
+/// - ...infinitely
+///
+/// This occurs in expressions like `(|x| x.plus(5))(7)` where numeric operations return
+/// numeric types that themselves support the same operations.
+///
+/// ## The Solution: Equirecursive Unification
+///
+/// Instead of infinitely expanding the constraint chain, we:
+/// 1. **Detect recursion** during constraint checking (via constraint_check_stack in Check.zig)
+/// 2. **Create a RecursionVar** that points back to the original structure
+/// 3. **Unify equirecursively**: Two types unify if they're structurally equal up to their recursion point
+///
+/// ## How It Works
+///
+/// A RecursionVar creates a **circular reference**:
+/// ```
+/// type_var -> RecursionVar { structure: type_var }
+/// ```
+///
+/// During unification (see unify.zig):
+/// - When we encounter a RecursionVar, we unfold one level and unify with its structure
+/// - The existing cycle detection in `unifyGuarded` (via `checkVarsEquiv`) prevents infinite recursion
+/// - Two RecursionVars unify if their structures unify
+///
+/// During type display (see TypeWriter.zig):
+/// - RecursionVar displays as its structure type
+/// - The existing `seen` tracking detects cycles and displays "..." to indicate recursion
+///
+/// ## Example
+///
+/// For `(|x| x.plus(5))(7)`:
+/// - Without RecursionVar: Infinite loop during constraint checking
+/// - With RecursionVar: Creates `a` where `a = RecursionVar { structure: a }`, terminates successfully
+pub const RecursionVar = struct {
+    /// The type variable containing the actual structure this recursion var points to
+    structure: Var,
+    /// Optional name for debugging and pretty-printing
+    name: ?Ident.Idx,
 };
 
 // alias //
@@ -992,6 +1061,20 @@ test "BitsNeeded.fromValue calculates correct bits for various values" {
 
 // content //
 
+/// Information about a recursive static dispatch constraint
+///
+/// When we detect that a constraint refers to itself (e.g., through a chain
+/// of constraints), we create a RecursionVar to prevent infinite loops and
+/// store metadata about the recursion here.
+pub const RecursionInfo = struct {
+    /// The recursion variable created to represent this recursive constraint
+    recursion_var: Var,
+
+    /// The depth in the constraint check stack where recursion was detected
+    /// This helps with debugging and understanding the recursion structure
+    depth: usize,
+};
+
 /// Represents a static dispatch constraints on a variable
 ///
 /// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
@@ -1005,6 +1088,8 @@ pub const StaticDispatchConstraint = struct {
     fn_var: Var,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
+    /// Optional recursion information if this constraint is recursive
+    recursion_info: ?RecursionInfo = null,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u3) {

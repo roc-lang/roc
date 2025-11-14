@@ -4877,6 +4877,15 @@ pub const Interpreter = struct {
                     const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
+                .recursion_var => |rec_var| {
+                    // Translate the structure variable that the recursion var points to
+                    const rt_structure = try self.translateTypeVar(module, rec_var.structure);
+                    const content: types.Content = .{ .recursion_var = .{
+                        .structure = rt_structure,
+                        .name = rec_var.name,
+                    } };
+                    break :blk try self.runtime_types.freshFromContent(content);
+                },
                 .flex => |flex| {
                     // Translate static dispatch constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {

@@ -423,6 +423,10 @@ pub const Generalizer = struct {
                     },
                 }
             },
+            .recursion_var => |rec_var| {
+                // Adjust rank by checking the structure the recursion var points to
+                return Rank.top_level.max(try self.adjustRank(rec_var.structure, group_rank, vars_to_generalize));
+            },
             .err => return group_rank,
         };
     }

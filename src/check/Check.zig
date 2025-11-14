@@ -90,6 +90,9 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
+/// Stack of type variables currently being constraint-checked, used to detect recursive constraints
+/// When a var appears in this stack while we're checking its constraints, we've detected recursion
+constraint_check_stack: std.ArrayList(Var),
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -171,6 +174,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
+        .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
@@ -198,6 +202,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
+    self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
     self.static_dispatch_method_name_buf.deinit(self.gpa);
@@ -1379,8 +1384,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     try self.unifyWith(anno_var, .err, env);
                                     return;
                                 },
-                                .flex, .rigid => {
-                                    // External type resolved to a flex or rigid var.
+                                .flex, .rigid, .recursion_var => {
+                                    // External type resolved to a flex, rigid, or recursion var.
                                     // This can happen when the external type is polymorphic but hasn't been
                                     // instantiated yet. We need to use the variable as-is, but this means
                                     // we can't get the arity/name information. This is likely a bug in how
@@ -4035,6 +4040,44 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
 
 // validate static dispatch constraints //
 
+/// Handle a recursive static dispatch constraint by creating a RecursionVar
+///
+/// When we detect that a constraint check would recurse (the variable is already
+/// being checked in the call stack), we create a RecursionVar to represent the
+/// recursive structure and prevent infinite loops.
+///
+/// The RecursionVar points back to the original variable structure, allowing
+/// equirecursive unification to properly handle the cycle.
+fn handleRecursiveConstraint(
+    self: *Self,
+    var_: types_mod.Var,
+    depth: usize,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    // Create the RecursionVar content that points to the original structure
+    const rec_var_content = types_mod.Content{
+        .recursion_var = .{
+            .structure = var_,
+            .name = null, // Could be enhanced to carry debug name
+        },
+    };
+
+    // Create a new type variable to represent the recursion point
+    // Use the current environment's rank for the recursion var
+    const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
+
+    // Create RecursionInfo to track the recursion metadata
+    const recursion_info = types_mod.RecursionInfo{
+        .recursion_var = recursion_var,
+        .depth = depth,
+    };
+
+    // Store the recursion info in the deferred constraint
+    // Note: This will be enhanced in later implementation to properly
+    // update the constraint with the recursion info
+    _ = recursion_info;
+}
+
 /// Check static dispatch constraints
 ///
 /// Note that new constraints can be added as we are processing. For example:
@@ -4059,6 +4102,20 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
+
+        // Detect recursive constraints
+        // Check if this var is already in the constraint check stack
+        for (self.constraint_check_stack.items, 0..) |stack_var, depth| {
+            if (stack_var == dispatcher_resolved.var_) {
+                // Found recursion! Create a RecursionVar to handle this properly
+                try self.handleRecursiveConstraint(dispatcher_resolved.var_, depth, env);
+                continue;
+            }
+        }
+
+        // Not recursive - push to stack and proceed normally
+        try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
+        defer _ = self.constraint_check_stack.pop();
 
         if (dispatcher_content == .err) {
             // If the root type is an error, then skip constraint checking

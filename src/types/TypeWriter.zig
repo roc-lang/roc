@@ -405,6 +405,10 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                     _ = try self.buf.writer().write(")");
                 }
             },
+            .recursion_var => |rec_var| {
+                // Write the recursion var by writing the structure it points to
+                try self.writeVar(rec_var.structure, root_var);
+            },
             .err => {
                 _ = try self.buf.writer().write("Error");
             },
@@ -752,6 +756,9 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         .alias => {
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
         },
+        .recursion_var => {
+            try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+        },
     }
 }
 
@@ -972,6 +979,10 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         },
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
+        },
+        .recursion_var => |rec_var| {
+            // Count the structure the recursion var points to
+            try self.countVar(search_var, rec_var.structure, count);
         },
         .err => {},
     }

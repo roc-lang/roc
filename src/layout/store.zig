@@ -1450,6 +1450,11 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
+                .recursion_var => |rec_var| {
+                    // Follow the recursion var structure
+                    current = self.types_store.resolveVar(rec_var.structure);
+                    continue;
+                },
                 .err => return LayoutError.TypeContainedMismatch,
             };
 
