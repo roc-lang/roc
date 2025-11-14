@@ -44,4 +44,5 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/builtin_scope_test.zig"));
     std.testing.refAllDecls(@import("test/check_code_patterns_test.zig"));
     std.testing.refAllDecls(@import("test/binop_constraint_test.zig"));
+    std.testing.refAllDecls(@import("test/test_simple_plus_types.zig"));
 }
