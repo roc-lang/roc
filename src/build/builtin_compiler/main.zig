@@ -119,6 +119,81 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
+/// Transform all numeric nominal types (U8, I8, ..., I128, Dec, F32, F64) to their compact Num representations.
+/// This ensures that numeric types in method signatures use num_compact instead of staying as nominal types,
+/// which is necessary for proper unification and serialization.
+fn transformNumericNominalToPrimitive(env: *ModuleEnv) !void {
+    const Num = types.Num;
+
+    // Map of numeric type names to their compact representations
+    const NumericTypeMapping = struct {
+        name: []const u8,
+        num_type: Num,
+    };
+
+    const numeric_mappings = [_]NumericTypeMapping{
+        .{ .name = "U8", .num_type = .{ .num_compact = .{ .int = .u8 } } },
+        .{ .name = "I8", .num_type = .{ .num_compact = .{ .int = .i8 } } },
+        .{ .name = "U16", .num_type = .{ .num_compact = .{ .int = .u16 } } },
+        .{ .name = "I16", .num_type = .{ .num_compact = .{ .int = .i16 } } },
+        .{ .name = "U32", .num_type = .{ .num_compact = .{ .int = .u32 } } },
+        .{ .name = "I32", .num_type = .{ .num_compact = .{ .int = .i32 } } },
+        .{ .name = "U64", .num_type = .{ .num_compact = .{ .int = .u64 } } },
+        .{ .name = "I64", .num_type = .{ .num_compact = .{ .int = .i64 } } },
+        .{ .name = "U128", .num_type = .{ .num_compact = .{ .int = .u128 } } },
+        .{ .name = "I128", .num_type = .{ .num_compact = .{ .int = .i128 } } },
+        .{ .name = "Dec", .num_type = .{ .num_compact = .{ .frac = .dec } } },
+        .{ .name = "F32", .num_type = .{ .num_compact = .{ .frac = .f32 } } },
+        .{ .name = "F64", .num_type = .{ .num_compact = .{ .frac = .f64 } } },
+    };
+
+    // Build a map of identifier -> num type for fast lookup
+    var ident_to_num_map = std.AutoHashMap(base.Ident.Idx, Num).init(env.gpa);
+    defer ident_to_num_map.deinit();
+
+    for (numeric_mappings) |mapping| {
+        if (env.common.findIdent(mapping.name)) |ident| {
+            try ident_to_num_map.put(ident, mapping.num_type);
+        }
+    }
+
+    // Iterate through all slots in the type store
+    for (0..env.types.len()) |i| {
+        const var_idx = @as(Var, @enumFromInt(i));
+
+        // Skip redirects, only process roots
+        if (!env.types.resolveVar(var_idx).is_root) {
+            continue;
+        }
+
+        const resolved = env.types.resolveVar(var_idx);
+        const desc = resolved.desc;
+
+        // Check if this descriptor contains a nominal type
+        switch (desc.content) {
+            .structure => |structure| {
+                switch (structure) {
+                    .nominal_type => |nominal| {
+                        // Check if this is a numeric nominal type
+                        if (ident_to_num_map.get(nominal.ident.ident_idx)) |num_type| {
+                            // Replace with compact num type
+                            const new_content = Content{ .structure = .{ .num = num_type } };
+                            const new_desc = types.Descriptor{
+                                .content = new_content,
+                                .rank = desc.rank,
+                                .mark = desc.mark,
+                            };
+                            try env.types.setVarDesc(var_idx, new_desc);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
 /// This transforms standalone annotations into low-level builtin lambda operations
 /// that will be recognized by the compiler backend.
@@ -639,9 +714,10 @@ pub fn main() !void {
 
     // Transform nominal types to primitive types as necessary.
     // This must happen BEFORE serialization to ensure the .bin file contains
-    // methods associated with the .str primitive, not a nominal type
+    // methods associated with primitives/compact types, not nominal types
     try transformStrNominalToPrimitive(builtin_env);
     try transformListNominalToPrimitive(builtin_env);
+    try transformNumericNominalToPrimitive(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");

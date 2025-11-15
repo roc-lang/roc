@@ -1843,6 +1843,39 @@ const Unifier = struct {
                             },
                         } } });
                     },
+                    .int_unbound => |b_requirements| {
+                        // int_unbound is more specific, so result is int_unbound
+                        const merged_int = a_reqs.int_requirements.unify(b_requirements);
+                        const merged_constraints = try self.unifyStaticDispatchConstraints(
+                            a_reqs.constraints,
+                            b_requirements.constraints,
+                        );
+
+                        self.merge(vars, .{ .structure = .{ .num = .{
+                            .int_unbound = .{
+                                .sign_needed = merged_int.sign_needed,
+                                .bits_needed = merged_int.bits_needed,
+                                .is_minimum_signed = merged_int.is_minimum_signed,
+                                .constraints = merged_constraints,
+                            },
+                        } } });
+                    },
+                    .frac_unbound => |b_requirements| {
+                        // frac_unbound is more specific, so result is frac_unbound
+                        const merged_frac = a_reqs.frac_requirements.unify(b_requirements);
+                        const merged_constraints = try self.unifyStaticDispatchConstraints(
+                            a_reqs.constraints,
+                            b_requirements.constraints,
+                        );
+
+                        self.merge(vars, .{ .structure = .{ .num = .{
+                            .frac_unbound = .{
+                                .fits_in_f32 = merged_frac.fits_in_f32,
+                                .fits_in_dec = merged_frac.fits_in_dec,
+                                .constraints = merged_constraints,
+                            },
+                        } } });
+                    },
                     .num_unbound_if_builtin => |b_requirements| {
                         // Merge two num_unbound_if_builtin
                         const merged_int = a_reqs.int_requirements.unify(b_requirements.int_requirements);
@@ -2039,6 +2072,38 @@ const Unifier = struct {
                             a_num_compact,
                             b_reqs,
                         );
+                    },
+                    .int_unbound => |b_reqs| {
+                        // When num_compact unifies with int_unbound, num_compact wins (it's more specific)
+                        // But we need to check that the compact type is actually an int
+                        switch (a_num_compact) {
+                            .int => |a_prec| {
+                                // Check if the int precision satisfies the requirements
+                                const result = self.checkIntPrecisionRequirements(a_prec, b_reqs);
+                                switch (result) {
+                                    .ok => {},
+                                    .negative_unsigned => return error.NegativeUnsignedInt,
+                                    .too_large => return error.NumberDoesNotFit,
+                                }
+                                self.merge(vars, vars.a.desc.content);
+                            },
+                            .frac => return error.TypeMismatch, // frac can't unify with int_unbound
+                        }
+                    },
+                    .frac_unbound => |b_reqs| {
+                        // When num_compact unifies with frac_unbound, num_compact wins (it's more specific)
+                        // But we need to check that the compact type is actually a frac
+                        switch (a_num_compact) {
+                            .frac => |a_prec| {
+                                // Check if the frac precision satisfies the requirements
+                                const does_fit = self.checkFracPrecisionRequirements(a_prec, b_reqs);
+                                if (!does_fit) {
+                                    return error.NumberDoesNotFit;
+                                }
+                                self.merge(vars, vars.a.desc.content);
+                            },
+                            .int => return error.TypeMismatch, // int can't unify with frac_unbound
+                        }
                     },
                     else => return error.TypeMismatch,
                 }
