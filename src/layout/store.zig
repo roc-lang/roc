@@ -1388,7 +1388,7 @@ pub const Store = struct {
                         return LayoutError.ZeroSizedType;
                     },
                 },
-                .flex => |flex_data| blk: {
+                .flex => blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue

@@ -73,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> (_arg -> b) where [a.plus : a, Error -> b]"))
+(expr (type "a -> (_arg -> _size) where [a.plus : a, Error -> _size2, _b.from_int_digits : _arg -> _ret]"))
 ~~~

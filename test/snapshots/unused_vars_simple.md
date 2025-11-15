@@ -257,12 +257,12 @@ main! = |_| {
 		(patt (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
 		(patt (type "e -> e"))
 		(patt (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
-		(patt (type "e -> f where [e.plus : e, _size -> f, _g.from_int_digits : _arg -> _ret]"))
+		(patt (type "e -> _size where [e.plus : e, _size2 -> _size3, _f.from_int_digits : _arg -> _ret]"))
 		(patt (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]")))
 	(expressions
 		(expr (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
 		(expr (type "e -> e"))
 		(expr (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))
-		(expr (type "e -> f where [e.plus : e, _size -> f, _g.from_int_digits : _arg -> _ret]"))
+		(expr (type "e -> _size where [e.plus : e, _size2 -> _size3, _f.from_int_digits : _arg -> _ret]"))
 		(expr (type "_arg -> _size where [_e.from_int_digits : _arg -> _ret]"))))
 ~~~

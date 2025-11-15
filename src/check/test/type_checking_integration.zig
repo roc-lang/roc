@@ -1766,7 +1766,7 @@ test "check type - equirecursive static dispatch - motivating example (current b
     try checkTypesExpr(
         source,
         .pass,
-        "_a",
+        "_size where [_a.from_int_digits : _arg -> _ret]",
     );
 }
 
@@ -1910,7 +1910,7 @@ test "check type - lambda with .plus method call on flex types" {
     const source =
         \\addFn = |x, y| x.plus(y)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a, b -> c where [a.plus : a, b -> c]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a, _size -> _size2 where [a.plus : a, _size3 -> _size4, _b.from_int_digits : _arg -> _ret]");
 }
 
 test "check type - lambda x + x (same variable twice)" {

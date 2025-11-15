@@ -164,13 +164,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, b -> c where [a.times : a, b -> c]"))
+		(patt (type "a, _size -> _size2 where [a.times : a, _size3 -> _size4, _b.from_int_digits : _arg -> _ret]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, _size -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(patt (type "a -> Error where [a.times : a, _size -> _size2, _b.from_int_digits : _arg -> _ret]"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "a, b -> c where [a.times : a, b -> c]"))
+		(expr (type "a, _size -> _size2 where [a.times : a, _size3 -> _size4, _b.from_int_digits : _arg -> _ret]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, _size -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(expr (type "a -> Error where [a.times : a, _size -> _size2, _b.from_int_digits : _arg -> _ret]"))
 		(expr (type "Error"))))
 ~~~

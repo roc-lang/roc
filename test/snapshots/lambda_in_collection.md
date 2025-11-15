@@ -89,5 +89,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(c, d -> e, f, g -> h) where [c.plus : c, d -> e, f.minus : f, g -> h]"))
+(expr (type "(c, _size -> _size2, d, _size3 -> _size4) where [c.plus : c, _size5 -> _size6, d.minus : d, _size7 -> _size8, _e.from_int_digits : _arg -> _ret]"))
 ~~~

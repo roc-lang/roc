@@ -26,6 +26,34 @@ MISSING METHOD - minus_operator_vs_method.md:11:11:11:16
 - - :0:0:0:0
 MISSING METHOD - minus_operator_vs_method.md:15:11:15:21
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**minus_operator_vs_method.md:11:15:11:16:**
+```roc
+result1 = a - b
+```
+              ^
+
+It has the type:
+    _MyType_
+
+But I expected it to be:
+    __size_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**minus_operator_vs_method.md:11:11:11:16:**
+```roc
+result1 = a - b
+```
+          ^^^^^
+
+It has the type:
+    __size_
+
+But the type annotation says it should have the type:
+    _MyType_
+
 **MISSING METHOD**
 The value before this **-** operator has the type **MyType**, which has no **minus** method:
 **minus_operator_vs_method.md:11:11:11:16:**
@@ -36,6 +64,34 @@ result1 = a - b
 
 
 **Hint: **The **-** operator calls a method named **minus** on the value preceding it, passing the value after the operator as the one argument.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**minus_operator_vs_method.md:15:19:15:20:**
+```roc
+result2 = a.minus(b)
+```
+                  ^
+
+It has the type:
+    _MyType_
+
+But I expected it to be:
+    __size_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**minus_operator_vs_method.md:15:11:15:21:**
+```roc
+result2 = a.minus(b)
+```
+          ^^^^^^^^^^
+
+It has the type:
+    __size_
+
+But the type annotation says it should have the type:
+    _MyType_
 
 **MISSING METHOD**
 This **minus** method is being called on the type **MyType**, which has no method with that name:

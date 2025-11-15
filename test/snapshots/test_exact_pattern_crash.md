@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __size, _size2, (_arg -> e), (_arg2 -> h) -> _ret where [_size3, _size4, (i -> e), (j -> h) -> k.plus : _size5, _size6, (i -> e), (j -> h) -> k, _size7, _size8, (i -> e), (j -> h) -> k.times : _size9, _size10, (i -> e), (j -> h) -> k]_
+    __size, _size2, (_arg -> _size3), (_arg2 -> _size4) -> _ret where [_size5, _size6, (e -> _size7), (h -> _size8) -> i.plus : _size9, _size10, (e -> _size11), (h -> _size12) -> i, _size13, _size14, (e -> _size15), (h -> _size16) -> i.times : _size17, _size18, (e -> _size19), (h -> _size20) -> i]_
 
 But I expected it to be:
     _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_
