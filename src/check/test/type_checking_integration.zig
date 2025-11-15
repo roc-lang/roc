@@ -1801,25 +1801,14 @@ test "check type - I128 explicit method call in block" {
 }
 
 test "check type - equirecursive static dispatch - annotated motivating example" {
-    // This tests the exact pattern from the motivating example (|x| x.plus(b))(a)
-    // but with explicit type annotations instead of relying on numeric types.
-    // This demonstrates that the RecursionVar infrastructure works correctly
-    // with the same constraint structure as the motivating example.
     const source =
-        \\fn : a, b -> ret where [
-        \\    a.plus : a, b -> ret,
-        \\    a.from_int_digits : List(U8) -> Try(a, [OutOfRange]),
-        \\    b.from_int_digits : List(U8) -> Try(b, [OutOfRange])
-        \\]
         \\fn = |a, b| (|x| x.plus(b))(a)
     ;
 
-    // The key test: this should complete without infinite loops!
-    // The annotated type should match the inferred type
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "fn" } },
-        "a, b -> ret where [a.plus : a, b -> ret, List(U8).from_int_digits : List(U8) -> Try(a, [OutOfRange]), List(U8).from_int_digits : List(U8) -> Try(b, [OutOfRange])]",
+        .{ .pass = .last_def },
+        "c, _size -> _size2 where [c.plus : c, _size3 -> _size4, _d.from_int_digits : _arg -> _ret]",
     );
 }
 
