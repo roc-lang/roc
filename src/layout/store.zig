@@ -1220,18 +1220,36 @@ pub const Store = struct {
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
-                                const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
+                                const arg_layout_idx = self.addTypeVar(arg_var, &temp_scope) catch |err| {
+                                    if (err == LayoutError.ZeroSizedType) {
+                                        // Zero-sized payload (e.g., flex var); skip it
+                                        continue;
+                                    }
+                                    return err;
+                                };
                                 const layout_val = self.getLayout(arg_layout_idx);
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
                                 // Build tuple layout from argument layouts
                                 var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
                                 defer self.env.gpa.free(elem_layouts);
+                                var non_zero_count: usize = 0;
                                 for (args_slice, 0..) |v, i| {
-                                    const elem_idx = try self.addTypeVar(v, &temp_scope);
-                                    elem_layouts[i] = self.getLayout(elem_idx);
+                                    const elem_idx = self.addTypeVar(v, &temp_scope) catch |err| {
+                                        if (err == LayoutError.ZeroSizedType) {
+                                            // Skip zero-sized elements (e.g., flex vars)
+                                            continue;
+                                        }
+                                        return err;
+                                    };
+                                    elem_layouts[non_zero_count] = self.getLayout(elem_idx);
+                                    non_zero_count += 1;
                                 }
-                                const tuple_idx = try self.putTuple(elem_layouts);
+                                if (non_zero_count == 0) {
+                                    // All elements were zero-sized; skip this variant
+                                    continue;
+                                }
+                                const tuple_idx = try self.putTuple(elem_layouts[0..non_zero_count]);
                                 const tuple_layout = self.getLayout(tuple_idx);
                                 updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             }
@@ -1404,10 +1422,10 @@ pub const Store = struct {
                         }
                     }
 
-                    // Flex vars should not appear unboxed during layout computation.
-                    // This indicates the type checker failed to resolve a polymorphic type
-                    // to a concrete type before evaluation.
-                    return LayoutError.BugUnboxedFlexVar;
+                    // Unconstrained flex vars represent type parameters that are never actually used
+                    // (e.g., the error type in `Ok(3)` or element type in `[]`).
+                    // Treat them as zero-sized types.
+                    return LayoutError.ZeroSizedType;
                 },
                 .rigid => blk: {
                     // First, check if this rigid var is mapped in the TypeScope

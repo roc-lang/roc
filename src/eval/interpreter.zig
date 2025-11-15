@@ -4537,6 +4537,7 @@ pub const Interpreter = struct {
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         var resolved = self.runtime_types.resolveVar(type_var);
 
+
         // Apply rigid variable substitution if this is a rigid variable
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
         // Note: Cycles are prevented by unification, so this chain must terminate
@@ -4645,11 +4646,145 @@ pub const Interpreter = struct {
         const resolved = module.types.resolveVar(compile_var);
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
-        if (self.translate_cache.get(key)) |found| return found;
+        if (self.translate_cache.get(key)) |found| {
+            std.debug.print(">>> CACHE HIT: compile var {d} (module 0x{x}) -> runtime var {d}\n", .{ resolved.var_, @intFromPtr(module), found });
+            return found;
+        }
 
         // Create a placeholder var and add it to the cache BEFORE recursive translation
         // This prevents infinite recursion when translating types with constraint cycles
-        const placeholder_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+        // The placeholder must match the structure of the type being translated to avoid
+        // BugUnboxedFlexVar errors if the placeholder leaks into child types during recursion
+        const placeholder_var = blk_placeholder: {
+            switch (resolved.desc.content) {
+                .structure => |flat| {
+                    // Create typed placeholders matching the structure type
+                    switch (flat) {
+                        .str => break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .str }),
+                        .empty_record => break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
+                        .empty_tag_union => break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union }),
+                        .num => {
+                            // For numeric types, use num_unbound_if_builtin as the placeholder
+                            const num_content = types.Content{
+                                .structure = .{
+                                    .num = .{ .num_unbound_if_builtin = types.Num.NumRequirements{
+                                        .int_requirements = types.Num.IntRequirements.init(),
+                                        .frac_requirements = types.Num.FracRequirements.init(),
+                                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+                                    } },
+                                },
+                            };
+                            break :blk_placeholder try self.runtime_types.freshFromContent(num_content);
+                        },
+                        .fn_pure => |f| {
+                            // Create minimal function placeholder with flex args/return
+                            const num_args = module.types.sliceVars(f.args).len;
+                            const placeholder_args = try self.allocator.alloc(types.Var, num_args);
+                            defer self.allocator.free(placeholder_args);
+                            for (placeholder_args) |*arg| {
+                                arg.* = try self.runtime_types.fresh(); // flex arg
+                            }
+                            const placeholder_ret = try self.runtime_types.fresh(); // flex return
+                            const content = try self.runtime_types.mkFuncPure(placeholder_args, placeholder_ret);
+                            break :blk_placeholder try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .fn_effectful => |f| {
+                            // Create minimal effectful function placeholder
+                            const num_args = module.types.sliceVars(f.args).len;
+                            const placeholder_args = try self.allocator.alloc(types.Var, num_args);
+                            defer self.allocator.free(placeholder_args);
+                            for (placeholder_args) |*arg| {
+                                arg.* = try self.runtime_types.fresh();
+                            }
+                            const placeholder_ret = try self.runtime_types.fresh();
+                            const content = try self.runtime_types.mkFuncEffectful(placeholder_args, placeholder_ret);
+                            break :blk_placeholder try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .fn_unbound => |f| {
+                            // Create minimal unbound function placeholder
+                            const num_args = module.types.sliceVars(f.args).len;
+                            const placeholder_args = try self.allocator.alloc(types.Var, num_args);
+                            defer self.allocator.free(placeholder_args);
+                            for (placeholder_args) |*arg| {
+                                arg.* = try self.runtime_types.fresh();
+                            }
+                            const placeholder_ret = try self.runtime_types.fresh();
+                            const content = try self.runtime_types.mkFuncUnbound(placeholder_args, placeholder_ret);
+                            break :blk_placeholder try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .tuple => |t| {
+                            // Create minimal tuple placeholder with flex elements
+                            const num_elems = module.types.sliceVars(t.elems).len;
+                            const placeholder_elems = try self.allocator.alloc(types.Var, num_elems);
+                            defer self.allocator.free(placeholder_elems);
+                            for (placeholder_elems) |*elem| {
+                                elem.* = try self.runtime_types.fresh();
+                            }
+                            const elems_range = try self.runtime_types.appendVars(placeholder_elems);
+                            break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } });
+                        },
+                        .record => {
+                            // For records, use empty_record as placeholder (simplest valid record)
+                            break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
+                        },
+                        .tag_union => {
+                            // For tag unions, use empty_tag_union as placeholder
+                            break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
+                        },
+                        .list => {
+                            // For lists, create list with flex element
+                            const elem_var = try self.runtime_types.fresh();
+                            break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .{ .list = elem_var } });
+                        },
+                        .box => {
+                            // For boxes, create box with flex inner
+                            const inner_var = try self.runtime_types.fresh();
+                            break :blk_placeholder try self.runtime_types.freshFromContent(.{ .structure = .{ .box = inner_var } });
+                        },
+                        else => {
+                            // For any other structure types, fall back to flex placeholder
+                            break :blk_placeholder try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+                        },
+                    }
+                },
+                .flex => |flex| {
+                    // For flex vars with numeric constraints, create num_unbound_if_builtin
+                    if (!flex.constraints.isEmpty()) {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                        const ident_store = module.getIdentStoreConst();
+                        for (ct_constraints) |ct_constraint| {
+                            const name = ident_store.getText(ct_constraint.fn_name);
+                            if (std.mem.eql(u8, name, "plus") or
+                                std.mem.eql(u8, name, "minus") or
+                                std.mem.eql(u8, name, "multiply") or
+                                std.mem.eql(u8, name, "times") or
+                                std.mem.eql(u8, name, "divide") or
+                                std.mem.eql(u8, name, "from_int_digits") or
+                                std.mem.eql(u8, name, "from_dec_digits"))
+                            {
+                                const num_content = types.Content{
+                                    .structure = .{
+                                        .num = .{ .num_unbound_if_builtin = types.Num.NumRequirements{
+                                            .int_requirements = types.Num.IntRequirements.init(),
+                                            .frac_requirements = types.Num.FracRequirements.init(),
+                                            .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+                                        } },
+                                    },
+                                };
+                                break :blk_placeholder try self.runtime_types.freshFromContent(num_content);
+                            }
+                        }
+                    }
+                    // Default flex placeholder
+                    break :blk_placeholder try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+                },
+                else => {
+                    // For other content types (rigid, alias, err), use flex placeholder
+                    break :blk_placeholder try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+                },
+            }
+        };
+        std.debug.print(">>> PLACEHOLDER CREATED: compile var {d} (module 0x{x}) -> runtime var {d}, content: {s}\n", .{ resolved.var_, @intFromPtr(module), placeholder_var, @tagName(resolved.desc.content) });
         try self.translate_cache.put(key, placeholder_var);
 
         const out_var = blk: {
@@ -4660,6 +4795,11 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .str });
                         },
                         .num => |initial_num| {
+                            // Check if this is num_unbound_if_builtin first - if so, preserve it
+                            if (initial_num == .num_unbound_if_builtin) {
+                                break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = initial_num } });
+                            }
+
                             const compact_num: types.Num.Compact = prec: {
                                 var num = initial_num;
                                 while (true) {
@@ -4672,10 +4812,7 @@ pub const Interpreter = struct {
                                             // TODO: Should we consider requirements here?
                                             break :prec .{ .int = types.Num.Int.Precision.default };
                                         },
-                                        .num_unbound_if_builtin => |_| {
-                                            // Default to I128 for builtin operations
-                                            break :prec .{ .int = types.Num.Int.Precision.default };
-                                        },
+                                        .num_unbound_if_builtin => unreachable, // Handled above
                                         .int_unbound => {
                                             // TODO: Should we consider requirements here?
                                             break :prec .{ .int = types.Num.Int.Precision.default };
@@ -4891,28 +5028,63 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
-                    // Translate static dispatch constraints if present
-                    const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
+                    // Check if this flex var has builtin numeric method constraints
+                    // If so, create num_unbound_if_builtin instead of a plain flex
+                    const has_numeric_constraints = blk_check: {
+                        if (flex.constraints.isEmpty()) break :blk_check false;
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
-                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
-                        defer rt_constraints.deinit(self.allocator);
-
+                        const ident_store = module.getIdentStoreConst();
                         for (ct_constraints) |ct_constraint| {
-                            // Translate the constraint's fn_var recursively
-                            const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
-                            try rt_constraints.append(self.allocator, .{
-                                .fn_name = ct_constraint.fn_name,
-                                .fn_var = rt_fn_var,
-                                .origin = ct_constraint.origin,
-                            });
+                            const name = ident_store.getText(ct_constraint.fn_name);
+                            if (std.mem.eql(u8, name, "plus") or
+                                std.mem.eql(u8, name, "minus") or
+                                std.mem.eql(u8, name, "multiply") or
+                                std.mem.eql(u8, name, "times") or
+                                std.mem.eql(u8, name, "divide") or
+                                std.mem.eql(u8, name, "from_int_digits") or
+                                std.mem.eql(u8, name, "from_dec_digits")) {
+                                break :blk_check true;
+                            }
                         }
+                        break :blk_check false;
+                    };
 
-                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
-                        break :blk_flex flex.withConstraints(rt_constraints_range);
-                    } else flex;
+                    if (has_numeric_constraints) {
+                        // Create num_unbound_if_builtin for flex vars with numeric constraints
+                        const num_content = types.Content{
+                            .structure = .{
+                                .num = .{ .num_unbound_if_builtin = types.Num.NumRequirements{
+                                    .int_requirements = types.Num.IntRequirements.init(),
+                                    .frac_requirements = types.Num.FracRequirements.init(),
+                                    .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+                                } },
+                            },
+                        };
+                        break :blk try self.runtime_types.freshFromContent(num_content);
+                    } else {
+                        // Translate static dispatch constraints if present
+                        const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
+                            const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                            var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
+                            defer rt_constraints.deinit(self.allocator);
 
-                    const content: types.Content = .{ .flex = rt_flex };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                            for (ct_constraints) |ct_constraint| {
+                                // Translate the constraint's fn_var recursively
+                                const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                                try rt_constraints.append(self.allocator, .{
+                                    .fn_name = ct_constraint.fn_name,
+                                    .fn_var = rt_fn_var,
+                                    .origin = ct_constraint.origin,
+                                });
+                            }
+
+                            const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                            break :blk_flex flex.withConstraints(rt_constraints_range);
+                        } else flex;
+
+                        const content: types.Content = .{ .flex = rt_flex };
+                        break :blk try self.runtime_types.freshFromContent(content);
+                    }
                 },
                 .rigid => |rigid| {
                     // Translate static dispatch constraints if present
@@ -4960,6 +5132,8 @@ pub const Interpreter = struct {
             break :blk current;
         } else out_var;
 
+        // Update the cache with the final translated var (replacing the placeholder)
+        std.debug.print(">>> CACHE UPDATE: compile var {d} (module 0x{x}): placeholder {d} -> final {d}\n", .{ resolved.var_, @intFromPtr(module), placeholder_var, final_var });
         try self.translate_cache.put(key, final_var);
         return final_var;
     }
@@ -4976,9 +5150,46 @@ pub const Interpreter = struct {
         }
 
         const instantiated = switch (resolved.desc.content) {
-            .rigid => blk: {
+            .rigid => |rigid| blk: {
                 // Replace rigid with fresh flex that can be unified
-                const fresh = try self.runtime_types.fresh();
+                // BUT: if this rigid has builtin numeric method constraints (.plus, .minus, etc.),
+                // create a num_unbound_if_builtin instead so layout computation can default to I128
+                const has_numeric_constraints = blk_check: {
+                    if (rigid.constraints.isEmpty()) break :blk_check false;
+                    const constraints = self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints);
+                    const ident_store = self.env.getIdentStoreConst();
+                    for (constraints) |constraint| {
+                        const name = ident_store.getText(constraint.fn_name);
+                        if (std.mem.eql(u8, name, "plus") or
+                            std.mem.eql(u8, name, "minus") or
+                            std.mem.eql(u8, name, "multiply") or
+                            std.mem.eql(u8, name, "divide") or
+                            std.mem.eql(u8, name, "from_int_digits") or
+                            std.mem.eql(u8, name, "from_dec_digits")) {
+                            break :blk_check true;
+                        }
+                    }
+                    break :blk_check false;
+                };
+
+                const fresh = if (has_numeric_constraints) blk_num: {
+                    std.debug.print(">>> instantiateType: Creating num_unbound_if_builtin for rigid with numeric constraints\n", .{});
+                    // Create num_unbound_if_builtin for numeric constraints
+                    const num_content = types.Content{
+                        .structure = .{
+                            .num = .{ .num_unbound_if_builtin = types.Num.NumRequirements{
+                                .int_requirements = types.Num.IntRequirements.init(),
+                                .frac_requirements = types.Num.FracRequirements.init(),
+                                .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+                            } },
+                        },
+                    };
+                    break :blk_num try self.runtime_types.freshFromContent(num_content);
+                } else blk_plain: {
+                    std.debug.print(">>> instantiateType: Creating plain flex for rigid WITHOUT numeric constraints\n", .{});
+                    break :blk_plain try self.runtime_types.fresh();
+                };
+
                 try subst_map.put(resolved.var_, fresh);
                 break :blk fresh;
             },
