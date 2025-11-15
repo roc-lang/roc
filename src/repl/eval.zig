@@ -407,36 +407,17 @@ pub const Repl = struct {
         };
 
         // Create canonicalizer with nested types available for qualified name resolution
-        // Register Bool, Result, Str, Dict, and Set individually so qualified access works (e.g., Bool.True)
+        // Register all Builtin types (Bool, Try, Str, List, Dict, Set, and ALL numeric types)
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
 
-        const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
-        const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
-        const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
-        const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
-        const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
-
-        try module_envs_map.put(bool_ident, .{
-            .env = self.builtin_module.env,
-            .statement_idx = self.builtin_indices.bool_type,
-        });
-        try module_envs_map.put(result_ident, .{
-            .env = self.builtin_module.env,
-            .statement_idx = self.builtin_indices.try_type,
-        });
-        // Str is added without statement_idx because it's a primitive builtin type
-        try module_envs_map.put(str_ident, .{
-            .env = self.builtin_module.env,
-        });
-        try module_envs_map.put(dict_ident, .{
-            .env = self.builtin_module.env,
-            .statement_idx = self.builtin_indices.dict_type,
-        });
-        try module_envs_map.put(set_ident, .{
-            .env = self.builtin_module.env,
-            .statement_idx = self.builtin_indices.set_type,
-        });
+        // Use shared function to populate ALL builtin types - ensures Builtin.roc is single source of truth
+        try can.Can.populateModuleEnvs(
+            &module_envs_map,
+            cir,
+            self.builtin_module.env,
+            self.builtin_indices,
+        );
 
         var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});

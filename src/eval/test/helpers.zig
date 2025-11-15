@@ -445,37 +445,15 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Create module_envs map for canonicalization (enables qualified calls)
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
-    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
-    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
-    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
-    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
-    try module_envs_map.put(bool_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.bool_type,
-    });
-    try module_envs_map.put(result_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.try_type,
-    });
-    // Str does NOT get a statement_idx because it's transformed to a primitive type
-    // (see transformStrNominalToPrimitive in builtin_compiler)
-    try module_envs_map.put(str_ident, .{
-        .env = builtin_module.env,
-    });
-    try module_envs_map.put(list_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.list_type,
-    });
-    try module_envs_map.put(dict_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.dict_type,
-    });
-    try module_envs_map.put(set_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.set_type,
-    });
+
+    // Populate module_envs with Bool, Try, Dict, Set, Str, List, and ALL numeric types
+    // This ensures production and tests use identical logic
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        module_env,
+        builtin_module.env,
+        builtin_indices,
+    );
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
@@ -523,6 +501,16 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);
+
+    // DEBUG: Check if there are any diagnostics after type checking
+    const diagnostics = module_env.store.sliceDiagnostics(module_env.diagnostics);
+    if (diagnostics.len > 0) {
+        std.debug.print("\n⚠️  Type checking produced {d} diagnostic(s)!\n", .{diagnostics.len});
+        for (diagnostics, 0..) |diag_idx, i| {
+            const diag = module_env.store.getDiagnostic(diag_idx);
+            std.debug.print("  Diagnostic {d}: {s}\n", .{i, @tagName(diag)});
+        }
+    }
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{

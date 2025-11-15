@@ -152,8 +152,9 @@ pub const Interpreter = struct {
     };
     allocator: std.mem.Allocator,
     runtime_layout_store: layout.Store,
-    // O(1) Var -> Layout slot cache (0 = unset, else layout_idx + 1)
-    var_to_layout_slot: std.array_list.Managed(u32),
+    // Per-module Var -> Layout slot caches (0 = unset, else layout_idx + 1)
+    // Key is module pointer, value is the cache array for that module
+    module_var_caches: std.AutoHashMap(*const can.ModuleEnv, std.ArrayList(u32)),
     // Empty scope used when converting vars to layouts
     empty_scope: TypeScope,
     // Rigid variable substitution context for generic function instantiation
@@ -244,13 +245,11 @@ pub const Interpreter = struct {
         next_module_id: u32,
         builtin_types: BuiltinTypes,
     ) !Interpreter {
-        var slots = try std.array_list.Managed(u32).initCapacity(allocator, 1024);
-        slots.appendNTimesAssumeCapacity(0, 1024);
         const scope = TypeScope.init(allocator);
         var result = Interpreter{
             .allocator = allocator,
             .runtime_layout_store = undefined, // set below to use compile-time types
-            .var_to_layout_slot = slots,
+            .module_var_caches = std.AutoHashMap(*const can.ModuleEnv, std.ArrayList(u32)).init(allocator),
             .empty_scope = scope,
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
@@ -1039,8 +1038,9 @@ pub const Interpreter = struct {
 
                 const resolved_rt = self.env.types.resolveVar(rt_var);
                 const root_idx: usize = @intFromEnum(resolved_rt.var_);
-                try self.ensureVarLayoutCapacity(root_idx + 1);
-                self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
+                const cache = try self.getOrCreateCacheForModule(self.env);
+                try self.ensureCacheCapacity(cache, root_idx + 1);
+                cache.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
 
                 var dest = try self.pushRaw(rec_layout, 0);
                 var accessor = try dest.asRecord(&self.runtime_layout_store);
@@ -1643,8 +1643,11 @@ pub const Interpreter = struct {
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
 
-                    // Clear the layout cache so layouts are recomputed with substitutions
-                    @memset(self.var_to_layout_slot.items, 0);
+                    // Clear all module layout caches so layouts are recomputed with substitutions
+                    var cache_it = self.module_var_caches.valueIterator();
+                    while (cache_it.next()) |cache| {
+                        @memset(cache.items, 0);
+                    }
                 }
 
                 var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
@@ -1725,9 +1728,9 @@ pub const Interpreter = struct {
                     // Switch to the closure's source module for correct expression evaluation
                     const saved_env = self.env;
                     const saved_bindings_len = self.bindings.items.len;
-                    self.env = @constCast(header.source_env);
+                    self.switchModule(@constCast(header.source_env));
                     defer {
-                        self.env = saved_env;
+                        self.switchModule(saved_env);
                         self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                     }
 
@@ -2063,9 +2066,9 @@ pub const Interpreter = struct {
                 // Switch to the closure's source module for correct expression evaluation
                 const saved_env = self.env;
                 const saved_bindings_len = self.bindings.items.len;
-                self.env = @constCast(closure_header.source_env);
+                self.switchModule(@constCast(closure_header.source_env));
                 defer {
-                    self.env = saved_env;
+                    self.switchModule(saved_env);
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
@@ -2205,9 +2208,9 @@ pub const Interpreter = struct {
                 // Save both env and bindings state
                 const saved_env = self.env;
                 const saved_bindings_len = self.bindings.items.len;
-                self.env = @constCast(other_env);
+                self.switchModule(@constCast(other_env));
                 defer {
-                    self.env = saved_env;
+                    self.switchModule(saved_env);
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
@@ -3072,9 +3075,9 @@ pub const Interpreter = struct {
         // Switch to the closure's source module
         const saved_env = self.env;
         const saved_bindings_len = self.bindings.items.len;
-        self.env = @constCast(closure_header.source_env);
+        self.switchModule(@constCast(closure_header.source_env));
         defer {
-            self.env = saved_env;
+            self.switchModule(saved_env);
             self.bindings.shrinkRetainingCapacity(saved_bindings_len);
         }
 
@@ -4361,7 +4364,12 @@ pub const Interpreter = struct {
         self.module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
         self.import_envs.deinit(self.allocator);
-        self.var_to_layout_slot.deinit();
+        // Clean up all per-module var caches
+        var cache_it = self.module_var_caches.valueIterator();
+        while (cache_it.next()) |cache| {
+            cache.deinit(self.allocator);
+        }
+        self.module_var_caches.deinit();
         self.runtime_layout_store.deinit();
         // TEMPORARY: Don't deinit runtime_types since it now points to env.types
         // self.env.types.deinit();
@@ -4485,9 +4493,9 @@ pub const Interpreter = struct {
         // Save current environment and bindings
         const saved_env = self.env;
         const saved_bindings_len = self.bindings.items.len;
-        self.env = @constCast(origin_env);
+        self.switchModule(@constCast(origin_env));
         defer {
-            self.env = saved_env;
+            self.switchModule(saved_env);
             // Restore bindings
             self.bindings.items.len = saved_bindings_len;
         }
@@ -4511,20 +4519,40 @@ pub const Interpreter = struct {
         return method_value;
     }
 
-    /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
-    pub fn ensureVarLayoutCapacity(self: *Interpreter, min_len: usize) !void {
-        if (self.var_to_layout_slot.items.len >= min_len) return;
-        const old_len = self.var_to_layout_slot.items.len;
-        try self.var_to_layout_slot.ensureTotalCapacityPrecise(min_len);
+    /// Switch to a different module, updating both self.env and the layout store's type store.
+    /// This is necessary for cross-module jumps to work correctly with type resolution.
+    inline fn switchModule(self: *Interpreter, new_env: *can.ModuleEnv) void {
+        self.env = new_env;
+        self.runtime_layout_store.env = new_env;
+        self.runtime_layout_store.types_store = &new_env.types;
+    }
+
+    /// Get or create the var->layout cache for a specific module.
+    /// Each module has its own cache because type vars are module-local.
+    fn getOrCreateCacheForModule(self: *Interpreter, module: *const can.ModuleEnv) !*std.ArrayList(u32) {
+        const gop = try self.module_var_caches.getOrPut(module);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try std.ArrayList(u32).initCapacity(self.allocator, 1024);
+            // Zero-fill initial capacity
+            try gop.value_ptr.appendNTimes(self.allocator, 0, 1024);
+        }
+        return gop.value_ptr;
+    }
+
+    /// Ensure a module's cache can index at least `min_len` entries; zero-fill new entries.
+    fn ensureCacheCapacity(self: *Interpreter, cache: *std.ArrayList(u32), min_len: usize) !void {
+        if (cache.items.len >= min_len) return;
+        const old_len = cache.items.len;
+        try cache.ensureTotalCapacity(self.allocator, min_len);
         // Set new length and zero-fill
-        self.var_to_layout_slot.items.len = min_len;
-        @memset(self.var_to_layout_slot.items[old_len..], 0);
+        cache.items.len = min_len;
+        @memset(cache.items[old_len..], 0);
     }
 
     /// Get the layout for a runtime type var using the O(1) biased slot array.
+    /// Uses the cache for the CURRENT module (self.env), which allows cross-module jumps to work.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         var resolved = self.env.types.resolveVar(type_var);
-
 
         // Apply rigid variable substitution if this is a rigid variable
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
@@ -4537,9 +4565,12 @@ pub const Interpreter = struct {
             }
         }
 
+        // Get the cache for the CURRENT module (self.env changes as we jump between modules!)
+        const cache = try self.getOrCreateCacheForModule(self.env);
+
         const idx: usize = @intFromEnum(resolved.var_);
-        try self.ensureVarLayoutCapacity(idx + 1);
-        const slot_ptr = &self.var_to_layout_slot.items[idx];
+        try self.ensureCacheCapacity(cache, idx + 1);
+        const slot_ptr = &cache.items[idx];
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
             const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
@@ -4558,13 +4589,29 @@ pub const Interpreter = struct {
     }
 
     /// Get layout directly from compile-time type var (no translation needed)
-    /// Since we initialized runtime_layout_store with compile-time types, we can use it directly
+    /// Uses the cache for the CURRENT module (self.env), which allows cross-module jumps to work.
     pub fn getLayoutFromCompileVar(self: *Interpreter, compile_var: types.Var) !layout.Layout {
+        std.debug.print("\n=== DEBUG: getLayoutFromCompileVar called ===\n", .{});
+        std.debug.print("  compile_var: {d}\n", .{@intFromEnum(compile_var)});
+        std.debug.print("  current module env: {*}\n", .{self.env});
+        std.debug.print("  runtime_layout_store.env: {*}\n", .{self.runtime_layout_store.env});
+        std.debug.print("  runtime_layout_store.types_store: {*}\n", .{self.runtime_layout_store.types_store});
+        std.debug.print("  &self.env.types: {*}\n", .{&self.env.types});
+        std.debug.print("  MATCH: {}\n", .{self.runtime_layout_store.types_store == &self.env.types});
         const resolved = self.env.types.resolveVar(compile_var);
+        std.debug.print("  resolved to var: {d}, content: {s}\n", .{@intFromEnum(resolved.var_), @tagName(resolved.desc.content)});
+        if (resolved.desc.content == .err) {
+            std.debug.print("  ❌ ERROR: Type var resolved to .err!\n", .{});
+            std.debug.print("  This means var {d} contains .err in THIS module's type store\n", .{@intFromEnum(resolved.var_)});
+            std.debug.print("  So the question is: WHY does the type store contain .err for var {d}?\n", .{@intFromEnum(resolved.var_)});
+        }
+
+        // Get the cache for the CURRENT module (self.env changes as we jump between modules!)
+        const cache = try self.getOrCreateCacheForModule(self.env);
 
         const idx: usize = @intFromEnum(resolved.var_);
-        try self.ensureVarLayoutCapacity(idx + 1);
-        const slot_ptr = &self.var_to_layout_slot.items[idx];
+        try self.ensureCacheCapacity(cache, idx + 1);
+        const slot_ptr = &cache.items[idx];
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
             const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
@@ -4680,8 +4727,9 @@ pub const Interpreter = struct {
         if (return_var_hint) |ret| {
             _ = try self.getRuntimeLayout(ret);
             const root_idx: usize = @intFromEnum(self.env.types.resolveVar(ret).var_);
-            try self.ensureVarLayoutCapacity(root_idx + 1);
-            const slot = self.var_to_layout_slot.items[root_idx];
+            const cache = try self.getOrCreateCacheForModule(self.env);
+            try self.ensureCacheCapacity(cache, root_idx + 1);
+            const slot = cache.items[root_idx];
             const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
             errdefer self.allocator.free(args_copy_mut);
             std.mem.copyForwards(types.Var, args_copy_mut, args);
@@ -4759,8 +4807,9 @@ pub const Interpreter = struct {
         // Ensure layout slot for return var
         _ = try self.getRuntimeLayout(substituted_ret);
         const root_idx: usize = @intFromEnum(self.env.types.resolveVar(substituted_ret).var_);
-        try self.ensureVarLayoutCapacity(root_idx + 1);
-        const slot = self.var_to_layout_slot.items[root_idx];
+        const cache = try self.getOrCreateCacheForModule(self.env);
+        try self.ensureCacheCapacity(cache, root_idx + 1);
+        const slot = cache.items[root_idx];
         const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
         errdefer self.allocator.free(args_copy_mut);
         std.mem.copyForwards(types.Var, args_copy_mut, args);

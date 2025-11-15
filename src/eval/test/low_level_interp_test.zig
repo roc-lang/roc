@@ -63,35 +63,14 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Create module_envs map for canonicalization (enables qualified calls to Str, List, etc.)
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs_map.deinit();
-    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
-    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
-    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
-    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
-    try module_envs_map.put(bool_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.bool_type,
-    });
-    try module_envs_map.put(result_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.try_type,
-    });
-    try module_envs_map.put(str_ident, .{
-        .env = builtin_module.env,
-    });
-    try module_envs_map.put(list_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.list_type,
-    });
-    try module_envs_map.put(dict_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.dict_type,
-    });
-    try module_envs_map.put(set_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.set_type,
-    });
+
+    // Use shared function to populate ALL builtin types - ensures Builtin.roc is single source of truth
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        module_env,
+        builtin_module.env,
+        builtin_indices,
+    );
 
     var czer = try Can.init(module_env, &parse_ast, &module_envs_map);
     defer czer.deinit();

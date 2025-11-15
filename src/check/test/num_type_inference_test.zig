@@ -329,3 +329,85 @@ test "infer octal literals as unbound num" {
         try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.int_requirements.bits_needed);
     }
 }
+
+test "type annotation I128 applied to literal in block" {
+    // This is the exact pattern from the failing eval test
+    const source =
+        \\{
+        \\    x : I128
+        \\    x = 42
+        \\    x
+        \\}
+    ;
+
+    var test_env = try TestEnv.initExpr("Test", source);
+    defer test_env.deinit();
+
+    // Check that the block type is I128
+    try test_env.assertLastDefType("I128");
+
+    // Also try to get the type of the literal `42` expression
+    // It should be I128, not .err
+    const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    const last_def = test_env.module_env.store.getDef(defs[defs.len - 1]);
+    const block_expr = test_env.module_env.store.getExpr(last_def.expr);
+
+    if (block_expr == .e_block) {
+        const stmts = test_env.module_env.store.sliceStatements(block_expr.e_block.stmts);
+        // Find the `x = 42` statement
+        for (stmts) |stmt_idx| {
+            const stmt = test_env.module_env.store.getStatement(stmt_idx);
+            if (stmt == .s_decl) {
+                const decl = stmt.s_decl;
+                // Get the expr (42)
+                const expr_idx = decl.expr;
+                const expr_var = ModuleEnv.varFrom(expr_idx);
+
+                // Resolve the type of the literal
+                const resolved = test_env.module_env.types.resolveVar(expr_var);
+
+                // It should NOT be .err
+                if (resolved.desc.content == .err) {
+                    std.debug.print("\n❌ LITERAL 42 HAS .err TYPE!\n", .{});
+                    return error.TestFailed;
+                }
+
+                // Use TypeWriter to print what type it actually is
+                try test_env.type_writer.write(expr_var);
+                const type_str = test_env.type_writer.get();
+                std.debug.print("\n✅ Literal 42 type: {s}\n", .{type_str});
+
+                // It should be I128
+                try testing.expectEqualStrings("I128", type_str);
+            }
+        }
+    } else {
+        return error.TestFailed;
+    }
+}
+
+test "type annotation I128 applied to literal with plus method call" {
+    // This tests the ACTUAL failing eval test pattern - WITH the .plus(7) call
+    // This should now PASS with the fixed Builtin wiring
+    const source =
+        \\{
+        \\    x : I128
+        \\    x = 42
+        \\    x.plus(7)
+        \\}
+    ;
+
+    var test_env = try TestEnv.initExpr("Test", source);
+    defer test_env.deinit();
+
+    // Check if there are type problems first
+    if (test_env.checker.problems.problems.items.len > 0) {
+        std.debug.print("\n❌ Still have {d} type problems:\n", .{test_env.checker.problems.problems.items.len});
+        for (test_env.checker.problems.problems.items) |problem| {
+            std.debug.print("  - {s}\n", .{@tagName(problem)});
+        }
+    }
+
+    // This should succeed now that numeric types are properly wired in
+    try test_env.assertLastDefType("I128");
+}
