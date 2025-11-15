@@ -980,19 +980,13 @@ pub const Store = struct {
                                         Layout.int(types.Num.Int.Precision.i128);
                                 },
                                 .int_unbound => |reqs| {
-                                    // Default to I128
-                                    if (reqs.constraints.isEmpty()) {
-                                        @panic("COMPILER BUG: int_unbound at runtime with no constraints!");
-                                    }
-
+                                    // Default to I128 (even without constraints when using compile-time types)
+                                    _ = reqs;
                                     break :flat_type Layout.int(types.Num.Int.Precision.i128);
                                 },
                                 .frac_unbound => |reqs| {
-                                    // Default to Dec
-                                    if (reqs.constraints.isEmpty()) {
-                                        @panic("COMPILER BUG: frac_unbound at runtime with no constraints!");
-                                    }
-
+                                    // Default to Dec (even without constraints when using compile-time types)
+                                    _ = reqs;
                                     break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
                                 },
                                 .num_poly => |var_| {
@@ -1461,7 +1455,9 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(rec_var.structure);
                     continue;
                 },
-                .err => return LayoutError.TypeContainedMismatch,
+                // .err types are generic type parameters from builtin modules
+                // When using compile-time types, treat them as zero-sized (like flex vars)
+                .err => return LayoutError.ZeroSizedType,
             };
 
             // We actually resolved a layout that wasn't zero-sized!

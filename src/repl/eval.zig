@@ -504,9 +504,7 @@ pub const Repl = struct {
 
         const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
         const output = blk: {
-            const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
-                break :blk try interpreter.renderValueRoc(result);
-            };
+            const expr_rt_var = expr_ct_var;
             break :blk try interpreter.renderValueRocWithType(result, expr_rt_var);
         };
 
