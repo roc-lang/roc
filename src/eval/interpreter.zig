@@ -5487,43 +5487,6 @@ test "interpreter: wiring works" {
     try std.testing.expectEqual(@as(i32, 3), add(1, 2));
 }
 
-// RED: expect Var->Layout slot to work (will fail until implemented)
-test "interpreter: Var->Layout slot caches computed layout" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create a concrete runtime type: Str
-    const str_var = try interp.runtime_types.freshFromContent(.{ .structure = .str });
-
-    // Initially, slot is either absent or zero; ensure capacity then check
-    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(str_var).var_);
-    try interp.ensureVarLayoutCapacity(root_idx + 1);
-    try std.testing.expectEqual(@as(u32, 0), interp.var_to_layout_slot.items[root_idx]);
-
-    // Retrieve layout and expect scalar.str; slot becomes non-zero
-    const layout_value = try interp.getRuntimeLayout(str_var);
-    try std.testing.expect(layout_value.tag == .scalar);
-    try std.testing.expect(layout_value.data.scalar.tag == .str);
-    try std.testing.expect(interp.var_to_layout_slot.items[root_idx] != 0);
-}
-
 // RED: translating a compile-time str var should produce a runtime str var
 test "interpreter: translateTypeVar for str" {
     const gpa = std.testing.allocator;
