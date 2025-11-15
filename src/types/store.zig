@@ -615,39 +615,22 @@ pub const Store = struct {
 
     /// Given a type var, follow all redirects until finding the root descriptor
     pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
-        const initial_var_num = @intFromEnum(initial_var);
-        const track_var_3 = initial_var_num == 3;
-
-        if (track_var_3) {
-            std.debug.print("\n  === Resolving var 3 redirect chain ===\n", .{});
-        }
-
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
 
         var is_root = true;
-        var redirect_count: u32 = 0;
 
         while (true) {
             switch (redirected_slot) {
                 .redirect => |next_redirect_var| {
-                    if (track_var_3) {
-                        std.debug.print("    Redirect #{d}: var {d} -> var {d}\n", .{redirect_count, @intFromEnum(Self.slotIdxToVar(redirected_slot_idx)), @intFromEnum(next_redirect_var)});
-                    }
-
                     redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
                     redirected_slot = self.slots.get(redirected_slot_idx);
 
                     is_root = false;
-                    redirect_count += 1;
                 },
                 .root => |desc_idx| {
                     const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
                     const desc = self.descs.get(desc_idx);
-
-                    if (track_var_3) {
-                        std.debug.print("    Final: var {d}, content: {s}\n", .{@intFromEnum(redirected_root_var), @tagName(desc.content)});
-                    }
 
                     return .{
                         .var_ = redirected_root_var,

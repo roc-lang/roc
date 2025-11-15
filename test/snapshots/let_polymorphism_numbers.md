@@ -38,7 +38,34 @@ main = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_numbers.md:16:19:16:23:**
+```roc
+float_add = num + 3.14
+```
+                  ^^^^
+
+It has the type:
+    __size_
+
+But I expected it to be:
+    __size_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_numbers.md:17:24:17:27:**
+```roc
+float_multiply = num * 2.5
+```
+                       ^^^
+
+It has the type:
+    __size_
+
+But I expected it to be:
+    __size_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -248,29 +275,29 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "a -> _size where [a.times : a, _size2 -> _size3, _b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
 		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
 		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(patt (type "a -> _size where [a.times : a, _size2 -> _size3, _b.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]")))
+		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]")))
 	(expressions
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "a -> _size where [a.times : a, _size2 -> _size3, _b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
 		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
 		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(expr (type "a -> _size where [a.times : a, _size2 -> _size3, _b.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]"))))
+		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))))
 ~~~

@@ -825,11 +825,7 @@ pub const Store = struct {
         unresolved_var: Var,
         type_scope: *const TypeScope,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
-        std.debug.print("\n=== DEBUG: addTypeVar called ===\n", .{});
-        std.debug.print("  unresolved_var: {d}\n", .{@intFromEnum(unresolved_var)});
         var current = self.types_store.resolveVar(unresolved_var);
-        std.debug.print("  resolved to var: {d}\n", .{@intFromEnum(current.var_)});
-        std.debug.print("  content tag: {s}\n", .{@tagName(current.desc.content)});
 
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
@@ -1454,10 +1450,6 @@ pub const Store = struct {
                     continue;
                 },
                 .err => {
-                    std.debug.print("\n=== DEBUG: Hit .err in addTypeVar ===\n", .{});
-                    std.debug.print("  Var number: {d}\n", .{@intFromEnum(current.var_)});
-                    std.debug.print("  Type desc content: .err\n", .{});
-                    std.debug.print("  Original unresolved var: {d}\n", .{@intFromEnum(unresolved_var)});
                     return LayoutError.TypeContainedMismatch;
                 },
             };

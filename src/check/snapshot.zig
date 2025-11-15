@@ -1261,10 +1261,6 @@ pub const SnapshotWriter = struct {
     fn writeNum(self: *Self, num: SnapshotNum, root_idx: SnapshotContentIdx) Allocator.Error!void {
         // Match TypeWriter.zig formatting exactly - this is the source of truth
 
-        // DEBUG: Log what type of Num we're writing
-        std.debug.print("\n=== DEBUG writeNum ===\n", .{});
-        std.debug.print("  Num type: {s}\n", .{@tagName(num)});
-
         switch (num) {
             .num_poly => |sub_var| {
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
@@ -1334,12 +1330,6 @@ pub const SnapshotWriter = struct {
     fn writeFracType(self: *Self, prec: types.Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
         // Match TypeWriter.zig formatting exactly - always print modern type names (F32, F64, Dec)
         _ = num_type;
-
-        // DEBUG: Log the precision value we received
-        const prec_int = @intFromEnum(prec);
-        std.debug.print("\n=== DEBUG writeFracType ===\n", .{});
-        std.debug.print("  prec enum int value: {d}\n", .{prec_int});
-        std.debug.print("  Expected values: f32=2, f64=3, dec=4\n", .{});
 
         _ = switch (prec) {
             .f32 => try self.buf.writer().write("F32"),

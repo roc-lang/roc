@@ -10,7 +10,25 @@ type=expr
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INCOMPATIBLE LIST ELEMENTS**
+The two elements in this list have incompatible types:
+**tuple_unification_test.md:1:2:**
+```roc
+[(1, "a"), (2.5, "b")]
+```
+ ^^^^^^^^  ^^^^^^^^^^
+
+The first element has this type:
+    _(_size, Str)_
+
+However, the second element has this type:
+    _(_size, Str)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 OpenSquare,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,Comma,OpenRound,Float,Comma,StringStart,StringPart,StringEnd,CloseRound,CloseSquare,
@@ -49,5 +67,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List((_size, Str)) where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+(expr (type "List(Error)"))
 ~~~

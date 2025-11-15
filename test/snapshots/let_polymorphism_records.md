@@ -52,6 +52,25 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
 TYPE MISMATCH - let_polymorphism_records.md:38:6:38:17
 # PROBLEMS
+**INCOMPATIBLE LIST ELEMENTS**
+The two elements in this list have incompatible types:
+**let_polymorphism_records.md:8:21:**
+```roc
+my_nonempty_list = [num, frac]
+```
+                    ^^^  ^^^^
+
+The first element has this type:
+    __size_
+
+However, the second element has this type:
+    __size_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 **TYPE MISMATCH**
 The second argument being passed to this function has the wrong type:
 **let_polymorphism_records.md:26:47:26:49:**
@@ -402,41 +421,41 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
 		(patt (type "Str"))
 		(patt (type "List(_elem)"))
-		(patt (type "List(_size) where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(patt (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret]"))
-		(patt (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "{ count: _size, data: List(_elem) } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "List(Error)"))
+		(patt (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
+		(patt (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "{ count: _size, data: List(_elem) } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(patt (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 		(patt (type "Error"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: _size } where [_a.from_int_digits : _arg -> _ret]"))
+		(patt (type "{ value: _size } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(_size) } where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]")))
+		(patt (type "{ value: List(_size) } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
 		(expr (type "Str"))
 		(expr (type "List(_elem)"))
-		(expr (type "List(_size) where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
-		(expr (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret]"))
-		(expr (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "{ count: _size, data: List(_elem) } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "List(Error)"))
+		(expr (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
+		(expr (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "{ count: _size, data: List(_elem) } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(expr (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 		(expr (type "Error"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: _size } where [_a.from_int_digits : _arg -> _ret]"))
+		(expr (type "{ value: _size } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(_size) } where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]"))))
+		(expr (type "{ value: List(_size) } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))))
 ~~~

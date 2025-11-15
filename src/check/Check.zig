@@ -3116,53 +3116,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         expr_region,
                     );
 
-                    std.debug.print("  Created constraint - constrained_var: {d}\n", .{@intFromEnum(constrained_var)});
-
                     // Unify constraint function args with actual expression vars
                     // This propagates types from the actual expressions to the constraint function
                     _ = try self.unify(constraint_receiver_var, receiver_var, env);
-                    std.debug.print("  Unified constraint_receiver with receiver\n", .{});
                     for (dispatch_arg_expr_idxs, 0..) |arg_expr_idx, i| {
                         const actual_arg_var = ModuleEnv.varFrom(arg_expr_idx);
-                        const constraint_arg_resolved = self.types.resolveVar(constraint_args_buf[i]);
-                        const actual_arg_resolved = self.types.resolveVar(actual_arg_var);
-                        std.debug.print("  BEFORE unifying constraint arg[{d}]:\n", .{i});
-                        std.debug.print("    constraint_arg var={d}, content={s}", .{
-                            @intFromEnum(constraint_arg_resolved.var_),
-                            @tagName(constraint_arg_resolved.desc.content),
-                        });
-                        if (constraint_arg_resolved.desc.content == .structure and constraint_arg_resolved.desc.content.structure == .num) {
-                            std.debug.print(" num={s}", .{@tagName(constraint_arg_resolved.desc.content.structure.num)});
-                        }
-                        std.debug.print("\n", .{});
-                        std.debug.print("    actual_arg var={d}, content={s}", .{
-                            @intFromEnum(actual_arg_resolved.var_),
-                            @tagName(actual_arg_resolved.desc.content),
-                        });
-                        if (actual_arg_resolved.desc.content == .structure and actual_arg_resolved.desc.content.structure == .num) {
-                            std.debug.print(" num={s}", .{@tagName(actual_arg_resolved.desc.content.structure.num)});
-                        }
-                        std.debug.print("\n", .{});
                         _ = try self.unify(constraint_args_buf[i], actual_arg_var, env);
-                        const after_resolved = self.types.resolveVar(constraint_args_buf[i]);
-                        std.debug.print("    AFTER unify: constraint_arg content={s}", .{@tagName(after_resolved.desc.content)});
-                        if (after_resolved.desc.content == .structure and after_resolved.desc.content.structure == .num) {
-                            std.debug.print(" num={s}", .{@tagName(after_resolved.desc.content.structure.num)});
-                        }
-                        std.debug.print("\n", .{});
                     }
 
                     // Unify constrained var with receiver (this attaches the constraint to the receiver type)
-                    std.debug.print("  About to unify constrained_var ({d}) with receiver_var ({d})\n", .{
-                        @intFromEnum(constrained_var),
-                        @intFromEnum(receiver_var),
-                    });
-                    const unify_result = try self.unify(constrained_var, receiver_var, env);
-                    std.debug.print("  Unify result: isProblem={}\n", .{unify_result.isProblem()});
+                    _ = try self.unify(constrained_var, receiver_var, env);
 
                     // Then, set the root expr to redirect to the ret var
                     _ = try self.unify(expr_var, dispatch_ret_var, env);
-                    std.debug.print("  ✅ Finished processing method call\n", .{});
                 }
             } else {
                 // Otherwise, this is dot access on a record
@@ -4122,12 +4088,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
 
-    // DEBUG: Log total constraints
-    if (deferred_constraint_len > 0) {
-        std.debug.print("\n=== DEBUG: checkDeferredStaticDispatchConstraints ===\n", .{});
-        std.debug.print("  Total constraints to check: {d}\n", .{deferred_constraint_len});
-    }
-
     while (deferred_constraint_index < deferred_constraint_len) : ({
         deferred_constraint_index += 1;
         deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
@@ -4135,13 +4095,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
-
-        // DEBUG: Log each constraint being checked
-        std.debug.print("  Constraint {d}: var={d}, content={s}\n", .{
-            deferred_constraint_index,
-            @intFromEnum(dispatcher_resolved.var_),
-            @tagName(dispatcher_content),
-        });
 
         // Detect recursive constraints
         // Check if this var is already in the constraint check stack
@@ -4249,10 +4202,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // .int_precision, .frac_precision, and .num_compact are all memory optimizations
             // that should be treated identically to the corresponding builtin nominal types
 
-            // DEBUG: Log that we're handling a numeric type
-            std.debug.print("\n=== DEBUG: Handling numeric type static dispatch ===\n", .{});
-            std.debug.print("  Num variant: {s}\n", .{@tagName(num)});
-
             const builtin_type_name: []const u8 = switch (num) {
                 .int_precision => |prec| switch (prec) {
                     .u8 => "U8",
@@ -4322,12 +4271,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 );
                 const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
 
-                // DEBUG: Log the qualified name we're looking up
-                std.debug.print("  Looking up method: {s}\n", .{qualified_name_bytes});
-
                 // Get the ident of this method in the builtin env
                 const ident_in_builtin_env = builtin_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
-                    std.debug.print("  ❌ Method NOT FOUND in builtin ident store!\n", .{});
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -4336,12 +4281,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     );
                     continue;
                 };
-
-                std.debug.print("  ✅ Found ident in builtin env: {d}\n", .{@as(u32, @bitCast(ident_in_builtin_env))});
 
                 // Get the def index in the builtin env
                 const node_idx_in_builtin_env = builtin_env.getExposedNodeIndexById(ident_in_builtin_env) orelse {
-                    std.debug.print("  ❌ Method NOT EXPOSED in builtin env!\n", .{});
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -4351,34 +4293,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     continue;
                 };
 
-                std.debug.print("  ✅ Found node index: {d}\n", .{node_idx_in_builtin_env});
-
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_builtin_env)));
                 const builtin_def_var: Var = ModuleEnv.varFrom(def_idx);
-
-                // DEBUG: Check the type in the builtin module BEFORE copying
-                const builtin_resolved = builtin_env.types.resolveVar(builtin_def_var);
-                std.debug.print("  BEFORE copy - builtin_def_var in Builtin module:\n", .{});
-                std.debug.print("    var={d}, content={s}\n", .{
-                    @intFromEnum(builtin_resolved.var_),
-                    @tagName(builtin_resolved.desc.content),
-                });
-                if (builtin_resolved.desc.content.unwrapFunc()) |builtin_func| {
-                    const builtin_args = builtin_env.types.sliceVars(builtin_func.args);
-                    std.debug.print("    function: {d} args\n", .{builtin_args.len});
-                    for (builtin_args, 0..) |arg_var, i| {
-                        const arg_resolved = builtin_env.types.resolveVar(arg_var);
-                        std.debug.print("      arg[{d}] var={d}, content={s}", .{
-                            i,
-                            @intFromEnum(arg_resolved.var_),
-                            @tagName(arg_resolved.desc.content),
-                        });
-                        if (arg_resolved.desc.content == .structure and arg_resolved.desc.content.structure == .num) {
-                            std.debug.print(" num={s}", .{@tagName(arg_resolved.desc.content.structure.num)});
-                        }
-                        std.debug.print("\n", .{});
-                    }
-                }
 
                 // Copy the builtin def type into the current module's type store before unifying.
                 // The builtin_def_var is an index in the builtin module's type store, but self.unify
@@ -4399,71 +4315,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     break :blk new_copy;
                 };
 
-                // DEBUG: Log what we're about to unify
-                const local_def_resolved = self.types.resolveVar(local_def_var);
-                const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var);
-                std.debug.print("  About to unify:\n", .{});
-                std.debug.print("    local_def_var ({d}): {s}\n", .{
-                    @intFromEnum(local_def_resolved.var_),
-                    @tagName(local_def_resolved.desc.content),
-                });
-                std.debug.print("    constraint.fn_var ({d}): {s}\n", .{
-                    @intFromEnum(constraint_fn_resolved.var_),
-                    @tagName(constraint_fn_resolved.desc.content),
-                });
-
-                // DEBUG: Print function signatures if both are functions
-                if (local_def_resolved.desc.content.unwrapFunc()) |local_func| {
-                    const local_args = self.types.sliceVars(local_func.args);
-                    std.debug.print("    local_def function: {d} args, ret={d}\n", .{
-                        local_args.len,
-                        @intFromEnum(local_func.ret),
-                    });
-                    for (local_args, 0..) |arg_var, i| {
-                        const arg_resolved = self.types.resolveVar(arg_var);
-                        std.debug.print("      arg[{d}] var={d}, content={s}", .{
-                            i,
-                            @intFromEnum(arg_resolved.var_),
-                            @tagName(arg_resolved.desc.content),
-                        });
-                        if (arg_resolved.desc.content == .structure) {
-                            std.debug.print(" structure={s}", .{@tagName(arg_resolved.desc.content.structure)});
-                            if (arg_resolved.desc.content.structure == .num) {
-                                std.debug.print(" num={s}", .{@tagName(arg_resolved.desc.content.structure.num)});
-                            }
-                        }
-                        std.debug.print("\n", .{});
-                    }
-                }
-                if (constraint_fn_resolved.desc.content.unwrapFunc()) |constraint_func| {
-                    const constraint_args = self.types.sliceVars(constraint_func.args);
-                    std.debug.print("    constraint function: {d} args, ret={d}\n", .{
-                        constraint_args.len,
-                        @intFromEnum(constraint_func.ret),
-                    });
-                    for (constraint_args, 0..) |arg_var, i| {
-                        const arg_resolved = self.types.resolveVar(arg_var);
-                        std.debug.print("      arg[{d}] var={d}, content={s}", .{
-                            i,
-                            @intFromEnum(arg_resolved.var_),
-                            @tagName(arg_resolved.desc.content),
-                        });
-                        if (arg_resolved.desc.content == .structure) {
-                            std.debug.print(" structure={s}", .{@tagName(arg_resolved.desc.content.structure)});
-                            if (arg_resolved.desc.content.structure == .num) {
-                                std.debug.print(" num={s}", .{@tagName(arg_resolved.desc.content.structure.num)});
-                            }
-                        }
-                        std.debug.print("\n", .{});
-                    }
-                }
-
                 const result = try self.unify(local_def_var, constraint.fn_var, env);
-                std.debug.print("  Unify result: isProblem={}\n", .{result.isProblem()});
                 if (result.isProblem()) {
-                    std.debug.print("  ❌❌❌ UNIFICATION FAILED\n", .{});
-                    std.debug.print("    Error type: {s}\n", .{@tagName(result)});
-                    std.debug.print("    Setting vars to .err\n", .{});
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
                 }

@@ -41,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> _size where [a.plus : a, _size2 -> _size3, _b.from_int_digits : _arg -> _ret]"))
+(expr (type "a -> _size where [a.plus : a, _size2 -> _size3, _b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
 ~~~

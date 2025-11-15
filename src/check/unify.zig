@@ -2068,12 +2068,15 @@ const Unifier = struct {
             .int_rigid => self.merge(vars, vars.a.desc.content),
             .frac_rigid => self.merge(vars, vars.a.desc.content),
 
-            // If the variable inside a was unbound with recs, unify the reqs
-            .num_unbound => |a_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
-                .int_requirements = b_reqs.int_requirements.unify(a_reqs.int_requirements),
-                .frac_requirements = b_reqs.frac_requirements.unify(a_reqs.frac_requirements),
-                .constraints = b_reqs.constraints,
-            } } } }),
+            // If the variable inside a was unbound with reqs, unify the reqs and keep wrapped in num_poly
+            .num_unbound => |a_reqs| {
+                const merged_unbound = self.fresh(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
+                    .int_requirements = b_reqs.int_requirements.unify(a_reqs.int_requirements),
+                    .frac_requirements = b_reqs.frac_requirements.unify(a_reqs.frac_requirements),
+                    .constraints = b_reqs.constraints,
+                } } } }) catch return Error.AllocatorError;
+                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = merged_unbound } } });
+            },
             .frac_unbound => |a_reqs| {
                 const poly_unbound = self.fresh(vars, .{ .structure = .{
                     .num = .{ .frac_unbound = b_reqs.frac_requirements.unify(a_reqs) },
@@ -2144,12 +2147,15 @@ const Unifier = struct {
             .int_rigid => self.merge(vars, vars.b.desc.content),
             .frac_rigid => self.merge(vars, vars.b.desc.content),
 
-            // If the variable inside a was unbound with recs, unify the reqs
-            .num_unbound => |b_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
-                .int_requirements = a_reqs.int_requirements.unify(b_reqs.int_requirements),
-                .frac_requirements = a_reqs.frac_requirements.unify(b_reqs.frac_requirements),
-                .constraints = a_reqs.constraints,
-            } } } }),
+            // If the variable inside b was unbound with reqs, unify the reqs and keep wrapped in num_poly
+            .num_unbound => |b_reqs| {
+                const merged_unbound = self.fresh(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
+                    .int_requirements = a_reqs.int_requirements.unify(b_reqs.int_requirements),
+                    .frac_requirements = a_reqs.frac_requirements.unify(b_reqs.frac_requirements),
+                    .constraints = a_reqs.constraints,
+                } } } }) catch return Error.AllocatorError;
+                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = merged_unbound } } });
+            },
             .frac_unbound => |b_reqs| {
                 const poly_unbound = self.fresh(vars, .{ .structure = .{
                     .num = .{ .frac_unbound = a_reqs.frac_requirements.unify(b_reqs) },

@@ -798,7 +798,10 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             if (reqs.int_requirements.bits_needed > 0 or reqs.int_requirements.sign_needed) {
                 try self.addImplicitNumericConstraint("from_int_digits");
             }
-            if (reqs.frac_requirements.fits_in_f32 or reqs.frac_requirements.fits_in_dec) {
+            // Only add frac constraint if requirements are NOT in default empty state
+            // Empty state has both fits_in_f32=true and fits_in_dec=true
+            // Actual fractional literals set one or both to false based on their value
+            if (!(reqs.frac_requirements.fits_in_f32 and reqs.frac_requirements.fits_in_dec)) {
                 try self.addImplicitNumericConstraint("from_dec_digits");
             }
             // If neither int nor frac requirements are set, default to from_int_digits

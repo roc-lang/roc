@@ -25,16 +25,19 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 + - :0:0:0:0
 # PROBLEMS
-**MISSING METHOD**
-The value before this **+** operator has the type **a**, which has no **plus** method:
-**lambda_currying_constraint.md:3:21:3:26:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_currying_constraint.md:3:25:3:26:**
 ```roc
 makeAdder = |x| |y| x + y
 ```
-                    ^^^^^
+                        ^
 
+It has the type:
+    _a_
 
-**Hint: ** The **+** operator requires the type to have a **plus** method. Did you forget to specify it in the type annotation?
+But I expected it to be:
+    __size_
 
 # TOKENS
 ~~~zig

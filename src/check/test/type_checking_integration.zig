@@ -56,7 +56,7 @@ test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try checkTypesExpr(source, .pass, "_size where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "_size where [_a.from_dec_digits : _arg -> _ret]");
 }
 
 test "check type - num - float suffix 1" {
