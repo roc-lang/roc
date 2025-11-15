@@ -48,6 +48,27 @@
         '';
 
       in {
+        packages = {
+          default = self.packages.${system}.roc;
+          roc = pkgs.stdenv.mkDerivation {
+            name = "roc";
+            src = ../.;
+            nativeBuildInputs = [ pkgs.zig.hook pkgs.pkg-config ];
+            zigBuildFlags = [ ];
+          };
+        };
+
+        apps = {
+          default = self.apps.${system}.roc;
+          roc = {
+            type = "app";
+            program = "${self.packages.${system}.roc}/bin/roc";
+            meta = {
+              description = "Roc CLI";
+              mainProgram = "roc";
+            };
+          };
+        };
 
         devShell = pkgs.mkShell {
           buildInputs = dependencies;
