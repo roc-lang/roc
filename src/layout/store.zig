@@ -983,16 +983,6 @@ pub const Store = struct {
                                     else
                                         Layout.int(types.Num.Int.Precision.i128);
                                 },
-                                .int_unbound => |reqs| {
-                                    // Default to I128 (even without constraints when using compile-time types)
-                                    _ = reqs;
-                                    break :flat_type Layout.int(types.Num.Int.Precision.i128);
-                                },
-                                .frac_unbound => |reqs| {
-                                    // Default to Dec (even without constraints when using compile-time types)
-                                    _ = reqs;
-                                    break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
-                                },
                                 .num_poly => |var_| {
                                     const next_type = self.types_store.resolveVar(var_).desc.content;
                                     if (next_type == .structure and next_type.structure == .num) {
@@ -1041,6 +1031,10 @@ pub const Store = struct {
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
                                     }
+                                },
+                                .frac_unbound => |_| {
+                                    // Decimal literal - default to Dec
+                                    break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
                                 },
                             }
                         }

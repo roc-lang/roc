@@ -242,10 +242,6 @@ pub const Store = struct {
                     .frac_requirements = unbound.frac_requirements,
                 } };
             },
-            .int_unbound => |requirements| {
-                // For unbound types, we don't have a var to resolve, just return the requirements
-                return SnapshotNum{ .int_unbound = requirements };
-            },
             .frac_unbound => |requirements| {
                 // For unbound types, we don't have a var to resolve, just return the requirements
                 return SnapshotNum{ .frac_unbound = requirements };
@@ -533,7 +529,6 @@ pub const SnapshotNum = union(enum) {
     frac_poly: SnapshotContentIdx,
     num_unbound: struct { int_requirements: types.Num.IntRequirements, frac_requirements: types.Num.FracRequirements },
     num_unbound_if_builtin: struct { int_requirements: types.Num.IntRequirements, frac_requirements: types.Num.FracRequirements },
-    int_unbound: types.Num.IntRequirements,
     frac_unbound: types.Num.FracRequirements,
     int_precision: types.Num.Int.Precision,
     frac_precision: types.Num.Frac.Precision,
@@ -1289,11 +1284,6 @@ pub const SnapshotWriter = struct {
                 try self.addImplicitNumericConstraint("from_int_digits");
             },
             .num_unbound_if_builtin => |_| {
-                _ = try self.buf.writer().write("_");
-                try self.generateContextualName(.NumContent);
-                try self.addImplicitNumericConstraint("from_int_digits");
-            },
-            .int_unbound => |_| {
                 _ = try self.buf.writer().write("_");
                 try self.generateContextualName(.NumContent);
                 try self.addImplicitNumericConstraint("from_int_digits");

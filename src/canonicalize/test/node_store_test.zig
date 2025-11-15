@@ -1039,7 +1039,7 @@ test "NodeStore round trip - Pattern" {
                 .bytes = @bitCast(rand.random().int(i128)),
                 .kind = .i128,
             },
-            .kind = .int_unbound,
+            .kind = .num_unbound,
         },
     });
     try patterns.append(gpa, CIR.Pattern{

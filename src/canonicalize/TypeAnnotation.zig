@@ -378,9 +378,6 @@ pub const TypeAnno = union(enum) {
         str,
         list,
         box,
-        num,
-        frac,
-        int,
         u8,
         u16,
         u32,
@@ -401,9 +398,6 @@ pub const TypeAnno = union(enum) {
                 .str => return "Str",
                 .list => return "List",
                 .box => return "Box",
-                .num => return "Num",
-                .frac => return "Frac",
-                .int => return "Int",
                 .u8 => return "U8",
                 .u16 => return "U16",
                 .u32 => return "U32",
@@ -425,9 +419,6 @@ pub const TypeAnno = union(enum) {
             if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Box")) return .box;
-            if (std.mem.eql(u8, bytes, "Num")) return .num;
-            if (std.mem.eql(u8, bytes, "Frac")) return .frac;
-            if (std.mem.eql(u8, bytes, "Int")) return .int;
             if (std.mem.eql(u8, bytes, "U8")) return .u8;
             if (std.mem.eql(u8, bytes, "U16")) return .u16;
             if (std.mem.eql(u8, bytes, "U32")) return .u32;

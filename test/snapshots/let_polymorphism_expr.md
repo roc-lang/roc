@@ -85,5 +85,5 @@ match [] {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ empty: List(_elem), ints: List(_size), strs: List(Str) } where [_a.from_int_digits : _arg -> _ret]"))
+(expr (type "{ empty: List(_elem), ints: List(_size), strs: List(Str) } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 ~~~

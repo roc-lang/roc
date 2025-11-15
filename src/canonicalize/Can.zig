@@ -3032,14 +3032,14 @@ fn canonicalizeSingleQuote(
         const expr_idx = try self.env.addExpr(CIR.Expr{
             .e_num = .{
                 .value = value_content,
-                .kind = .int_unbound,
+                .kind = .num_unbound,
             },
         }, region);
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
         const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
             .value = value_content,
-            .kind = .int_unbound,
+            .kind = .num_unbound,
         } }, region);
         return pat_idx;
     } else {

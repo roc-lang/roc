@@ -31,20 +31,6 @@ It has the type:
 But the type annotation says it should have the type:
     _Str_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:7:31:7:35:**
-```roc
-wrong_type_function = |x| x * 3.14
-```
-                              ^^^^
-
-It has the type:
-    __size_
-
-But the type annotation says it should have the type:
-    _I64_
-
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -122,8 +108,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error")))
+		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "I64 -> I64"))))
 ~~~

@@ -494,7 +494,6 @@ pub const Num = union(enum) {
     // These are Num(int) or Num(frac)
     //               ^^^         ^^^^
     int_poly: Var,
-    int_unbound: IntRequirements,
     frac_poly: Var,
     frac_unbound: FracRequirements,
 

@@ -791,10 +791,21 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             try self.writeVar(poly, root_var);
             try self.addImplicitNumericConstraint("from_dec_digits");
         },
-        .num_unbound => |_| {
+        .num_unbound => |reqs| {
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);
-            try self.addImplicitNumericConstraint("from_int_digits");
+            // Add constraints based on what requirements are present
+            if (reqs.int_requirements.bits_needed > 0 or reqs.int_requirements.sign_needed) {
+                try self.addImplicitNumericConstraint("from_int_digits");
+            }
+            if (reqs.frac_requirements.fits_in_f32 or reqs.frac_requirements.fits_in_dec) {
+                try self.addImplicitNumericConstraint("from_dec_digits");
+            }
+            // If neither int nor frac requirements are set, default to from_int_digits
+            if (reqs.int_requirements.bits_needed == 0 and !reqs.int_requirements.sign_needed and
+                reqs.frac_requirements.fits_in_f32 and reqs.frac_requirements.fits_in_dec) {
+                try self.addImplicitNumericConstraint("from_int_digits");
+            }
         },
         .num_unbound_if_builtin => |_| {
             // Display the same as num_unbound for now
@@ -802,12 +813,8 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             try self.generateContextualName(.NumContent);
             try self.addImplicitNumericConstraint("from_int_digits");
         },
-        .int_unbound => |_| {
-            _ = try self.buf.writer().write("_");
-            try self.generateContextualName(.NumContent);
-            try self.addImplicitNumericConstraint("from_int_digits");
-        },
         .frac_unbound => |_| {
+            // Display as underscore with from_dec_digits constraint
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);
             try self.addImplicitNumericConstraint("from_dec_digits");

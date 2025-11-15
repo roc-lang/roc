@@ -177,5 +177,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(_size, _size2, _size3, _size4, _size5, Bool, Bool, Bool, Bool, Bool, Bool, _size6, Bool, Bool, _field) where [_a.from_int_digits : _arg -> _ret]"))
+(expr (type "(_size, _size2, _size3, _size4, _size5, Bool, Bool, Bool, Bool, Bool, Bool, _size6, Bool, Bool, _field) where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
 ~~~

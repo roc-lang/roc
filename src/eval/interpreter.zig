@@ -1947,8 +1947,9 @@ pub const Interpreter = struct {
                                 // Determine which builtin numeric type to dispatch to based on the num variant
                                 const default_numeric_stmt = switch (num) {
                                     .num_unbound, .num_unbound_if_builtin, .num_poly => self.builtins.i128_stmt,
-                                    .int_unbound, .int_poly => self.builtins.i128_stmt,
-                                    .frac_unbound, .frac_poly => self.builtins.dec_stmt,
+                                    .int_poly => self.builtins.i128_stmt,
+                                    .frac_poly => self.builtins.dec_stmt,
+                                    .frac_unbound => self.builtins.dec_stmt,
 
                                     // Map each int precision to its specific type
                                     .int_precision => |prec| switch (prec) {
@@ -2970,8 +2971,9 @@ pub const Interpreter = struct {
                             // Determine which builtin numeric type to dispatch to based on the num variant
                             const default_numeric_stmt = switch (num) {
                                 .num_unbound, .num_unbound_if_builtin, .num_poly => self.builtins.i128_stmt,
-                                .int_unbound, .int_poly => self.builtins.i128_stmt,
-                                .frac_unbound, .frac_poly => self.builtins.dec_stmt,
+                                .int_poly => self.builtins.i128_stmt,
+                                .frac_poly => self.builtins.dec_stmt,
+                                .frac_unbound => self.builtins.dec_stmt,
 
                                 // Map each int precision to its specific type
                                 .int_precision => |prec| switch (prec) {

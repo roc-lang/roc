@@ -539,9 +539,6 @@ pub const NumKind = enum {
     // If this number has no restrictions
     num_unbound,
 
-    // If this number is an int with no restrictions
-    int_unbound,
-
     // If the number has an explicit suffix
     u8,
     i8,
