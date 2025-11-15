@@ -281,7 +281,8 @@ pub const Interpreter = struct {
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
         };
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
+        // Use compile-time types directly for layout computation instead of translating
+        result.runtime_layout_store = try layout.Store.init(env, &env.types);
 
         return result;
     }
@@ -639,13 +640,9 @@ pub const Interpreter = struct {
                 return try self.evalExprMinimal(blk.final_expr, roc_ops, null);
             },
             .e_num => |num_lit| {
-                // Use runtime type to choose layout
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const translated = try self.translateTypeVar(self.env, ct_var);
-                    break :blk translated;
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
+                // Get layout directly from compile-time type (no translation needed)
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const layout_val = try self.getLayoutFromCompileVar(ct_var);
                 var value = try self.pushRaw(layout_val, 0);
                 // Write integer as i128 respecting precision via StackValue
                 value.is_initialized = false;
@@ -4548,6 +4545,31 @@ pub const Interpreter = struct {
                 break;
             }
         }
+
+        const idx: usize = @intFromEnum(resolved.var_);
+        try self.ensureVarLayoutCapacity(idx + 1);
+        const slot_ptr = &self.var_to_layout_slot.items[idx];
+        if (slot_ptr.* != 0) {
+            const layout_idx_plus_one = slot_ptr.*;
+            const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
+            return self.runtime_layout_store.getLayout(layout_idx);
+        }
+
+        const layout_idx = switch (resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
+                else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+            },
+            else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+        };
+        slot_ptr.* = @intFromEnum(layout_idx) + 1;
+        return self.runtime_layout_store.getLayout(layout_idx);
+    }
+
+    /// Get layout directly from compile-time type var (no translation needed)
+    /// Since we initialized runtime_layout_store with compile-time types, we can use it directly
+    pub fn getLayoutFromCompileVar(self: *Interpreter, compile_var: types.Var) !layout.Layout {
+        const resolved = self.env.types.resolveVar(compile_var);
 
         const idx: usize = @intFromEnum(resolved.var_);
         try self.ensureVarLayoutCapacity(idx + 1);

@@ -1234,7 +1234,7 @@ pub const Store = struct {
                                 var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
                                 defer self.env.gpa.free(elem_layouts);
                                 var non_zero_count: usize = 0;
-                                for (args_slice, 0..) |v, i| {
+                                for (args_slice) |v| {
                                     const elem_idx = self.addTypeVar(v, &temp_scope) catch |err| {
                                         if (err == LayoutError.ZeroSizedType) {
                                             // Skip zero-sized elements (e.g., flex vars)
