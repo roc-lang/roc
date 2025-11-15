@@ -1404,28 +1404,6 @@ pub const Store = struct {
                         }
                     }
 
-                    // Check if this flex var has constraints
-                    // Constrained flex vars can have default types inferred from their constraints
-                    if (!flex_data.constraints.isEmpty()) {
-                        const constraints = self.types_store.sliceStaticDispatchConstraints(flex_data.constraints);
-                        const ident_store = self.env.getIdentStoreConst();
-
-                        // Check for numeric literal constraints - these should NOT be on flex vars!
-                        for (constraints) |constraint| {
-                            const fn_name_text = ident_store.getText(constraint.fn_name);
-                            if (std.mem.eql(u8, fn_name_text, "from_int_digits") or
-                                std.mem.eql(u8, fn_name_text, "from_dec_digits"))
-                            {
-                                @panic("COMPILER BUG: Found numeric literal constraint on flex var at runtime! Numeric literals should create num types with constraints, not flex vars.");
-                            }
-                        }
-
-                        // All other constraints (for nominal types etc.) should cause an error
-                        // since we don't know how to default them
-                        return LayoutError.BugUnboxedFlexVar;
-                    }
-
-                    // No constraints - this is truly an unconstrained flex var
                     // Flex vars should not appear unboxed during layout computation.
                     // This indicates the type checker failed to resolve a polymorphic type
                     // to a concrete type before evaluation.

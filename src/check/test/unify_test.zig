@@ -3516,15 +3516,9 @@ test "unify - unbound vs polymorphic - full matrix" {
 
             // Add context on failure
             if (expected == .yes) {
-                case.expectBothOrders(NumTestCase.expectOk) catch |err| {
-                    std.debug.print("FAILED: {s} × {s} (expected to unify)\n", .{ @tagName(unbound_kind), @tagName(poly_kind) });
-                    return err;
-                };
+                try case.expectBothOrders(NumTestCase.expectOk);
             } else {
-                case.expectBothOrders(NumTestCase.expectProblem) catch |err| {
-                    std.debug.print("FAILED: {s} × {s} (expected NOT to unify)\n", .{ @tagName(unbound_kind), @tagName(poly_kind) });
-                    return err;
-                };
+                try case.expectBothOrders(NumTestCase.expectProblem);
             }
         }
     }

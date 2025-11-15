@@ -642,7 +642,8 @@ pub const Interpreter = struct {
                 // Use runtime type to choose layout
                 const rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
+                    const translated = try self.translateTypeVar(self.env, ct_var);
+                    break :blk translated;
                 };
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 var value = try self.pushRaw(layout_val, 0);
@@ -3052,9 +3053,9 @@ pub const Interpreter = struct {
                         else => return error.InvalidMethodReceiver,
                     }
                 },
-                // Flex/rigid vars should have been specialized to nominal types before runtime
-                .flex, .rigid => {
-                    // If we reach here, the receiver wasn't properly monomorphized
+                .flex => return error.InvalidMethodReceiver,
+                .rigid => {
+                    // Rigid vars should have been specialized to nominal types before runtime
                     return error.InvalidMethodReceiver;
                 },
                 else => return error.InvalidMethodReceiver,
@@ -3101,7 +3102,6 @@ pub const Interpreter = struct {
         // For regular lambdas, check parameter count matches argument count
         const params = self.env.store.slicePatterns(closure_header.params);
         if (params.len != args.len) {
-            std.debug.print("Method param count mismatch: expected {}, got {} args\n", .{ params.len, args.len });
             return error.TypeMismatch;
         }
 

@@ -2666,7 +2666,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.checkDeferredStaticDispatchConstraints(env);
 
             // Link the root expr with the final expr
-            _ = try self.unify(expr_var, ModuleEnv.varFrom(block.final_expr), env);
+            const final_expr_var = ModuleEnv.varFrom(block.final_expr);
+            _ = try self.unify(expr_var, final_expr_var, env);
         },
         // function //
         .e_lambda => |lambda| {
@@ -3109,8 +3110,44 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // For static dispatch to be used like `thing.dispatch(...)` the
                     // method being dispatched on must accept the type of `thing` as
                     // it's first arg. So, we prepend the `receiver_var` to the args list
-                    const first_arg_range = try self.types.appendVars(&.{receiver_var});
-                    const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
+
+                    // Create fresh vars for the constraint function arguments instead of using
+                    // receiver_var and arg vars directly. This allows us to set them to
+                    // num_unbound_if_builtin for builtin numeric methods without modifying the
+                    // expression vars. Since `a + b` is syntax sugar for `a.plus(b)`, these
+                    // two paths use identical logic.
+                    const constraint_receiver_var = try self.fresh(env, expr_region);
+                    const constraint_args_buf = try self.gpa.alloc(Var, dispatch_arg_expr_idxs.len);
+                    defer self.gpa.free(constraint_args_buf);
+                    for (dispatch_arg_expr_idxs, 0..) |_, i| {
+                        constraint_args_buf[i] = try self.fresh(env, expr_region);
+                    }
+
+                    const is_builtin_numeric_method =
+                        dot_access.field_name == self.cir.plus_ident or
+                        dot_access.field_name == self.cir.minus_ident or
+                        dot_access.field_name == self.cir.times_ident or
+                        dot_access.field_name == self.cir.div_ident or
+                        dot_access.field_name == self.cir.div_trunc_ident or
+                        dot_access.field_name == self.cir.rem_ident;
+                    if (is_builtin_numeric_method) {
+                        const num_unbound_if_builtin_content = Content{
+                            .structure = .{
+                                .num = .{ .num_unbound_if_builtin = types_mod.Num.NumRequirements{
+                                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                                    .frac_requirements = types_mod.Num.FracRequirements.init(),
+                                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                                } },
+                            },
+                        };
+                        for (constraint_args_buf) |arg_var| {
+                            try self.types.setVarContent(arg_var, num_unbound_if_builtin_content);
+                        }
+                    }
+
+                    // Build the args range: receiver first, then other args
+                    const first_arg_range = try self.types.appendVars(&.{constraint_receiver_var});
+                    const rest_args_range = try self.types.appendVars(constraint_args_buf);
                     const dispatch_arg_vars_range = Var.SafeList.Range{
                         .start = first_arg_range.start,
                         .count = rest_args_range.count + 1,
@@ -3119,11 +3156,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // TODO Why do we have to create the static dispatch fn at the
                     // receiver rank instead of the  cur rank?
 
-                    // Since the return type of this dispatch is unknown, create a
-                    // flex to represent it
                     const dispatch_ret_var = try self.fresh(env, expr_region);
+                    if (is_builtin_numeric_method) {
+                        const num_unbound_if_builtin_content = Content{
+                            .structure = .{
+                                .num = .{ .num_unbound_if_builtin = types_mod.Num.NumRequirements{
+                                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                                    .frac_requirements = types_mod.Num.FracRequirements.init(),
+                                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                                } },
+                            },
+                        };
+                        try self.types.setVarContent(dispatch_ret_var, num_unbound_if_builtin_content);
+                    }
 
-                    // Now, create the function being dispatched
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = dispatch_arg_vars_range,
                         .ret = dispatch_ret_var,
@@ -3145,6 +3191,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         expr_region,
                     );
 
+                    // Unify constraint function args with actual expression vars
+                    // This propagates types from the actual expressions to the constraint function
+                    _ = try self.unify(constraint_receiver_var, receiver_var, env);
+                    for (dispatch_arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                        const actual_arg_var = ModuleEnv.varFrom(arg_expr_idx);
+                        _ = try self.unify(constraint_args_buf[i], actual_arg_var, env);
+                    }
+
+                    // Unify constrained var with receiver (this attaches the constraint to the receiver type)
                     _ = try self.unify(constrained_var, receiver_var, env);
 
                     // Then, set the root expr to redirect to the ret var
@@ -3291,10 +3346,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     _ = try self.checkDeferredStaticDispatchConstraints(env);
                 }
 
-                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
-
                 // Unify the pattern with the expression
-
+                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
             },
             .s_var => |var_stmt| {
@@ -3754,10 +3807,26 @@ fn checkBinopExpr(
 
             if (should_use_static_dispatch) {
                 // All types use static dispatch: a + b desugars to a.plus(b)
-                // Type unification will propagate types through the constraint function
-
+                // Create fresh vars for the constraint function arguments instead of using
+                // lhs_var/rhs_var directly. This allows us to set them to num_unbound_if_builtin
+                // for builtin numeric methods without modifying the expression vars.
+                const constraint_lhs_var = try self.fresh(env, expr_region);
+                const constraint_rhs_var = try self.fresh(env, expr_region);
                 const ret_var = try self.fresh(env, expr_region);
-                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+                const num_unbound_if_builtin_content = Content{
+                    .structure = .{
+                        .num = .{ .num_unbound_if_builtin = types_mod.Num.NumRequirements{
+                            .int_requirements = types_mod.Num.IntRequirements.init(),
+                            .frac_requirements = types_mod.Num.FracRequirements.init(),
+                            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        } },
+                    },
+                };
+
+                try self.types.setVarContent(constraint_rhs_var, num_unbound_if_builtin_content);
+                try self.types.setVarContent(ret_var, num_unbound_if_builtin_content);
+
+                const args_range = try self.types.appendVars(&.{ constraint_lhs_var, constraint_rhs_var });
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
                     .ret = ret_var,
@@ -3776,6 +3845,13 @@ fn checkBinopExpr(
                     env,
                     expr_region,
                 );
+
+                // Unify constraint function args with actual expression vars
+                // This propagates types: lhs_var flows to constraint_lhs_var, rhs_var flows to constraint_rhs_var
+                _ = try self.unify(constraint_lhs_var, lhs_var, env);
+                _ = try self.unify(constraint_rhs_var, rhs_var, env);
+
+                // Unify constrained var with lhs (this attaches the constraint to the receiver type)
                 _ = try self.unify(constrained_var, lhs_var, env);
 
                 // DO NOT attach constraint to return type!
