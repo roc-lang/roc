@@ -12,11 +12,6 @@ const test_exclusions = [_][]const u8{
     "src/snapshot_tool",
 };
 
-const test_file_exclusions = [_][]const u8{
-    // TODO: This test got out of sync and is not straightforward to fix
-    "src/eval/test/low_level_interp_test.zig",
-};
-
 const TermColor = struct {
     pub const red = "\x1b[0;31m";
     pub const green = "\x1b[0;32m";
@@ -155,36 +150,12 @@ fn handleFile(
         return;
     }
 
-    if (shouldSkipTestPath(path)) {
-        allocator.free(path);
-        return;
-    }
-
-    if (shouldSkipTestFile(path)) {
-        allocator.free(path);
-        return;
-    }
-
     if (try fileHasTestDecl(allocator, path)) {
         try test_files.append(allocator, path);
         return;
     }
 
     allocator.free(path);
-}
-
-fn shouldSkipTestPath(path: []const u8) bool {
-    for (test_exclusions) |prefix| {
-        if (hasDirPrefix(path, prefix)) return true;
-    }
-    return false;
-}
-
-fn shouldSkipTestFile(path: []const u8) bool {
-    for (test_file_exclusions) |excluded| {
-        if (std.mem.eql(u8, path, excluded)) return true;
-    }
-    return false;
 }
 
 fn hasDirPrefix(path: []const u8, prefix: []const u8) bool {
