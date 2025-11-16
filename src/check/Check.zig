@@ -2239,10 +2239,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
             } else {
                 const f64_val = frac.value.toF64();
+
+                // Create constraint for from_dec_digits method
+                const ret_var = try self.fresh(env, expr_region);
+                const arg_var = try self.fresh(env, expr_region);
+                const args_range = try self.types.appendVars(&.{arg_var});
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = self.cir.from_dec_digits_ident,
+                    .fn_var = constraint_fn_var,
+                    .origin = .numeric_literal,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
                 const requirements = types_mod.Num.FracRequirements{
                     .fits_in_f32 = can.CIR.fitsInF32(f64_val),
                     .fits_in_dec = can.CIR.fitsInDec(f64_val),
-                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    .constraints = constraint_range,
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -2257,7 +2275,29 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
             } else {
-                const reqs = frac.value.toFracRequirements();
+                // Create constraint for from_dec_digits method
+                const ret_var = try self.fresh(env, expr_region);
+                const arg_var = try self.fresh(env, expr_region);
+                const args_range = try self.types.appendVars(&.{arg_var});
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = self.cir.from_dec_digits_ident,
+                    .fn_var = constraint_fn_var,
+                    .origin = .numeric_literal,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                const base_reqs = frac.value.toFracRequirements();
+                const reqs = types_mod.Num.FracRequirements{
+                    .fits_in_f32 = base_reqs.fits_in_f32,
+                    .fits_in_dec = base_reqs.fits_in_dec,
+                    .constraints = constraint_range,
+                };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = reqs,
                 } } }, env, expr_region);
@@ -3821,7 +3861,16 @@ fn checkBinopExpr(
                 }
 
                 // Unify left and right together
-                _ = try self.unify(lhs_var, rhs_var, env);
+                const unify_result = try self.unify(lhs_var, rhs_var, env);
+
+                if (false) { // Debug disabled
+                    const lhs_resolved_after = self.types.resolveVar(lhs_var);
+                    const rhs_resolved_after = self.types.resolveVar(rhs_var);
+                    std.debug.print("\n=== Binop Unification ===\n", .{});
+                    std.debug.print("  lhs_var: {d}, rhs_var: {d}\n", .{ @intFromEnum(lhs_var), @intFromEnum(rhs_var) });
+                    std.debug.print("  lhs resolved: {d}, rhs resolved: {d}\n", .{ @intFromEnum(lhs_resolved_after.var_), @intFromEnum(rhs_resolved_after.var_) });
+                    std.debug.print("  result: {s}\n", .{@tagName(unify_result)});
+                }
 
                 // Set root expr. If unifications succeeded this will the the
                 // num, otherwise the propgate error
