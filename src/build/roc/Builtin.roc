@@ -1,12 +1,12 @@
-Builtin := [].{
-	Str := [ProvidedByCompiler].{
+Builtin :: [].{
+	Str :: [ProvidedByCompiler].{
 		is_empty : Str -> Bool
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
 	}
 
-	List := [ProvidedByCompiler].{
+	List :: [ProvidedByCompiler].{
 		len : List(_item) -> U64
 		is_empty : List(_item) -> Bool
 		concat : List(item), List(item) -> List(item)
@@ -90,17 +90,17 @@ Builtin := [].{
 		#}
 	}
 
-	Dict := [EmptyDict].{}
+	Dict :: [EmptyDict].{}
 
-	Set(item) := [].{
+	Set(item) :: [].{
 		is_empty : Set(item) -> Bool
 
 		is_eq : Set(item), Set(item) -> Bool
 		is_eq = |_a, _b| Bool.False
 	}
 
-	Num := {}.{
-		U8 := [].{
+	Num :: {}.{
+		U8 :: [].{
 			is_zero : U8 -> Bool
 			is_eq : U8, U8 -> Bool
 			is_gt : U8, U8 -> Bool
@@ -117,7 +117,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 		}
 
-		I8 := [].{
+		I8 :: [].{
 			is_zero : I8 -> Bool
 			is_negative : I8 -> Bool
 			is_positive : I8 -> Bool
@@ -137,7 +137,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 		}
 
-		U16 := [].{
+		U16 :: [].{
 			is_zero : U16 -> Bool
 			is_eq : U16, U16 -> Bool
 			is_gt : U16, U16 -> Bool
@@ -154,7 +154,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 		}
 
-		I16 := [].{
+		I16 :: [].{
 			is_zero : I16 -> Bool
 			is_negative : I16 -> Bool
 			is_positive : I16 -> Bool
@@ -174,7 +174,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 		}
 
-		U32 := [].{
+		U32 :: [].{
 			is_zero : U32 -> Bool
 			is_eq : U32, U32 -> Bool
 			is_gt : U32, U32 -> Bool
@@ -191,7 +191,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 		}
 
-		I32 := [].{
+		I32 :: [].{
 			is_zero : I32 -> Bool
 			is_negative : I32 -> Bool
 			is_positive : I32 -> Bool
@@ -211,7 +211,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 		}
 
-		U64 := [].{
+		U64 :: [].{
 			is_zero : U64 -> Bool
 			is_eq : U64, U64 -> Bool
 			is_gt : U64, U64 -> Bool
@@ -228,7 +228,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 		}
 
-		I64 := [].{
+		I64 :: [].{
 			is_zero : I64 -> Bool
 			is_negative : I64 -> Bool
 			is_positive : I64 -> Bool
@@ -248,7 +248,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 		}
 
-		U128 := [].{
+		U128 :: [].{
 			is_zero : U128 -> Bool
 			is_eq : U128, U128 -> Bool
 			is_gt : U128, U128 -> Bool
@@ -265,7 +265,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 		}
 
-		I128 := [].{
+		I128 :: [].{
 			is_zero : I128 -> Bool
 			is_negative : I128 -> Bool
 			is_positive : I128 -> Bool
@@ -285,7 +285,7 @@ Builtin := [].{
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 		}
 
-		Dec := [].{
+		Dec :: [].{
 			is_zero : Dec -> Bool
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool
@@ -307,7 +307,7 @@ Builtin := [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 		}
 
-		F32 := [].{
+		F32 :: [].{
 			is_zero : F32 -> Bool
 			is_negative : F32 -> Bool
 			is_positive : F32 -> Bool
@@ -327,7 +327,7 @@ Builtin := [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 		}
 
-		F64 := [].{
+		F64 :: [].{
 			is_zero : F64 -> Bool
 			is_negative : F64 -> Bool
 			is_positive : F64 -> Bool
