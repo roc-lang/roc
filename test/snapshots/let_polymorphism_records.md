@@ -52,25 +52,6 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
 TYPE MISMATCH - let_polymorphism_records.md:38:6:38:17
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The two elements in this list have incompatible types:
-**let_polymorphism_records.md:8:21:**
-```roc
-my_nonempty_list = [num, frac]
-```
-                    ^^^  ^^^^
-
-The first element has this type:
-    __size_
-
-However, the second element has this type:
-    __size_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
 **TYPE MISMATCH**
 The second argument being passed to this function has the wrong type:
 **let_polymorphism_records.md:26:47:26:49:**
@@ -425,7 +406,7 @@ NO CHANGE
 		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
 		(patt (type "Str"))
 		(patt (type "List(_elem)"))
-		(patt (type "List(Error)"))
+		(patt (type "List(_size) where [_a.from_dec_digits : _arg -> _ret]"))
 		(patt (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
@@ -444,7 +425,7 @@ NO CHANGE
 		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
 		(expr (type "Str"))
 		(expr (type "List(_elem)"))
-		(expr (type "List(Error)"))
+		(expr (type "List(_size) where [_a.from_dec_digits : _arg -> _ret]"))
 		(expr (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))

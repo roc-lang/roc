@@ -1976,29 +1976,28 @@ const Unifier = struct {
                                 self.merge(vars, vars.b.desc.content);
                             },
                             .frac_unbound => |b_frac_reqs| {
-                                // Merge requirements
+                                // When num_unbound (which may have int constraints like from_int_digits)
+                                // unifies with frac_unbound (which has frac constraints like from_dec_digits),
+                                // we need to create a num_unbound result that preserves BOTH sets of constraints.
+                                // This is critical for cases like `1 - 0.2` where we need both from_int_digits
+                                // (from the "1") and from_dec_digits (from the "0.2") on the result.
+
                                 const merged_frac = a_reqs.frac_requirements.unify(b_frac_reqs);
-                                if (false) { // Debug constraints
-                                    std.debug.print("\n=== Merging constraints in num_unbound ⨯ frac_poly(frac_unbound) ===\n", .{});
-                                    std.debug.print("  a_reqs.constraints.len = {d}\n", .{a_reqs.constraints.len()});
-                                    std.debug.print("  b_frac_reqs.constraints.len = {d}\n", .{b_frac_reqs.constraints.len()});
-                                }
                                 const merged_constraints = try self.unifyStaticDispatchConstraints(
                                     a_reqs.constraints,
                                     b_frac_reqs.constraints,
                                 );
-                                if (false) { // Debug constraints
-                                    std.debug.print("  merged_constraints.len = {d}\n", .{merged_constraints.len()});
-                                }
-                                const frac_unbound_var = self.fresh(vars, .{ .structure = .{
-                                    .num = .{ .frac_unbound = .{
-                                        .fits_in_f32 = merged_frac.fits_in_f32,
-                                        .fits_in_dec = merged_frac.fits_in_dec,
+
+                                // Create num_unbound (not frac_unbound) to preserve both int and frac requirements
+                                const num_unbound_var = self.fresh(vars, .{ .structure = .{
+                                    .num = .{ .num_unbound = .{
+                                        .int_requirements = a_reqs.int_requirements,
+                                        .frac_requirements = merged_frac,
                                         .constraints = merged_constraints,
                                     } },
                                 } }) catch return Error.AllocatorError;
-                                try self.unifyGuarded(b_poly_var, frac_unbound_var);
-                                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = frac_unbound_var } } });
+                                try self.unifyGuarded(b_poly_var, num_unbound_var);
+                                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = num_unbound_var } } });
                             },
                             else => return error.TypeMismatch,
                         }

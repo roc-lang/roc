@@ -3831,12 +3831,12 @@ fn checkBinopExpr(
                 // optimization - they're semantically the same as method constraints.
 
                 // Collect ALL constraints from both operands (except the binop method itself)
-                var operand_constraints = try std.ArrayList(types_mod.StaticDispatchConstraint).initCapacity(self.types.gpa, 4);
-                defer operand_constraints.deinit();
+                var operand_constraints = std.ArrayList(types_mod.StaticDispatchConstraint){};
+                defer operand_constraints.deinit(self.types.gpa);
 
                 // Helper to extract constraints from a type variable
                 const extract_constraints = struct {
-                    fn call(types: *types_mod.Types, var_: types_mod.Var, list: *std.ArrayList(types_mod.StaticDispatchConstraint), binop_method: types_mod.Ident.Idx) !void {
+                    fn call(types: *types_mod.Store, var_: types_mod.Var, list: *std.ArrayList(types_mod.StaticDispatchConstraint), alloc: std.mem.Allocator, binop_method: Ident.Idx) !void {
                         const resolved = types.resolveVar(var_);
                         switch (resolved.desc.content) {
                             .structure => |s| switch (s) {
@@ -3847,7 +3847,7 @@ fn checkBinopExpr(
                                         .frac_unbound => |reqs| reqs.constraints,
                                         .int_poly, .frac_poly, .num_poly => |poly_var| {
                                             // Follow the poly var to get constraints
-                                            return call(types, poly_var, list, binop_method);
+                                            return call(types, poly_var, list, alloc, binop_method);
                                         },
                                         else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                                     };
@@ -3855,8 +3855,8 @@ fn checkBinopExpr(
                                     const constraints_slice = types.static_dispatch_constraints.sliceRange(constraints_range);
                                     for (constraints_slice) |c| {
                                         // Include all constraints EXCEPT the binop method itself
-                                        if (c.fn_name.raw != binop_method.raw) {
-                                            try list.append(c);
+                                        if (c.fn_name != binop_method) {
+                                            try list.append(alloc, c);
                                         }
                                     }
                                 },
@@ -3867,8 +3867,8 @@ fn checkBinopExpr(
                     }
                 }.call;
 
-                try extract_constraints(&self.types, lhs_var, &operand_constraints, method_name);
-                try extract_constraints(&self.types, rhs_var, &operand_constraints, method_name);
+                try extract_constraints(self.types, lhs_var, &operand_constraints, self.types.gpa, method_name);
+                try extract_constraints(self.types, rhs_var, &operand_constraints, self.types.gpa, method_name);
 
                 // If we collected any constraints, add them to ret_var
                 if (operand_constraints.items.len > 0) {
@@ -3886,12 +3886,12 @@ fn checkBinopExpr(
                     };
 
                     // Merge the constraints
-                    var all_constraints = try std.ArrayList(types_mod.StaticDispatchConstraint).initCapacity(self.types.gpa, 8);
-                    defer all_constraints.deinit();
+                    var all_constraints = std.ArrayList(types_mod.StaticDispatchConstraint){};
+                    defer all_constraints.deinit(self.types.gpa);
 
                     const existing_slice = self.types.static_dispatch_constraints.sliceRange(existing_constraints);
-                    try all_constraints.appendSlice(existing_slice);
-                    try all_constraints.appendSlice(operand_constraints.items);
+                    try all_constraints.appendSlice(self.types.gpa, existing_slice);
+                    try all_constraints.appendSlice(self.types.gpa, operand_constraints.items);
 
                     const merged_constraints_range = try self.types.appendStaticDispatchConstraints(all_constraints.items);
 

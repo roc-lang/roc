@@ -11,18 +11,18 @@ type=expr
 INCOMPATIBLE LIST ELEMENTS - let_polymorphism_error.md:1:6:1:6
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**let_polymorphism_error.md:1:2:**
+The second and third elements in this list have incompatible types:
+**let_polymorphism_error.md:1:6:**
 ```roc
 [42, 4.2, "hello"]
 ```
- ^^  ^^^
+     ^^^  ^^^^^^^
 
-The first element has this type:
+The second element has this type:
     __size_
 
-However, the second element has this type:
-    __size_
+However, the third element has this type:
+    _Str_
 
 All elements in a list must have compatible types.
 

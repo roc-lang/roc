@@ -117,34 +117,7 @@ main = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_complex.md:100:20:100:24:**
-```roc
-        from_frac: frac * 10.0,
-```
-                   ^^^^
-
-It has the type:
-    __size_
-
-But I expected it to be:
-    __size_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_complex.md:100:27:100:31:**
-```roc
-        from_frac: frac * 10.0,
-```
-                          ^^^^
-
-It has the type:
-    __size_
-
-But I expected it to be:
-    __size_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -1108,7 +1081,7 @@ main = |_| {
 		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "List(_size) where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ base: _size, derived: List(_size2) } where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "{ computations: { from_frac: Error, from_num: _size, list_from_num: List(_size2) }, empty_lists: { in_list: List(List(_elem)), in_record: { data: List(_elem2) }, raw: List(_elem3) }, numbers: { float: _size3, list: List(_size4), value: _size5 }, strings: { list: List(Str), value: Str } } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(patt (type "{ computations: { from_frac: _size, from_num: _size2, list_from_num: List(_size3) }, empty_lists: { in_list: List(List(_elem)), in_record: { data: List(_elem2) }, raw: List(_elem3) }, numbers: { float: _size4, list: List(_size5), value: _size6 }, strings: { list: List(Str), value: Str } } where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
 		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]")))
 	(expressions
 		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
@@ -1137,6 +1110,6 @@ main = |_| {
 		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "List(_size) where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ base: _size, derived: List(_size2) } where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "{ computations: { from_frac: Error, from_num: _size, list_from_num: List(_size2) }, empty_lists: { in_list: List(List(_elem)), in_record: { data: List(_elem2) }, raw: List(_elem3) }, numbers: { float: _size3, list: List(_size4), value: _size5 }, strings: { list: List(Str), value: Str } } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+		(expr (type "{ computations: { from_frac: _size, from_num: _size2, list_from_num: List(_size3) }, empty_lists: { in_list: List(List(_elem)), in_record: { data: List(_elem2) }, raw: List(_elem3) }, numbers: { float: _size4, list: List(_size5), value: _size6 }, strings: { list: List(Str), value: Str } } where [_a.from_dec_digits : _arg -> _ret, _b.from_int_digits : _arg -> _ret]"))
 		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]"))))
 ~~~
