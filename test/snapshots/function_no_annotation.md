@@ -166,11 +166,11 @@ NO CHANGE
 	(defs
 		(patt (type "a, _size -> _size2 where [a.times : a, _size3 -> _size4, _b.from_int_digits : _arg -> _ret]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, _size -> _size2, _b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
+		(patt (type "a -> Error where [a.times : a, _size -> _size2, _b.from_int_digits : _arg -> _ret]"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a, _size -> _size2 where [a.times : a, _size3 -> _size4, _b.from_int_digits : _arg -> _ret]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, _size -> _size2, _b.from_int_digits : _arg -> _ret, _c.from_dec_digits : _arg -> _ret]"))
+		(expr (type "a -> Error where [a.times : a, _size -> _size2, _b.from_int_digits : _arg -> _ret]"))
 		(expr (type "Error"))))
 ~~~

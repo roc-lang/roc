@@ -1449,7 +1449,10 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(rec_var.structure);
                     continue;
                 },
-                .err => {
+                .err => |err_info| {
+                    std.debug.print("\n=== ERROR TYPE ENCOUNTERED IN LAYOUT ===\n", .{});
+                    std.debug.print("  Type var: {d}\n", .{@intFromEnum(current.var_)});
+                    std.debug.print("  Error info: {any}\n", .{err_info});
                     return LayoutError.TypeContainedMismatch;
                 },
             };

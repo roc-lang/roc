@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Ok(_size), Err(_size2)]_others where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+(expr (type "[Ok(_size), Err(_size2)]_others where [_a.from_int_digits : _arg -> _ret]"))
 ~~~

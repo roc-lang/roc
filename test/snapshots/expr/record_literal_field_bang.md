@@ -55,5 +55,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ answer: _size, launchTheNukes!: {} -> _ret } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+(expr (type "{ answer: _size, launchTheNukes!: {} -> _ret } where [_a.from_int_digits : _arg -> _ret]"))
 ~~~

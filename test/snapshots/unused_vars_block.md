@@ -171,7 +171,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]")))
+		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]")))
 	(expressions
-		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))))
+		(expr (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]"))))
 ~~~

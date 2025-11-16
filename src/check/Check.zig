@@ -4316,6 +4316,110 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 };
 
                 const result = try self.unify(local_def_var, constraint.fn_var, env);
+
+                if (false and std.mem.indexOf(u8, qualified_name_bytes, "I128.plus") != null) {
+                    const resolved_local = self.types.resolveVar(local_def_var);
+                    std.debug.print("\n=== DEBUG: I128.plus Method Signature ===\n", .{});
+                    std.debug.print("  Qualified name: {s}\n", .{qualified_name_bytes});
+                    std.debug.print("  local_def_var: {d}\n", .{@intFromEnum(local_def_var)});
+                    std.debug.print("  Resolved var: {d}\n", .{@intFromEnum(resolved_local.var_)});
+                    std.debug.print("  Content: {s}\n", .{@tagName(resolved_local.desc.content)});
+                    if (resolved_local.desc.content == .structure) {
+                        const struct_content = resolved_local.desc.content.structure;
+                        if (struct_content == .fn_pure or struct_content == .fn_effectful or struct_content == .fn_unbound) {
+                            const func = switch (struct_content) {
+                                .fn_pure => |f| f,
+                                .fn_effectful => |f| f,
+                                .fn_unbound => |f| f,
+                                else => unreachable,
+                            };
+                            const resolved_ret = self.types.resolveVar(func.ret);
+                            std.debug.print("  Function type: {s}\n", .{@tagName(struct_content)});
+                            std.debug.print("  Return type var: {d}\n", .{@intFromEnum(func.ret)});
+                            std.debug.print("  Resolved return var: {d}\n", .{@intFromEnum(resolved_ret.var_)});
+                            std.debug.print("  Return content: {s}\n", .{@tagName(resolved_ret.desc.content)});
+                            if (resolved_ret.desc.content == .structure) {
+                                std.debug.print("  Return structure: {s}\n", .{@tagName(resolved_ret.desc.content.structure)});
+                                if (resolved_ret.desc.content.structure == .num) {
+                                    const num_val = resolved_ret.desc.content.structure.num;
+                                    std.debug.print("  Num variant: {s}\n", .{@tagName(num_val)});
+                                    if (num_val == .num_compact) {
+                                        const compact = num_val.num_compact;
+                                        std.debug.print("  Compact type: {s}\n", .{@tagName(compact)});
+                                        switch (compact) {
+                                            .int => |int_prec| std.debug.print("    Int precision: {s}\n", .{@tagName(int_prec)}),
+                                            .frac => |frac_prec| std.debug.print("    Frac precision: {s}\n", .{@tagName(frac_prec)}),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    std.debug.print("  constraint.fn_var: {d}\n", .{@intFromEnum(constraint.fn_var)});
+
+                    // Also check what constraint.fn_var looks like
+                    const resolved_constraint_fn = self.types.resolveVar(constraint.fn_var);
+                    std.debug.print("  Constraint fn type var: {d}\n", .{@intFromEnum(resolved_constraint_fn.var_)});
+                    std.debug.print("  Constraint fn content: {s}\n", .{@tagName(resolved_constraint_fn.desc.content)});
+                    if (resolved_constraint_fn.desc.content == .structure) {
+                        std.debug.print("  Constraint structure: {s}\n", .{@tagName(resolved_constraint_fn.desc.content.structure)});
+                        const struct_content = resolved_constraint_fn.desc.content.structure;
+                        if (struct_content == .fn_pure or struct_content == .fn_effectful or struct_content == .fn_unbound) {
+                            const constraint_func = switch (struct_content) {
+                                .fn_pure => |f| f,
+                                .fn_effectful => |f| f,
+                                .fn_unbound => |f| f,
+                                else => unreachable,
+                            };
+                            const resolved_constraint_ret = self.types.resolveVar(constraint_func.ret);
+                            std.debug.print("  Constraint ret var: {d}\n", .{@intFromEnum(constraint_func.ret)});
+                            std.debug.print("  Constraint ret resolved var: {d}\n", .{@intFromEnum(resolved_constraint_ret.var_)});
+                            std.debug.print("  Constraint ret content: {s}\n", .{@tagName(resolved_constraint_ret.desc.content)});
+                            if (resolved_constraint_ret.desc.content == .structure and resolved_constraint_ret.desc.content.structure == .num) {
+                                std.debug.print("  Constraint ret num: {s}\n", .{@tagName(resolved_constraint_ret.desc.content.structure.num)});
+                            }
+                        }
+                    }
+
+                    std.debug.print("  About to unify local_def_var={d} with constraint.fn_var={d}\n", .{@intFromEnum(local_def_var), @intFromEnum(constraint.fn_var)});
+                    std.debug.print("==========================================\n", .{});
+                }
+
+                // DEBUG: After unification, check what happened to the return types
+                if (false and std.mem.indexOf(u8, qualified_name_bytes, "I128.plus") != null) {
+                    const resolved_local_after = self.types.resolveVar(local_def_var);
+                    const resolved_constraint_after = self.types.resolveVar(constraint.fn_var);
+                    std.debug.print("\n=== AFTER UNIFICATION ===\n", .{});
+                    std.debug.print("  Unification result: {s}\n", .{@tagName(result)});
+                    std.debug.print("  local_def_var: {d} -> {d}\n", .{@intFromEnum(local_def_var), @intFromEnum(resolved_local_after.var_)});
+                    std.debug.print("  constraint.fn_var: {d} -> {d}\n", .{@intFromEnum(constraint.fn_var), @intFromEnum(resolved_constraint_after.var_)});
+
+                    // Check if they unified to the same var
+                    if (resolved_local_after.var_ == resolved_constraint_after.var_) {
+                        std.debug.print("  -> Both now point to same var: {d}\n", .{@intFromEnum(resolved_local_after.var_)});
+                    }
+
+                    // Check the resolved function structure
+                    if (resolved_constraint_after.desc.content == .structure) {
+                        const struct_content = resolved_constraint_after.desc.content.structure;
+                        std.debug.print("  Constraint structure after: {s}\n", .{@tagName(struct_content)});
+                        if (struct_content == .fn_pure or struct_content == .fn_effectful or struct_content == .fn_unbound) {
+                            const func_after = switch (struct_content) {
+                                .fn_pure => |f| f,
+                                .fn_effectful => |f| f,
+                                .fn_unbound => |f| f,
+                                else => unreachable,
+                            };
+                            const ret_after = self.types.resolveVar(func_after.ret);
+                            std.debug.print("  Return var: {d} -> {d}\n", .{@intFromEnum(func_after.ret), @intFromEnum(ret_after.var_)});
+                            std.debug.print("  Return content: {s}\n", .{@tagName(ret_after.desc.content)});
+                            if (ret_after.desc.content == .structure and ret_after.desc.content.structure == .num) {
+                                std.debug.print("  Return num: {s}\n", .{@tagName(ret_after.desc.content.structure.num)});
+                            }
+                        }
+                    }
+                    std.debug.print("=========================\n", .{});
+                }
                 if (result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);

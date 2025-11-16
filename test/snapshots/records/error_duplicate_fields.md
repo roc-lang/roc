@@ -90,5 +90,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: _size, email: Str, name: Str } where [_a.from_int_digits : _arg -> _ret, _b.from_dec_digits : _arg -> _ret]"))
+(expr (type "{ age: _size, email: Str, name: Str } where [_a.from_int_digits : _arg -> _ret]"))
 ~~~

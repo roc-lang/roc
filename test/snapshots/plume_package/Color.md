@@ -216,24 +216,6 @@ This **to_frac** method is being called on the type **U8**, which has no method 
 
 **Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**Color.md:23:5:23:33:**
-```roc
-    Color.RGBA(r, g, b, rounded)
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The tag is:
-    _RGBA(U8, U8, U8, _size)_
-
-But the nominal type needs it to one of:
-    _[Hex(Str), Named(Str), RGB(U8, U8, U8), RGBA(U8, U8, U8, Dec)]_
-
-**Hint:** The nominal type has a tag with the same name, but different args:
-
-    _RGBA(U8, U8, U8, Dec)_
-
 **TYPE DOES NOT HAVE METHODS**
 You're calling the method `to_utf8` on a type that doesn't support methods:
 **Color.md:29:13:29:26:**
@@ -1235,7 +1217,7 @@ is_named_color = |str| {
 (inferred-types
 	(defs
 		(patt (type "U8, U8, U8 -> Color"))
-		(patt (type "U8, U8, U8, U8 -> Error"))
+		(patt (type "U8, U8, U8, U8 -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Color -> Error"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
@@ -1245,7 +1227,7 @@ is_named_color = |str| {
 			(ty-header (name "Color"))))
 	(expressions
 		(expr (type "U8, U8, U8 -> Color"))
-		(expr (type "U8, U8, U8, U8 -> Error"))
+		(expr (type "U8, U8, U8, U8 -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Color -> Error"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))

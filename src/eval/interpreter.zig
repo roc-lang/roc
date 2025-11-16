@@ -4593,20 +4593,7 @@ pub const Interpreter = struct {
     /// Get layout directly from compile-time type var (no translation needed)
     /// Uses the cache for the CURRENT module (self.env), which allows cross-module jumps to work.
     pub fn getLayoutFromCompileVar(self: *Interpreter, compile_var: types.Var) !layout.Layout {
-        std.debug.print("\n=== DEBUG: getLayoutFromCompileVar called ===\n", .{});
-        std.debug.print("  compile_var: {d}\n", .{@intFromEnum(compile_var)});
-        std.debug.print("  current module env: {*}\n", .{self.env});
-        std.debug.print("  runtime_layout_store.env: {*}\n", .{self.runtime_layout_store.env});
-        std.debug.print("  runtime_layout_store.types_store: {*}\n", .{self.runtime_layout_store.types_store});
-        std.debug.print("  &self.env.types: {*}\n", .{&self.env.types});
-        std.debug.print("  MATCH: {}\n", .{self.runtime_layout_store.types_store == &self.env.types});
         const resolved = self.env.types.resolveVar(compile_var);
-        std.debug.print("  resolved to var: {d}, content: {s}\n", .{@intFromEnum(resolved.var_), @tagName(resolved.desc.content)});
-        if (resolved.desc.content == .err) {
-            std.debug.print("  ❌ ERROR: Type var resolved to .err!\n", .{});
-            std.debug.print("  This means var {d} contains .err in THIS module's type store\n", .{@intFromEnum(resolved.var_)});
-            std.debug.print("  So the question is: WHY does the type store contain .err for var {d}?\n", .{@intFromEnum(resolved.var_)});
-        }
 
         // Get the cache for the CURRENT module (self.env changes as we jump between modules!)
         const cache = try self.getOrCreateCacheForModule(self.env);

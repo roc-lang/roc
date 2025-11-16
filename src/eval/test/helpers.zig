@@ -500,17 +500,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
 
     // Type check the expression
-    _ = try checker.checkExprRepl(canonical_expr_idx);
-
-    // DEBUG: Check if there are any diagnostics after type checking
-    const diagnostics = module_env.store.sliceDiagnostics(module_env.diagnostics);
-    if (diagnostics.len > 0) {
-        std.debug.print("\n⚠️  Type checking produced {d} diagnostic(s)!\n", .{diagnostics.len});
-        for (diagnostics, 0..) |diag_idx, i| {
-            const diag = module_env.store.getDiagnostic(diag_idx);
-            std.debug.print("  Diagnostic {d}: {s}\n", .{i, @tagName(diag)});
-        }
-    }
+    try checker.checkExprRepl(canonical_expr_idx);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{

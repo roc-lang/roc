@@ -118,5 +118,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_size where [_f.from_int_digits : _arg -> _ret, _g.from_dec_digits : _arg -> _ret]"))
+(expr (type "_size where [_f.from_int_digits : _arg -> _ret]"))
 ~~~

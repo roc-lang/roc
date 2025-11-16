@@ -2572,7 +2572,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret, _e.from_dec_digits : _arg -> _ret]"))
+		(patt (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "Error"))
@@ -2619,7 +2619,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret, _e.from_dec_digits : _arg -> _ret]"))
+		(expr (type "Bool -> _size where [_d.from_int_digits : _arg -> _ret]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "Error"))

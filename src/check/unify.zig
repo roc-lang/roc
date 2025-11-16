@@ -2024,6 +2024,23 @@ const Unifier = struct {
                             .int => return error.TypeMismatch, // int can't unify with frac_unbound
                         }
                     },
+                    .num_unbound_if_builtin => |b_reqs| {
+                        // Concrete type wins over num_unbound_if_builtin
+                        // Similar to num_unbound case, but we need to check requirements
+                        if (b_reqs.constraints.len() > 0) {
+                            // Defer constraint checking
+                            _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                                .var_ = vars.a.var_,
+                                .constraints = b_reqs.constraints,
+                            }) catch return Error.AllocatorError;
+                        }
+
+                        try self.unifyCompactAndUnboundNums(
+                            vars,
+                            a_num_compact,
+                            b_reqs,
+                        );
+                    },
                     else => return error.TypeMismatch,
                 }
             },

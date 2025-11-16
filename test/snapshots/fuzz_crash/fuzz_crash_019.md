@@ -1998,7 +1998,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> _size where [_f.from_int_digits : _arg -> _ret, _j.from_dec_digits : _arg -> _ret]"))
+		(patt (type "Bool -> _size where [_f.from_int_digits : _arg -> _ret]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
@@ -2035,7 +2035,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> _size where [_f.from_int_digits : _arg -> _ret, _j.from_dec_digits : _arg -> _ret]"))
+		(expr (type "Bool -> _size where [_f.from_int_digits : _arg -> _ret]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))
