@@ -860,18 +860,25 @@ fn processAssociatedItemsSecondPass(
                                     const pattern_idx = def_cir.pattern;
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                    // Update unqualified name (e.g., "my_not")
-                                    try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
+                                    // Check if this is still a placeholder before updating.
+                                    // For nested types with associated blocks (e.g., NumLiteral inside Num),
+                                    // the item may have already been fully processed during the recursive
+                                    // processAssociatedBlock call in Phase 2b of processAssociatedItemsFirstPass.
+                                    // In that case, the placeholder was already consumed and we should skip it.
+                                    if (self.isPlaceholder(decl_ident)) {
+                                        // Update unqualified name (e.g., "my_not")
+                                        try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
 
-                                    // Update type-qualified name (e.g., "MyBool.my_not")
-                                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                    if (type_qualified_idx.idx != decl_ident.idx) {
-                                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
-                                    }
+                                        // Update type-qualified name (e.g., "MyBool.my_not")
+                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+                                        if (type_qualified_idx.idx != decl_ident.idx) {
+                                            try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                                        }
 
-                                    // Update fully qualified name (e.g., "Test.MyBool.my_not")
-                                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
-                                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                        // Update fully qualified name (e.g., "Test.MyBool.my_not")
+                                        if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
+                                            try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                        }
                                     }
 
                                     break :blk true; // Found and processed matching decl
