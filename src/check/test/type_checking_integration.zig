@@ -246,7 +246,7 @@ test "check type - def - func with annotation 1" {
 
 test "check type - def - func with annotation 2" {
     const source =
-        \\id : x -> Num(_size)
+        \\id : x -> a where [a.from_int_digits : List(U8) -> Try(a, [OutOfRange])]
         \\id = |_| 15
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "x -> _size where [_a.from_int_digits : _arg -> _ret]");
@@ -296,7 +296,7 @@ test "check type - def - forward ref" {
 
 test "check type - def - nested lambda with wrong annotation" {
     const source =
-        \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
+        \\curried_add : a, a, a, a -> a where [a.plus : a, a -> a, a.from_int_digits : List(U8) -> Try(a, [OutOfRange])]
         \\curried_add = |a| |b| |c| |d| a + b + c + d
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -415,7 +415,7 @@ test "check type - alias with arg" {
         \\
         \\MyListAlias(a) : List(a)
         \\
-        \\x : MyListAlias(Num(size))
+        \\x : MyListAlias(size)
         \\x = [15]
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "MyListAlias(size) where [_b.from_int_digits : _arg -> _ret]");
@@ -510,7 +510,7 @@ test "check type - nominal recursive type anno mismatch" {
     const source =
         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
         \\
-        \\x : ConsList(Num(size))
+        \\x : ConsList(size)
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
@@ -1474,7 +1474,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
         \\main! = |_| {}
         \\
         \\# Four layers of nested lambdas
-        \\curried_add : Num(a) -> (Num(a) -> (Num(a) -> (Num(a) -> Num(a))))
+        \\curried_add : a -> (a -> (a -> (a -> a))) where [a.plus : a, a -> a, a.from_int_digits : List(U8) -> Try(a, [OutOfRange])]
         \\curried_add = |a| |b| |c| |d| a + b + c + d
         \\
         \\func = {
@@ -1554,7 +1554,7 @@ test "check type - comprehensive - annotations with inferred types" {
         \\main! = |_| {}
         \\
         \\# Annotated function
-        \\add : Num(a), Num(a) -> Num(a)
+        \\add : a, a -> a where [a.plus : a, a -> a, a.from_int_digits : List(U8) -> Try(a, [OutOfRange])]
         \\add = |x, y| x + y
         \\
         \\# Inferred function that uses annotated one
@@ -1786,9 +1786,7 @@ test "check type - I128 explicit method call in block" {
 
     // Check if there are type errors
     const num_problems = test_env.checker.problems.problems.items.len;
-    if (num_problems > 0) {
-        return error.SkipZigTest; // Skip this test for now - we need to fix the type errors first
-    }
+    try std.testing.expectEqual(@as(usize, 0), num_problems);
 
     const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
     const last_def_var = ModuleEnv.varFrom(defs_slice[defs_slice.len - 1]);
