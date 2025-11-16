@@ -323,6 +323,11 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .frac = precision }, .tag = .frac } }, .tag = .scalar };
     }
 
+    /// Default number layout (Dec) for unresolved polymorphic number types
+    pub fn default_num() Layout {
+        return Layout.frac(.dec);
+    }
+
     /// bool layout
     pub fn boolType() Layout {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .bool = {} }, .tag = .bool } }, .tag = .scalar };
