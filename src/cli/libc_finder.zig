@@ -81,35 +81,32 @@ pub fn findLibc(allocator: std.mem.Allocator) !LibcInfo {
 }
 
 /// Find libc using compiler queries (gcc/clang)
-fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
+fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
     const compilers = [_][]const u8{ "gcc", "clang", "cc" };
 
     // Get architecture first
-    const arch = try getArchitecture(allocator);
-    defer allocator.free(arch);
+    const arch = try getArchitecture(arena);
 
     // Get the expected dynamic linker name for this architecture
     const ld_name = getDynamicLinkerName(arch);
 
     for (compilers) |compiler| {
         // Try to get dynamic linker path from compiler
-        const ld_cmd = try std.fmt.allocPrint(allocator, "-print-file-name={s}", .{ld_name});
-        defer allocator.free(ld_cmd);
+        const ld_cmd = try std.fmt.allocPrint(arena, "-print-file-name={s}", .{ld_name});
 
-        const ld_result = process.Child.run(.{
-            .allocator = allocator,
+        // TODO: Do we need to do something with this process' stdout,
+        // or is this only here to continue to the next iteration?
+        // Could be that it was forgotten before I refactored it and now to intent is lost.
+        _ = process.Child.run(.{
+            .allocator = arena,
             .argv = &[_][]const u8{ compiler, ld_cmd },
         }) catch continue;
-        defer allocator.free(ld_result.stdout);
-        defer allocator.free(ld_result.stderr);
 
         // Try to get libc path from compiler
         const libc_result = process.Child.run(.{
-            .allocator = allocator,
+            .allocator = arena,
             .argv = &[_][]const u8{ compiler, "-print-file-name=libc.so" },
         }) catch continue;
-        defer allocator.free(libc_result.stdout);
-        defer allocator.free(libc_result.stderr);
 
         const libc_path = std.mem.trimRight(u8, libc_result.stdout, "\n\r \t");
         if (libc_path.len == 0 or std.mem.eql(u8, libc_path, "libc.so")) continue;
@@ -124,18 +121,17 @@ fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
         const lib_dir = fs.path.dirname(libc_path) orelse continue;
 
         // Find dynamic linker
-        const dynamic_linker = try findDynamicLinker(allocator, arch, lib_dir) orelse continue;
-        defer allocator.free(dynamic_linker);
+        const dynamic_linker = try findDynamicLinker(arena, arch, lib_dir) orelse continue;
 
         // Validate dynamic linker path
         if (!validatePath(dynamic_linker)) continue;
 
         return LibcInfo{
-            .dynamic_linker = try allocator.dupe(u8, dynamic_linker),
-            .libc_path = try allocator.dupe(u8, libc_path),
-            .lib_dir = try allocator.dupe(u8, lib_dir),
-            .arch = try allocator.dupe(u8, arch),
-            .allocator = allocator,
+            .dynamic_linker = try arena.dupe(u8, dynamic_linker),
+            .libc_path = try arena.dupe(u8, libc_path),
+            .lib_dir = try arena.dupe(u8, lib_dir),
+            .arch = try arena.dupe(u8, arch),
+            .allocator = arena,
         };
     }
 
@@ -191,7 +187,7 @@ fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
 }
 
 /// Find the dynamic linker for the given architecture
-fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []const u8) !?[]const u8 {
+fn findDynamicLinker(arena: std.mem.Allocator, arch: []const u8, lib_dir: []const u8) !?[]const u8 {
     // Map architecture to dynamic linker names (including musl)
     const ld_names = if (std.mem.eql(u8, arch, "x86_64"))
         &[_][]const u8{ "ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1", "ld-linux.so.2" }
@@ -206,12 +202,11 @@ fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []
 
     // Search in the lib directory first
     for (ld_names) |ld_name| {
-        const path = try fs.path.join(allocator, &[_][]const u8{ lib_dir, ld_name });
-        defer allocator.free(path);
+        const path = try fs.path.join(arena, &[_][]const u8{ lib_dir, ld_name });
 
         if (fs.openFileAbsolute(path, .{})) |file| {
             file.close();
-            return try allocator.dupe(u8, path);
+            return try arena.dupe(u8, path);
         } else |_| {}
     }
 
@@ -227,12 +222,11 @@ fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []
 
     for (common_paths) |search_dir| {
         for (ld_names) |ld_name| {
-            const path = try fs.path.join(allocator, &[_][]const u8{ search_dir, ld_name });
-            defer allocator.free(path);
+            const path = try fs.path.join(arena, &[_][]const u8{ search_dir, ld_name });
 
             if (fs.openFileAbsolute(path, .{})) |file| {
                 file.close();
-                return try allocator.dupe(u8, path);
+                return try arena.dupe(u8, path);
             } else |_| {}
         }
     }
@@ -314,19 +308,6 @@ fn getMultiarchTriplet(arena: std.mem.Allocator, arch: []const u8) ![]const u8 {
     };
 
     return std.mem.trimRight(u8, result.stdout, "\n\r \t");
-}
-
-/// Find a file in a directory
-fn findFile(allocator: std.mem.Allocator, dir_path: []const u8, filename: []const u8) !?[]const u8 {
-    const full_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, filename });
-    defer allocator.free(full_path);
-
-    if (fs.openFileAbsolute(full_path, .{})) |file| {
-        file.close();
-        return try allocator.dupe(u8, full_path);
-    } else |_| {
-        return null;
-    }
 }
 
 test "libc detection integration test" {
