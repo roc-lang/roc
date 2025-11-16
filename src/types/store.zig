@@ -414,7 +414,6 @@ pub const Store = struct {
                 .num_unbound, .num_unbound_if_builtin => true,
                 .int_poly => |poly_var| self.needsInstantiation(poly_var),
                 .frac_poly => |poly_var| self.needsInstantiation(poly_var),
-                .frac_unbound => true,
                 else => false, // Concrete numeric types don't need instantiation
             },
             .nominal_type => false, // Nominal types are concrete

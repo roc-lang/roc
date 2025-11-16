@@ -341,7 +341,7 @@ pub const Generalizer = struct {
                             },
 
                             // Unbound - optimizations like list_unbound
-                            .num_unbound, .num_unbound_if_builtin, .frac_unbound => return group_rank,
+                            .num_unbound, .num_unbound_if_builtin => return group_rank,
 
                             // Concrete - fully determined types with no variables
                             .int_precision, .frac_precision, .num_compact => return Rank.top_level,

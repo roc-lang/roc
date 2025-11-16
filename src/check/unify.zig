@@ -278,7 +278,7 @@ pub fn unifyWithConf(
                     const literal_is_a = switch (a_resolved.desc.content) {
                         .structure => |structure| switch (structure) {
                             .num => |num| switch (num) {
-                                .int_poly, .num_poly, .num_unbound, .num_unbound_if_builtin, .frac_poly, .frac_unbound => true,
+                                .int_poly, .num_poly, .num_unbound, .num_unbound_if_builtin, .frac_poly => true,
                                 else => false,
                             },
                             .list_unbound => true,
@@ -306,7 +306,7 @@ pub fn unifyWithConf(
                     const literal_is_a = switch (a_resolved.desc.content) {
                         .structure => |structure| switch (structure) {
                             .num => |num| switch (num) {
-                                .int_poly, .num_poly, .num_unbound, .num_unbound_if_builtin, .frac_poly, .frac_unbound => true,
+                                .int_poly, .num_poly, .num_unbound, .num_unbound_if_builtin, .frac_poly => true,
                                 else => false,
                             },
                             .list_unbound => true,
@@ -819,7 +819,6 @@ const Unifier = struct {
                 const num_constraints: types_mod.StaticDispatchConstraint.SafeList.Range = if (a_flat_type == .num) switch (a_flat_type.num) {
                     .num_unbound => |reqs| reqs.constraints,
                     .num_unbound_if_builtin => |reqs| reqs.constraints,
-                    .frac_unbound => |reqs| reqs.constraints,
                     .num_poly, .int_poly, .frac_poly => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                     else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 } else types_mod.StaticDispatchConstraint.SafeList.Range.empty();
@@ -845,7 +844,6 @@ const Unifier = struct {
                 const num_constraints: types_mod.StaticDispatchConstraint.SafeList.Range = if (a_flat_type == .num) switch (a_flat_type.num) {
                     .num_unbound => |reqs| reqs.constraints,
                     .num_unbound_if_builtin => |reqs| reqs.constraints,
-                    .frac_unbound => |reqs| reqs.constraints,
                     else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 } else types_mod.StaticDispatchConstraint.SafeList.Range.empty();
 
@@ -1059,18 +1057,29 @@ const Unifier = struct {
                         // Check if the number literal can unify with this nominal type
                         // by unifying the nominal type's from_*_digits method signature with the expected type
                         switch (a_num) {
-                            .num_unbound, .num_unbound_if_builtin => {
+                            .num_unbound => |reqs| {
+                                // Check if this is a decimal literal (has frac requirements) or integer literal
+                                const has_frac_reqs = reqs.frac_requirements.fits_in_f32 or reqs.frac_requirements.fits_in_dec;
+                                if (has_frac_reqs) {
+                                    // Decimal literal - unify with from_dec_digits
+                                    if (try self.nominalTypeHasFromDecDigits(b_nominal)) {
+                                        self.merge(vars, vars.b.desc.content);
+                                    } else {
+                                        return error.TypeMismatch;
+                                    }
+                                } else {
+                                    // Integer literal - unify with from_int_digits
+                                    if (try self.nominalTypeHasFromIntDigits(b_nominal)) {
+                                        self.merge(vars, vars.b.desc.content);
+                                    } else {
+                                        return error.TypeMismatch;
+                                    }
+                                }
+                            },
+                            .num_unbound_if_builtin => {
                                 // Integer literal - unify with from_int_digits: List(U8) -> Try(Self, [OutOfRange])
                                 if (try self.nominalTypeHasFromIntDigits(b_nominal)) {
                                     // Unification succeeded - the nominal type can accept integer literals
-                                    self.merge(vars, vars.b.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            .frac_unbound => {
-                                // Decimal literal - unify with from_dec_digits
-                                if (try self.nominalTypeHasFromDecDigits(b_nominal)) {
                                     self.merge(vars, vars.b.desc.content);
                                 } else {
                                     return error.TypeMismatch;
@@ -1156,34 +1165,36 @@ const Unifier = struct {
                         // Check if the nominal type (a) can accept number literals (b)
                         // based on whether it has the appropriate from_*_digits method
                         switch (b_num) {
-                            .num_unbound => {
-                                // Integer literal - check for from_int_digits OR if it's a builtin numeric type
-                                // Builtin numeric types from Builtin.Num module don't expose from_int_digits in their
-                                // type representation but they inherently accept integer literals
-                                const is_builtin_numeric = blk: {
-                                    // Check if this nominal type's name matches a known builtin numeric type
-                                    const ident_store = self.module_env.getIdentStore();
-                                    const name = ident_store.getText(a_type.ident.ident_idx);
-                                    // Builtin numeric types have qualified names like "Builtin.Num.I128"
-                                    if (std.mem.startsWith(u8, name, "Builtin.Num.")) {
-                                        break :blk true;
+                            .num_unbound => |reqs| {
+                                // Check if this is a decimal literal (has frac requirements) or integer literal
+                                const has_frac_reqs = reqs.frac_requirements.fits_in_f32 or reqs.frac_requirements.fits_in_dec;
+                                if (has_frac_reqs) {
+                                    // Decimal literal - check for from_dec_digits
+                                    if (try self.nominalTypeHasFromDecDigits(a_type)) {
+                                        self.merge(vars, vars.a.desc.content);
+                                    } else {
+                                        return error.TypeMismatch;
                                     }
-                                    break :blk false;
-                                };
+                                } else {
+                                    // Integer literal - check for from_int_digits OR if it's a builtin numeric type
+                                    // Builtin numeric types from Builtin.Num module don't expose from_int_digits in their
+                                    // type representation but they inherently accept integer literals
+                                    const is_builtin_numeric = blk: {
+                                        // Check if this nominal type's name matches a known builtin numeric type
+                                        const ident_store = self.module_env.getIdentStore();
+                                        const name = ident_store.getText(a_type.ident.ident_idx);
+                                        // Builtin numeric types have qualified names like "Builtin.Num.I128"
+                                        if (std.mem.startsWith(u8, name, "Builtin.Num.")) {
+                                            break :blk true;
+                                        }
+                                        break :blk false;
+                                    };
 
-                                if (is_builtin_numeric or try self.nominalTypeHasFromIntDigits(a_type)) {
-                                    self.merge(vars, vars.a.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            .frac_unbound => {
-                                // Decimal literal - check for from_dec_digits
-                                if (try self.nominalTypeHasFromDecDigits(a_type)) {
-                                    // The nominal type can accept decimal literals
-                                    self.merge(vars, vars.a.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
+                                    if (is_builtin_numeric or try self.nominalTypeHasFromIntDigits(a_type)) {
+                                        self.merge(vars, vars.a.desc.content);
+                                    } else {
+                                        return error.TypeMismatch;
+                                    }
                                 }
                             },
                             .num_poly => |poly_var| {
@@ -1592,8 +1603,17 @@ const Unifier = struct {
 
     fn nominalSupportsResolvedNum(self: *Self, resolved: ResolvedNum, nominal_type: NominalType) Error!bool {
         return switch (resolved) {
-            .frac_unbound, .frac_resolved, .frac_flex, .frac_rigid => self.nominalTypeHasFromDecDigits(nominal_type),
+            .frac_resolved, .frac_flex, .frac_rigid => self.nominalTypeHasFromDecDigits(nominal_type),
             .int_resolved, .int_flex, .int_rigid => self.nominalTypeHasFromIntDigits(nominal_type),
+            .num_unbound => |reqs| {
+                // Check if this is a fractional or integer literal based on requirements
+                const has_frac_reqs = reqs.frac_requirements.fits_in_f32 or reqs.frac_requirements.fits_in_dec;
+                if (has_frac_reqs) {
+                    return self.nominalTypeHasFromDecDigits(nominal_type);
+                } else {
+                    return self.nominalTypeHasFromIntDigits(nominal_type);
+                }
+            },
             else => false,
         };
     }
@@ -1862,29 +1882,6 @@ const Unifier = struct {
                             b_num_compact,
                         );
                     },
-                    .frac_unbound => |b_frac_reqs| {
-                        // num_unbound unifying with frac_unbound:
-                        // - If num_unbound has int requirements (constrained to int), this is a type mismatch
-                        // - If num_unbound has no int requirements (unconstrained), becomes frac_unbound
-                        if (a_reqs.int_requirements.bits_needed > 0 or a_reqs.int_requirements.sign_needed) {
-                            // This num_unbound is constrained to be an integer, can't unify with frac
-                            return error.TypeMismatch;
-                        }
-
-                        const merged_frac = a_reqs.frac_requirements.unify(b_frac_reqs);
-                        const merged_constraints = try self.unifyStaticDispatchConstraints(
-                            a_reqs.constraints,
-                            b_frac_reqs.constraints,
-                        );
-
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .frac_unbound = .{
-                                .fits_in_f32 = merged_frac.fits_in_f32,
-                                .fits_in_dec = merged_frac.fits_in_dec,
-                                .constraints = merged_constraints,
-                            },
-                        } } });
-                    },
                     .int_poly => |b_poly_var| {
                         // num_unbound unifying with int_poly:
                         // - If num_unbound has frac requirements (fits_in_f32/fits_in_dec), can't unify with int
@@ -1951,16 +1948,16 @@ const Unifier = struct {
                         const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_frac);
                         switch (b_num_resolved) {
                             .frac_flex => {
-                                // Make the flex var become frac_unbound with our requirements
-                                const frac_unbound_var = self.fresh(vars, .{ .structure = .{
-                                    .num = .{ .frac_unbound = .{
-                                        .fits_in_f32 = a_reqs.frac_requirements.fits_in_f32,
-                                        .fits_in_dec = a_reqs.frac_requirements.fits_in_dec,
+                                // Make the flex var become num_unbound with our requirements
+                                const num_unbound_var = self.fresh(vars, .{ .structure = .{
+                                    .num = .{ .num_unbound = .{
+                                        .int_requirements = a_reqs.int_requirements,
+                                        .frac_requirements = a_reqs.frac_requirements,
                                         .constraints = a_reqs.constraints,
                                     } },
                                 } }) catch return Error.AllocatorError;
-                                try self.unifyGuarded(b_poly_var, frac_unbound_var);
-                                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = frac_unbound_var } } });
+                                try self.unifyGuarded(b_poly_var, num_unbound_var);
+                                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = num_unbound_var } } });
                             },
                             .frac_resolved => |b_prec| {
                                 // Check if the concrete fractional type satisfies our requirements
@@ -1975,23 +1972,24 @@ const Unifier = struct {
                                 // Rigid var wins
                                 self.merge(vars, vars.b.desc.content);
                             },
-                            .frac_unbound => |b_frac_reqs| {
+                            .num_unbound => |b_num_reqs| {
                                 // When num_unbound (which may have int constraints like from_int_digits)
-                                // unifies with frac_unbound (which has frac constraints like from_dec_digits),
+                                // unifies with another num_unbound (which has frac constraints like from_dec_digits),
                                 // we need to create a num_unbound result that preserves BOTH sets of constraints.
                                 // This is critical for cases like `1 - 0.2` where we need both from_int_digits
                                 // (from the "1") and from_dec_digits (from the "0.2") on the result.
 
-                                const merged_frac = a_reqs.frac_requirements.unify(b_frac_reqs);
+                                const merged_int = a_reqs.int_requirements.unify(b_num_reqs.int_requirements);
+                                const merged_frac = a_reqs.frac_requirements.unify(b_num_reqs.frac_requirements);
                                 const merged_constraints = try self.unifyStaticDispatchConstraints(
                                     a_reqs.constraints,
-                                    b_frac_reqs.constraints,
+                                    b_num_reqs.constraints,
                                 );
 
-                                // Create num_unbound (not frac_unbound) to preserve both int and frac requirements
+                                // Create num_unbound to preserve both int and frac requirements
                                 const num_unbound_var = self.fresh(vars, .{ .structure = .{
                                     .num = .{ .num_unbound = .{
-                                        .int_requirements = a_reqs.int_requirements,
+                                        .int_requirements = merged_int,
                                         .frac_requirements = merged_frac,
                                         .constraints = merged_constraints,
                                     } },
@@ -2051,22 +2049,6 @@ const Unifier = struct {
                             },
                         } } });
                     },
-                    .frac_unbound => |b_requirements| {
-                        // frac_unbound is more specific, so result is frac_unbound
-                        const merged_frac = a_reqs.frac_requirements.unify(b_requirements);
-                        const merged_constraints = try self.unifyStaticDispatchConstraints(
-                            a_reqs.constraints,
-                            b_requirements.constraints,
-                        );
-
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .frac_unbound = .{
-                                .fits_in_f32 = merged_frac.fits_in_f32,
-                                .fits_in_dec = merged_frac.fits_in_dec,
-                                .constraints = merged_constraints,
-                            },
-                        } } });
-                    },
                     .num_compact => |b_num_compact| {
                         // Concrete type wins
                         if (a_reqs.constraints.len() > 0) {
@@ -2107,11 +2089,11 @@ const Unifier = struct {
                         try self.unifyGuarded(a_poly_var, b_poly_var);
                         self.merge(vars, vars.a.desc.content);
                     },
-                    .frac_unbound => |b_reqs| {
+                    .num_unbound => |b_num_reqs| {
                         const a_num_resolved = self.resolvePolyNum(a_poly_var, .inside_frac);
                         switch (a_num_resolved) {
                             .frac_resolved => |a_prec| {
-                                const does_fit = self.checkFracPrecisionRequirements(a_prec, b_reqs);
+                                const does_fit = self.checkFracPrecisionRequirements(a_prec, b_num_reqs.frac_requirements);
                                 if (!does_fit) {
                                     return error.NumberDoesNotFit;
                                 }
@@ -2120,51 +2102,26 @@ const Unifier = struct {
                             .frac_flex => {
                                 self.merge(vars, vars.b.desc.content);
                             },
-                            else => return error.TypeMismatch,
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .frac_unbound => |a_reqs| {
-                switch (b_num) {
-                    .frac_poly => |b_poly_var| {
-                        const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_frac);
-                        switch (b_num_resolved) {
-                            .frac_resolved => |b_prec| {
-                                const does_fit = self.checkFracPrecisionRequirements(b_prec, a_reqs);
-                                if (!does_fit) {
-                                    return error.NumberDoesNotFit;
-                                }
-                                self.merge(vars, vars.b.desc.content);
-                            },
-                            .frac_flex => {
-                                self.merge(vars, vars.a.desc.content);
+                            .num_unbound => |a_num_reqs| {
+                                // Merge two num_unbound inside frac_poly
+                                const merged_int = a_num_reqs.int_requirements.unify(b_num_reqs.int_requirements);
+                                const merged_frac = a_num_reqs.frac_requirements.unify(b_num_reqs.frac_requirements);
+                                const merged_constraints = try self.unifyStaticDispatchConstraints(
+                                    a_num_reqs.constraints,
+                                    b_num_reqs.constraints,
+                                );
+                                const num_unbound_var = self.fresh(vars, .{ .structure = .{
+                                    .num = .{ .num_unbound = .{
+                                        .int_requirements = merged_int,
+                                        .frac_requirements = merged_frac,
+                                        .constraints = merged_constraints,
+                                    } },
+                                } }) catch return Error.AllocatorError;
+                                try self.unifyGuarded(a_poly_var, num_unbound_var);
+                                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = num_unbound_var } } });
                             },
                             else => return error.TypeMismatch,
                         }
-                    },
-                    .frac_unbound => |b_reqs| {
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .frac_unbound = a_reqs.unify(b_reqs),
-                        } } });
-                    },
-                    .num_unbound_if_builtin => |b_reqs| {
-                        // frac_unbound is more specific than num_unbound_if_builtin
-                        // Result should be frac_unbound with merged requirements
-                        const merged_frac = a_reqs.unify(b_reqs.frac_requirements);
-                        const merged_constraints = try self.unifyStaticDispatchConstraints(
-                            a_reqs.constraints,
-                            b_reqs.constraints,
-                        );
-
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .frac_unbound = .{
-                                .fits_in_f32 = merged_frac.fits_in_f32,
-                                .fits_in_dec = merged_frac.fits_in_dec,
-                                .constraints = merged_constraints,
-                            },
-                        } } });
                     },
                     else => return error.TypeMismatch,
                 }
@@ -2218,21 +2175,6 @@ const Unifier = struct {
                             b_reqs,
                         );
                     },
-                    .frac_unbound => |b_reqs| {
-                        // When num_compact unifies with frac_unbound, num_compact wins (it's more specific)
-                        // But we need to check that the compact type is actually a frac
-                        switch (a_num_compact) {
-                            .frac => |a_prec| {
-                                // Check if the frac precision satisfies the requirements
-                                const does_fit = self.checkFracPrecisionRequirements(a_prec, b_reqs);
-                                if (!does_fit) {
-                                    return error.NumberDoesNotFit;
-                                }
-                                self.merge(vars, vars.a.desc.content);
-                            },
-                            .int => return error.TypeMismatch, // int can't unify with frac_unbound
-                        }
-                    },
                     .num_unbound_if_builtin => |b_reqs| {
                         // Concrete type wins over num_unbound_if_builtin
                         // Similar to num_unbound case, but we need to check requirements
@@ -2283,10 +2225,14 @@ const Unifier = struct {
                 self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = num_with_int_reqs } } });
             },
             .frac_flex => {
-                const frac_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = b_reqs.frac_requirements },
+                const num_unbound_var = self.fresh(vars, .{ .structure = .{
+                    .num = .{ .num_unbound = .{
+                        .int_requirements = Num.IntRequirements.init(),
+                        .frac_requirements = b_reqs.frac_requirements,
+                        .constraints = b_reqs.constraints,
+                    } },
                 } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
+                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = num_unbound_var } } });
             },
 
             // If the variable was rigid, then the rigid wins
@@ -2302,12 +2248,6 @@ const Unifier = struct {
                     .constraints = b_reqs.constraints,
                 } } } }) catch return Error.AllocatorError;
                 self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = merged_unbound } } });
-            },
-            .frac_unbound => |a_reqs| {
-                const poly_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = b_reqs.frac_requirements.unify(a_reqs) },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
             },
 
             // If the variable inside an int with a precision
@@ -2362,10 +2302,14 @@ const Unifier = struct {
                 self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = num_with_int_reqs } } });
             },
             .frac_flex => {
-                const frac_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = a_reqs.frac_requirements },
+                const num_unbound_var = self.fresh(vars, .{ .structure = .{
+                    .num = .{ .num_unbound = .{
+                        .int_requirements = Num.IntRequirements.init(),
+                        .frac_requirements = a_reqs.frac_requirements,
+                        .constraints = a_reqs.constraints,
+                    } },
                 } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
+                self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = num_unbound_var } } });
             },
 
             // If the variable was rigid, then the rigid wins
@@ -2381,12 +2325,6 @@ const Unifier = struct {
                     .constraints = a_reqs.constraints,
                 } } } }) catch return Error.AllocatorError;
                 self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = merged_unbound } } });
-            },
-            .frac_unbound => |b_reqs| {
-                const poly_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = a_reqs.frac_requirements.unify(b_reqs) },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
             },
 
             // If the variable inside an int with a precision
@@ -2453,7 +2391,6 @@ const Unifier = struct {
                     // If the variable inside b was a frac, error
                     .frac_flex => return error.TypeMismatch,
                     .frac_resolved => return error.TypeMismatch,
-                    .frac_unbound => return error.TypeMismatch,
 
                     // If the variable was rigid, then error
                     .num_rigid => return error.TypeMismatch,
@@ -2486,13 +2423,6 @@ const Unifier = struct {
                         self.merge(vars, vars.a.desc.content);
                     } else {
                         return error.TypeMismatch;
-                    },
-                    .frac_unbound => |b_reqs| {
-                        const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs);
-                        if (!does_fit) {
-                            return error.NumberDoesNotFit;
-                        }
-                        self.merge(vars, vars.a.desc.content);
                     },
 
                     // If the variable inside b was an int, error
@@ -2569,16 +2499,6 @@ const Unifier = struct {
                     self.merge(vars, vars.b.desc.content);
                 } else {
                     return error.TypeMismatch;
-                },
-                .int => return error.TypeMismatch,
-            },
-            .frac_unbound => |a_reqs| switch (b_num) {
-                .frac => |b_frac| {
-                    const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs);
-                    if (!does_fit) {
-                        return error.NumberDoesNotFit;
-                    }
-                    self.merge(vars, vars.b.desc.content);
                 },
                 .int => return error.TypeMismatch,
             },
@@ -2758,7 +2678,6 @@ const Unifier = struct {
         int_resolved: Num.Int.Precision,
         frac_flex,
         frac_rigid: Var,
-        frac_unbound: Num.FracRequirements,
         frac_resolved: Num.Frac.Precision,
         err: Var,
     };
@@ -2840,9 +2759,6 @@ const Unifier = struct {
                             .frac_poly => |var_| {
                                 seen_frac = true;
                                 num_var = var_;
-                            },
-                            .frac_unbound => |reqs| {
-                                return .{ .frac_unbound = reqs };
                             },
                             .int_precision => |prec| {
                                 return .{ .int_resolved = prec };

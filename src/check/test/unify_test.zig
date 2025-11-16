@@ -3218,10 +3218,15 @@ const NumTestCase = struct {
                 } } } });
                 break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
             },
-            // frac_unbound needs to be wrapped: Num(Frac(unbound))
-            .frac => |reqs| blk: {
-                const frac_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = reqs } } });
-                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+            // num_unbound with empty int requirements needs to be wrapped in frac_poly
+            .frac => |frac_reqs| blk: {
+                const num_reqs = Num.NumRequirements{
+                    .int_requirements = Num.IntRequirements.init(),
+                    .frac_requirements = frac_reqs,
+                    .constraints = frac_reqs.constraints,
+                };
+                const frac_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_reqs } } });
+                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_var } } });
             },
             // num_unbound is already at the top level: Num(unbound)
             .num => |reqs| try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = reqs } } }),
@@ -3620,10 +3625,10 @@ test "unify - unbound vs unbound - requirement merging" {
         // Should take AND of capabilities (both false)
         const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
         const frac_poly = resolved.structure.num.num_poly;
-        const frac_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.frac_unbound;
+        const num_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.num_unbound;
 
-        try std.testing.expectEqual(false, frac_unbound.fits_in_f32);
-        try std.testing.expectEqual(false, frac_unbound.fits_in_dec);
+        try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_f32);
+        try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_dec);
     }
 
     // Test that num requirements merge both int and frac (Num(num_unbound))
@@ -3641,11 +3646,12 @@ test "unify - unbound vs unbound - requirement merging" {
         try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_dec);
     }
 
-    // Test that Num(num_unbound with int requirements) × Num(frac_unbound) doesn't unify
+    // Test that Num(num_unbound with int requirements) × Num(num_unbound with frac requirements) unifies
     {
         const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.intLiteral(100, false), NumTypeUnbound.fracLiteral(true, true));
 
-        try case.expectProblem();
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
     }
 
     // Test that Num(num_unbound) × Num(Int(num_unbound with only int reqs)) unifies and merges int requirements
@@ -3666,22 +3672,22 @@ test "unify - unbound vs unbound - requirement merging" {
         try std.testing.expectEqual(Num.Int.BitsNeeded.@"9_to_15".toBits(), num_unbound.int_requirements.bits_needed);
     }
 
-    // Test that Num(num_unbound) × Num(Frac(frac_unbound)) unifies and merges frac requirements
+    // Test that Num(num_unbound) × Num(Frac(num_unbound)) unifies and merges frac requirements
     {
         const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.numLiteral(100, false, true, false), // Num(num_unbound)
-            NumTypeUnbound.fracLiteral(false, true) // Num(Frac(frac_unbound))
+            NumTypeUnbound.fracLiteral(false, true) // Num(Frac(num_unbound with frac reqs))
         );
 
         const unified = try case.unifyAndGetResult();
         try std.testing.expect(unified.result == .ok);
 
-        // Result should be Num(Frac(frac_unbound)) with merged requirements
+        // Result should be Num(Frac(num_unbound)) with merged requirements
         const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
         const frac_poly = resolved.structure.num.num_poly;
-        const frac_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.frac_unbound;
+        const num_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.num_unbound;
 
-        try std.testing.expectEqual(false, frac_unbound.fits_in_f32);
-        try std.testing.expectEqual(false, frac_unbound.fits_in_dec);
+        try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_f32);
+        try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_dec);
     }
 }
 

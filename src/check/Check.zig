@@ -2034,13 +2034,17 @@ fn checkPatternHelp(
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
             } else {
                 const f64_val = dec.value.toF64();
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.CIR.fitsInF32(f64_val),
-                    .fits_in_dec = can.CIR.fitsInDec(f64_val),
+                const requirements = types_mod.Num.NumRequirements{
+                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                    .frac_requirements = types_mod.Num.FracRequirements{
+                        .fits_in_f32 = can.CIR.fitsInF32(f64_val),
+                        .fits_in_dec = can.CIR.fitsInDec(f64_val),
+                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
+                    .num_unbound = requirements,
                 } } }, env, pattern_region);
 
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{
@@ -2052,9 +2056,14 @@ fn checkPatternHelp(
             if (dec.has_suffix) {
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
             } else {
-                const reqs = dec.value.toFracRequirements();
+                const base_reqs = dec.value.toFracRequirements();
+                const reqs = types_mod.Num.NumRequirements{
+                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                    .frac_requirements = base_reqs,
+                    .constraints = base_reqs.constraints,
+                };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = reqs,
+                    .num_unbound = reqs,
                 } } }, env, pattern_region);
 
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{
@@ -2202,13 +2211,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, env);
             } else {
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = true,
-                    .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
+                const requirements = types_mod.Num.NumRequirements{
+                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                    .frac_requirements = types_mod.Num.FracRequirements{
+                        .fits_in_f32 = true,
+                        .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
+                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
+                    .num_unbound = requirements,
                 } } }, env, expr_region);
 
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
@@ -2220,13 +2233,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, env);
             } else {
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.CIR.fitsInF32(@floatCast(frac.value)),
-                    .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
+                const requirements = types_mod.Num.NumRequirements{
+                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                    .frac_requirements = types_mod.Num.FracRequirements{
+                        .fits_in_f32 = can.CIR.fitsInF32(@floatCast(frac.value)),
+                        .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
+                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
+                    .num_unbound = requirements,
                 } } }, env, expr_region);
 
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
@@ -2257,13 +2274,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.CIR.fitsInF32(f64_val),
-                    .fits_in_dec = can.CIR.fitsInDec(f64_val),
+                const requirements = types_mod.Num.NumRequirements{
+                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                    .frac_requirements = types_mod.Num.FracRequirements{
+                        .fits_in_f32 = can.CIR.fitsInF32(f64_val),
+                        .fits_in_dec = can.CIR.fitsInDec(f64_val),
+                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    },
                     .constraints = constraint_range,
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
+                    .num_unbound = requirements,
                 } } }, env, expr_region);
 
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
@@ -2293,13 +2314,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
                 const base_reqs = frac.value.toFracRequirements();
-                const reqs = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = base_reqs.fits_in_f32,
-                    .fits_in_dec = base_reqs.fits_in_dec,
+                const reqs = types_mod.Num.NumRequirements{
+                    .int_requirements = types_mod.Num.IntRequirements.init(),
+                    .frac_requirements = types_mod.Num.FracRequirements{
+                        .fits_in_f32 = base_reqs.fits_in_f32,
+                        .fits_in_dec = base_reqs.fits_in_dec,
+                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    },
                     .constraints = constraint_range,
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = reqs,
+                    .num_unbound = reqs,
                 } } }, env, expr_region);
 
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
@@ -3844,7 +3869,6 @@ fn checkBinopExpr(
                                     const constraints_range = switch (n) {
                                         .num_unbound => |reqs| reqs.constraints,
                                         .num_unbound_if_builtin => |reqs| reqs.constraints,
-                                        .frac_unbound => |reqs| reqs.constraints,
                                         .int_poly, .frac_poly, .num_poly => |poly_var| {
                                             // Follow the poly var to get constraints
                                             return call(types, poly_var, list, alloc, binop_method);
@@ -4324,7 +4348,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             // For unbound/poly numeric types, skip constraint checking (like flex vars)
             switch (num) {
-                .num_unbound, .num_unbound_if_builtin, .frac_unbound, .num_poly, .int_poly, .frac_poly => {
+                .num_unbound, .num_unbound_if_builtin, .num_poly, .int_poly, .frac_poly => {
                     continue;
                 },
                 .int_precision, .frac_precision, .num_compact => {},

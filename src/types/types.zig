@@ -495,7 +495,6 @@ pub const Num = union(enum) {
     //               ^^^         ^^^^
     int_poly: Var,
     frac_poly: Var,
-    frac_unbound: FracRequirements,
 
     // These are Num(Int(Signed8)) or Num(Frac(Decimal))
     //                   ^^^^^^^               ^^^^^^^

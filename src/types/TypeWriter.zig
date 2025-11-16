@@ -816,12 +816,6 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             try self.generateContextualName(.NumContent);
             try self.addImplicitNumericConstraint("from_int_digits");
         },
-        .frac_unbound => |_| {
-            // Display as underscore with from_dec_digits constraint
-            _ = try self.buf.writer().write("_");
-            try self.generateContextualName(.NumContent);
-            try self.addImplicitNumericConstraint("from_dec_digits");
-        },
         .int_precision => |prec| {
             try self.writeIntType(prec, .precision);
         },

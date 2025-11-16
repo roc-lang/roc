@@ -1028,10 +1028,6 @@ pub const Store = struct {
                                         return LayoutError.InvalidRecordExtension;
                                     }
                                 },
-                                .frac_unbound => |_| {
-                                    // Decimal literal - default to Dec
-                                    break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
-                                },
                             }
                         }
                     },
