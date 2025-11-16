@@ -1207,11 +1207,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             const start = self.pos;
             if (statementType == .top_level or statementType == .in_associated_block) {
                 const header = try self.parseTypeHeader();
-                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
+                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual or self.peek() == .OpDoubleColon) .nominal else .alias;
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
