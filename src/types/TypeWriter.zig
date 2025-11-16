@@ -777,20 +777,8 @@ fn writeTag(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error!
 }
 
 /// Convert a num type to a type string
-fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!void {
+fn writeNum(self: *TypeWriter, num: Num, _: Var) std.mem.Allocator.Error!void {
     switch (num) {
-        .num_poly => |poly_var| {
-            try self.writeVar(poly_var, root_var);
-            try self.addImplicitNumericConstraint("from_int_digits");
-        },
-        .int_poly => |poly| {
-            try self.writeVar(poly, root_var);
-            try self.addImplicitNumericConstraint("from_int_digits");
-        },
-        .frac_poly => |poly| {
-            try self.writeVar(poly, root_var);
-            try self.addImplicitNumericConstraint("from_dec_digits");
-        },
         .num_unbound => |reqs| {
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);

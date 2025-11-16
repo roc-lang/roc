@@ -434,16 +434,13 @@ pub const Tuple = struct {
 /// a compact, canonical form directly. This avoids the need for multiple
 /// indirections, such as separate type variables and layered aliases.
 ///
-/// When a polymorphic number is required (eg in the type signature of
-/// a generic function over `Num(a)`), we allow full representation via
-/// `num_poly`, `int_poly`, or `frac_poly`. However, during unification,
-/// if a polymorphic number is unified with a compact one, the compact
-/// form always wins: we discard the polymorphic wrapper and store the
-/// concrete, memory-efficient version instead.
+/// When a type parameter is used in a numeric context (e.g., `a` in a
+/// function `f : a -> a` where `a` is later constrained to be numeric),
+/// we use flex or rigid type variables directly without any wrapper.
+/// During unification, if a flex/rigid var is unified with a compact
+/// number type, the compact form wins and we store the concrete,
+/// memory-efficient version instead.
 pub const Num = union(enum) {
-    // These are Num(a)
-    //           ^^^
-    num_poly: Var,
     num_unbound: NumRequirements,
 
     /// A special numeric type variant that behaves like a flex var during type checking
@@ -490,11 +487,6 @@ pub const Num = union(enum) {
     /// Currently only implemented for `.plus` method from arithmetic desugaring. Other
     /// operators (`.times`, `.minus`, etc.) will need similar treatment in the future.
     num_unbound_if_builtin: NumRequirements,
-
-    // These are Num(int) or Num(frac)
-    //               ^^^         ^^^^
-    int_poly: Var,
-    frac_poly: Var,
 
     // These are Num(Int(Signed8)) or Num(Frac(Decimal))
     //                   ^^^^^^^               ^^^^^^^

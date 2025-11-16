@@ -325,44 +325,6 @@ test "instantiate - num types" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
-
-    // Test num_poly
-    {
-        const num_poly = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = rigid_a } } });
-
-        var instantiator = Instantiator{
-            .store = &env.types,
-            .idents = &env.idents,
-            .var_map = &env.var_map,
-            .rigid_behavior = .fresh_flex,
-        };
-
-        const instantiated = try instantiator.instantiateVar(num_poly);
-        const resolved = env.types.resolveVar(instantiated);
-
-        try std.testing.expect(resolved.desc.content.structure.num == .num_poly);
-        try std.testing.expect(resolved.desc.content.structure.num.num_poly != rigid_a);
-    }
-
-    // Test int_poly
-    {
-        const int_poly = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = rigid_a } } });
-
-        var instantiator = Instantiator{
-            .store = &env.types,
-            .idents = &env.idents,
-            .var_map = &env.var_map,
-            .rigid_behavior = .fresh_flex,
-        };
-
-        const instantiated = try instantiator.instantiateVar(int_poly);
-        const resolved = env.types.resolveVar(instantiated);
-
-        try std.testing.expect(resolved.desc.content.structure.num == .int_poly);
-        try std.testing.expect(resolved.desc.content.structure.num.int_poly != rigid_a);
-    }
-
     // Test that concrete types remain unchanged
     {
         const u8_var = try env.types.freshFromContent(.{ .structure = .{ .num = Num.int_u8 } });

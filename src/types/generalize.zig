@@ -330,16 +330,6 @@ pub const Generalizer = struct {
                     },
                     .num => |num| {
                         switch (num) {
-                            .num_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .int_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .frac_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-
                             // Unbound - optimizations like list_unbound
                             .num_unbound, .num_unbound_if_builtin => return group_rank,
 

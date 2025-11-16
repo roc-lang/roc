@@ -25,34 +25,6 @@ match shape {
       ^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**tag_with_payload.md:2:30:2:36:**
-```roc
-    Circle(radius) => 3.14 * radius * radius
-```
-                             ^^^^^^
-
-It has the type:
-    __size_
-
-But I expected it to be:
-    __size_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**tag_with_payload.md:4:37:4:41:**
-```roc
-    Triangle(base, height) => 0.5 * base * height
-```
-                                    ^^^^
-
-It has the type:
-    __size_
-
-But I expected it to be:
-    __size_
-
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -144,5 +116,5 @@ match shape {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
 ~~~

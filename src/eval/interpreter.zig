@@ -1946,9 +1946,28 @@ pub const Interpreter = struct {
 
                                 // Determine which builtin numeric type to dispatch to based on the num variant
                                 const default_numeric_stmt = switch (num) {
-                                    .num_unbound, .num_unbound_if_builtin, .num_poly => self.builtins.i128_stmt,
-                                    .int_poly => self.builtins.i128_stmt,
-                                    .frac_poly => self.builtins.dec_stmt,
+                                    .num_unbound, .num_unbound_if_builtin => |reqs| num_type_blk: {
+                                        // Check constraints to determine if this came from a decimal literal
+                                        // Decimal literals have "from_dec_digits" constraint
+                                        // Integer literals have "from_int_digits" constraint
+                                        const constraints = self.env.types.sliceStaticDispatchConstraints(reqs.constraints);
+                                        var has_dec_constraint = false;
+                                        for (constraints) |constraint| {
+                                            const ident = self.env.common.getIdent(constraint.fn_name);
+                                            if (std.mem.eql(u8, ident, "from_dec_digits")) {
+                                                has_dec_constraint = true;
+                                                break;
+                                            }
+                                        }
+
+                                        // If came from a decimal literal, default to Dec
+                                        // Otherwise default to I128
+                                        if (has_dec_constraint) {
+                                            break :num_type_blk self.builtins.dec_stmt;
+                                        } else {
+                                            break :num_type_blk self.builtins.i128_stmt;
+                                        }
+                                    },
 
                                     // Map each int precision to its specific type
                                     .int_precision => |prec| switch (prec) {
@@ -2952,7 +2971,7 @@ pub const Interpreter = struct {
         };
 
         // Resolve the LHS type and map it to a nominal type
-        // This handles num_unbound/num_poly by defaulting to I128, num_compact by mapping to the specific type, etc.
+        // This handles num_unbound by defaulting to I128, num_compact by mapping to the specific type, etc.
         const lhs_resolved = self.env.types.resolveVar(lhs_rt_var);
         const NominalInfo = struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx };
         const nominal_info: NominalInfo = blk: {
@@ -2969,9 +2988,23 @@ pub const Interpreter = struct {
 
                             // Determine which builtin numeric type to dispatch to based on the num variant
                             const default_numeric_stmt = switch (num) {
-                                .num_unbound, .num_unbound_if_builtin, .num_poly => self.builtins.i128_stmt,
-                                .int_poly => self.builtins.i128_stmt,
-                                .frac_poly => self.builtins.dec_stmt,
+                                .num_unbound, .num_unbound_if_builtin => |reqs| num_type_blk2: {
+                                    // Check constraints to determine if this came from a decimal literal
+                                    const constraints = self.env.types.sliceStaticDispatchConstraints(reqs.constraints);
+                                    var has_dec_constraint = false;
+                                    for (constraints) |constraint| {
+                                        const ident = self.env.common.getIdent(constraint.fn_name);
+                                        if (std.mem.eql(u8, ident, "from_dec_digits")) {
+                                            has_dec_constraint = true;
+                                            break;
+                                        }
+                                    }
+                                    if (has_dec_constraint) {
+                                        break :num_type_blk2 self.builtins.dec_stmt;
+                                    } else {
+                                        break :num_type_blk2 self.builtins.i128_stmt;
+                                    }
+                                },
 
                                 // Map each int precision to its specific type
                                 .int_precision => |prec| switch (prec) {

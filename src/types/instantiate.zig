@@ -269,11 +269,8 @@ pub const Instantiator = struct {
         return Tuple{ .elems = fresh_elems_range };
     }
 
-    fn instantiateNum(self: *Self, num: Num) std.mem.Allocator.Error!Num {
+    fn instantiateNum(_: *Self, num: Num) std.mem.Allocator.Error!Num {
         return switch (num) {
-            .num_poly => |poly_var| Num{ .num_poly = try self.instantiateVar(poly_var) },
-            .int_poly => |poly_var| Num{ .int_poly = try self.instantiateVar(poly_var) },
-            .frac_poly => |poly_var| Num{ .frac_poly = try self.instantiateVar(poly_var) },
             // Concrete types remain unchanged
             .int_precision => |precision| Num{ .int_precision = precision },
             .frac_precision => |precision| Num{ .frac_precision = precision },

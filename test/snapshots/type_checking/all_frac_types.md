@@ -17,48 +17,7 @@ c = 123.456
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:2:5:2:9:**
-```roc
-a = 3.14
-```
-    ^^^^
-
-It has the type:
-    __size_
-
-But the type annotation says it should have the type:
-    _F32_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:5:5:5:12:**
-```roc
-b = 2.71828
-```
-    ^^^^^^^
-
-It has the type:
-    __size_
-
-But the type annotation says it should have the type:
-    _F64_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:8:5:8:12:**
-```roc
-c = 123.456
-```
-    ^^^^^^^
-
-It has the type:
-    __size_
-
-But the type annotation says it should have the type:
-    _Dec_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -117,11 +76,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "F32"))
+		(patt (type "F64"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "F32"))
+		(expr (type "F64"))
+		(expr (type "Dec"))))
 ~~~

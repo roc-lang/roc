@@ -218,16 +218,8 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) std.mem.Allocator.Error!SnapshotNum {
+    fn deepCopyNum(_: *Self, _: *const TypesStore, num: types.Num) std.mem.Allocator.Error!SnapshotNum {
         switch (num) {
-            .num_poly => |poly_var| {
-                const deep_poly = try self.deepCopyVar(store, poly_var);
-                return SnapshotNum{ .num_poly = deep_poly };
-            },
-            .int_poly => |poly_var| {
-                const deep_poly = try self.deepCopyVar(store, poly_var);
-                return SnapshotNum{ .int_poly = deep_poly };
-            },
             .num_unbound => |unbound| {
                 // For unbound types, we don't have a var to resolve, just return the requirements
                 return SnapshotNum{ .num_unbound = .{
@@ -241,10 +233,6 @@ pub const Store = struct {
                     .int_requirements = unbound.int_requirements,
                     .frac_requirements = unbound.frac_requirements,
                 } };
-            },
-            .frac_poly => |poly_var| {
-                const deep_poly = try self.deepCopyVar(store, poly_var);
-                return SnapshotNum{ .frac_poly = deep_poly };
             },
             .int_precision => |prec| {
                 return SnapshotNum{ .int_precision = prec };
@@ -520,9 +508,6 @@ pub const SnapshotTuple = struct {
 
 /// TODO
 pub const SnapshotNum = union(enum) {
-    num_poly: SnapshotContentIdx,
-    int_poly: SnapshotContentIdx,
-    frac_poly: SnapshotContentIdx,
     num_unbound: struct { int_requirements: types.Num.IntRequirements, frac_requirements: types.Num.FracRequirements },
     num_unbound_if_builtin: struct { int_requirements: types.Num.IntRequirements, frac_requirements: types.Num.FracRequirements },
     int_precision: types.Num.Int.Precision,
@@ -1253,22 +1238,10 @@ pub const SnapshotWriter = struct {
     }
 
     /// Convert a num type to a type string
-    fn writeNum(self: *Self, num: SnapshotNum, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeNum(self: *Self, num: SnapshotNum, _: SnapshotContentIdx) Allocator.Error!void {
         // Match TypeWriter.zig formatting exactly - this is the source of truth
 
         switch (num) {
-            .num_poly => |sub_var| {
-                try self.writeWithContext(sub_var, .NumContent, root_idx);
-                try self.addImplicitNumericConstraint("from_int_digits");
-            },
-            .int_poly => |sub_var| {
-                try self.writeWithContext(sub_var, .NumContent, root_idx);
-                try self.addImplicitNumericConstraint("from_int_digits");
-            },
-            .frac_poly => |sub_var| {
-                try self.writeWithContext(sub_var, .NumContent, root_idx);
-                try self.addImplicitNumericConstraint("from_dec_digits");
-            },
             .num_unbound => |_| {
                 _ = try self.buf.writer().write("_");
                 try self.generateContextualName(.NumContent);

@@ -243,18 +243,15 @@ fn copyTuple(
 }
 
 fn copyNum(
-    source_store: *const TypesStore,
-    dest_store: *TypesStore,
+    _: *const TypesStore,
+    _: *TypesStore,
     num: Num,
-    var_mapping: *VarMapping,
-    source_idents: *const base.Ident.Store,
-    dest_idents: *base.Ident.Store,
-    allocator: std.mem.Allocator,
+    _: *VarMapping,
+    _: *const base.Ident.Store,
+    _: *base.Ident.Store,
+    _: std.mem.Allocator,
 ) std.mem.Allocator.Error!Num {
     return switch (num) {
-        .num_poly => |poly_var| Num{ .num_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .int_poly => |poly_var| Num{ .int_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .frac_poly => |poly_var| Num{ .frac_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .num_unbound => |unbound| Num{ .num_unbound = unbound },
         .num_unbound_if_builtin => |unbound| Num{ .num_unbound_if_builtin = unbound },
         .int_precision => |precision| Num{ .int_precision = precision },

@@ -410,10 +410,7 @@ pub const Store = struct {
                 break :blk false;
             },
             .num => |num| switch (num) {
-                .num_poly => |poly_var| self.needsInstantiation(poly_var),
                 .num_unbound, .num_unbound_if_builtin => true,
-                .int_poly => |poly_var| self.needsInstantiation(poly_var),
-                .frac_poly => |poly_var| self.needsInstantiation(poly_var),
                 else => false, // Concrete numeric types don't need instantiation
             },
             .nominal_type => false, // Nominal types are concrete
@@ -1146,8 +1143,11 @@ test "resolveVarAndCompressPath - no-op on already root" {
     var store = try Store.init(gpa);
     defer store.deinit();
 
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
+    const num = Content{ .structure = .{ .num = .{ .num_unbound = .{
+        .int_requirements = types.Num.IntRequirements.init(),
+        .frac_requirements = types.Num.FracRequirements.init(),
+        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+    } } } };
     const num_var = try store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
@@ -1163,8 +1163,11 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     var store = try Store.init(gpa);
     defer store.deinit();
 
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
+    const num = Content{ .structure = .{ .num = .{ .num_unbound = .{
+        .int_requirements = types.Num.IntRequirements.init(),
+        .frac_requirements = types.Num.FracRequirements.init(),
+        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+    } } } };
     const c = try store.freshFromContent(num);
     const b = try store.freshRedirect(c);
     const a = try store.freshRedirect(b);

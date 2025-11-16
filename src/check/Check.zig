@@ -2043,12 +2043,10 @@ fn checkPatternHelp(
                     },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .num_unbound = requirements,
-                } } }, env, pattern_region);
 
+                // Return num_unbound directly (no wrapping in frac_poly)
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{
-                    .frac_poly = frac_var,
+                    .num_unbound = requirements,
                 } } }, env);
             }
         },
@@ -2062,12 +2060,10 @@ fn checkPatternHelp(
                     .frac_requirements = base_reqs,
                     .constraints = base_reqs.constraints,
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .num_unbound = reqs,
-                } } }, env, pattern_region);
 
+                // Return num_unbound directly (no wrapping in frac_poly)
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{
-                    .frac_poly = frac_var,
+                    .num_unbound = reqs,
                 } } }, env);
             }
         },
@@ -2220,12 +2216,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .num_unbound = requirements,
-                } } }, env, expr_region);
 
+                // Return num_unbound directly (no wrapping in frac_poly)
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .frac_poly = frac_var,
+                    .num_unbound = requirements,
                 } } }, env);
             }
         },
@@ -2242,12 +2236,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .num_unbound = requirements,
-                } } }, env, expr_region);
 
+                // Return num_unbound directly (no wrapping in frac_poly)
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .frac_poly = frac_var,
+                    .num_unbound = requirements,
                 } } }, env);
             }
         },
@@ -2283,12 +2275,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .constraints = constraint_range,
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .num_unbound = requirements,
-                } } }, env, expr_region);
 
+                // Return num_unbound directly (no wrapping in frac_poly)
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .frac_poly = frac_var,
+                    .num_unbound = requirements,
                 } } }, env);
             }
         },
@@ -2323,12 +2313,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .constraints = constraint_range,
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .num_unbound = reqs,
-                } } }, env, expr_region);
 
+                // Return num_unbound directly (no wrapping in frac_poly)
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .frac_poly = frac_var,
+                    .num_unbound = reqs,
                 } } }, env);
             }
         },
@@ -3869,10 +3857,6 @@ fn checkBinopExpr(
                                     const constraints_range = switch (n) {
                                         .num_unbound => |reqs| reqs.constraints,
                                         .num_unbound_if_builtin => |reqs| reqs.constraints,
-                                        .int_poly, .frac_poly, .num_poly => |poly_var| {
-                                            // Follow the poly var to get constraints
-                                            return call(types, poly_var, list, alloc, binop_method);
-                                        },
                                         else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                                     };
 
@@ -4346,9 +4330,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             any_checked = true;  // We're processing numeric constraints
             const num = dispatcher_content.structure.num;
 
-            // For unbound/poly numeric types, skip constraint checking (like flex vars)
+            // For unbound numeric types, skip constraint checking (like flex vars)
             switch (num) {
-                .num_unbound, .num_unbound_if_builtin, .num_poly, .int_poly, .frac_poly => {
+                .num_unbound, .num_unbound_if_builtin => {
                     continue;
                 },
                 .int_precision, .frac_precision, .num_compact => {},

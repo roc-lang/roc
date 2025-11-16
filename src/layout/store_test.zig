@@ -10,6 +10,7 @@ const collections = @import("collections");
 const ModuleEnv = @import("can").ModuleEnv;
 
 const types_store = types.store;
+const types_mod = types.types;
 const Ident = base.Ident;
 const target = base.target;
 const LayoutError = layout_store_.LayoutError;
@@ -83,26 +84,33 @@ test "addTypeVar - default layouts for polymorphic types" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    // Flex number var (Num a) defaults to i128
-    const num_var = try lt.type_store.fresh();
-    const flex_num_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = num_var } } });
-    const num_layout_idx = try lt.layout_store.addTypeVar(flex_num_var, &lt.type_scope);
-    const num_layout = lt.layout_store.getLayout(num_layout_idx);
-    try testing.expect(num_layout.tag == .scalar);
-    try testing.expect(num_layout.data.scalar.data.int == .i128);
-
-    // Flex int var (Int a) defaults to i128
-    const int_var = try lt.type_store.fresh();
-    const flex_int_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = int_var } } });
-    const int_layout_idx = try lt.layout_store.addTypeVar(flex_int_var, &lt.type_scope);
+    // num_unbound with int requirements defaults to i128
+    const int_unbound_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_unbound = .{
+        .int_requirements = .{
+            .bits_needed = 1,
+            .sign_needed = false,
+            .is_minimum_signed = false,
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        },
+        .frac_requirements = types_mod.Num.FracRequirements.init(),
+        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+    } } } });
+    const int_layout_idx = try lt.layout_store.addTypeVar(int_unbound_var, &lt.type_scope);
     const int_layout = lt.layout_store.getLayout(int_layout_idx);
     try testing.expect(int_layout.tag == .scalar);
     try testing.expect(int_layout.data.scalar.data.int == .i128);
 
-    // Flex frac var (Frac a) defaults to dec
-    const frac_var = try lt.type_store.fresh();
-    const flex_frac_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = frac_var } } });
-    const frac_layout_idx = try lt.layout_store.addTypeVar(flex_frac_var, &lt.type_scope);
+    // num_unbound with frac requirements defaults to dec
+    const frac_unbound_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_unbound = .{
+        .int_requirements = types_mod.Num.IntRequirements.init(),
+        .frac_requirements = .{
+            .fits_in_f32 = false,
+            .fits_in_dec = true,
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        },
+        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+    } } } });
+    const frac_layout_idx = try lt.layout_store.addTypeVar(frac_unbound_var, &lt.type_scope);
     const frac_layout = lt.layout_store.getLayout(frac_layout_idx);
     try testing.expect(frac_layout.tag == .scalar);
     try testing.expect(frac_layout.data.scalar.data.frac == .dec);

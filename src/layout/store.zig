@@ -940,11 +940,8 @@ pub const Store = struct {
                         current = resolved;
                         continue;
                     },
-                    .num => |initial_num| {
-                        var num = initial_num;
-
-                        while (true) {
-                            switch (num) {
+                    .num => |num| {
+                        switch (num) {
                                 // TODO: Unwrap number to get the root precision or requiremnets
                                 .num_compact => |compact| switch (compact) {
                                     .int => |precision| break :flat_type Layout.int(precision),
@@ -979,57 +976,7 @@ pub const Store = struct {
                                     else
                                         Layout.int(types.Num.Int.Precision.i128);
                                 },
-                                .num_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        // Check flex var constraints to determine appropriate default
-                                        const flex_data = next_type.flex;
-                                        if (!flex_data.constraints.isEmpty()) {
-                                            const constraints = self.types_store.sliceStaticDispatchConstraints(flex_data.constraints);
-                                            const ident_store = self.env.getIdentStoreConst();
-
-                                            var has_dec_literal = false;
-                                            for (constraints) |constraint| {
-                                                const name = ident_store.getText(constraint.fn_name);
-                                                if (std.mem.eql(u8, name, "from_dec_digits")) {
-                                                    has_dec_literal = true;
-                                                    break;
-                                                }
-                                            }
-
-                                            if (has_dec_literal) {
-                                                break :flat_type Layout.frac(types.Num.Frac.Precision.dec);
-                                            }
-                                        }
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .int_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .frac_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.frac(types.Num.Frac.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
                             }
-                        }
                     },
                     .tuple => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);

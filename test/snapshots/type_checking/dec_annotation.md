@@ -11,20 +11,7 @@ x = 123.456
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**dec_annotation.md:2:5:2:12:**
-```roc
-x = 123.456
-```
-    ^^^^^^^
-
-It has the type:
-    __size_
-
-But the type annotation says it should have the type:
-    _Dec_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -59,7 +46,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Dec"))))
 ~~~

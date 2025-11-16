@@ -403,10 +403,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(patt (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
+		(patt (type "_size where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "Str"))
 		(patt (type "List(_elem)"))
-		(patt (type "List(_size) where [_a.from_dec_digits : _arg -> _ret]"))
+		(patt (type "List(_size) where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
 		(patt (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))
@@ -422,10 +422,10 @@ NO CHANGE
 		(patt (type "_arg -> _size where [_a.from_int_digits : _arg -> _ret]")))
 	(expressions
 		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
-		(expr (type "_size where [_a.from_dec_digits : _arg -> _ret]"))
+		(expr (type "_size where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "Str"))
 		(expr (type "List(_elem)"))
-		(expr (type "List(_size) where [_a.from_dec_digits : _arg -> _ret]"))
+		(expr (type "List(_size) where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "a -> { count: _size, data: a } where [_b.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ count: _size, data: _size2 } where [_a.from_int_digits : _arg -> _ret]"))
 		(expr (type "{ count: _size, data: Str } where [_a.from_int_digits : _arg -> _ret]"))

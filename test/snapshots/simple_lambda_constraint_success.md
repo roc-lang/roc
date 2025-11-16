@@ -16,20 +16,7 @@ addTwoF64 = |x| x + 2.0
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:7:21:7:24:**
-```roc
-addTwoF64 = |x| x + 2.0
-```
-                    ^^^
-
-It has the type:
-    __size_
-
-But the type annotation says it should have the type:
-    _F64_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -107,8 +94,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "I64 -> I64"))
-		(patt (type "Error -> Error")))
+		(patt (type "F64 -> F64")))
 	(expressions
 		(expr (type "I64 -> I64"))
-		(expr (type "Error -> Error"))))
+		(expr (type "F64 -> F64"))))
 ~~~

@@ -163,67 +163,74 @@ const TestEnv = struct {
     // helpers - nums //
 
     fn mkNumPoly(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = var_ } } });
+        _ = self;
+        return var_;
     }
 
     fn mkNumPolyFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const flex_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = flex_var } } });
+        return try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
     }
 
     fn mkNumPolyRigid(self: *Self, name: []const u8) std.mem.Allocator.Error!Var {
-        const rigid_var = try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = rigid_var } } });
+        return try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
     }
 
     // helpers - nums - ints //
 
     fn mkIntConcrete(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
-        const int_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = var_ } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+        _ = self;
+        return var_;
     }
 
     fn mkIntPolyFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const flex_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-        const int_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = flex_var } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+        // Create an unbound integer literal type
+        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
+            .int_requirements = .{
+                .bits_needed = 1,
+                .sign_needed = false,
+                .is_minimum_signed = false,
+                .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+            },
+            .frac_requirements = types_mod.Num.FracRequirements.init(),
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        } } } });
     }
 
     fn mkIntPolyRigid(self: *Self, name: []const u8) std.mem.Allocator.Error!Var {
-        const rigid_var = try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
-        const int_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = rigid_var } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+        return try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
     }
 
     fn mkIntPoly(self: *Self, prec: Num.Int.Precision) std.mem.Allocator.Error!Var {
-        const prec_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
-        const int_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = prec_var } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
     }
 
     // helpers - nums - fracs //
 
     fn mkFracConcrete(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
-        const int_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = var_ } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+        _ = self;
+        return var_;
     }
 
     fn mkFracPolyFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const flex_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-        const frac_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = flex_var } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+        // Create an unbound fractional literal type
+        // This is flexible and can fit in F32, F64, or Dec
+        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
+            .int_requirements = types_mod.Num.IntRequirements.init(),
+            .frac_requirements = .{
+                .fits_in_f32 = true,  // Can fit in F32 (most permissive)
+                .fits_in_dec = true,  // Can fit in Dec
+                .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+            },
+            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        } } } });
     }
 
     fn mkFracPolyRigid(self: *Self, name: []const u8) std.mem.Allocator.Error!Var {
-        const rigid_var = try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
-        const frac_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = rigid_var } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+        return try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
     }
 
     fn mkFracPoly(self: *Self, prec: Num.Frac.Precision) std.mem.Allocator.Error!Var {
-        const prec_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
-        const frac_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = prec_var } } });
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
     }
 
     // helpers - structure - tuple //
@@ -1222,16 +1229,16 @@ test "unify - Num(rigid) and Num(rigid)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("b"));
-    const num = Content{ .structure = .{ .num = .{ .num_poly = rigid } } };
-    const a = try env.module_env.types.freshFromContent(num);
-    const b = try env.module_env.types.freshFromContent(num);
+    const rigid_content = try env.mkRigidVar("b");
+    const rigid = try env.module_env.types.freshFromContent(rigid_content);
+    const a = rigid;
+    const b = rigid;
 
     const result = try env.unify(a, b);
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(num, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(rigid_content, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(rigid_a) and Num(rigid_b)" {
@@ -3210,23 +3217,23 @@ const NumTestCase = struct {
     fn makeUnboundVar(env: *TestEnv, spec: NumTypeUnbound) !Var {
         return switch (spec) {
             // Integer literals are represented as num_unbound with only int requirements
+            // No longer wrapping in num_poly - just return num_unbound directly
             .int => |reqs| blk: {
-                const int_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
+                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
                     .int_requirements = reqs,
                     .frac_requirements = Num.FracRequirements.init(),
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 } } } });
-                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
             },
-            // num_unbound with empty int requirements needs to be wrapped in frac_poly
+            // num_unbound with empty int requirements (fractional literal)
             .frac => |frac_reqs| blk: {
                 const num_reqs = Num.NumRequirements{
                     .int_requirements = Num.IntRequirements.init(),
                     .frac_requirements = frac_reqs,
                     .constraints = frac_reqs.constraints,
                 };
-                const frac_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_reqs } } });
-                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_var } } });
+                // No longer wrapping in frac_poly - just return num_unbound directly
+                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_reqs } } });
             },
             // num_unbound is already at the top level: Num(unbound)
             .num => |reqs| try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = reqs } } }),
@@ -3483,21 +3490,22 @@ test "unify - unbound vs polymorphic - full matrix" {
     const PolyKind = enum { int_poly_flex, frac_poly_flex, num_poly_flex };
 
     // Matrix: should unbound × poly unify?
+    // All unbound types can unify because they merge their requirements into a single num_unbound
     const ShouldUnify = enum { yes, no };
     const should_unify = std.EnumArray(UnboundKind, std.EnumArray(PolyKind, ShouldUnify)).init(.{
         .int = std.EnumArray(PolyKind, ShouldUnify).init(.{
-            .int_poly_flex = .yes, // Num(Int(a)) × Num(Int(b)) → yes
-            .frac_poly_flex = .no, // Num(Int(a)) × Num(Frac(b)) → NO!
-            .num_poly_flex = .yes, // Num(Int(a)) × Num(b) → yes
+            .int_poly_flex = .yes, // num_unbound(int) × num_unbound(int) → yes
+            .frac_poly_flex = .yes, // num_unbound(int) × num_unbound(frac) → YES! (merges requirements)
+            .num_poly_flex = .yes, // num_unbound(int) × Num(b) → yes
         }),
         .frac = std.EnumArray(PolyKind, ShouldUnify).init(.{
-            .int_poly_flex = .no, // Num(Frac(a)) × Num(Int(b)) → NO!
-            .frac_poly_flex = .yes, // Num(Frac(a)) × Num(Frac(b)) → yes
-            .num_poly_flex = .yes, // Num(Frac(a)) × Num(b) → yes
+            .int_poly_flex = .yes, // num_unbound(frac) × num_unbound(int) → YES! (merges requirements)
+            .frac_poly_flex = .yes, // num_unbound(frac) × num_unbound(frac) → yes
+            .num_poly_flex = .yes, // num_unbound(frac) × Num(b) → yes
         }),
         .num = std.EnumArray(PolyKind, ShouldUnify).init(.{
-            .int_poly_flex = .yes, // Num(a) × Num(Int(b)) → yes
-            .frac_poly_flex = .yes, // Num(a) × Num(Frac(b)) → yes
+            .int_poly_flex = .yes, // Num(a) × num_unbound(int) → yes
+            .frac_poly_flex = .yes, // Num(a) × num_unbound(frac) → yes
             .num_poly_flex = .yes, // Num(a) × Num(b) → yes
         }),
     });
@@ -3538,6 +3546,8 @@ test "unify - polymorphic vs polymorphic - full matrix" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
+    // int_poly_flex and frac_poly_flex both create num_unbound (just with different requirements)
+    // They can unify by merging their requirements into a single num_unbound
     const PolyKind = enum { num_poly_flex, int_poly_flex, frac_poly_flex };
 
     // Matrix: should poly × poly unify?
@@ -3545,18 +3555,18 @@ test "unify - polymorphic vs polymorphic - full matrix" {
     const should_unify = std.EnumArray(PolyKind, std.EnumArray(PolyKind, ShouldUnify)).init(.{
         .num_poly_flex = std.EnumArray(PolyKind, ShouldUnify).init(.{
             .num_poly_flex = .yes, // Num(a) × Num(b) → yes
-            .int_poly_flex = .yes, // Num(a) × Num(Int(b)) → yes
-            .frac_poly_flex = .yes, // Num(a) × Num(Frac(b)) → yes
+            .int_poly_flex = .yes, // Num(a) × num_unbound(int) → yes
+            .frac_poly_flex = .yes, // Num(a) × num_unbound(frac) → yes
         }),
         .int_poly_flex = std.EnumArray(PolyKind, ShouldUnify).init(.{
-            .num_poly_flex = .yes, // Num(Int(a)) × Num(b) → yes
-            .int_poly_flex = .yes, // Num(Int(a)) × Num(Int(b)) → yes
-            .frac_poly_flex = .no, // Num(Int(a)) × Num(Frac(b)) → NO!
+            .num_poly_flex = .yes, // num_unbound(int) × Num(b) → yes
+            .int_poly_flex = .yes, // num_unbound(int) × num_unbound(int) → yes
+            .frac_poly_flex = .yes, // num_unbound(int) × num_unbound(frac) → YES! (merges requirements)
         }),
         .frac_poly_flex = std.EnumArray(PolyKind, ShouldUnify).init(.{
-            .num_poly_flex = .yes, // Num(Frac(a)) × Num(b) → yes
-            .int_poly_flex = .no, // Num(Frac(a)) × Num(Int(b)) → NO!
-            .frac_poly_flex = .yes, // Num(Frac(a)) × Num(Frac(b)) → yes
+            .num_poly_flex = .yes, // num_unbound(frac) × Num(b) → yes
+            .int_poly_flex = .yes, // num_unbound(frac) × num_unbound(int) → YES! (merges requirements)
+            .frac_poly_flex = .yes, // num_unbound(frac) × num_unbound(frac) → yes
         }),
     });
 
@@ -3606,8 +3616,7 @@ test "unify - unbound vs unbound - requirement merging" {
 
         // Should take max bits (9) and OR the sign (true)
         const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
-        const int_poly = resolved.structure.num.num_poly;
-        const num_unbound = env.module_env.types.resolveVar(int_poly).desc.content.structure.num.num_unbound;
+        const num_unbound = resolved.structure.num.num_unbound;
 
         try std.testing.expectEqual(true, num_unbound.int_requirements.sign_needed);
         try std.testing.expectEqual(Num.Int.BitsNeeded.@"9_to_15".toBits(), num_unbound.int_requirements.bits_needed);
@@ -3623,12 +3632,10 @@ test "unify - unbound vs unbound - requirement merging" {
         try std.testing.expect(unified.result == .ok);
 
         // Should take AND of capabilities (both false)
-        const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
-        const frac_poly = resolved.structure.num.num_poly;
-        const num_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.num_unbound;
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content.structure.num.num_unbound;
 
-        try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_f32);
-        try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_dec);
+        try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_f32);
+        try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_dec);
     }
 
     // Test that num requirements merge both int and frac (Num(num_unbound))
