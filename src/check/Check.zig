@@ -2137,16 +2137,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Handle num_unbound specially to create num types with constraints
             switch (num.kind) {
                 .num_unbound => {
-                    const int_reqs = num.value.toIntRequirements();
+                    var int_reqs = num.value.toIntRequirements();
                     const frac_reqs = num.value.toFracRequirements();
 
-                    // Determine constraint name based on whether it's a decimal or integer
-                    const is_decimal = frac_reqs.fits_in_dec and !frac_reqs.fits_in_f32;
-                    const constraint_name = if (is_decimal)
-                        self.cir.from_dec_digits_ident
-                    else
-                        self.cir.from_int_digits_ident;
-
+                    // Integer literals get from_int_digits constraint
                     // Create constraint function: List U8 -> Try Self [OutOfRange]
                     const ret_var = try self.fresh(env, expr_region);
                     const arg_var = try self.fresh(env, expr_region);
@@ -2158,18 +2152,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     } } }, env, expr_region);
 
                     const constraint = StaticDispatchConstraint{
-                        .fn_name = constraint_name,
+                        .fn_name = self.cir.from_int_digits_ident,
                         .fn_var = constraint_fn_var,
                         .origin = .numeric_literal,
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                    // Put constraint in int_requirements since this is an integer literal
+                    int_reqs.constraints = constraint_range;
 
                     // Create num type with embedded constraints (NOT flex var!)
                     const num_type: Num = .{
                         .num_unbound = .{
                             .int_requirements = int_reqs,
                             .frac_requirements = frac_reqs,
-                            .constraints = constraint_range,
+                            .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                         },
                     };
 
@@ -2207,12 +2204,29 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, env);
             } else {
+                // Float literals need from_dec_digits constraint
+                const ret_var = try self.fresh(env, expr_region);
+                const arg_var = try self.fresh(env, expr_region);
+                const args_range = try self.types.appendVars(&.{arg_var});
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = self.cir.from_dec_digits_ident,
+                    .fn_var = constraint_fn_var,
+                    .origin = .numeric_literal,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
                 const requirements = types_mod.Num.NumRequirements{
                     .int_requirements = types_mod.Num.IntRequirements.init(),
                     .frac_requirements = types_mod.Num.FracRequirements{
                         .fits_in_f32 = true,
                         .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
-                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        .constraints = constraint_range,
                     },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
@@ -2227,12 +2241,29 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, env);
             } else {
+                // Float literals need from_dec_digits constraint
+                const ret_var = try self.fresh(env, expr_region);
+                const arg_var = try self.fresh(env, expr_region);
+                const args_range = try self.types.appendVars(&.{arg_var});
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = self.cir.from_dec_digits_ident,
+                    .fn_var = constraint_fn_var,
+                    .origin = .numeric_literal,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
                 const requirements = types_mod.Num.NumRequirements{
                     .int_requirements = types_mod.Num.IntRequirements.init(),
                     .frac_requirements = types_mod.Num.FracRequirements{
                         .fits_in_f32 = can.CIR.fitsInF32(@floatCast(frac.value)),
                         .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
-                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        .constraints = constraint_range,
                     },
                     .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
@@ -2271,9 +2302,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .frac_requirements = types_mod.Num.FracRequirements{
                         .fits_in_f32 = can.CIR.fitsInF32(f64_val),
                         .fits_in_dec = can.CIR.fitsInDec(f64_val),
-                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        .constraints = constraint_range,
                     },
-                    .constraints = constraint_range,
+                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
 
                 // Return num_unbound directly (no wrapping in frac_poly)
@@ -2309,9 +2340,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .frac_requirements = types_mod.Num.FracRequirements{
                         .fits_in_f32 = base_reqs.fits_in_f32,
                         .fits_in_dec = base_reqs.fits_in_dec,
-                        .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        .constraints = constraint_range,
                     },
-                    .constraints = constraint_range,
+                    .constraints = types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
 
                 // Return num_unbound directly (no wrapping in frac_poly)

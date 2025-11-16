@@ -782,20 +782,30 @@ fn writeNum(self: *TypeWriter, num: Num, _: Var) std.mem.Allocator.Error!void {
         .num_unbound => |reqs| {
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(.NumContent);
-            // Add constraints based on what requirements are present
-            if (reqs.int_requirements.bits_needed > 0 or reqs.int_requirements.sign_needed) {
-                try self.addImplicitNumericConstraint("from_int_digits");
+            // Add constraints from the actual stored constraints
+            // Check int_requirements for from_int_digits
+            if (reqs.int_requirements.constraints.count > 0) {
+                const int_constraints = self.types.sliceStaticDispatchConstraints(reqs.int_requirements.constraints);
+                for (int_constraints) |constraint| {
+                    const fn_name = self.idents.getText(constraint.fn_name);
+                    try self.addImplicitNumericConstraint(fn_name);
+                }
             }
-            // Only add frac constraint if requirements are NOT in default empty state
-            // Empty state has both fits_in_f32=true and fits_in_dec=true
-            // Actual fractional literals set one or both to false based on their value
-            if (!(reqs.frac_requirements.fits_in_f32 and reqs.frac_requirements.fits_in_dec)) {
-                try self.addImplicitNumericConstraint("from_dec_digits");
+            // Check frac_requirements for from_dec_digits
+            if (reqs.frac_requirements.constraints.count > 0) {
+                const frac_constraints = self.types.sliceStaticDispatchConstraints(reqs.frac_requirements.constraints);
+                for (frac_constraints) |constraint| {
+                    const fn_name = self.idents.getText(constraint.fn_name);
+                    try self.addImplicitNumericConstraint(fn_name);
+                }
             }
-            // If neither int nor frac requirements are set, default to from_int_digits
-            if (reqs.int_requirements.bits_needed == 0 and !reqs.int_requirements.sign_needed and
-                reqs.frac_requirements.fits_in_f32 and reqs.frac_requirements.fits_in_dec) {
-                try self.addImplicitNumericConstraint("from_int_digits");
+            // Check top-level constraints
+            if (reqs.constraints.count > 0) {
+                const top_constraints = self.types.sliceStaticDispatchConstraints(reqs.constraints);
+                for (top_constraints) |constraint| {
+                    const fn_name = self.idents.getText(constraint.fn_name);
+                    try self.addImplicitNumericConstraint(fn_name);
+                }
             }
         },
         .num_unbound_if_builtin => |_| {

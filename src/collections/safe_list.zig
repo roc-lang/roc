@@ -252,8 +252,12 @@ pub fn SafeList(comptime T: type) type {
             const start: usize = @intFromEnum(range.start);
             const end: usize = start + range.count;
 
-            std.debug.assert(start <= end);
-            std.debug.assert(end <= self.items.items.len);
+            if (start > end) {
+                @panic("COMPILER BUG: SafeList range has start > end");
+            }
+            if (end > self.items.items.len) {
+                @panic("COMPILER BUG: SafeList range extends beyond list bounds - constraint list was modified after range was created");
+            }
 
             return self.items.items[start..end];
         }
