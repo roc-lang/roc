@@ -190,7 +190,6 @@ fn findViaFilesystem(allocator: std.mem.Allocator) !LibcInfo {
         }
     }
 
-    allocator.free(arch);
     return error.LibcNotFound;
 }
 
