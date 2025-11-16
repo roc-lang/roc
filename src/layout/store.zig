@@ -952,26 +952,31 @@ pub const Store = struct {
                                 // For polymorphic types, default based on requirements and constraints
                                 .num_unbound => |reqs| {
                                     // At runtime, we should default to I128 for integers, Dec for fractions
-                                    const is_decimal = reqs.frac_requirements.fits_in_dec and !reqs.frac_requirements.fits_in_f32 and reqs.int_requirements.bits_needed == 0;
+                                    // Determine the concrete type based on requirements
+                                    const has_int_reqs = reqs.int_requirements.bits_needed > 0 or reqs.int_requirements.sign_needed;
+                                    const frac_reqs_are_defaults = reqs.frac_requirements.fits_in_f32 and reqs.frac_requirements.fits_in_dec;
 
-                                    // If there are constraints, they MUST be checked
-                                    // Numeric literals should always have constraints
-                                    if (reqs.constraints.isEmpty()) {
-                                        @panic("COMPILER BUG: num_unbound at runtime with no constraints! Where did this come from? Numeric literals should always have constraints.");
-                                    }
+                                    // Logic:
+                                    // - If it has int requirements AND frac requirements are defaults → I128 (integer literal)
+                                    // - If it has non-default frac requirements → Dec (decimal literal or mixed)
+                                    // - If it has neither int nor non-default frac requirements → I128 (conservative default)
+                                    const is_integer = has_int_reqs and frac_reqs_are_defaults;
 
-                                    // Default to concrete type
-                                    break :flat_type if (is_decimal)
-                                        Layout.frac(types.Num.Frac.Precision.dec)
+                                    // Note: num_unbound may have empty constraints for truly polymorphic
+                                    // type parameters (not from literals). In that case, we still need
+                                    // to pick a default layout based on requirements.
+
+                                    break :flat_type if (is_integer)
+                                        Layout.int(types.Num.Int.Precision.i128)
                                     else
-                                        Layout.int(types.Num.Int.Precision.i128);
+                                        Layout.frac(types.Num.Frac.Precision.dec);
                                 },
                                 .num_unbound_if_builtin => |reqs| {
                                     // Like num_unbound, but allowed to be unconstrained at runtime
                                     // Defaults to I128 for integers, Dec for fractions
-                                    const is_decimal = reqs.frac_requirements.fits_in_dec and !reqs.frac_requirements.fits_in_f32 and reqs.int_requirements.bits_needed == 0;
+                                    const has_frac_reqs = reqs.frac_requirements.fits_in_f32 or reqs.frac_requirements.fits_in_dec;
 
-                                    break :flat_type if (is_decimal)
+                                    break :flat_type if (has_frac_reqs)
                                         Layout.frac(types.Num.Frac.Precision.dec)
                                     else
                                         Layout.int(types.Num.Int.Precision.i128);

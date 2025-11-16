@@ -3670,10 +3670,9 @@ test "unify - unbound vs unbound - requirement merging" {
         const unified = try case.unifyAndGetResult();
         try std.testing.expect(unified.result == .ok);
 
-        // Result should be Num(Int(num_unbound)) with merged requirements
+        // Result should be num_unbound with merged requirements
         const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
-        const int_poly = resolved.structure.num.num_poly;
-        const num_unbound = env.module_env.types.resolveVar(int_poly).desc.content.structure.num.num_unbound;
+        const num_unbound = resolved.structure.num.num_unbound;
 
         try std.testing.expectEqual(true, num_unbound.int_requirements.sign_needed);
         try std.testing.expectEqual(Num.Int.BitsNeeded.@"9_to_15".toBits(), num_unbound.int_requirements.bits_needed);
@@ -3688,10 +3687,9 @@ test "unify - unbound vs unbound - requirement merging" {
         const unified = try case.unifyAndGetResult();
         try std.testing.expect(unified.result == .ok);
 
-        // Result should be Num(Frac(num_unbound)) with merged requirements
+        // Result should be num_unbound with merged requirements
         const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
-        const frac_poly = resolved.structure.num.num_poly;
-        const num_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.num_unbound;
+        const num_unbound = resolved.structure.num.num_unbound;
 
         try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_f32);
         try std.testing.expectEqual(false, num_unbound.frac_requirements.fits_in_dec);
