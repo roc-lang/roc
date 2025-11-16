@@ -11,6 +11,15 @@ const builtin = @import("builtin");
 const fs = std.fs;
 const process = std.process;
 
+/// Same as the non Tmp variant of this datastructure,
+/// except this one has no allocator
+const ArenaAllocatedLibcInfo = struct {
+    dynamic_linker: []const u8,
+    libc_path: []const u8,
+    lib_dir: []const u8,
+    arch: []const u8,
+};
+
 /// Information about the system's libc installation
 pub const LibcInfo = struct {
     /// Path to the dynamic linker (e.g., /lib64/ld-linux-x86-64.so.2)
@@ -65,23 +74,23 @@ pub fn findLibc(allocator: std.mem.Allocator) !LibcInfo {
     const arena = arena_alloca.allocator();
 
     // Try compiler-based detection first (most reliable)
-    const tempLibcInfo = if (try findViaCompiler(arena)) |info|
+    const tmpLibcInfo = if (try findViaCompiler(arena)) |info|
         info
     else
         // Fall back to filesystem search
         try findViaFilesystem(arena);
 
     return LibcInfo{
-        .lib_dir = try allocator.dupe(u8, tempLibcInfo.lib_dir),
-        .dynamic_linker = try allocator.dupe(u8, tempLibcInfo.dynamic_linker),
-        .libc_path = try allocator.dupe(u8, tempLibcInfo.libc_path),
-        .arch = try allocator.dupe(u8, tempLibcInfo.arch),
+        .lib_dir = try allocator.dupe(u8, tmpLibcInfo.lib_dir),
+        .dynamic_linker = try allocator.dupe(u8, tmpLibcInfo.dynamic_linker),
+        .libc_path = try allocator.dupe(u8, tmpLibcInfo.libc_path),
+        .arch = try allocator.dupe(u8, tmpLibcInfo.arch),
         .allocator = allocator,
     };
 }
 
 /// Find libc using compiler queries (gcc/clang)
-fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
+fn findViaCompiler(arena: std.mem.Allocator) !?ArenaAllocatedLibcInfo {
     const compilers = [_][]const u8{ "gcc", "clang", "cc" };
 
     // Get architecture first
@@ -126,12 +135,11 @@ fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
         // Validate dynamic linker path
         if (!validatePath(dynamic_linker)) continue;
 
-        return LibcInfo{
+        return ArenaAllocatedLibcInfo{
             .dynamic_linker = try arena.dupe(u8, dynamic_linker),
             .libc_path = try arena.dupe(u8, libc_path),
             .lib_dir = try arena.dupe(u8, lib_dir),
             .arch = try arena.dupe(u8, arch),
-            .allocator = arena,
         };
     }
 
@@ -139,7 +147,7 @@ fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
 }
 
 /// Find libc by searching the filesystem
-fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
+fn findViaFilesystem(arena: std.mem.Allocator) !ArenaAllocatedLibcInfo {
     const arch = try getArchitecture(arena);
     const search_paths = try getSearchPaths(arena, arch);
 
@@ -173,12 +181,11 @@ fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
                 continue;
             }
 
-            return LibcInfo{
+            return ArenaAllocatedLibcInfo{
                 .lib_dir = lib_dir,
                 .dynamic_linker = dynamic_linker,
                 .libc_path = libc_path,
                 .arch = arch,
-                .allocator = arena,
             };
         }
     }
