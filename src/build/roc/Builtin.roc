@@ -100,6 +100,14 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
+		NumLiteral :: [Self(Bool)].{
+			is_negative : NumLiteral -> Bool
+			is_negative = |self| match self {
+				# TODO make this a nominal record once we have those
+				Self(is_negative) => is_negative
+			}
+		}
+
 		U8 :: [].{
 			is_zero : U8 -> Bool
 			is_eq : U8, U8 -> Bool
