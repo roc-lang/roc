@@ -3819,11 +3819,94 @@ fn checkBinopExpr(
                 // Unify constrained var with lhs (this attaches the constraint to the receiver type)
                 _ = try self.unify(constrained_var, lhs_var, env);
 
-                // DO NOT attach constraint to return type!
+                // DO NOT attach the BINOP METHOD constraint (e.g., .plus) to return type!
                 // Attaching the same constraint to both lhs_var and ret_var causes them to be
                 // unified together because the constraint function has .ret = ret_var, creating
                 // a circular reference. This causes expr_var -> ret_var -> lhs_var, making the
                 // lambda return type equal to its parameter (BUG!).
+                //
+                // However, we DO need to propagate ALL OTHER constraints from both operands to
+                // the result. This includes literal constraints (from_int_digits, from_dec_digits)
+                // and any other method constraints. The literal constraints are just a performance
+                // optimization - they're semantically the same as method constraints.
+
+                // Collect ALL constraints from both operands (except the binop method itself)
+                var operand_constraints = try std.ArrayList(types_mod.StaticDispatchConstraint).initCapacity(self.types.gpa, 4);
+                defer operand_constraints.deinit();
+
+                // Helper to extract constraints from a type variable
+                const extract_constraints = struct {
+                    fn call(types: *types_mod.Types, var_: types_mod.Var, list: *std.ArrayList(types_mod.StaticDispatchConstraint), binop_method: types_mod.Ident.Idx) !void {
+                        const resolved = types.resolveVar(var_);
+                        switch (resolved.desc.content) {
+                            .structure => |s| switch (s) {
+                                .num => |n| {
+                                    const constraints_range = switch (n) {
+                                        .num_unbound => |reqs| reqs.constraints,
+                                        .num_unbound_if_builtin => |reqs| reqs.constraints,
+                                        .frac_unbound => |reqs| reqs.constraints,
+                                        .int_poly, .frac_poly, .num_poly => |poly_var| {
+                                            // Follow the poly var to get constraints
+                                            return call(types, poly_var, list, binop_method);
+                                        },
+                                        else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                                    };
+
+                                    const constraints_slice = types.static_dispatch_constraints.sliceRange(constraints_range);
+                                    for (constraints_slice) |c| {
+                                        // Include all constraints EXCEPT the binop method itself
+                                        if (c.fn_name.raw != binop_method.raw) {
+                                            try list.append(c);
+                                        }
+                                    }
+                                },
+                                else => {},
+                            },
+                            else => {},
+                        }
+                    }
+                }.call;
+
+                try extract_constraints(&self.types, lhs_var, &operand_constraints, method_name);
+                try extract_constraints(&self.types, rhs_var, &operand_constraints, method_name);
+
+                // If we collected any constraints, add them to ret_var
+                if (operand_constraints.items.len > 0) {
+                    // Merge with existing constraints on ret_var (if any)
+                    const ret_resolved = self.types.resolveVar(ret_var);
+                    const existing_constraints = switch (ret_resolved.desc.content) {
+                        .structure => |s| switch (s) {
+                            .num => |n| switch (n) {
+                                .num_unbound_if_builtin => |reqs| reqs.constraints,
+                                else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                            },
+                            else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                        },
+                        else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    };
+
+                    // Merge the constraints
+                    var all_constraints = try std.ArrayList(types_mod.StaticDispatchConstraint).initCapacity(self.types.gpa, 8);
+                    defer all_constraints.deinit();
+
+                    const existing_slice = self.types.static_dispatch_constraints.sliceRange(existing_constraints);
+                    try all_constraints.appendSlice(existing_slice);
+                    try all_constraints.appendSlice(operand_constraints.items);
+
+                    const merged_constraints_range = try self.types.appendStaticDispatchConstraints(all_constraints.items);
+
+                    // Update ret_var to include the constraints
+                    const new_content = Content{
+                        .structure = .{
+                            .num = .{ .num_unbound_if_builtin = types_mod.Num.NumRequirements{
+                                .int_requirements = types_mod.Num.IntRequirements.init(),
+                                .frac_requirements = types_mod.Num.FracRequirements.init(),
+                                .constraints = merged_constraints_range,
+                            } },
+                        },
+                    };
+                    try self.types.setVarContent(ret_var, new_content);
+                }
 
                 _ = try self.unify(expr_var, ret_var, env);
             } else {

@@ -221,7 +221,7 @@ pub fn unifyWithConf(
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch, module_lookup);
     unifier.unifyGuarded(a, b) catch |err| {
         // Debug: Log which unification failed
-        if (true) { // Debug enabled
+        if (false) { // Debug disabled
             const a_resolved = types.resolveVar(a);
             const b_resolved = types.resolveVar(b);
             std.debug.print("\n=== UNIFICATION FAILED ===\n", .{});
@@ -233,11 +233,17 @@ pub fn unifyWithConf(
                 if (a_resolved.desc.content.structure == .num) {
                     std.debug.print("  a num: {s}\n", .{@tagName(a_resolved.desc.content.structure.num)});
                 }
+                if (a_resolved.desc.content.structure == .tag_union) {
+                    std.debug.print("  a is tag_union\n", .{});
+                }
             }
             if (b_resolved.desc.content == .structure) {
                 std.debug.print("  b structure: {s}\n", .{@tagName(b_resolved.desc.content.structure)});
                 if (b_resolved.desc.content.structure == .num) {
                     std.debug.print("  b num: {s}\n", .{@tagName(b_resolved.desc.content.structure.num)});
+                }
+                if (b_resolved.desc.content.structure == .tag_union) {
+                    std.debug.print("  b is tag_union\n", .{});
                 }
             }
         }
@@ -1078,8 +1084,16 @@ const Unifier = struct {
                                     return error.TypeMismatch;
                                 }
                             },
-                            .int_poly, .frac_poly => |poly_var| {
-                                const resolved_poly = self.resolvePolyNum(poly_var, .inside_num);
+                            .int_poly => |poly_var| {
+                                const resolved_poly = self.resolvePolyNum(poly_var, .inside_int);
+                                if (try self.nominalSupportsResolvedNum(resolved_poly, b_nominal)) {
+                                    self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .frac_poly => |poly_var| {
+                                const resolved_poly = self.resolvePolyNum(poly_var, .inside_frac);
                                 if (try self.nominalSupportsResolvedNum(resolved_poly, b_nominal)) {
                                     self.merge(vars, vars.b.desc.content);
                                 } else {
@@ -1174,6 +1188,22 @@ const Unifier = struct {
                             },
                             .num_poly => |poly_var| {
                                 const resolved_poly = self.resolvePolyNum(poly_var, .inside_num);
+                                if (try self.nominalSupportsResolvedNum(resolved_poly, a_type)) {
+                                    self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .int_poly => |poly_var| {
+                                const resolved_poly = self.resolvePolyNum(poly_var, .inside_int);
+                                if (try self.nominalSupportsResolvedNum(resolved_poly, a_type)) {
+                                    self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .frac_poly => |poly_var| {
+                                const resolved_poly = self.resolvePolyNum(poly_var, .inside_frac);
                                 if (try self.nominalSupportsResolvedNum(resolved_poly, a_type)) {
                                     self.merge(vars, vars.a.desc.content);
                                 } else {
@@ -1914,18 +1944,20 @@ const Unifier = struct {
                     },
                     .frac_poly => |b_poly_var| {
                         // num_unbound unifying with frac_poly:
-                        // - If num_unbound has int requirements, this is a type mismatch (int can't be frac)
-                        // - Otherwise, resolve the poly var and handle accordingly
-                        if (a_reqs.int_requirements.bits_needed > 0 or a_reqs.int_requirements.sign_needed) {
-                            return error.TypeMismatch;
-                        }
+                        // - num_unbound can represent both int and frac values (e.g., literal "1" can be 1.0)
+                        // - Resolve the poly var and merge requirements accordingly
+                        // - NOTE: Integer literals like "1" have int_requirements set, but can still unify with frac types
 
                         const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_frac);
                         switch (b_num_resolved) {
                             .frac_flex => {
                                 // Make the flex var become frac_unbound with our requirements
                                 const frac_unbound_var = self.fresh(vars, .{ .structure = .{
-                                    .num = .{ .frac_unbound = a_reqs.frac_requirements },
+                                    .num = .{ .frac_unbound = .{
+                                        .fits_in_f32 = a_reqs.frac_requirements.fits_in_f32,
+                                        .fits_in_dec = a_reqs.frac_requirements.fits_in_dec,
+                                        .constraints = a_reqs.constraints,
+                                    } },
                                 } }) catch return Error.AllocatorError;
                                 try self.unifyGuarded(b_poly_var, frac_unbound_var);
                                 self.merge(vars, .{ .structure = .{ .num = .{ .frac_poly = frac_unbound_var } } });
@@ -1946,10 +1978,18 @@ const Unifier = struct {
                             .frac_unbound => |b_frac_reqs| {
                                 // Merge requirements
                                 const merged_frac = a_reqs.frac_requirements.unify(b_frac_reqs);
+                                if (false) { // Debug constraints
+                                    std.debug.print("\n=== Merging constraints in num_unbound ⨯ frac_poly(frac_unbound) ===\n", .{});
+                                    std.debug.print("  a_reqs.constraints.len = {d}\n", .{a_reqs.constraints.len()});
+                                    std.debug.print("  b_frac_reqs.constraints.len = {d}\n", .{b_frac_reqs.constraints.len()});
+                                }
                                 const merged_constraints = try self.unifyStaticDispatchConstraints(
                                     a_reqs.constraints,
                                     b_frac_reqs.constraints,
                                 );
+                                if (false) { // Debug constraints
+                                    std.debug.print("  merged_constraints.len = {d}\n", .{merged_constraints.len()});
+                                }
                                 const frac_unbound_var = self.fresh(vars, .{ .structure = .{
                                     .num = .{ .frac_unbound = .{
                                         .fits_in_f32 = merged_frac.fits_in_f32,
