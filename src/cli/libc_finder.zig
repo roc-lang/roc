@@ -144,7 +144,7 @@ fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
     const search_paths = try getSearchPaths(arena, arch);
 
     // Search for libc in standard paths
-    for (search_paths.items) |lib_dir| {
+    for (search_paths) |lib_dir| {
         var dir = fs.openDirAbsolute(lib_dir, .{}) catch continue;
         defer dir.close();
 
@@ -245,44 +245,62 @@ fn getArchitecture(arena: std.mem.Allocator) ![]const u8 {
 }
 
 /// Get library search paths for the given architecture
-fn getSearchPaths(arena: std.mem.Allocator, arch: []const u8) !std.array_list.Managed([]const u8) {
-    var paths = std.array_list.Managed([]const u8).init(arena);
-
-    // Get multiarch triplet if possible
+fn getSearchPaths(arena: std.mem.Allocator, arch: []const u8) ![]const []const u8 {
     const triplet = try getMultiarchTriplet(arena, arch);
 
-    // Add multiarch paths
-    try paths.append(try std.fmt.allocPrint(arena, "/lib/{s}", .{triplet}));
-    try paths.append(try std.fmt.allocPrint(arena, "/usr/lib/{s}", .{triplet}));
+    // Dynamic string allocations for multiarch locations
+    const path_lib_triplet = try std.fmt.allocPrint(arena, "/lib/{s}", .{triplet});
+    const path_usr_lib_triplet = try std.fmt.allocPrint(arena, "/usr/lib/{s}", .{triplet});
 
-    // Add architecture-specific paths
-    if (std.mem.eql(u8, arch, "x86_64")) {
-        try paths.append(try arena.dupe(u8, "/lib64"));
-        try paths.append(try arena.dupe(u8, "/usr/lib64"));
-        try paths.append(try arena.dupe(u8, "/lib/x86_64-linux-gnu"));
-        try paths.append(try arena.dupe(u8, "/usr/lib/x86_64-linux-gnu"));
-    } else if (std.mem.eql(u8, arch, "aarch64")) {
-        try paths.append(try arena.dupe(u8, "/lib64"));
-        try paths.append(try arena.dupe(u8, "/usr/lib64"));
-        try paths.append(try arena.dupe(u8, "/lib/aarch64-linux-gnu"));
-        try paths.append(try arena.dupe(u8, "/usr/lib/aarch64-linux-gnu"));
-    } else if (std.mem.startsWith(u8, arch, "arm")) {
-        try paths.append(try arena.dupe(u8, "/lib32"));
-        try paths.append(try arena.dupe(u8, "/usr/lib32"));
-        try paths.append(try arena.dupe(u8, "/lib/arm-linux-gnueabihf"));
-        try paths.append(try arena.dupe(u8, "/usr/lib/arm-linux-gnueabihf"));
+    const arch_paths = if (std.mem.eql(u8, arch, "x86_64"))
+        &[_][]const u8{
+            "/lib64",
+            "/usr/lib64",
+            "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+        }
+    else if (std.mem.eql(u8, arch, "aarch64"))
+        &[_][]const u8{
+            "/lib64",
+            "/usr/lib64",
+            "/lib/aarch64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+        }
+    else if (std.mem.startsWith(u8, arch, "arm"))
+        &[_][]const u8{
+            "/lib32",
+            "/usr/lib32",
+            "/lib/arm-linux-gnueabihf",
+            "/usr/lib/arm-linux-gnueabihf",
+        }
+    else
+        &[_][]const u8{};
+
+    // Always include these generic/musl paths
+    const base = [_][]const u8{
+        path_lib_triplet,
+        path_usr_lib_triplet,
+        "/lib",
+        "/usr/lib",
+        "/usr/local/lib",
+        "/lib/musl",
+        "/usr/lib/musl",
+    };
+
+    // Concatenate
+    const total_len = base.len + arch_paths.len;
+    const result = try arena.alloc([]const u8, total_len);
+
+    var i: usize = 0;
+    for (base) |p| {
+        result[i] = p;
+        i += 1;
     }
-
-    // Add generic paths
-    try paths.append(try arena.dupe(u8, "/lib"));
-    try paths.append(try arena.dupe(u8, "/usr/lib"));
-    try paths.append(try arena.dupe(u8, "/usr/local/lib"));
-
-    // Add musl-specific paths
-    try paths.append(try arena.dupe(u8, "/lib/musl"));
-    try paths.append(try arena.dupe(u8, "/usr/lib/musl"));
-
-    return paths;
+    for (arch_paths) |ap| {
+        result[i] = ap;
+        i += 1;
+    }
+    return result;
 }
 
 /// Get multiarch triplet (e.g., x86_64-linux-gnu)
