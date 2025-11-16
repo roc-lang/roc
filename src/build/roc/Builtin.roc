@@ -123,6 +123,7 @@ Builtin :: [].{
 			rem_by : U8, U8 -> U8
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(U8, [InvalidNumLiteral(Str)])
 		}
 
 		I8 :: [].{
@@ -143,6 +144,7 @@ Builtin :: [].{
 			rem_by : I8, I8 -> I8
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(I8, [InvalidNumLiteral(Str)])
 		}
 
 		U16 :: [].{
@@ -160,6 +162,7 @@ Builtin :: [].{
 			rem_by : U16, U16 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(U16, [InvalidNumLiteral(Str)])
 		}
 
 		I16 :: [].{
@@ -180,6 +183,7 @@ Builtin :: [].{
 			rem_by : I16, I16 -> I16
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(I16, [InvalidNumLiteral(Str)])
 		}
 
 		U32 :: [].{
@@ -197,6 +201,7 @@ Builtin :: [].{
 			rem_by : U32, U32 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(U32, [InvalidNumLiteral(Str)])
 		}
 
 		I32 :: [].{
@@ -217,6 +222,7 @@ Builtin :: [].{
 			rem_by : I32, I32 -> I32
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(I32, [InvalidNumLiteral(Str)])
 		}
 
 		U64 :: [].{
@@ -234,6 +240,7 @@ Builtin :: [].{
 			rem_by : U64, U64 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(U64, [InvalidNumLiteral(Str)])
 		}
 
 		I64 :: [].{
@@ -254,6 +261,7 @@ Builtin :: [].{
 			rem_by : I64, I64 -> I64
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(I64, [InvalidNumLiteral(Str)])
 		}
 
 		U128 :: [].{
@@ -271,6 +279,7 @@ Builtin :: [].{
 			rem_by : U128, U128 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(U128, [InvalidNumLiteral(Str)])
 		}
 
 		I128 :: [].{
@@ -291,6 +300,7 @@ Builtin :: [].{
 			rem_by : I128, I128 -> I128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(I128, [InvalidNumLiteral(Str)])
 		}
 
 		Dec :: [].{
@@ -313,6 +323,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(Dec, [InvalidNumLiteral(Str)])
 		}
 
 		F32 :: [].{
@@ -333,6 +344,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(F32, [InvalidNumLiteral(Str)])
 		}
 
 		F64 :: [].{
@@ -353,6 +365,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+			from_num_literal : NumLiteral -> Try(F64, [InvalidNumLiteral(Str)])
 		}
 	}
 }
