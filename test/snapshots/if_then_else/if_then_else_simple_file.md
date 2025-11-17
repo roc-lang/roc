@@ -44,7 +44,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[A]_others_
+    _[A][ProvidedByCompiler]_
 
 All branches in an `if` must have compatible types.
 

@@ -4037,6 +4037,9 @@ fn handleRecursiveConstraint(
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    // Cache the "Builtin" identifier from the current module for comparison
+    const builtin_ident = self.cir.common.findIdent("Builtin");
+
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
@@ -4129,10 +4132,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // If the root type is aa flex, then we there's nothing to check
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
-            // TODO: Internal types like Str, Try, List, etc are not
-            // technically nominal types. So in those cases, we should lookup
-            // the builtin module manually and dispatch that way
-
             // If the root type is a nominal type, then this is valid static dispatch
             const nominal_type = dispatcher_content.structure.nominal_type;
 
@@ -4147,7 +4146,15 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (is_this_module) {
                     break :blk self.cir;
                 } else {
-                    // Get the module env from module_envs
+                    // Check if this is the Builtin module - use the direct reference
+                    // Internal types like Str, Try, List, etc have methods defined in Builtin
+                    if (builtin_ident != null and original_module_ident == builtin_ident.?) {
+                        if (self.common_idents.builtin_module) |builtin_env| {
+                            break :blk builtin_env;
+                        }
+                    }
+
+                    // Get the module env from module_envs for user-defined modules
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
                     const mb_original_module_env = module_envs.get(original_module_ident);

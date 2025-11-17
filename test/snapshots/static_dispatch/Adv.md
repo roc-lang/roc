@@ -46,7 +46,7 @@ main = {
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:13:17:32
 MISSING METHOD - Adv.md:23:13:23:33
-TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:28:13:28:32
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -73,18 +73,16 @@ This **update_strr** method is being called on the type **Adv**, which has no me
 
 **Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `update` on a type that doesn't support methods:
+**MISSING METHOD**
+This **update** method is being called on the type **Str**, which has no method with that name:
 **Adv.md:28:13:28:32:**
 ```roc
 	next_val = "Hello".update(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
 
-
+**Hint: **For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

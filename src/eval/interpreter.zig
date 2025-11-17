@@ -281,7 +281,12 @@ pub const Interpreter = struct {
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
         };
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
+
+        // Get the "Builtin.Str" identifier from the runtime module's identifier store
+        // (identifiers are per-module, so we need to insert "Builtin.Str" into the runtime module's table)
+        const builtin_str_ident = env.common.findIdent("Builtin.Str");
+
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, builtin_str_ident);
 
         return result;
     }

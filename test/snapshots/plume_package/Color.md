@@ -89,7 +89,7 @@ DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
-TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
+MISSING METHOD - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
 TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
 TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
@@ -97,7 +97,7 @@ TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
 TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
 TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
 TYPE MISMATCH - Color.md:32:5:45:6
-TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
+MISSING METHOD - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -223,18 +223,16 @@ This type doesn't support methods:
 
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_utf8` on a type that doesn't support methods:
+**MISSING METHOD**
+This **to_utf8** method is being called on the type **Str**, which has no method with that name:
 **Color.md:29:13:29:26:**
 ```roc
     bytes = str.to_utf8()
 ```
             ^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
 
-
+**Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
 
 **TYPE DOES NOT HAVE METHODS**
 You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
@@ -340,18 +338,16 @@ It has the type:
 But the type annotation says it should have the type:
     _Try(Color, [InvalidHex(Str)])_
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_named_color` on a type that doesn't support methods:
+**MISSING METHOD**
+This **is_named_color** method is being called on the type **Str**, which has no method with that name:
 **Color.md:62:8:62:28:**
 ```roc
     if str.is_named_color()
 ```
        ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
 
-
+**Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

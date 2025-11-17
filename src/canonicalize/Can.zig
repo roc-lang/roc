@@ -285,14 +285,6 @@ pub fn populateModuleEnvs(
             .statement_idx = statement_idx,
         });
     }
-
-    // Also add an entry for "Builtin" module itself so that nominal types
-    // with origin_module="Builtin" can be looked up in module_envs
-    const builtin_module_ident = try calling_module_env.insertIdent(base.Ident.for_text("Builtin"));
-    try module_envs_map.put(builtin_module_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null, // No specific statement - this is the module itself
-    });
 }
 
 /// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, and numeric types) from the Builtin module.

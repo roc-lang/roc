@@ -61,6 +61,10 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Identifier for "Builtin.Str" to recognize the string type without string comparisons
+    // (null when compiling Builtin module itself or when Builtin.Str isn't available)
+    builtin_str_ident: ?Ident.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -105,6 +109,7 @@ pub const Store = struct {
     pub fn init(
         env: *ModuleEnv,
         type_store: *const types_store.Store,
+        builtin_str_ident: ?Ident.Idx,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -144,6 +149,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .builtin_str_ident = builtin_str_ident,
         };
     }
 
@@ -886,11 +892,13 @@ pub const Store = struct {
                     },
                     .nominal_type => |nominal_type| {
                         // Special-case Builtin.Str: it has a tag union backing type, but
-                        // should have RocStr layout (3 pointers)
-                        const str_ident = self.env.common.findIdent("Builtin.Str");
-                        if (str_ident != null and nominal_type.ident.ident_idx == str_ident.?) {
-                            // Str nominal type should use the string layout
-                            break :flat_type Layout.str();
+                        // should have RocStr layout (3 pointers).
+                        // Check if this nominal type's identifier matches "Builtin.Str"
+                        if (self.builtin_str_ident) |builtin_str| {
+                            if (nominal_type.ident.ident_idx == builtin_str) {
+                                // This is Builtin.Str - use string layout
+                                break :flat_type Layout.str();
+                            }
                         }
 
                         // TODO special-case the builtin Num type here.
