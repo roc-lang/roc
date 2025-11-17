@@ -116,8 +116,7 @@ const MiniCiStep = struct {
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
 
-        // Rebuild the zig command line, replacing the original step with
-        // the requested one, but preserving all subsequent flags and args.
+        // Build a clean zig build command for the requested step.
         try child_argv.append(b.allocator, b.graph.zig_exe); // zig executable
         try child_argv.append(b.allocator, "build");
 
