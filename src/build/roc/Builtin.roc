@@ -58,15 +58,27 @@ Builtin :: [].{
 
 	Try(ok, err) := [Ok(ok), Err(err)].{
 		is_ok : Try(_ok, _err) -> Bool
-		is_ok = |res| match res {
+		is_ok = |try| match try {
 			Ok(_) => True
 			Err(_) => False
 		}
 
 		is_err : Try(_ok, _err) -> Bool
-		is_err = |res| match res {
+		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
+		}
+
+		ok_or : Try(ok, _err), ok -> ok
+		ok_or = |try, fallback| match try {
+		    Ok(val) => val
+		    Err(_) => fallback
+		}
+
+		err_or : Try(_ok, err), err -> err
+		err_or = |try, fallback| match try {
+		    Err(val) => val
+		    Ok(_) => fallback
 		}
 
 		#eq : Try(ok, err), Try(ok, err) -> Bool
