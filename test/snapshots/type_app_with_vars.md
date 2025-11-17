@@ -13,21 +13,19 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - type_app_with_vars.md:4:22:4:34
+MISSING METHOD - type_app_with_vars.md:4:22:4:34
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `map` on a type that doesn't support methods:
+**MISSING METHOD**
+This **map** method is being called on the type **List(a)**, which has no method with that name:
 **type_app_with_vars.md:4:22:4:34:**
 ```roc
 mapList = |list, fn| list.map(fn)
 ```
                      ^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _List(a)_
 
-
+**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

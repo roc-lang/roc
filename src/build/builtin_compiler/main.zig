@@ -400,7 +400,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     return new_def_indices;
 }
 
-
 fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
         var file = try std.fs.openFileAbsolute(path, .{});
