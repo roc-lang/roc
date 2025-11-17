@@ -404,13 +404,29 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     // First add a string literal
     const str_literal_idx = try env.insertString("hello");
 
+    // Create a nominal Str type
+    const str_ident = try env.insertIdent(base.Ident.for_text("Str"));
+    const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
+
+    // Create backing type for Str (empty_record as placeholder for the tag union)
+    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const str_vars = [_]types.Var{str_backing_var};
+    const str_vars_range = try env.types.appendVars(&str_vars);
+
+    const str_nominal = types.NominalType{
+        .ident = types.TypeIdent{ .ident_idx = str_ident },
+        .vars = .{ .nonempty = str_vars_range },
+        .origin_module = builtin_ident,
+    };
+    const str_type = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .empty_record });
+    _ = str_type;
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .empty_record });
+    _ = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);
@@ -429,5 +445,5 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "{}") != null);
+    try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
 }

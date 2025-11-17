@@ -92,9 +92,23 @@ test "nominal type origin - displays origin in snapshot writer" {
         var buf = std.ArrayList(u8).empty;
         defer buf.deinit(test_allocator);
 
-        // Create type arguments
-        const str_content = snapshot.SnapshotContent{ .structure = .empty_record };
+        // Create a nominal Str type as the type argument
+        const str_ident = try idents.insert(test_allocator, Ident.for_text("Str"));
+        const builtin_ident = try idents.insert(test_allocator, Ident.for_text("Builtin"));
+
+        // Str has a backing type (we'll use empty_record as a placeholder for the tag union backing)
+        const str_backing = snapshot.SnapshotContent{ .structure = .empty_record };
+        const str_backing_idx = try snapshots.contents.append(test_allocator, str_backing);
+        const str_vars_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{str_backing_idx});
+
+        const str_nominal = snapshot.SnapshotNominalType{
+            .ident = types_mod.TypeIdent{ .ident_idx = str_ident },
+            .vars = str_vars_range,
+            .origin_module = builtin_ident,
+        };
+        const str_content = snapshot.SnapshotContent{ .structure = .{ .nominal_type = str_nominal } };
         const str_idx = try snapshots.contents.append(test_allocator, str_content);
+
         const args_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{ nominal_type_backing_idx, str_idx });
 
         // Create a nominal type with args from a different module
@@ -116,8 +130,9 @@ test "nominal type origin - displays origin in snapshot writer" {
         try writer.writeNominalType(generic_nominal, nominal_type_backing_idx);
 
         const result = writer.get();
-        // Should show "Person({}) (from Data.Types)" - empty_record displays as {}
-        try testing.expect(std.mem.indexOf(u8, result, "Person({})") != null);
+        // Should show "Person(Str (from Builtin)) (from Data.Types)"
+        // Note: Str shows its origin since it's a nominal type from a different module
+        try testing.expect(std.mem.indexOf(u8, result, "Person(Str (from Builtin))") != null);
         try testing.expect(std.mem.indexOf(u8, result, "(from Data.Types)") != null);
     }
 }
