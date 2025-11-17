@@ -1238,10 +1238,19 @@ fn processSnapshotContent(
     }
 
     // Use the shared type checking function to ensure identical behavior with roc check
+    // We need to keep module_envs alive until after we're done with the checker (for type printing)
+    var module_envs_for_repl_expr: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
+    defer if (module_envs_for_repl_expr) |*envs| envs.deinit();
+
+    var module_envs_for_snippet: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
+    defer if (module_envs_for_snippet) |*envs| envs.deinit();
+
+    var module_envs_for_file: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
+    defer if (module_envs_for_file) |*envs| envs.deinit();
+
     var solver = if (maybe_expr_idx) |expr_idx| blk: {
         // For REPL/expr tests, create module_envs for type checking
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-        defer module_envs.deinit();
 
         if (config.builtin_module) |builtin_env| {
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
@@ -1257,27 +1266,39 @@ fn processSnapshotContent(
             common_idents,
         );
         _ = try checker.checkExprRepl(expr_idx.idx);
+        module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
     } else switch (content.meta.node_type) {
         .file, .package, .platform, .app => blk: {
             // For file types, use the combined canonicalize+typecheck function.
             // This ensures the SAME module_envs map is used for both phases (just like REPL tests)
+            // For file tests, canonicalization happens INSIDE canonicalizeAndTypeCheckModule,
+            // so can_ir.imports is still empty at this point. We can't use builtin_modules
+            // (which is built from can_ir.imports). Instead, just pass builtin_env directly.
             const builtin_env = config.builtin_module orelse unreachable;
-            const imported_envs_const: []const *ModuleEnv = @ptrCast(builtin_modules.items);
-            break :blk try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            // Cast from *const ModuleEnv to *ModuleEnv (function signature requires non-const pointer)
+            const builtin_env_nonconst: *ModuleEnv = @constCast(builtin_env);
+            const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env_nonconst};
+
+            // Initialize module_envs_for_file and pass it to the function
+            // This way it stays alive until the defer at line 1249
+            module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+
+            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 allocator,
                 can_ir,
                 &parse_ast,
                 builtin_env,
                 config.builtin_indices,
-                imported_envs_const,
+                imported_envs_for_file,
+                &module_envs_for_file.?,
             );
+            break :blk checker;
         },
         .snippet, .statement, .header, .expr => blk: {
             // For snippet/statement/header/expr tests, use old-style separate type checking (already canonicalized above)
             // Note: .expr can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
 
             if (config.builtin_module) |builtin_env| {
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
@@ -1293,6 +1314,7 @@ fn processSnapshotContent(
                 common_idents,
             );
             try checker.checkFile();
+            module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
         .repl => unreachable, // Should never reach here - repl is handled earlier
