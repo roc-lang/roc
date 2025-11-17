@@ -1476,11 +1476,9 @@ const Unifier = struct {
         }) catch return error.AllocatorError;
 
         // Create nominal List(U8) - List is from Builtin module
-        const list_ident = self.module_env.common.findIdent("List") orelse {
-            // If List ident is not found, something is wrong with the environment
-            // This should never happen in a properly initialized compiler
-            @panic("List ident not found in module environment");
-        };
+        // If List ident is not found, something is wrong with the environment
+        // This should never happen in a properly initialized compiler!
+        const list_ident = self.module_env.common.findIdent("List") orelse unreachable;
 
         // Use the cached builtin_module_ident which represents the "Builtin" module.
         const origin_module = if (self.module_lookup.get(self.module_env.builtin_module_ident)) |_|

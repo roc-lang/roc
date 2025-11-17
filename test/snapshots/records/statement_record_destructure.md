@@ -21,17 +21,6 @@ Is there an `import` or `exposing` missing up-top?
                        ^^^^^^
 
 
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**statement_record_destructure.md:1:24:1:30:**
-```roc
-{ name, age, email } = person
-```
-                       ^^^^^^
-
-The `crash` happened with this message:
-    **Runtime error in expression**
-
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseCurly,OpAssign,LowerIdent,

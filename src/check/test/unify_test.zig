@@ -2995,20 +2995,19 @@ test "unify - fails on anonymous recursion" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Use Box for anonymous recursion testing
-    const box_var_a = try env.module_env.types.fresh();
-    const box_content_a = Content{
-        .structure = .{ .box = box_var_a },
-    };
-    try env.module_env.types.setRootVarContent(box_var_a, box_content_a);
+    // Create a tag union that recursively contains itself (anonymous recursion)
+    // This is like: a = [A a] unifying with b = [A b]
+    const tag_var_a = try env.module_env.types.fresh();
+    const tag_a = try env.mkTag("A", &[_]Var{tag_var_a});
+    const tag_union_a = try env.mkTagUnionClosed(&[_]Tag{tag_a});
+    try env.module_env.types.setRootVarContent(tag_var_a, tag_union_a.content);
 
-    const box_var_b = try env.module_env.types.fresh();
-    const box_content_b = Content{
-        .structure = .{ .box = box_var_b },
-    };
-    try env.module_env.types.setRootVarContent(box_var_b, box_content_b);
+    const tag_var_b = try env.module_env.types.fresh();
+    const tag_b = try env.mkTag("A", &[_]Var{tag_var_b});
+    const tag_union_b = try env.mkTagUnionClosed(&[_]Tag{tag_b});
+    try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
 
-    const result = try env.unify(box_var_a, box_var_b);
+    const result = try env.unify(tag_var_a, tag_var_b);
 
     switch (result) {
         .ok => try std.testing.expect(false),

@@ -9,7 +9,6 @@ F
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_004.md:2:1:2:1
-MISSING MAIN! FUNCTION - fuzz_crash_004.md:1:1:1:2
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -30,20 +29,6 @@ Other valid examples:
 **fuzz_crash_004.md:2:1:2:1:**
 ```roc
 
-```
-^
-
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_004.md:1:1:1:2:**
-```roc
-F
 ```
 ^
 

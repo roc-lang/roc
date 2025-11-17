@@ -766,6 +766,7 @@ pub const PackageEnv = struct {
 
     /// Combined canonicalization and type checking function for snapshot tool
     /// This ensures the SAME module_envs map is used for both phases
+    /// Note: Does NOT run compile-time evaluation - caller should do that separately if needed
     pub fn canonicalizeAndTypeCheckModule(
         gpa: Allocator,
         env: *ModuleEnv,
@@ -814,11 +815,6 @@ pub const PackageEnv = struct {
         errdefer checker.deinit();
 
         try checker.checkFile();
-
-        // After type checking, evaluate top-level declarations at compile time
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval);
-        _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();
 

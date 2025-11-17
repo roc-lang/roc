@@ -35,17 +35,6 @@ main = MyJson.decode
        ^^^^^^^^^^^^^
 
 
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**can_import_with_alias.md:3:8:3:21:**
-```roc
-main = MyJson.decode
-```
-       ^^^^^^^^^^^^^
-
-The `crash` happened with this message:
-    **Runtime error in expression**
-
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

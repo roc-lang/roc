@@ -1143,8 +1143,22 @@ fn processSnapshotContent(
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file, .package, .platform, .app, .snippet => {
+        .file, .package, .platform, .app => {
             // All file types that use canonicalizeFile() will use the combined function below
+        },
+        .snippet => {
+            // Snippet tests can have arbitrary content (type declarations, expressions, etc.)
+            // that may not work with canonicalizeFile(), so handle them separately
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+            defer module_envs.deinit();
+
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+            }
+
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            defer czer.deinit();
+            try czer.canonicalizeFile();
         },
         .header => {
             // TODO: implement canonicalize_header when available
@@ -1244,20 +1258,44 @@ fn processSnapshotContent(
         );
         _ = try checker.checkExprRepl(expr_idx.idx);
         break :blk checker;
-    } else blk: {
-        // For all test types that use canonicalizeFile() (file, package, platform, app, snippet),
-        // use the combined canonicalize+typecheck function.
-        // This ensures the SAME module_envs map is used for both phases (just like REPL tests)
-        const builtin_env = config.builtin_module orelse unreachable;
-        const imported_envs_const: []const *ModuleEnv = @ptrCast(builtin_modules.items);
-        break :blk try compile.PackageEnv.canonicalizeAndTypeCheckModule(
-            allocator,
-            can_ir,
-            &parse_ast,
-            builtin_env,
-            config.builtin_indices,
-            imported_envs_const,
-        );
+    } else switch (content.meta.node_type) {
+        .file, .package, .platform, .app => blk: {
+            // For file types, use the combined canonicalize+typecheck function.
+            // This ensures the SAME module_envs map is used for both phases (just like REPL tests)
+            const builtin_env = config.builtin_module orelse unreachable;
+            const imported_envs_const: []const *ModuleEnv = @ptrCast(builtin_modules.items);
+            break :blk try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+                allocator,
+                can_ir,
+                &parse_ast,
+                builtin_env,
+                config.builtin_indices,
+                imported_envs_const,
+            );
+        },
+        .snippet, .statement, .header, .expr => blk: {
+            // For snippet/statement/header/expr tests, use old-style separate type checking (already canonicalized above)
+            // Note: .expr can reach here if canonicalizeExpr returned null (error during canonicalization)
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+            defer module_envs.deinit();
+
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+            }
+
+            var checker = try Check.init(
+                allocator,
+                &can_ir.types,
+                can_ir,
+                builtin_modules.items,
+                &module_envs,
+                &can_ir.store.regions,
+                common_idents,
+            );
+            try checker.checkFile();
+            break :blk checker;
+        },
+        .repl => unreachable, // Should never reach here - repl is handled earlier
     };
     defer solver.deinit();
 

@@ -177,61 +177,6 @@ parser = Json.Parser.Advanced.NonExistent.create
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**can_import_unresolved_qualified.md:5:8:5:31:**
-```roc
-main = Json.NonExistent.method
-```
-       ^^^^^^^^^^^^^^^^^^^^^^^
-
-The `crash` happened with this message:
-    **Runtime error in expression**
-
-**COMPTIME EVAL ERROR**
-This definition could not be evaluated at compile time:
-**can_import_unresolved_qualified.md:16:10:16:28:**
-```roc
-result = Json.prase("test")
-```
-         ^^^^^^^^^^^^^^^^^^
-
-The evaluation failed with error:
-    **TypeMismatch**
-
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**can_import_unresolved_qualified.md:19:10:19:31:**
-```roc
-config = Unknown.Module.config
-```
-         ^^^^^^^^^^^^^^^^^^^^^
-
-The `crash` happened with this message:
-    **Runtime error in expression**
-
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**can_import_unresolved_qualified.md:22:10:22:28:**
-```roc
-client = Http.invalidMethod
-```
-         ^^^^^^^^^^^^^^^^^^
-
-The `crash` happened with this message:
-    **Runtime error in expression**
-
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**can_import_unresolved_qualified.md:25:10:25:49:**
-```roc
-parser = Json.Parser.Advanced.NonExistent.create
-```
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The `crash` happened with this message:
-    **Runtime error in expression**
-
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

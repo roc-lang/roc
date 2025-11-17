@@ -33,8 +33,6 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:27:4:32
 UNDECLARED TYPE - type_app_complex_nested.md:4:48:4:53
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-TOO MANY ARGS - type_app_complex_nested.md:18:41:18:60
-TOO MANY ARGS - type_app_complex_nested.md:4:38:4:58
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -101,26 +99,6 @@ This type is referenced here:
 deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_app_complex_nested.md:18:41:18:60:**
-```roc
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                        ^^^^^^^^^^^^^^^^^^^
-
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_app_complex_nested.md:4:38:4:58:**
-```roc
-processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                                     ^^^^^^^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -351,7 +329,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try(List(Error), Error) -> List(_c)"))
+		(patt (type "Error -> List(_c)"))
 		(patt (type "Error -> _ret"))
 		(patt (type "_arg -> List(_c)")))
 	(type_decls
@@ -361,7 +339,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Try(List(Error), Error) -> List(_c)"))
+		(expr (type "Error -> List(_c)"))
 		(expr (type "Error -> _ret"))
 		(expr (type "_arg -> List(_c)"))))
 ~~~
