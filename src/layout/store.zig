@@ -443,6 +443,21 @@ pub const Store = struct {
         return self.getEmptyRecordLayout();
     }
 
+    /// Get or create a zero-sized type layout
+    pub fn ensureZstLayout(self: *Self) !Idx {
+        // Check if we already have a ZST layout
+        for (0..self.layouts.len()) |i| {
+            const layout = self.layouts.get(i);
+            if (layout.tag == .zst) {
+                return @enumFromInt(i);
+            }
+        }
+
+        // Create new ZST layout
+        const zst_layout = Layout.zst();
+        return try self.insertLayout(zst_layout);
+    }
+
     /// Get the size in bytes of a layout, given the store's target usize.
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)
@@ -471,7 +486,14 @@ pub const Store = struct {
                 const captures_size = self.layoutSize(captures_layout);
                 return aligned_captures_offset + captures_size;
             },
+            .zst => 0, // Zero-sized types have size 0
         };
+    }
+
+    /// Check if a layout is zero-sized
+    /// This simply checks if the layout has size 0
+    pub fn isZeroSized(self: *const Self, layout: Layout) bool {
+        return self.layoutSize(layout) == 0;
     }
 
     /// Add the tag union's tags to self.pending_tags,
@@ -1065,10 +1087,15 @@ pub const Store = struct {
 
                         // For general tag unions, we need to compute the layout
                         // First, determine discriminant size based on number of tags
-                        const discriminant_layout = if (num_tags == 0)
-                            // Empty tag union - should not happen in practice
-                            return LayoutError.ZeroSizedType
-                        else if (num_tags <= 256)
+                        if (num_tags == 0) {
+                            // Empty tag union - represents a zero-sized type
+                            const zst_layout = Layout.zst();
+                            const zst_layout_idx = try self.insertLayout(zst_layout);
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, zst_layout_idx);
+                            return zst_layout_idx;
+                        }
+
+                        const discriminant_layout = if (num_tags <= 256)
                             Layout.int(.u8)
                         else if (num_tags <= 65536)
                             Layout.int(.u16)
@@ -1129,7 +1156,7 @@ pub const Store = struct {
                         for (tags_slice.items(.args)) |tag_args| {
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
-                                // zero-sized payload; nothing to update
+                                // No payload arguments
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
@@ -1137,13 +1164,14 @@ pub const Store = struct {
                                 const layout_val = self.getLayout(arg_layout_idx);
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
-                                // Build tuple layout from argument layouts
+                                // Build tuple layout from argument layouts (including ZSTs)
                                 var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
                                 defer self.env.gpa.free(elem_layouts);
                                 for (args_slice, 0..) |v, i| {
                                     const elem_idx = try self.addTypeVar(v, &temp_scope);
                                     elem_layouts[i] = self.getLayout(elem_idx);
                                 }
+
                                 const tuple_idx = try self.putTuple(elem_layouts);
                                 const tuple_layout = self.getLayout(tuple_idx);
                                 updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
@@ -1214,94 +1242,32 @@ pub const Store = struct {
                         continue;
                     },
                     .empty_record, .empty_tag_union => blk: {
-                        // Empty records and tag unions are zero-sized, so we need to do something different
-                        // depending on the container we're working on (if any). For example, if we're
-                        // working on a record field, then we need to drop that field from the container.
+                        // Empty records and tag unions are zero-sized types. They get a ZST layout.
+                        // We only special-case List({}) and Box({}) because they need runtime representation.
                         if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.pop() orelse unreachable;
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             switch (pending_item.container) {
                                 .list => {
-                                    // It turned out we were getting the layout for a List({})
+                                    // List({}) needs special runtime representation
+                                    _ = self.work.pending_containers.pop();
                                     break :blk Layout.listOfZst();
                                 },
                                 .box => {
-                                    // It turned out we were getting the layout for a Box({})
+                                    // Box({}) needs special runtime representation
+                                    _ = self.work.pending_containers.pop();
                                     break :blk Layout.boxOfZst();
                                 },
-                                .record => |pending_record| {
-                                    // It turned out we were getting the layout for a record field
-                                    std.debug.assert(pending_record.pending_fields > 0);
-                                    var updated_record = pending_record;
-                                    updated_record.pending_fields -= 1;
-
-                                    // The current field we're working on turned out to be zero-sized, so drop it.
-                                    _ = self.work.pending_record_fields.pop() orelse unreachable;
-
-                                    if (updated_record.pending_fields == 0) {
-                                        if (self.work.resolved_record_fields.len == updated_record.resolved_fields_start) {
-                                            // All fields were zero-sized, so the parent container turned
-                                            // out to be an empty record as well.
-                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-
-                                            continue :flat_type .empty_record;
-                                        } else {
-                                            // We finished the record we were working on.
-                                            break :blk try self.finishRecord(updated_record);
-                                        }
-                                    } else {
-                                        // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{
-                                            .var_ = pending_item.var_,
-                                            .container = .{ .record = updated_record },
-                                        });
-
-                                        // Get the next field to process
-                                        const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-                                        current = self.types_store.resolveVar(next_field.var_);
-                                        continue;
-                                    }
-                                },
-                                .tuple => |pending_tuple| {
-                                    // It turned out we were getting the layout for a tuple field
-                                    std.debug.assert(pending_tuple.pending_fields > 0);
-                                    var updated_tuple = pending_tuple;
-                                    updated_tuple.pending_fields -= 1;
-
-                                    // The current field we're working on turned out to be zero-sized, so drop it.
-                                    _ = self.work.pending_tuple_fields.pop() orelse unreachable;
-
-                                    if (updated_tuple.pending_fields == 0) {
-                                        if (self.work.resolved_tuple_fields.len == updated_tuple.resolved_fields_start) {
-                                            // All fields were zero-sized, so the parent container turned
-                                            // out to be an empty tuple as well.
-                                            self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
-
-                                            continue :flat_type .empty_record; // Empty tuple is like empty record
-                                        } else {
-                                            // We finished the tuple we were working on.
-                                            break :blk try self.finishTuple(updated_tuple);
-                                        }
-                                    } else {
-                                        // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{
-                                            .var_ = pending_item.var_,
-                                            .container = .{ .tuple = updated_tuple },
-                                        });
-
-                                        // Get the next field to process
-                                        const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
-                                        current = self.types_store.resolveVar(next_field.var_);
-                                        continue;
-                                    }
+                                else => {
+                                    // For records and tuples, treat ZST fields normally
+                                    break :blk Layout.zst();
                                 },
                             }
                         }
-
-                        // Unboxed zero-sized types cannot have a layout
-                        return LayoutError.ZeroSizedType;
+                        // Not inside any container, just return ZST
+                        break :blk Layout.zst();
                     },
                 },
-                .flex => |_| blk: {
+                .flex => |flex| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1317,12 +1283,18 @@ pub const Store = struct {
                         }
                     }
 
-                    // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
-                    // This is a known issue that needs proper constraint solving before layout computation.
-                    // For now, default to Dec for unresolved polymorphic types.
+                    // If the flex var has no constraints, it represents a phantom type parameter
+                    // or unused tag branch that doesn't exist at runtime.
+                    if (flex.constraints.isEmpty()) {
+                        break :blk Layout.zst();
+                    }
+
+                    // Flex vars with constraints appear in REPL/eval contexts where type constraints
+                    // haven't been fully solved. This is a known issue that needs proper constraint
+                    // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
                     break :blk Layout.default_num();
                 },
-                .rigid => blk: {
+                .rigid => |rigid| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1338,11 +1310,15 @@ pub const Store = struct {
                         }
                     }
 
-                    // Rigid vars should not appear unboxed in layout computation.
-                    // This is likely a bug in the type system.
-                    //
-                    // Unlike flex vars, rigid vars represent type parameters that should
-                    // have been instantiated. This is a bug that should be fixed.
+                    // If the rigid var has no constraints, it represents a phantom type parameter
+                    // or unused tag branch that doesn't exist at runtime (e.g., `_err` in `Try(ok, _err)`).
+                    if (rigid.constraints.isEmpty()) {
+                        break :blk Layout.zst();
+                    }
+
+                    // Rigid vars with constraints should not appear unboxed in layout computation.
+                    // This is likely a bug in the type system where the rigid var should
+                    // have been instantiated based on its constraints.
                     return LayoutError.BugUnboxedRigidVar;
                 },
                 .alias => |alias| {
@@ -1369,10 +1345,22 @@ pub const Store = struct {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        layout = Layout.box(layout_idx);
+                        // Check if the element type is zero-sized (recursively)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (self.isZeroSized(elem_layout)) {
+                            layout = Layout.boxOfZst();
+                        } else {
+                            layout = Layout.box(layout_idx);
+                        }
                     },
                     .list => {
-                        layout = Layout.list(layout_idx);
+                        // Check if the element type is zero-sized (recursively)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (self.isZeroSized(elem_layout)) {
+                            layout = Layout.listOfZst();
+                        } else {
+                            layout = Layout.list(layout_idx);
+                        }
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);

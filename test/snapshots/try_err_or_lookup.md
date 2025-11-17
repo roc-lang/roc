@@ -9,5 +9,8 @@ type=repl
 » Try.err_or(Try.Ok(123), "default")
 ~~~
 # OUTPUT
+Evaluation error: error.NotImplemented
+---
+Evaluation error: error.NotImplemented
 # PROBLEMS
 NIL
