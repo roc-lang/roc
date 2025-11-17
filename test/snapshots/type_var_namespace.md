@@ -7,15 +7,15 @@ type=file
 ~~~roc
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-# Type variable 'elem' introduced in annotation
-process : List(elem) -> elem
+# Type variable 'item' introduced in annotation
+process : List(item) -> item
 process = |list| {
-    # value identifier named 'elem' is allowed - different namespace from type variable
-    elem = 42
+    # value identifier named 'item' is allowed - different namespace from type variable
+    item = 42
 
-    # type variable 'elem' still refers to the function annotation's type parameter
-    result : elem
-    result = List.first(list) |> Try.withDefault(elem)
+    # type variable 'item' still refers to the function annotation's type parameter
+    result : item
+    result = List.first(list).ok_or(item)
 
     result
 }
@@ -23,56 +23,18 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
-UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
-DOES NOT EXIST - type_var_namespace.md:11:34:11:49
-TYPE MISMATCH - type_var_namespace.md:11:14:11:30
+MISSING METHOD - type_var_namespace.md:11:14:11:42
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **|>** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**type_var_namespace.md:11:31:11:33:**
+**MISSING METHOD**
+This **ok_or** method is being called on the type **Try(item, [ListWasEmpty])**, which has no method with that name:
+**type_var_namespace.md:11:14:11:42:**
 ```roc
-    result = List.first(list) |> Try.withDefault(elem)
+    result = List.first(list).ok_or(item)
 ```
-                              ^^
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**type_var_namespace.md:11:31:11:33:**
-```roc
-    result = List.first(list) |> Try.withDefault(elem)
-```
-                              ^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**DOES NOT EXIST**
-`Try.withDefault` does not exist.
-
-**type_var_namespace.md:11:34:11:49:**
-```roc
-    result = List.first(list) |> Try.withDefault(elem)
-```
-                                 ^^^^^^^^^^^^^^^
-
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_namespace.md:11:14:11:30:**
-```roc
-    result = List.first(list) |> Try.withDefault(elem)
-```
-             ^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Try(elem, [ListWasEmpty])_
-
-But the type annotation says it should have the type:
-    _elem_
+**Hint: **For this to work, the type would need to have a method named **ok_or** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -81,7 +43,7 @@ LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,Low
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpColon,LowerIdent,
-LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpPizza,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,
 CloseCurly,
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
@@ -106,8 +68,8 @@ EndOfFile,
 			(ty-fn
 				(ty-apply
 					(ty (name "List"))
-					(ty-var (raw "elem")))
-				(ty-var (raw "elem"))))
+					(ty-var (raw "item")))
+				(ty-var (raw "item"))))
 		(s-decl
 			(p-ident (raw "process"))
 			(e-lambda
@@ -116,19 +78,19 @@ EndOfFile,
 				(e-block
 					(statements
 						(s-decl
-							(p-ident (raw "elem"))
+							(p-ident (raw "item"))
 							(e-int (raw "42")))
 						(s-type-anno (name "result")
-							(ty-var (raw "elem")))
+							(ty-var (raw "item")))
 						(s-decl
 							(p-ident (raw "result"))
-							(e-apply
-								(e-ident (raw "List.first"))
-								(e-ident (raw "list"))))
-						(e-malformed (reason "expr_unexpected_token"))
-						(e-apply
-							(e-ident (raw "Try.withDefault"))
-							(e-ident (raw "elem")))
+							(e-field-access
+								(e-apply
+									(e-ident (raw "List.first"))
+									(e-ident (raw "list")))
+								(e-apply
+									(e-ident (raw "ok_or"))
+									(e-ident (raw "item")))))
 						(e-ident (raw "result"))))))
 		(s-decl
 			(p-ident (raw "main!"))
@@ -141,16 +103,15 @@ EndOfFile,
 ~~~roc
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-# Type variable 'elem' introduced in annotation
-process : List(elem) -> elem
+# Type variable 'item' introduced in annotation
+process : List(item) -> item
 process = |list| {
-	# value identifier named 'elem' is allowed - different namespace from type variable
-	elem = 42
+	# value identifier named 'item' is allowed - different namespace from type variable
+	item = 42
 
-	# type variable 'elem' still refers to the function annotation's type parameter
-	result : elem
-	result = List.first(list)
-		Try.withDefault(elem)
+	# type variable 'item' still refers to the function annotation's type parameter
+	result : item
+	result = List.first(list).ok_or(item)
 
 	result
 }
@@ -167,29 +128,27 @@ main! = |_| {}
 				(p-assign (ident "list")))
 			(e-block
 				(s-let
-					(p-assign (ident "elem"))
+					(p-assign (ident "item"))
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call
-						(e-lookup-external
-							(builtin))
-						(e-lookup-local
-							(p-assign (ident "list")))))
-				(s-expr
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr
-					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
-						(e-lookup-local
-							(p-assign (ident "elem")))))
+					(e-dot-access (field "ok_or")
+						(receiver
+							(e-call
+								(e-lookup-external
+									(builtin))
+								(e-lookup-local
+									(p-assign (ident "list")))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "item"))))))
 				(e-lookup-local
 					(p-assign (ident "result")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-rigid-var (name "elem")))
-				(ty-rigid-var-lookup (ty-rigid-var (name "elem"))))))
+					(ty-rigid-var (name "item")))
+				(ty-rigid-var-lookup (ty-rigid-var (name "item"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
