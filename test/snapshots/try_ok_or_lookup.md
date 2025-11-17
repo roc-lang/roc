@@ -9,8 +9,8 @@ type=repl
 » Try.ok_or(Try.Err("oops"), 99)
 ~~~
 # OUTPUT
-42
+Evaluation error: error.NotImplemented
 ---
-99
+Evaluation error: error.NotImplemented
 # PROBLEMS
 NIL

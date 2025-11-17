@@ -181,9 +181,11 @@ test "addTypeVar - zero-sized types (ZST)" {
     const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const empty_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union });
 
-    // Bare ZSTs should error
-    try testing.expectError(LayoutError.ZeroSizedType, lt.layout_store.addTypeVar(empty_record_var, &lt.type_scope));
-    try testing.expectError(LayoutError.ZeroSizedType, lt.layout_store.addTypeVar(empty_tag_union_var, &lt.type_scope));
+    // Bare ZSTs should return .zst layout
+    const empty_record_idx = try lt.layout_store.addTypeVar(empty_record_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(empty_record_idx).tag == .zst);
+    const empty_tag_union_idx = try lt.layout_store.addTypeVar(empty_tag_union_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(empty_tag_union_idx).tag == .zst);
 
     // ZSTs inside containers should use optimized layouts
     const box_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
@@ -195,7 +197,7 @@ test "addTypeVar - zero-sized types (ZST)" {
     try testing.expect(lt.layout_store.getLayout(list_zst_idx).tag == .list_of_zst);
 }
 
-test "addTypeVar - record with dropped zero-sized fields" {
+test "addTypeVar - record with zero-sized fields keeps them" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
@@ -219,10 +221,10 @@ test "addTypeVar - record with dropped zero-sized fields" {
 
     try testing.expect(record_layout.tag == .record);
     const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
-    try testing.expectEqual(@as(usize, 2), field_slice.len); // "empty" field should be dropped
+    try testing.expectEqual(@as(usize, 3), field_slice.len); // All fields including ZST "empty" field are kept
 }
 
-test "addTypeVar - record with only zero-sized fields errors" {
+test "addTypeVar - record with only zero-sized fields" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
@@ -238,10 +240,14 @@ test "addTypeVar - record with only zero-sized fields errors" {
     });
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
-    // Bare record with only ZST fields should error
-    try testing.expectError(LayoutError.ZeroSizedType, lt.layout_store.addTypeVar(record_var, &lt.type_scope));
+    // Bare record with only ZST fields should create a record with ZST fields
+    const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
+    const record_layout = lt.layout_store.getLayout(record_idx);
+    try testing.expect(record_layout.tag == .record);
+    const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
+    try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
-    // Box of such a record should become box_of_zst
+    // Box of such a record should be box_of_zst since the record only contains ZST fields
     const box_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
     const box_idx = try lt.layout_store.addTypeVar(box_record_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
@@ -402,4 +408,89 @@ test "deeply nested containers with inner ZST" {
     // The innermost element is Box(empty_record), which should resolve to box_of_zst
     const inner_box_layout = lt.layout_store.getLayout(inner_list_layout.data.list);
     try testing.expect(inner_box_layout.tag == .box_of_zst);
+}
+
+test "nested ZST detection - List of record with ZST field" {
+    // Test: List({ field: {} }) should be list_of_zst
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = empty_record_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
+
+    // List of this record should be list_of_zst since the record only has ZST fields
+    const list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
+    const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
+}
+
+test "nested ZST detection - Box of tuple with ZST elements" {
+    // Test: Box(((), ())) should be box_of_zst
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create a tuple with two empty record elements: ((), ())
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const tuple_elems = try lt.type_store.vars.appendSlice(lt.gpa, &[_]types.Var{ empty_record_var, empty_record_var });
+    const tuple_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
+
+    // The tuple should be ZST since both elements are ZST
+    const tuple_idx = try lt.layout_store.addTypeVar(tuple_var, &lt.type_scope);
+    const tuple_layout = lt.layout_store.getLayout(tuple_idx);
+    try testing.expect(lt.layout_store.layoutSize(tuple_layout) == 0);
+
+    // Box of it should be box_of_zst
+    const box_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = tuple_var } });
+    const box_idx = try lt.layout_store.addTypeVar(box_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
+}
+
+test "nested ZST detection - deeply nested" {
+    // Test: List({ field: ({ field2: {} }, ()) }) should be list_of_zst
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Start from the inside: {} (empty record)
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+
+    // { field2: {} }
+    const inner_record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("field2")), .var_ = empty_record_var },
+    });
+    const inner_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_record_fields, .ext = empty_record_var } } });
+
+    // ({ field2: {} }, ()) - tuple with ZST record and ZST empty record
+    const tuple_elems = try lt.type_store.vars.appendSlice(lt.gpa, &[_]types.Var{ inner_record_var, empty_record_var });
+    const tuple_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
+
+    // { field: ({ field2: {} }, ()) }
+    const outer_record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = tuple_var },
+    });
+    const outer_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_record_fields, .ext = empty_record_var } } });
+
+    // List({ field: ({ field2: {} }, ()) })
+    const list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = outer_record_var } });
+    const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
+
+    // Since the entire nested structure is ZST, the list should be list_of_zst
+    try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }
