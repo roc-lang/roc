@@ -74,6 +74,82 @@ const TestsSummaryStep = struct {
     }
 };
 
+const MiniCiStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *MiniCiStep {
+        const self = b.allocator.create(MiniCiStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "minici-inner",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+
+        const b = step.owner;
+
+        // Run the sequence of `zig build` commands that make up the
+        // mini CI pipeline.
+        try runSubBuild(b, "fmt", "zig build fmt");
+        try runSubBuild(b, null, "zig build");
+        try runSubBuild(b, "snapshot", "zig build snapshot");
+        try runSubBuild(b, "test", "zig build test");
+        try runSubBuild(b, "test-playground", "zig build test-playground");
+        try runSubBuild(b, "test-serialization-sizes", "zig build test-serialization-sizes");
+        try runSubBuild(b, "test-cli", "zig build test-cli");
+    }
+
+    fn runSubBuild(
+        b: *std.Build,
+        step_name: ?[]const u8,
+        display: []const u8,
+    ) !void {
+        std.debug.print("---- minici: running `{s}` ----\n", .{display});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        // Rebuild the zig command line, replacing the original step with
+        // the requested one, but preserving all subsequent flags and args.
+        try child_argv.append(b.allocator, b.graph.zig_exe); // zig executable
+        try child_argv.append(b.allocator, "build");
+
+        if (step_name) |name| {
+            try child_argv.append(b.allocator, name);
+        }
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    std.debug.print(
+                        "minici: `{s}` failed with exit code {d}\n",
+                        .{ display, code },
+                    );
+                    return error.MakeFailed;
+                }
+            },
+            else => {
+                std.debug.print("minici: `{s}` terminated abnormally\n", .{display});
+                return error.MakeFailed;
+            },
+        }
+    }
+};
+
 fn createAndRunBuiltinCompiler(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -148,6 +224,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
+    const minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
@@ -474,6 +551,10 @@ pub fn build(b: *std.Build) void {
         serialization_size_step.dependOn(&size_check_wasm32.step);
         serialization_size_step.dependOn(&run_native.step);
     }
+
+    // Mini CI convenience step: runs a sequence of common build and test commands in order.
+    const minici_inner = MiniCiStep.create(b);
+    minici_step.dependOn(&minici_inner.step);
 
     // Create and add module tests
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
