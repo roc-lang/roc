@@ -767,6 +767,8 @@ pub const PackageEnv = struct {
     /// Combined canonicalization and type checking function for snapshot tool
     /// This ensures the SAME module_envs map is used for both phases
     /// Note: Does NOT run compile-time evaluation - caller should do that separately if needed
+    /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
+    /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
         gpa: Allocator,
         env: *ModuleEnv,
@@ -774,22 +776,18 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         builtin_indices: can.CIR.BuiltinIndices,
         imported_envs: []const *ModuleEnv,
+        module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     ) !Check {
-        // Create module_envs map for auto-importing builtin types
-        // This map will be used for BOTH canonicalization and type checking
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-        errdefer module_envs_map.deinit();
-
         // Populate module_envs with Bool, Try, Dict, Set using shared function
         try Can.populateModuleEnvs(
-            &module_envs_map,
+            module_envs_out,
             env,
             builtin_module_env,
             builtin_indices,
         );
 
         // Canonicalize
-        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        var czer = try Can.init(env, parse_ast, module_envs_out);
         try czer.canonicalizeFile();
         czer.deinit();
 
@@ -808,15 +806,13 @@ pub const PackageEnv = struct {
             &env.types,
             env,
             imported_envs,
-            &module_envs_map,
+            module_envs_out,
             &env.store.regions,
             module_common_idents,
         );
         errdefer checker.deinit();
 
         try checker.checkFile();
-
-        module_envs_map.deinit();
 
         return checker;
     }
