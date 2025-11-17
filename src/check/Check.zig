@@ -4037,9 +4037,6 @@ fn handleRecursiveConstraint(
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    // Cache the "Builtin" identifier from the current module for comparison
-    const builtin_ident = self.cir.common.findIdent("Builtin");
-
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
@@ -4146,18 +4143,43 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (is_this_module) {
                     break :blk self.cir;
                 } else {
-                    // Check if this is the Builtin module - use the direct reference
-                    // Internal types like Str, Try, List, etc have methods defined in Builtin
-                    if (builtin_ident != null and original_module_ident == builtin_ident.?) {
-                        if (self.common_idents.builtin_module) |builtin_env| {
-                            break :blk builtin_env;
-                        }
-                    }
-
-                    // Get the module env from module_envs for user-defined modules
+                    // TODO: The name `module_envs` is misleading - it's actually a map of
+                    // auto-imported TYPE NAMES to their defining modules, not a map of module names.
+                    // This is because when you write `List` in user code (not `Builtin.List`), the
+                    // compiler needs to quickly resolve which module defines that type name.
+                    //
+                    // This creates confusion here in static dispatch: we have an `origin_module`
+                    // which stores the MODULE name ("Builtin"), but `module_envs` is keyed by
+                    // TYPE names ("List", "Bool", etc.).
+                    //
+                    // The correct solution would be to have two separate maps:
+                    // - auto_imported_types: HashMap(TypeName, ModuleEnv) for canonicalization
+                    // - imported_modules: HashMap(ModuleName, ModuleEnv) for module lookups
+                    //
+                    // For now, we work around this by detecting builtin types and using the type
+                    // name as the lookup key instead of the module name.
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
-                    const mb_original_module_env = module_envs.get(original_module_ident);
+
+                    const lookup_key = if (original_module_ident == self.cir.builtin_module_ident) lookup_blk: {
+                        // For Builtin types, the nominal_type.ident contains the fully qualified name
+                        // like "Builtin.Str", but module_envs is keyed by just the unqualified name "Str".
+                        // We need to extract just the type name without the module prefix.
+                        const full_name = self.cir.getIdent(nominal_type.ident.ident_idx);
+                        const dot_index = std.mem.indexOfScalar(u8, full_name, '.') orelse {
+                            // No dot found - use as-is (shouldn't happen for Builtin types, but handle gracefully)
+                            break :lookup_blk nominal_type.ident.ident_idx;
+                        };
+                        const unqualified_name = full_name[dot_index + 1 ..];
+                        // Look up the unqualified name in the identifier store
+                        const unqualified_ident = self.cir.common.findIdent(unqualified_name) orelse {
+                            // If we can't find it, fall back to the original (will likely fail the assertion below)
+                            break :lookup_blk nominal_type.ident.ident_idx;
+                        };
+                        break :lookup_blk unqualified_ident;
+                    } else original_module_ident; // Use module name for user-defined modules
+
+                    const mb_original_module_env = module_envs.get(lookup_key);
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }
