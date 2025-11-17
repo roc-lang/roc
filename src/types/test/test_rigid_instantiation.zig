@@ -291,7 +291,15 @@ test "instantiate - alias preserves structure" {
     defer env.deinit();
 
     const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
-    const backing = try env.types.freshFromContent(.{ .structure = .{ .list = rigid_a } });
+    const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
+    const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+    const backing_content = try env.types.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        rigid_a,
+        &[_]Var{rigid_a},
+        builtin_module_idx,
+    );
+    const backing = try env.types.freshFromContent(backing_content);
     const alias_content = try env.mkAlias("MyList", backing, &[_]Var{rigid_a});
     const original = try env.types.freshFromContent(alias_content);
 
@@ -314,7 +322,9 @@ test "instantiate - alias preserves structure" {
     // Get the backing var
     const backing_var = env.types.getAliasBackingVar(alias);
     const backing_resolved = env.types.resolveVar(backing_var);
-    const backing_list_elem = backing_resolved.desc.content.structure.list;
+    const backing_nominal = backing_resolved.desc.content.structure.nominal_type;
+    const backing_list_args = env.types.sliceNominalArgs(backing_nominal);
+    const backing_list_elem = backing_list_args[0];
 
     // The alias arg and the list element should be the same fresh var
     try std.testing.expectEqual(args[0], backing_list_elem);
@@ -409,7 +419,15 @@ test "instantiate - box and list" {
 
     // Test List a
     {
-        const list_var = try env.types.freshFromContent(.{ .structure = .{ .list = rigid_a } });
+        const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
+        const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+        const list_content = try env.types.mkNominal(
+            .{ .ident_idx = list_ident_idx },
+            rigid_a,
+            &[_]Var{rigid_a},
+            builtin_module_idx,
+        );
+        const list_var = try env.types.freshFromContent(list_content);
 
         var instantiator = Instantiator{
             .store = &env.types,
@@ -421,8 +439,10 @@ test "instantiate - box and list" {
         const instantiated = try instantiator.instantiateVar(list_var);
         const resolved = env.types.resolveVar(instantiated);
 
-        try std.testing.expect(resolved.desc.content.structure == .list);
-        try std.testing.expect(resolved.desc.content.structure.list != rigid_a);
+        try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+        const nominal = resolved.desc.content.structure.nominal_type;
+        const nominal_args = env.types.sliceNominalArgs(nominal);
+        try std.testing.expect(nominal_args[0] != rigid_a);
     }
 }
 

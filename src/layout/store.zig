@@ -858,34 +858,38 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
-                    .list => |elem_var| {
-                        const elem_content = self.types_store.resolveVar(elem_var).desc.content;
-                        if (elem_content == .flex or elem_content == .rigid) {
-                            // For unbound lists (empty lists), use list of zero-sized type
-                            const layout = Layout.listOfZst();
-                            const idx = try self.insertLayout(layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                            return idx;
-                        } else {
-                            // Otherwise, add this to the stack of pending work
-                            try self.work.pending_containers.append(self.env.gpa, .{
-                                .var_ = current.var_,
-                                .container = .list,
-                            });
-
-                            // Push a pending List container and "recurse" on the elem type
-                            current = self.types_store.resolveVar(elem_var);
-                            continue;
-                        }
-                    },
-                    .list_unbound => {
-                        // For unbound lists (empty lists), use list of zero-sized type
-                        const layout = Layout.listOfZst();
-                        const idx = try self.insertLayout(layout);
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                        return idx;
-                    },
                     .nominal_type => |nominal_type| {
+                        // Special-case for Builtin.List - treat it like the primitive .list type
+                        const list_ident = self.env.common.findIdent("List");
+                        if (list_ident != null and nominal_type.ident.ident_idx == list_ident.?) {
+                            // Extract the element type from the type arguments
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                            if (type_args.len != 1) {
+                                @panic("List nominal type must have exactly 1 type parameter");
+                            }
+                            const elem_var = type_args[0];
+
+                            // Same logic as the old .list case
+                            const elem_content = self.types_store.resolveVar(elem_var).desc.content;
+                            if (elem_content == .flex or elem_content == .rigid) {
+                                // For unbound lists (empty lists), use list of zero-sized type
+                                const layout = Layout.listOfZst();
+                                const idx = try self.insertLayout(layout);
+                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                                return idx;
+                            } else {
+                                // Otherwise, add this to the stack of pending work
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = current.var_,
+                                    .container = .list,
+                                });
+
+                                // Push a pending List container and "recurse" on the elem type
+                                current = self.types_store.resolveVar(elem_var);
+                                continue;
+                            }
+                        }
+
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.

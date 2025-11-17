@@ -400,8 +400,6 @@ pub const Store = struct {
         return switch (flat_type) {
             .str => false,
             .box => |box_var| self.needsInstantiation(box_var),
-            .list => |list_var| self.needsInstantiation(list_var),
-            .list_unbound => true,
             .tuple => |tuple| blk: {
                 const elems_slice = self.sliceVars(tuple.elems);
                 for (elems_slice) |elem_var| {
@@ -1296,7 +1294,15 @@ test "Store comprehensive CompactWriter roundtrip" {
     const flex = try original.fresh();
     const str_var = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
     const list_elem = try original.fresh();
-    const list_var = try original.freshFromContent(Content{ .structure = .{ .list = list_elem } });
+    const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 999 };
+    const builtin_module_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 998 };
+    const list_content = try original.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        list_elem,
+        &[_]Var{list_elem},
+        builtin_module_idx,
+    );
+    const list_var = try original.freshFromContent(list_content);
 
     // Create a function type
     const arg1 = try original.fresh();
@@ -1360,7 +1366,11 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
-    try std.testing.expectEqual(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
+    // List is now a nominal type
+    try std.testing.expect(deser_list.desc.content.structure == .nominal_type);
+    const deser_nominal = deser_list.desc.content.structure.nominal_type;
+    const deser_list_args = deserialized.sliceNominalArgs(deser_nominal);
+    try std.testing.expectEqual(list_elem, deser_list_args[0]);
 
     const deser_func = deserialized.resolveVar(func_var);
     switch (deser_func.desc.content.structure) {

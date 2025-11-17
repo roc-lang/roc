@@ -94,7 +94,7 @@ test "check type - list empty" {
     const source =
         \\[]
     ;
-    try checkTypesExpr(source, .pass, "List(_elem)");
+    try checkTypesExpr(source, .pass, "List(_a)");
 }
 
 test "check type - list - same elems 1" {

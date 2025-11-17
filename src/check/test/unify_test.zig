@@ -244,6 +244,10 @@ const TestEnv = struct {
         );
     }
 
+    fn mkList(self: *Self, elem_var: Var) std.mem.Allocator.Error!Content {
+        return try self.mkNominalType("List", elem_var, &[_]Var{elem_var});
+    }
+
     // helpers - structure - func //
 
     fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
@@ -714,7 +718,7 @@ test "unify - a & b list with same arg unify" {
     const str = Content{ .structure = .str };
     const str_var = try env.module_env.types.freshFromContent(str);
 
-    const list_str = Content{ .structure = .{ .list = str_var } };
+    const list_str = try env.mkList(str_var);
 
     const a = try env.module_env.types.freshFromContent(list_str);
     const b = try env.module_env.types.freshFromContent(list_str);
@@ -738,8 +742,8 @@ test "unify - a & b list with diff args (fail)" {
     const u8_ = Content{ .structure = .{ .num = Num.int_u8 } };
     const u8_var = try env.module_env.types.freshFromContent(u8_);
 
-    const list_str = Content{ .structure = .{ .list = str_var } };
-    const list_u8 = Content{ .structure = .{ .list = u8_var } };
+    const list_str = try env.mkList(str_var);
+    const list_u8 = try env.mkList(u8_var);
 
     const a = try env.module_env.types.freshFromContent(list_str);
     const b = try env.module_env.types.freshFromContent(list_u8);
@@ -2991,19 +2995,20 @@ test "unify - fails on anonymous recursion" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const list_var_a = try env.module_env.types.fresh();
-    const list_content_a = Content{
-        .structure = .{ .list = list_var_a },
+    // Use Box for anonymous recursion testing (List is now a nominal type)
+    const box_var_a = try env.module_env.types.fresh();
+    const box_content_a = Content{
+        .structure = .{ .box = box_var_a },
     };
-    try env.module_env.types.setRootVarContent(list_var_a, list_content_a);
+    try env.module_env.types.setRootVarContent(box_var_a, box_content_a);
 
-    const list_var_b = try env.module_env.types.fresh();
-    const list_content_b = Content{
-        .structure = .{ .list = list_var_b },
+    const box_var_b = try env.module_env.types.fresh();
+    const box_content_b = Content{
+        .structure = .{ .box = box_var_b },
     };
-    try env.module_env.types.setRootVarContent(list_var_b, list_content_b);
+    try env.module_env.types.setRootVarContent(box_var_b, box_content_b);
 
-    const result = try env.unify(list_var_a, list_var_b);
+    const result = try env.unify(box_var_a, box_var_b);
 
     switch (result) {
         .ok => try std.testing.expect(false),
@@ -4543,7 +4548,8 @@ test "recursion_var - equirecursive unification with nested structure" {
 
     // Create a list structure: List(a) where a is flexible
     const elem_var = try env.module_env.types.fresh();
-    const list_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .list = elem_var } });
+    const list_content = try env.mkList(elem_var);
+    const list_var = try env.module_env.types.freshFromContent(list_content);
 
     // Create a RecursionVar that points to the list
     const rec_var = try env.module_env.types.freshFromContent(Content{
@@ -4555,7 +4561,8 @@ test "recursion_var - equirecursive unification with nested structure" {
 
     // Create another list with the same structure
     const elem_var_2 = try env.module_env.types.fresh();
-    const list_var_2 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .list = elem_var_2 } });
+    const list_content_2 = try env.mkList(elem_var_2);
+    const list_var_2 = try env.module_env.types.freshFromContent(list_content_2);
 
     // RecursionVar should unify with the list
     const result = try env.unify(rec_var, list_var_2);
@@ -4650,9 +4657,8 @@ test "type_writer - recursion_var with cycle displays correctly" {
     const rec_var_placeholder = try env.module_env.types.fresh();
 
     // Create a list that points to the placeholder
-    const list_var = try env.module_env.types.freshFromContent(Content{
-        .structure = .{ .list = rec_var_placeholder },
-    });
+    const list_content = try env.mkList(rec_var_placeholder);
+    const list_var = try env.module_env.types.freshFromContent(list_content);
 
     // Create a RecursionVar that points to the list
     const rec_var = try env.module_env.types.freshFromContent(Content{
@@ -4692,9 +4698,8 @@ test "type_writer - nested recursion_var displays correctly" {
         },
     });
 
-    const list_var = try env.module_env.types.freshFromContent(Content{
-        .structure = .{ .list = inner_rec_var },
-    });
+    const list_content = try env.mkList(inner_rec_var);
+    const list_var = try env.module_env.types.freshFromContent(list_content);
 
     const outer_rec_var = try env.module_env.types.freshFromContent(Content{
         .recursion_var = .{

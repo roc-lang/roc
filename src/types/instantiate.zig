@@ -223,8 +223,6 @@ pub const Instantiator = struct {
         return switch (flat_type) {
             .str => FlatType.str,
             .box => |box_var| FlatType{ .box = try self.instantiateVar(box_var) },
-            .list => |list_var| FlatType{ .list = try self.instantiateVar(list_var) },
-            .list_unbound => FlatType.list_unbound,
             .tuple => |tuple| FlatType{ .tuple = try self.instantiateTuple(tuple) },
             .num => |num| FlatType{ .num = try self.instantiateNum(num) },
             .nominal_type => |nominal| FlatType{ .nominal_type = try self.instantiateNominalType(nominal) },
