@@ -1,19 +1,18 @@
 [toolchain]
 # How to update version:
 #  - update `channel = "RUST_VERSION"`
-#  - update `channel = "RUST_VERSION"` in examples/platform-switching/rust-platform/rust-toolchain.toml
-#  - update `channel = "RUST_VERSION"` in examples/glue/rust-platform/rust-toolchain.toml
+#  - update `channel = "RUST_VERSION"` in crates/cli/tests/platform-switching/rust-platform/rust-toolchain.toml
 #  - to update the nightly version:
-#     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2024
+#     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2025
 #     - update `channel = "nightly-OLD_DATE"` below
 #     - update nightly-OLD_DATE in .github/workflows/ubuntu_x86_64.yml
 #     - update nightly-OLD_DATE in .github/workflows/windows_tests.yml
 #     - update nightly-OLD_DATE in .github/workflows/windows_release_build.yml
 #     - update nightly-OLD_DATE in crates/compiler/build/src/link.rs
 
-channel = "1.77.2" # check ^^^ when changing this
+channel = "1.91.1" # check ^^^ when changing this
 # 
-# channel = "nightly-2024-02-03" # 1.77.0 nightly to be able to use unstable features
+# channel = "nightly-2025-09-14" # 1.91.0 nightly to be able to use unstable features
 profile = "default"
 components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`
@@ -21,6 +20,6 @@ components = [
 ]
 
 targets = [
-    "wasm32-wasi", # for test_wasm.sh
+    "wasm32-wasip1", # for test_wasm.sh
     "wasm32-unknown-unknown", # for repl_wasm
 ]
