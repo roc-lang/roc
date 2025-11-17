@@ -628,6 +628,13 @@ pub const PackageEnv = struct {
         // Mark current node as visiting (gray) before exploring imports
         st.visit_color = 1;
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+            // Special case: Builtin is a precompiled module, not a local file import
+            // It's auto-imported and should not be scheduled for parsing
+            if (str_idx == env.builtin_module_ident) {
+                // Skip Builtin entirely - it's handled via builtin_modules
+                continue;
+            }
+
             const mod_name = env.getString(str_idx);
 
             // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
@@ -804,6 +811,12 @@ pub const PackageEnv = struct {
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+            // Special case: Builtin is precompiled and available via builtin_modules
+            if (str_idx == env.builtin_module_ident) {
+                try imported_envs.append(self.gpa, @constCast(self.builtin_modules.builtin_module.env));
+                continue;
+            }
+
             const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
             const is_ext = hadQualifiedImport(env, import_name);
