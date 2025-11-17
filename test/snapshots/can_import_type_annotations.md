@@ -233,6 +233,17 @@ advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input
                                        ^^^^^^^^^^^^^^^^^^^^^
 
 
+**COMPTIME CRASH**
+This definition crashed during compile-time evaluation:
+**can_import_type_annotations.md:21:10:21:28:**
+```roc
+config = Json.defaultConfig
+```
+         ^^^^^^^^^^^^^^^^^^
+
+The `crash` happened with this message:
+    **Runtime error in expression**
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
@@ -644,15 +655,15 @@ combineTrys = |result1, result2|
 	(defs
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Error"))
-		(patt (type "Error -> Try(Error, Error)"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error"))
 		(patt (type "Error, Str -> Error"))
-		(patt (type "Try(a, err), Try(b, err) -> Try((a, b), err)")))
+		(patt (type "Error, Error -> Error")))
 	(expressions
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Error"))
-		(expr (type "Error -> Try(Error, Error)"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error"))
 		(expr (type "Error, Str -> Error"))
-		(expr (type "Try(a, err), Try(b, err) -> Try((a, b), err)"))))
+		(expr (type "Error, Error -> Error"))))
 ~~~

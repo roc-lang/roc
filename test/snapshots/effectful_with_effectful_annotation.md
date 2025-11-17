@@ -41,6 +41,17 @@ print_msg! = |msg| Stdout.line!(msg)
                    ^^^^^^^^^^^^
 
 
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**effectful_with_effectful_annotation.md:9:9:9:36:**
+```roc
+main! = print_msg!("Hello, world!")
+```
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The evaluation failed with error:
+    **TypeMismatch**
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

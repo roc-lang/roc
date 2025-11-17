@@ -84,6 +84,25 @@ But the third argument has the type:
 
 `multi_arg_fn` needs these arguments to have compatible types.
 
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**lambda_multi_arg_mismatch.md:8:10:17:2:**
+```roc
+result = multi_arg_fn(
+    42,        # x1: U64 (type 'a')
+    "hello",   # x2: Str (type 'b') - correct
+    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+    1.5,       # x4: F64 (type 'c') - correct
+    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
+    [1, 2],    # x6: List I64 (type 'd') - correct
+    True,      # x7: Bool (should be 'a' = U64) - MISMATCH
+    "done",    # x8: Str (type 'e') - correct
+)
+```
+
+The evaluation failed with error:
+    **NotImplemented**
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,OpArrow,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,
