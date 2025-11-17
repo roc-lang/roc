@@ -311,9 +311,6 @@ processData : Config, List(Value) -> Try(List(Value), Error)
 **DOES NOT EXIST**
 `List.mapTry` does not exist.
 
-`List` is in scope, but it has no associated `mapTry`.
-
-It's referenced here:
 **can_import_exposing_types.md:22:5:22:16:**
 ```roc
     List.mapTry(
@@ -801,7 +798,7 @@ combineTrys = |jsonTry, httpStatus|
 				(p-assign (ident "config"))
 				(p-assign (ident "values")))
 			(e-call
-				(e-runtime-error (tag "nested_value_not_found"))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))
 				(e-lookup-local
 					(p-assign (ident "values")))
 				(e-closure
