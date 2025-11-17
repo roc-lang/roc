@@ -136,10 +136,10 @@ fn findViaCompiler(arena: std.mem.Allocator) !?ArenaAllocatedLibcInfo {
         if (!validatePath(dynamic_linker)) continue;
 
         return ArenaAllocatedLibcInfo{
-            .dynamic_linker = try arena.dupe(u8, dynamic_linker),
-            .libc_path = try arena.dupe(u8, libc_path),
-            .lib_dir = try arena.dupe(u8, lib_dir),
-            .arch = try arena.dupe(u8, arch),
+            .dynamic_linker = dynamic_linker,
+            .libc_path = libc_path,
+            .lib_dir = lib_dir,
+            .arch = arch,
         };
     }
 
