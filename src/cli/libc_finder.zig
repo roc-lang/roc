@@ -8,6 +8,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
+const Allocators = base.Allocators;
 const fs = std.fs;
 const process = std.process;
 
@@ -68,24 +70,21 @@ fn getDynamicLinkerName(arch: []const u8) []const u8 {
 }
 
 /// Main entry point - finds libc and dynamic linker
-pub fn findLibc(allocator: std.mem.Allocator) !LibcInfo {
-    var arena_alloca = std.heap.ArenaAllocator.init(allocator);
-    defer arena_alloca.deinit();
-    const arena = arena_alloca.allocator();
+pub fn findLibc(allocs: Allocators) !LibcInfo {
 
     // Try compiler-based detection first (most reliable)
-    const tmpLibcInfo = if (try findViaCompiler(arena)) |info|
+    const tmpLibcInfo = if (try findViaCompiler(allocs.arena)) |info|
         info
     else
         // Fall back to filesystem search
-        try findViaFilesystem(arena);
+        try findViaFilesystem(allocs.arena);
 
     return LibcInfo{
-        .lib_dir = try allocator.dupe(u8, tmpLibcInfo.lib_dir),
-        .dynamic_linker = try allocator.dupe(u8, tmpLibcInfo.dynamic_linker),
-        .libc_path = try allocator.dupe(u8, tmpLibcInfo.libc_path),
-        .arch = try allocator.dupe(u8, tmpLibcInfo.arch),
-        .allocator = allocator,
+        .lib_dir = try allocs.gpa.dupe(u8, tmpLibcInfo.lib_dir),
+        .dynamic_linker = try allocs.gpa.dupe(u8, tmpLibcInfo.dynamic_linker),
+        .libc_path = try allocs.gpa.dupe(u8, tmpLibcInfo.libc_path),
+        .arch = try allocs.gpa.dupe(u8, tmpLibcInfo.arch),
+        .allocator = allocs.gpa,
     };
 }
 
@@ -284,7 +283,7 @@ fn getSearchPaths(arena: std.mem.Allocator, arch: []const u8) ![]const []const u
         &[_][]const u8{};
 
     // Always include these generic/musl paths
-    const base = [_][]const u8{
+    const root_bases = [_][]const u8{
         path_lib_triplet,
         path_usr_lib_triplet,
         "/lib",
@@ -295,11 +294,11 @@ fn getSearchPaths(arena: std.mem.Allocator, arch: []const u8) ![]const []const u
     };
 
     // Concatenate
-    const total_len = base.len + arch_paths.len;
+    const total_len = root_bases.len + arch_paths.len;
     const result = try arena.alloc([]const u8, total_len);
 
     var i: usize = 0;
-    for (base) |p| {
+    for (root_bases) |p| {
         result[i] = p;
         i += 1;
     }
@@ -338,9 +337,11 @@ fn getMultiarchTriplet(arena: std.mem.Allocator, arch: []const u8) ![]const u8 {
 test "libc detection integration test" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
 
-    const allocator = std.testing.allocator;
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(std.testing.allocator);
+    defer allocs.deinit();
 
-    const libc_info = findLibc(allocator) catch |err| switch (err) {
+    const libc_info = findLibc(allocs) catch |err| switch (err) {
         error.LibcNotFound => {
             std.log.warn("Libc not found on this system - this may be expected in some environments", .{});
             return error.SkipZigTest;
