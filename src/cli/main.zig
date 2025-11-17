@@ -869,7 +869,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
                     // as specified in the design document.
 
                     const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs.gpa)) |libc_info| {
+                    if (libc_finder.findLibc(allocs)) |libc_info| {
                         defer {
                             var info = libc_info;
                             info.deinit();

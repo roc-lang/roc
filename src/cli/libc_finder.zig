@@ -70,7 +70,7 @@ fn getDynamicLinkerName(arch: []const u8) []const u8 {
 }
 
 /// Main entry point - finds libc and dynamic linker
-pub fn findLibc(allocs: Allocators) !LibcInfo {
+pub fn findLibc(allocs: *Allocators) !LibcInfo {
 
     // Try compiler-based detection first (most reliable)
     const tmpLibcInfo = if (try findViaCompiler(allocs.arena)) |info|
@@ -341,7 +341,7 @@ test "libc detection integration test" {
     allocs.initInPlace(std.testing.allocator);
     defer allocs.deinit();
 
-    const libc_info = findLibc(allocs) catch |err| switch (err) {
+    const libc_info = findLibc(&allocs) catch |err| switch (err) {
         error.LibcNotFound => {
             std.log.warn("Libc not found on this system - this may be expected in some environments", .{});
             return error.SkipZigTest;
