@@ -648,87 +648,6 @@ fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { s
     return .{ .start = start_idx, .end = next_section_idx };
 }
 
-/// Wrapper for a loaded compiled builtin module that tracks the buffer
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
-
-        // Free the buffer (the env points into this buffer for most data)
-        self.gpa.free(self.buffer);
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
-    // Copy the embedded data to properly aligned memory
-    // CompactWriter requires specific alignment for serialization
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    // Cast to the serialized structure
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*;
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .module_kind = serialized_ptr.module_kind,
-        .all_defs = serialized_ptr.all_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .exports = serialized_ptr.exports,
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
-        .module_name = module_name,
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
-    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
     .backing_allocator = std.heap.c_allocator,
 };
@@ -868,12 +787,12 @@ pub fn main() !void {
         }
     }
 
-    // Load compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_loaded.deinit();
+    // Load builtin modules using the same code path as roc check
+    const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
+    defer gpa.destroy(builtin_modules_ptr);
 
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
+    defer builtin_modules_ptr.deinit();
 
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
@@ -882,8 +801,8 @@ pub fn main() !void {
         .output_section_command = output_section_command,
         .trace_eval = trace_eval,
         .linecol_mode = linecol_mode,
-        .builtin_module = builtin_loaded.env,
-        .builtin_indices = builtin_indices,
+        .builtin_module = builtin_modules_ptr.builtin_module.env,
+        .builtin_indices = builtin_modules_ptr.builtin_indices,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -921,12 +840,12 @@ pub fn main() !void {
 }
 
 fn checkSnapshotExpectations(gpa: Allocator) !bool {
-    // Load compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_loaded.deinit();
+    // Load builtin modules using the same code path as roc check
+    const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
+    defer gpa.destroy(builtin_modules_ptr);
 
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
+    defer builtin_modules_ptr.deinit();
 
     const config = Config{
         .maybe_fuzz_corpus_path = null,
@@ -934,8 +853,8 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .expected_section_command = .check,
         .output_section_command = .check,
         .disable_updates = true,
-        .builtin_module = builtin_loaded.env,
-        .builtin_indices = builtin_indices,
+        .builtin_module = builtin_modules_ptr.builtin_module.env,
+        .builtin_indices = builtin_modules_ptr.builtin_indices,
     };
     const snapshots_dir = "test/snapshots";
     var work_list = WorkList.init(gpa);
@@ -1308,22 +1227,33 @@ fn processSnapshotContent(
         }
     }
 
-    var solver = try Check.init(
-        allocator,
-        &can_ir.types,
-        can_ir,
-        builtin_modules.items,
-        &module_envs,
-        &can_ir.store.regions,
-        common_idents,
-    );
-    defer solver.deinit();
+    // Use the shared type checking function to ensure identical behavior with roc check
+    std.debug.print("DEBUG snapshot: maybe_expr_idx = {}\n", .{maybe_expr_idx != null});
+    var solver = if (maybe_expr_idx) |expr_idx| blk: {
+        std.debug.print("DEBUG snapshot: Using REPL path\n", .{});
+        // For REPL/expr tests, use the old flow for now
+        var checker = try Check.init(
+            allocator,
+            &can_ir.types,
+            can_ir,
+            builtin_modules.items,
+            &module_envs,
+            &can_ir.store.regions,
+            common_idents,
+        );
+        _ = try checker.checkExprRepl(expr_idx.idx);
+        break :blk checker;
+    } else blk: {
+        std.debug.print("DEBUG snapshot: Using FILE path (shared typeCheckModule)\n", .{});
+        // For file tests, use the shared function from compile_package
+        // Use the SAME builtin module that was used during canonicalization
+        const builtin_env = config.builtin_module orelse unreachable;
 
-    if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExprRepl(expr_idx.idx);
-    } else {
-        try solver.checkFile();
-    }
+        // Cast the slice type - we know the data is compatible
+        const imported_envs_const: []const *ModuleEnv = @ptrCast(builtin_modules.items);
+        break :blk try compile.PackageEnv.typeCheckModule(allocator, can_ir, builtin_env, imported_envs_const);
+    };
+    defer solver.deinit();
 
     // Assert that we have regions for every type variable
     solver.debugAssertArraysInSync();

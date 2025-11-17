@@ -4056,6 +4056,9 @@ fn handleRecursiveConstraint(
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
+    if (deferred_constraint_len > 0) {
+        std.debug.print("DEBUG: checkDeferredStaticDispatchConstraints called with {} constraints\n", .{deferred_constraint_len});
+    }
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
         deferred_constraint_index += 1;
@@ -4196,6 +4199,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const region = self.getRegionAt(deferred_constraint.var_);
             const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
+            std.debug.print("DEBUG Check: type_name_bytes='{s}', original_module_ident={}, original_env.module_name='{s}'\n", .{
+                type_name_bytes,
+                original_module_ident,
+                original_env.module_name,
+            });
+
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
@@ -4211,27 +4220,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
                 // Calculate the name of the static dispatch function
                 //
-                // For builtin types like "Builtin.Try", the type ident includes the module prefix,
-                // but methods are registered as "Try.ok_or" not "Builtin.Builtin.Try.ok_or".
-                // We need to strip the "Builtin." prefix for method lookup.
-                //
                 // TODO: This works for top-level types, but not for deeply
                 // nested types like: MyModule.A.B.C.my_func
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
-
-                const is_builtin_nested_type = original_module_ident == self.cir.builtin_module_ident and
-                    std.mem.startsWith(u8, type_name_bytes, "Builtin.");
-
-                if (is_builtin_nested_type) {
-                    // For nested builtin types like "Builtin.Try", strip the "Builtin." prefix
-                    // Method is registered as "Try.ok_or"
-                    const short_name = type_name_bytes[8..]; // Skip "Builtin."
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ short_name, constraint_fn_name_bytes },
-                    );
-                } else if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}",
