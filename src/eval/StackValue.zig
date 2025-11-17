@@ -548,7 +548,7 @@ fn copyListValueToPtr(
 /// Create a RecordAccessor for safe record field access
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
     std.debug.assert(self.is_initialized); // Record must be initialized before accessing
-    std.debug.assert(self.ptr != null);
+    // Note: ptr can be null for records with all ZST fields
     std.debug.assert(self.layout.tag == .record);
 
     const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
