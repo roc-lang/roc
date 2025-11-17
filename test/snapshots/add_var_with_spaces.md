@@ -21,6 +21,17 @@ add2 = x +      2
        ^
 
 
+**COMPTIME CRASH**
+This definition crashed during compile-time evaluation:
+**add_var_with_spaces.md:1:8:1:18:**
+```roc
+add2 = x +      2
+```
+       ^^^^^^^^^^
+
+The `crash` happened with this message:
+    **runtime error**
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,OpPlus,Int,

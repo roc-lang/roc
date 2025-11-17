@@ -4056,9 +4056,6 @@ fn handleRecursiveConstraint(
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
-    if (deferred_constraint_len > 0) {
-        std.debug.print("DEBUG: checkDeferredStaticDispatchConstraints called with {} constraints\n", .{deferred_constraint_len});
-    }
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
         deferred_constraint_index += 1;
@@ -4198,12 +4195,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Get some data about the nominal type
             const region = self.getRegionAt(deferred_constraint.var_);
             const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
-
-            std.debug.print("DEBUG Check: type_name_bytes='{s}', original_module_ident={}, original_env.module_name='{s}'\n", .{
-                type_name_bytes,
-                original_module_ident,
-                original_env.module_name,
-            });
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);

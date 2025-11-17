@@ -30,6 +30,7 @@ const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
+const AST = parse.AST;
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
 /// Timing information for different phases
@@ -588,22 +589,15 @@ pub const PackageEnv = struct {
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
 
-        // Create module_envs map for auto-importing builtin types
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
-        defer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        // This ensures production and tests use identical logic
-        try Can.populateModuleEnvs(
-            &module_envs_map,
+        // Use shared canonicalization function to ensure consistency with snapshot tool
+        try canonicalizeModule(
+            self.gpa,
             env,
+            &parse_ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
         );
 
-        var czer = try Can.init(env, &parse_ast, &module_envs_map);
-        try czer.canonicalizeFile();
-        czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_canonicalize_ns += @intCast(canon_end - canon_start);
@@ -770,6 +764,94 @@ pub const PackageEnv = struct {
         }
     }
 
+    /// Combined canonicalization and type checking function for snapshot tool
+    /// This ensures the SAME module_envs map is used for both phases
+    pub fn canonicalizeAndTypeCheckModule(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        parse_ast: *AST,
+        builtin_module_env: *const ModuleEnv,
+        builtin_indices: can.CIR.BuiltinIndices,
+        imported_envs: []const *ModuleEnv,
+    ) !Check {
+        // Create module_envs map for auto-importing builtin types
+        // This map will be used for BOTH canonicalization and type checking
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        errdefer module_envs_map.deinit();
+
+        // Populate module_envs with Bool, Try, Dict, Set using shared function
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            builtin_module_env,
+            builtin_indices,
+        );
+
+        // Canonicalize
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        try czer.canonicalizeFile();
+        czer.deinit();
+
+        // Type check using the SAME module_envs_map
+        const module_common_idents: Check.CommonIdents = .{
+            .module_name = try env.insertIdent(base.Ident.for_text("test")),
+            .list = try env.insertIdent(base.Ident.for_text("List")),
+            .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = builtin_indices.bool_type,
+            .try_stmt = builtin_indices.try_type,
+            .builtin_module = builtin_module_env,
+        };
+
+        var checker = try Check.init(
+            gpa,
+            &env.types,
+            env,
+            imported_envs,
+            &module_envs_map,
+            &env.store.regions,
+            module_common_idents,
+        );
+        errdefer checker.deinit();
+
+        try checker.checkFile();
+
+        // After type checking, evaluate top-level declarations at compile time
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval);
+        _ = try comptime_evaluator.evalAll();
+
+        module_envs_map.deinit();
+
+        return checker;
+    }
+
+    /// Shared canonicalization function that can be called from other tools (e.g., snapshot tool)
+    /// This ensures all tools use the exact same canonicalization logic as production builds
+    pub fn canonicalizeModule(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        parse_ast: *AST,
+        builtin_module_env: *const ModuleEnv,
+        builtin_indices: can.CIR.BuiltinIndices,
+    ) !void {
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        defer module_envs_map.deinit();
+
+        // Populate module_envs with Bool, Try, Dict, Set using shared function
+        // This ensures production and tests use identical logic
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            builtin_module_env,
+            builtin_indices,
+        );
+
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        try czer.canonicalizeFile();
+        czer.deinit();
+    }
+
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
     pub fn typeCheckModule(
@@ -778,7 +860,6 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
     ) !Check {
-        std.debug.print("DEBUG: typeCheckModule called\n", .{});
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -858,7 +939,6 @@ pub const PackageEnv = struct {
             }
         }
 
-        std.debug.print("DEBUG doTypeCheck: calling typeCheckModule\n", .{});
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items);
         defer checker.deinit();

@@ -52,6 +52,21 @@ Is there an `import` or `exposing` missing up-top?
               ^^^^^^
 
 
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**import_exposing_basic.md:3:8:8:2:**
+```roc
+main = {
+    data = { name: "Alice", age: 30 }
+    encoded = encode(data)
+    decoded = decode(encoded)
+    decoded
+}
+```
+
+The evaluation failed with error:
+    **TypeMismatch**
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,

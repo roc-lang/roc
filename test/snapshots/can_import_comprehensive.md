@@ -192,6 +192,44 @@ Is there an `import` or `exposing` missing up-top?
                ^^^^^^^^^^
 
 
+**COMPTIME CRASH**
+This definition crashed during compile-time evaluation:
+**can_import_comprehensive.md:5:8:33:2:**
+```roc
+main = {
+    client = Http.get
+    parser = Json.utf8
+    helper = Str.trim
+
+    # Test direct module access
+    result1 = Json.parse
+
+    # Test aliased module access
+    result2 = Http.post
+
+    # Test exposed items (should work without module prefix)
+    result3 = get
+    result4 = post
+
+    # Test multiple qualified access
+    combined = Str.concat
+
+    (
+        client,
+        parser,
+        helper,
+        result1,
+        result2,
+        result3,
+        result4,
+        combined,
+    )
+}
+```
+
+The `crash` happened with this message:
+    **runtime error**
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

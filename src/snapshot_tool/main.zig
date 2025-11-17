@@ -1140,51 +1140,47 @@ fn processSnapshotContent(
         .builtin_module = config.builtin_module,
     };
 
-    // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
-    // This makes them available without needing explicit `import` statements in tests
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-
-    // Use the shared populateModuleEnvs function to ensure consistency with production code
-    if (config.builtin_module) |builtin_env| {
-        try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-    }
-
-    var czer = try Can.init(can_ir, &parse_ast, &module_envs);
-    defer czer.deinit();
-
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => {
-            try czer.canonicalizeFile();
-            try czer.validateForChecking();
+        .file, .package, .platform, .app, .snippet => {
+            // All file types that use canonicalizeFile() will use the combined function below
         },
         .header => {
             // TODO: implement canonicalize_header when available
         },
-        .expr => {
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
-        },
-        .statement => {
-            const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
-            if (can_stmt_result.canonicalized_stmt) |can_stmt| {
-                // Manually track scratch statements because we aren't using the file entrypoint
-                const scratch_statements_start = can_ir.store.scratch.?.statements.top();
-                try can_ir.store.addScratchStatement(can_stmt.idx);
-                can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+        .expr, .statement => {
+            // Expr and statement tests use different canonicalization methods
+            // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+            defer module_envs.deinit();
+
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+            }
+
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            defer czer.deinit();
+
+            switch (content.meta.node_type) {
+                .expr => {
+                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
+                },
+                .statement => {
+                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
+                    if (can_stmt_result.canonicalized_stmt) |can_stmt| {
+                        // Manually track scratch statements because we aren't using the file entrypoint
+                        const scratch_statements_start = can_ir.store.scratch.?.statements.top();
+                        try can_ir.store.addScratchStatement(can_stmt.idx);
+                        can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+                    }
+                },
+                else => unreachable,
             }
         },
-        .package => try czer.canonicalizeFile(),
-        .platform => try czer.canonicalizeFile(),
-        .app => try czer.canonicalizeFile(),
         .repl => unreachable, // Handled above
-        .snippet => {
-            // Snippet - just canonicalize without validation
-            try czer.canonicalizeFile();
-        },
     }
 
     // Assert that everything is in-sync
@@ -1228,10 +1224,15 @@ fn processSnapshotContent(
     }
 
     // Use the shared type checking function to ensure identical behavior with roc check
-    std.debug.print("DEBUG snapshot: maybe_expr_idx = {}\n", .{maybe_expr_idx != null});
     var solver = if (maybe_expr_idx) |expr_idx| blk: {
-        std.debug.print("DEBUG snapshot: Using REPL path\n", .{});
-        // For REPL/expr tests, use the old flow for now
+        // For REPL/expr tests, create module_envs for type checking
+        var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+        defer module_envs.deinit();
+
+        if (config.builtin_module) |builtin_env| {
+            try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+        }
+
         var checker = try Check.init(
             allocator,
             &can_ir.types,
@@ -1244,14 +1245,19 @@ fn processSnapshotContent(
         _ = try checker.checkExprRepl(expr_idx.idx);
         break :blk checker;
     } else blk: {
-        std.debug.print("DEBUG snapshot: Using FILE path (shared typeCheckModule)\n", .{});
-        // For file tests, use the shared function from compile_package
-        // Use the SAME builtin module that was used during canonicalization
+        // For all test types that use canonicalizeFile() (file, package, platform, app, snippet),
+        // use the combined canonicalize+typecheck function.
+        // This ensures the SAME module_envs map is used for both phases (just like REPL tests)
         const builtin_env = config.builtin_module orelse unreachable;
-
-        // Cast the slice type - we know the data is compatible
         const imported_envs_const: []const *ModuleEnv = @ptrCast(builtin_modules.items);
-        break :blk try compile.PackageEnv.typeCheckModule(allocator, can_ir, builtin_env, imported_envs_const);
+        break :blk try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            allocator,
+            can_ir,
+            &parse_ast,
+            builtin_env,
+            config.builtin_indices,
+            imported_envs_const,
+        );
     };
     defer solver.deinit();
 
