@@ -4211,10 +4211,27 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
                 // Calculate the name of the static dispatch function
                 //
+                // For builtin types like "Builtin.Try", the type ident includes the module prefix,
+                // but methods are registered as "Try.ok_or" not "Builtin.Builtin.Try.ok_or".
+                // We need to strip the "Builtin." prefix for method lookup.
+                //
                 // TODO: This works for top-level types, but not for deeply
                 // nested types like: MyModule.A.B.C.my_func
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+
+                const is_builtin_nested_type = original_module_ident == self.cir.builtin_module_ident and
+                    std.mem.startsWith(u8, type_name_bytes, "Builtin.");
+
+                if (is_builtin_nested_type) {
+                    // For nested builtin types like "Builtin.Try", strip the "Builtin." prefix
+                    // Method is registered as "Try.ok_or"
+                    const short_name = type_name_bytes[8..]; // Skip "Builtin."
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}",
+                        .{ short_name, constraint_fn_name_bytes },
+                    );
+                } else if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}",
