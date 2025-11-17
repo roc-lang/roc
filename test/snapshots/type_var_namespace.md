@@ -24,9 +24,9 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
-DOES NOT EXIST - type_var_namespace.md:11:14:11:24
 UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
 DOES NOT EXIST - type_var_namespace.md:11:34:11:49
+TYPE MISMATCH - type_var_namespace.md:11:14:11:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|>** is not expected in an expression.
@@ -37,19 +37,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     result = List.first(list) |> Try.withDefault(elem)
 ```
                               ^^
-
-
-**DOES NOT EXIST**
-`List.first` does not exist.
-
-`List` is in scope, but it has no associated `first`.
-
-It's referenced here:
-**type_var_namespace.md:11:14:11:24:**
-```roc
-    result = List.first(list) |> Try.withDefault(elem)
-```
-             ^^^^^^^^^^
 
 
 **UNRECOGNIZED SYNTAX**
@@ -72,6 +59,20 @@ This might be a syntax error, an unsupported language feature, or a typo.
 ```
                                  ^^^^^^^^^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_var_namespace.md:11:14:11:30:**
+```roc
+    result = List.first(list) |> Try.withDefault(elem)
+```
+             ^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Try(elem, [ListWasEmpty])_
+
+But the type annotation says it should have the type:
+    _elem_
 
 # TOKENS
 ~~~zig
@@ -171,7 +172,8 @@ main! = |_| {}
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
-						(e-runtime-error (tag "nested_value_not_found"))
+						(e-lookup-external
+							(builtin))
 						(e-lookup-local
 							(p-assign (ident "list")))))
 				(s-expr

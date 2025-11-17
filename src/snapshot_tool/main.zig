@@ -1221,37 +1221,14 @@ fn processSnapshotContent(
         .builtin_module = config.builtin_module,
     };
 
-    // Auto-inject Bool, Try, Str, Dict, and Set as available imports (if they're loaded)
+    // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
     // This makes them available without needing explicit `import` statements in tests
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
 
-    // Register each builtin type individually with its statement index
-    // They all point to the same Builtin module env
-    // Note: Str is NOT added because it's handled as a primitive builtin type
-    // in TypeAnno.Builtin.fromBytes() and should never go through module_envs
+    // Use the shared populateModuleEnvs function to ensure consistency with production code
     if (config.builtin_module) |builtin_env| {
-        const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
-        const try_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Try"));
-        const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
-        const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
-
-        try module_envs.put(bool_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.bool_type,
-        });
-        try module_envs.put(try_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.try_type,
-        });
-        try module_envs.put(dict_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.dict_type,
-        });
-        try module_envs.put(set_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.set_type,
-        });
+        try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
     }
 
     var czer = try Can.init(can_ir, &parse_ast, &module_envs);
