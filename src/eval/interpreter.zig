@@ -1938,7 +1938,7 @@ pub const Interpreter = struct {
 
                 if (!treat_as_method) {
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
-                    // ZST records are now supported - they can have fields with ZST layouts
+                    // Records can have zero-sized fields
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
                     if (rec_data.fields.count == 0) return error.TypeMismatch; // No fields to access
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
