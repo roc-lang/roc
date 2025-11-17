@@ -562,7 +562,11 @@ fn processAssociatedBlock(
                     try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, qualified_type_decl_idx);
                 }
 
-                // Introduce associated items of nested types
+                // Introduce associated items of nested types into this scope
+                // Note: Nested types with associated blocks were already fully processed
+                // during processAssociatedItemsFirstPass (Phase 2b), so these items are
+                // NOT placeholders - they're fully processed definitions.
+                // We're just aliasing them into this scope for convenience.
                 if (nested_type_decl.associated) |nested_assoc| {
                     for (self.parse_ir.store.statementSlice(nested_assoc.statements)) |nested_assoc_stmt_idx| {
                         const nested_assoc_stmt = self.parse_ir.store.getStatement(nested_assoc_stmt_idx);
@@ -572,7 +576,7 @@ fn processAssociatedBlock(
                             if (nested_pattern == .ident) {
                                 const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
                                 if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
-                                    // Build fully qualified name (e.g., "Test.MyBool.my_not")
+                                    // Build fully qualified name (e.g., "Builtin.Num.NumLiteral.is_negative")
                                     const qualified_text = self.env.getIdent(qualified_ident_idx);
                                     const nested_decl_text = self.env.getIdent(nested_decl_ident);
                                     const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
@@ -582,21 +586,15 @@ fn processAssociatedBlock(
                                         .found => |pattern_idx| {
                                             const scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                            // Check if this is a placeholder
-                                            const is_placeholder = self.isPlaceholder(full_qualified_ident_idx);
+                                            // Just add aliases to scope - don't track as placeholders
+                                            // because these were already fully processed
 
-                                            // Add unqualified name (e.g., "my_not")
+                                            // Add unqualified name (e.g., "is_negative")
                                             try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
-                                            if (is_placeholder) {
-                                                try self.placeholder_idents.put(self.env.gpa, nested_decl_ident, {});
-                                            }
 
-                                            // Add type-qualified name (e.g., "MyBool.my_not")
+                                            // Add type-qualified name (e.g., "NumLiteral.is_negative")
                                             const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
                                             try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                                            if (is_placeholder) {
-                                                try self.placeholder_idents.put(self.env.gpa, type_qualified_ident_idx, {});
-                                            }
                                         },
                                         .not_found => {},
                                     }
@@ -862,18 +860,25 @@ fn processAssociatedItemsSecondPass(
                                     const pattern_idx = def_cir.pattern;
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                    // Update unqualified name (e.g., "my_not")
-                                    try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
+                                    // Check if this is still a placeholder before updating.
+                                    // For nested types with associated blocks (e.g., NumLiteral inside Num),
+                                    // the item may have already been fully processed during the recursive
+                                    // processAssociatedBlock call in Phase 2b of processAssociatedItemsFirstPass.
+                                    // In that case, the placeholder was already consumed and we should skip it.
+                                    if (self.isPlaceholder(decl_ident)) {
+                                        // Update unqualified name (e.g., "my_not")
+                                        try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
 
-                                    // Update type-qualified name (e.g., "MyBool.my_not")
-                                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                    if (type_qualified_idx.idx != decl_ident.idx) {
-                                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
-                                    }
+                                        // Update type-qualified name (e.g., "MyBool.my_not")
+                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+                                        if (type_qualified_idx.idx != decl_ident.idx) {
+                                            try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                                        }
 
-                                    // Update fully qualified name (e.g., "Test.MyBool.my_not")
-                                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
-                                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                        // Update fully qualified name (e.g., "Test.MyBool.my_not")
+                                        if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
+                                            try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                        }
                                     }
 
                                     break :blk true; // Found and processed matching decl

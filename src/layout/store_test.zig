@@ -83,23 +83,23 @@ test "addTypeVar - default layouts for polymorphic types" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    // Flex number var (Num a) defaults to i128
+    // Flex number var (Num a) defaults to Dec
     const num_var = try lt.type_store.fresh();
     const flex_num_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = num_var } } });
     const num_layout_idx = try lt.layout_store.addTypeVar(flex_num_var, &lt.type_scope);
     const num_layout = lt.layout_store.getLayout(num_layout_idx);
     try testing.expect(num_layout.tag == .scalar);
-    try testing.expect(num_layout.data.scalar.data.int == .i128);
+    try testing.expect(num_layout.data.scalar.data.frac == .dec);
 
-    // Flex int var (Int a) defaults to i128
+    // Flex int var (Int a) defaults to Dec
     const int_var = try lt.type_store.fresh();
     const flex_int_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = int_var } } });
     const int_layout_idx = try lt.layout_store.addTypeVar(flex_int_var, &lt.type_scope);
     const int_layout = lt.layout_store.getLayout(int_layout_idx);
     try testing.expect(int_layout.tag == .scalar);
-    try testing.expect(int_layout.data.scalar.data.int == .i128);
+    try testing.expect(int_layout.data.scalar.data.frac == .dec);
 
-    // Flex frac var (Frac a) defaults to dec
+    // Flex frac var (Frac a) defaults to Dec
     const frac_var = try lt.type_store.fresh();
     const flex_frac_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = frac_var } } });
     const frac_layout_idx = try lt.layout_store.addTypeVar(flex_frac_var, &lt.type_scope);

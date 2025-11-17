@@ -117,6 +117,7 @@ pub const Token = struct {
         OpLessThan,
         OpEquals,
         OpColonEqual,
+        OpDoubleColon,
         NoSpaceOpQuestion,
 
         Comma,
@@ -257,6 +258,7 @@ pub const Token = struct {
                 .OpLessThan,
                 .OpEquals,
                 .OpColonEqual,
+                .OpDoubleColon,
                 .NoSpaceOpQuestion,
                 .Comma,
                 .Dot,
@@ -1389,6 +1391,9 @@ pub const Tokenizer = struct {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
                         try self.pushTokenNormalHere(gpa, .OpColonEqual, start);
+                    } else if (self.cursor.peekAt(1) == ':') {
+                        self.cursor.pos += 2;
+                        try self.pushTokenNormalHere(gpa, .OpDoubleColon, start);
                     } else {
                         self.cursor.pos += 1;
                         try self.pushTokenNormalHere(gpa, .OpColon, start);
@@ -2139,6 +2144,11 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 2);
                 try buf2.append(':');
                 try buf2.append('=');
+            },
+            .OpDoubleColon => {
+                std.debug.assert(length == 2);
+                try buf2.append(':');
+                try buf2.append(':');
             },
 
             .Comma => {

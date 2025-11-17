@@ -912,23 +912,23 @@ pub const Store = struct {
                                 .frac_precision => |precision| break :flat_type Layout.frac(precision),
                                 // For polymorphic types, use default precision
                                 .num_unbound => |_| {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                    // Default unbound number types to Dec
+                                    break :flat_type Layout.default_num();
                                 },
                                 .int_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                    // Default unbound int types to Dec
+                                    break :flat_type Layout.default_num();
                                 },
                                 .frac_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.frac(types.Num.Frac.Precision.default);
+                                    // Default unbound frac types to Dec
+                                    break :flat_type Layout.default_num();
                                 },
                                 .num_poly => |var_| {
                                     const next_type = self.types_store.resolveVar(var_).desc.content;
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
                                     } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                        break :flat_type Layout.default_num();
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
                                     }
@@ -938,7 +938,7 @@ pub const Store = struct {
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
                                     } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                        break :flat_type Layout.default_num();
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
                                     }
@@ -948,7 +948,7 @@ pub const Store = struct {
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
                                     } else if (next_type == .flex) {
-                                        break :flat_type Layout.frac(types.Num.Frac.Precision.default);
+                                        break :flat_type Layout.default_num();
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
                                     }
@@ -1315,8 +1315,8 @@ pub const Store = struct {
 
                     // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
                     // This is a known issue that needs proper constraint solving before layout computation.
-                    // For now, default to I64 for numeric flex vars.
-                    break :blk Layout.int(.i64);
+                    // For now, default to Dec for unresolved polymorphic types.
+                    break :blk Layout.default_num();
                 },
                 .rigid => blk: {
                     // First, check if this rigid var is mapped in the TypeScope
