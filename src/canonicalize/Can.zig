@@ -375,7 +375,7 @@ fn processTypeDeclFirstPass(
     defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
     // Canonicalize the type declaration header first
-    const header_idx = try self.canonicalizeTypeHeader(type_decl.header);
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
     // Check if the header is malformed before trying to use it
@@ -6923,7 +6923,7 @@ fn canonicalizeTypeAnnoFunc(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
+fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind: AST.TypeDeclKind) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6984,8 +6984,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
 
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
+                // Only reject underscore-prefixed names for type aliases, not nominal/opaque types
                 const param_name = self.parse_ir.env.getIdent(param_ident);
-                if (param_name.len > 0 and param_name[0] == '_') {
+                if (param_name.len > 0 and param_name[0] == '_' and type_kind == .alias) {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .is_alias = true,
                         .region = param_region,
@@ -6997,15 +6998,43 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
                 } }, param_region);
                 try self.env.store.addScratchTypeAnno(param_anno);
             },
+            .underscore_type_var => |underscore_ty_var| {
+                // Handle underscore-prefixed type parameters like _a, _foo
+                const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
+                const param_ident = self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok) orelse {
+                    const malformed = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{
+                        .region = param_region,
+                    } });
+                    try self.env.store.addScratchTypeAnno(malformed);
+                    continue;
+                };
+
+                // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
+                if (type_kind == .alias) {
+                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
+                        .is_alias = true,
+                        .region = param_region,
+                    } });
+                }
+
+                // Create rigid variable for this parameter
+                const param_anno = try self.env.addTypeAnno(.{ .rigid_var = .{
+                    .name = param_ident,
+                } }, param_region);
+                try self.env.store.addScratchTypeAnno(param_anno);
+            },
             .underscore => |underscore_param| {
                 // Handle underscore type parameters
                 const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
 
                 // Push underscore diagnostic for underscore type parameters
-                try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                    .is_alias = true,
-                    .region = param_region,
-                } });
+                // Only reject for type aliases, not nominal/opaque types
+                if (type_kind == .alias) {
+                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
+                        .is_alias = true,
+                        .region = param_region,
+                    } });
+                }
 
                 // Create underscore type annotation
                 const underscore_anno = try self.env.addTypeAnno(.{ .underscore = {} }, param_region);
@@ -7016,10 +7045,13 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
                 const param_region = self.parse_ir.tokenizedRegionToRegion(malformed_param.region);
 
                 // Push underscore diagnostic for malformed underscore type parameters
-                try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                    .is_alias = true,
-                    .region = param_region,
-                } });
+                // Only reject for type aliases, not nominal/opaque types
+                if (type_kind == .alias) {
+                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
+                        .is_alias = true,
+                        .region = param_region,
+                    } });
+                }
 
                 // Create malformed type annotation using pushMalformed for consistency
                 const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{
