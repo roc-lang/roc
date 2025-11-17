@@ -627,15 +627,13 @@ pub const PackageEnv = struct {
         var any_new: bool = false;
         // Mark current node as visiting (gray) before exploring imports
         st.visit_color = 1;
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-            // Special case: Builtin is a precompiled module, not a local file import
-            // It's auto-imported and should not be scheduled for parsing
-            if (str_idx == env.builtin_module_ident) {
-                // Skip Builtin entirely - it's handled via builtin_modules
+        for (env.imports.imports.items.items[0..import_count], 0..) |str_idx, import_idx_int| {
+            const mod_name = env.getString(str_idx);
+
+            // Skip Builtin module (Import.Idx 0) - it's precompiled and already available
+            if (import_idx_int == 0) {
                 continue;
             }
-
-            const mod_name = env.getString(str_idx);
 
             // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
             const qualified = hadQualifiedImport(env, mod_name);
@@ -810,14 +808,15 @@ pub const PackageEnv = struct {
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-            // Special case: Builtin is precompiled and available via builtin_modules
-            if (str_idx == env.builtin_module_ident) {
-                try imported_envs.append(self.gpa, @constCast(self.builtin_modules.builtin_module.env));
+        for (env.imports.imports.items.items[0..import_count], 0..) |str_idx, import_idx_int| {
+            const import_name = env.getString(str_idx);
+
+            // Handle Builtin module (Import.Idx 0) specially - it's precompiled
+            if (import_idx_int == 0) {
+                try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
                 continue;
             }
 
-            const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
             const is_ext = hadQualifiedImport(env, import_name);
 
