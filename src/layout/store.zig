@@ -859,7 +859,7 @@ pub const Store = struct {
                         continue;
                     },
                     .nominal_type => |nominal_type| {
-                        // Special-case for Builtin.List - treat it like the primitive .list type
+                        // Special handling for Builtin.List
                         const list_ident = self.env.common.findIdent("List");
                         if (list_ident != null and nominal_type.ident.ident_idx == list_ident.?) {
                             // Extract the element type from the type arguments
@@ -869,10 +869,10 @@ pub const Store = struct {
                             }
                             const elem_var = type_args[0];
 
-                            // Same logic as the old .list case
+                            // Check if the element type is unbound (flex or rigid)
                             const elem_content = self.types_store.resolveVar(elem_var).desc.content;
                             if (elem_content == .flex or elem_content == .rigid) {
-                                // For unbound lists (empty lists), use list of zero-sized type
+                                // For unbound element types (e.g., empty lists), use list of zero-sized type
                                 const layout = Layout.listOfZst();
                                 const idx = try self.insertLayout(layout);
                                 try self.layouts_by_var.put(self.env.gpa, current.var_, idx);

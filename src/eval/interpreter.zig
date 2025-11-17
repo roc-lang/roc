@@ -4942,7 +4942,6 @@ pub const Interpreter = struct {
                         const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
                         break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
-                    // NOTE: .list removed - List is now a nominal type and handled by the 'else' case
                     .box => |boxed_var| blk_box: {
                         // Recursively instantiate the boxed type
                         const new_boxed = try self.instantiateType(boxed_var, subst_map);

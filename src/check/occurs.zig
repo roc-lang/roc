@@ -379,9 +379,6 @@ test "occurs: no recurcion (v = Str)" {
     try std.testing.expectEqual(.not_recursive, result);
 }
 
-// NOTE: Tests for List recursion removed - List is now a nominal type from Builtin.roc
-// and recursion through nominal types is handled differently than primitive recursion.
-
 test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);

@@ -4176,13 +4176,24 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (is_this_module) {
                     break :blk self.cir;
                 } else {
-                    // Get the module env from module_envs
+                    // TODO: The name `module_envs` is misleading - it's actually a map of
+                    // auto-imported TYPE NAMES to their defining modules, not a map of module names.
+                    // This is because when you write `List` in user code (not `Builtin.List`), the
+                    // compiler needs to quickly resolve which module defines that type name.
+                    //
+                    // This creates confusion here in static dispatch: we have an `origin_module`
+                    // which stores the MODULE name ("Builtin"), but `module_envs` is keyed by
+                    // TYPE names ("List", "Bool", etc.).
+                    //
+                    // The correct solution would be to have two separate maps:
+                    // - auto_imported_types: HashMap(TypeName, ModuleEnv) for canonicalization
+                    // - imported_modules: HashMap(ModuleName, ModuleEnv) for module lookups
+                    //
+                    // For now, we work around this by detecting builtin types and using the type
+                    // name as the lookup key instead of the module name.
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
 
-                    // For auto-imported builtin types (List, Bool, Try, etc.), module_envs is keyed
-                    // by the TYPE NAME, not "Builtin". So if origin_module is "Builtin", we need
-                    // to look up using the type name instead.
                     const lookup_key = if (original_module_ident == self.cir.builtin_module_ident)
                         nominal_type.ident.ident_idx  // Use type name for auto-imported builtins
                     else
