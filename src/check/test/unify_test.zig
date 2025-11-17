@@ -2995,7 +2995,7 @@ test "unify - fails on anonymous recursion" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Use Box for anonymous recursion testing (List is now a nominal type)
+    // Use Box for anonymous recursion testing
     const box_var_a = try env.module_env.types.fresh();
     const box_content_a = Content{
         .structure = .{ .box = box_var_a },

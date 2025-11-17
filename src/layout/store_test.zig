@@ -144,7 +144,7 @@ test "addTypeVar - scalar optimization for containers" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    // Test List(Scalar) - using nominal List type
+    // Test List(Scalar)
     const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
