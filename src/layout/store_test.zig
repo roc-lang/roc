@@ -463,7 +463,11 @@ test "nested ZST detection - List of record with ZST field" {
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
     // List of this record should be list_of_zst since the record only has ZST fields
-    const list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
+    const list_ident_idx = try lt.module_env.getIdentStore().insert(lt.module_env.gpa, Ident.for_text("List"));
+    const list_type_ident = types.TypeIdent{ .ident_idx = list_ident_idx };
+    const origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
+    const list_content = try lt.type_store.mkNominal(list_type_ident, record_var, &[_]types.Var{record_var}, origin_module);
+    const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }
@@ -524,7 +528,11 @@ test "nested ZST detection - deeply nested" {
     const outer_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_record_fields, .ext = empty_record_var } } });
 
     // List({ field: ({ field2: {} }, ()) })
-    const list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = outer_record_var } });
+    const list_ident_idx = try lt.module_env.getIdentStore().insert(lt.module_env.gpa, Ident.for_text("List"));
+    const list_type_ident = types.TypeIdent{ .ident_idx = list_ident_idx };
+    const origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
+    const list_content = try lt.type_store.mkNominal(list_type_ident, outer_record_var, &[_]types.Var{outer_record_var}, origin_module);
+    const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
 
     // Since the entire nested structure is ZST, the list should be list_of_zst
