@@ -393,7 +393,6 @@ pub const TypeIdent = struct {
 /// Represents type without indirection, it's the concrete form that a type
 /// takes after resolving type variables and aliases.
 pub const FlatType = union(enum) {
-    str,
     box: Var,
     list: Var,
     list_unbound,

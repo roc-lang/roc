@@ -406,11 +406,11 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    _ = try env.types.freshFromContent(.{ .structure = .empty_record });
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    _ = try env.types.freshFromContent(.{ .structure = .empty_record });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);
@@ -427,10 +427,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     // Verify the output contains the type information
     const result_str = result.items;
 
-    // Uncomment to debug:
-    // std.debug.print("\nType extraction result:\n{s}\n", .{result_str});
-
     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
+    try testing.expect(std.mem.indexOf(u8, result_str, "{}") != null);
 }

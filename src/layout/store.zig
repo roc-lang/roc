@@ -848,7 +848,6 @@ pub const Store = struct {
 
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => Layout.str(),
                     .box => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .{
                             .var_ = current.var_,
@@ -886,6 +885,14 @@ pub const Store = struct {
                         return idx;
                     },
                     .nominal_type => |nominal_type| {
+                        // Special-case Builtin.Str: it has a tag union backing type, but
+                        // should have RocStr layout (3 pointers)
+                        const str_ident = self.env.common.findIdent("Builtin.Str");
+                        if (str_ident != null and nominal_type.ident.ident_idx == str_ident.?) {
+                            // Str nominal type should use the string layout
+                            break :flat_type Layout.str();
+                        }
+
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.

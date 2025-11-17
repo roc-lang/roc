@@ -307,7 +307,7 @@ pub const Generalizer = struct {
             },
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .str, .empty_record, .empty_tag_union => return Rank.top_level,
+                    .empty_record, .empty_tag_union => return Rank.top_level,
                     .list_unbound => {
                         // Unbounds are special-cased: An unbound represents a
                         // flex var _at the same rank_ as the  unbound list. So,

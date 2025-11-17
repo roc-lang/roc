@@ -66,58 +66,6 @@ const BuiltinIndices = struct {
     f64_type: CIR.Statement.Idx,
 };
 
-/// Transform all Str nominal types to .str primitive types in a module.
-/// This is necessary because the interpreter needs .str to be a primitive type,
-/// but we define methods on Str as a nominal type in Str.roc for ergonomics.
-///
-/// This transformation happens after type-checking but before serialization,
-/// ensuring that the serialized .bin file contains methods associated with
-/// the .str primitive type rather than a nominal Str type.
-fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
-    const FlatType = types.FlatType;
-
-    // Get the Str identifier in this module
-    const str_ident = env.common.findIdent("Str") orelse {
-        @panic("Str identifier not found in Builtin module");
-    };
-
-    // Iterate through all slots in the type store
-    for (0..env.types.len()) |i| {
-        const var_idx = @as(Var, @enumFromInt(i));
-
-        // Skip redirects, only process roots
-        if (!env.types.resolveVar(var_idx).is_root) {
-            continue;
-        }
-
-        const resolved = env.types.resolveVar(var_idx);
-        const desc = resolved.desc;
-
-        // Check if this descriptor contains a nominal type
-        switch (desc.content) {
-            .structure => |structure| {
-                switch (structure) {
-                    .nominal_type => |nominal| {
-                        // Check if this is the Str nominal type
-                        // TypeIdent has an ident_idx field that references the identifier
-                        if (nominal.ident.ident_idx == str_ident) {
-                            // Replace with .str primitive type
-                            const new_content = Content{ .structure = FlatType.str };
-                            const new_desc = types.Descriptor{
-                                .content = new_content,
-                                .rank = desc.rank,
-                                .mark = desc.mark,
-                            };
-                            try env.types.setVarDesc(var_idx, new_desc);
-                        }
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
-}
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
 /// This transforms standalone annotations into low-level builtin lambda operations
@@ -401,7 +349,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 }
 
 /// Transform all List nominal types to .list primitive types in a module.
-/// This is similar to transformStrNominalToPrimitive but handles List's type parameter.
 ///
 /// List is parameterized (List(a)), so we need to preserve the element type parameter
 /// when transforming from nominal to primitive. The transformation replaces
@@ -503,6 +450,7 @@ pub fn main() !void {
         &.{}, // No module dependencies
         null, // bool_stmt not available yet (will be found within Builtin)
         null, // try_stmt not available yet (will be found within Builtin)
+        null, // str_stmt not available yet (will be found within Builtin)
     );
     defer {
         builtin_env.deinit();
@@ -581,8 +529,7 @@ pub fn main() !void {
 
     // Transform nominal types to primitive types as necessary.
     // This must happen BEFORE serialization to ensure the .bin file contains
-    // methods associated with the .str primitive, not a nominal type
-    try transformStrNominalToPrimitive(builtin_env);
+    // methods associated with the primitive types
     try transformListNominalToPrimitive(builtin_env);
 
     // Create output directory
@@ -628,6 +575,7 @@ fn compileModule(
     deps: []const ModuleDep,
     bool_stmt_opt: ?CIR.Statement.Idx,
     try_stmt_opt: ?CIR.Statement.Idx,
+    str_stmt_opt: ?CIR.Statement.Idx,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -649,7 +597,7 @@ fn compileModule(
     const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
-    // Use provided bool_stmt and try_stmt if available, otherwise use undefined
+    // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
     var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
@@ -657,6 +605,7 @@ fn compileModule(
         .box = box_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
+        .str_stmt = str_stmt_opt orelse undefined,
         .builtin_module = null,
     };
 
@@ -794,8 +743,8 @@ fn compileModule(
             module_env.evaluation_order = eval_order_ptr;
         }
 
-        // Find Bool and Try statements before type checking
-        // When compiling Builtin, bool_stmt and try_stmt are initially undefined,
+        // Find Bool, Try, and Str statements before type checking
+        // When compiling Builtin, bool_stmt, try_stmt, and str_stmt are initially undefined,
         // but they must be set before type checking begins
         const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
@@ -813,10 +762,19 @@ fn compileModule(
             std.debug.print("=" ** 80 ++ "\n", .{});
             return error.TypeDeclarationNotFound;
         };
+        const found_str_stmt = findTypeDeclaration(module_env, "Str") catch {
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("ERROR: Could not find Str type in Builtin module\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("The Str type declaration is required for type checking.\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            return error.TypeDeclarationNotFound;
+        };
 
         // Update common_idents with the found statement indices
         common_idents.bool_stmt = found_bool_stmt;
         common_idents.try_stmt = found_try_stmt;
+        common_idents.str_stmt = found_str_stmt;
     }
 
     // 6. Type check
