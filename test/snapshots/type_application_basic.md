@@ -13,18 +13,23 @@ processList = |list| list.len()
 main! = |_| processList(["one","two","three"])
 ~~~
 # EXPECTED
-MISSING METHOD - type_application_basic.md:4:22:4:32
+TYPE MISMATCH - type_application_basic.md:4:22:4:32
 # PROBLEMS
-**MISSING METHOD**
-This **len** method is being called on the type **List(Str)**, which has no method with that name:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **type_application_basic.md:4:22:4:32:**
 ```roc
 processList = |list| list.len()
 ```
                      ^^^^^^^^^^
 
+It has the type:
+    _List(Str) -> Num(Int(Unsigned64))_
 
-**Hint: **For this to work, the type would need to have a method named **len** associated with it in the type's declaration.
+But I expected it to be:
+    _List(_item) -> Num(Int(Unsigned64))_
+
+**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
 
 # TOKENS
 ~~~zig
@@ -130,9 +135,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "List(Str) -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

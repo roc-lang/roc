@@ -12,18 +12,21 @@ type=expr
 }
 ~~~
 # EXPECTED
-MISSING METHOD - can_dot_access_with_vars.md:4:5:4:17
+TYPE MISMATCH - can_dot_access_with_vars.md:4:5:4:17
 # PROBLEMS
-**MISSING METHOD**
-This **map** method is being called on the type **List(Num(_size))**, which has no method with that name:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **can_dot_access_with_vars.md:4:5:4:17:**
 ```roc
     list.map(fn)
 ```
     ^^^^^^^^^^^^
 
+It has the type:
+    _List(Num(_size)), (Num(_size2) -> Num(_size3)) -> _ret_
 
-**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
+But I expected it to be:
+    _List(a), (a -> b) -> List(b)_
 
 # TOKENS
 ~~~zig

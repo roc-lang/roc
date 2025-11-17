@@ -4153,21 +4153,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Get the module ident that this type was defined in
             const original_module_ident = nominal_type.origin_module;
 
-            // Skip static dispatch checking for internal builtin types (List, Str, Dict, Set, etc.)
-            // These types don't support methods, so we can immediately report the error.
-            if (original_module_ident == self.cir.builtin_module_ident) {
-                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-                for (constraints) |constraint| {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                    );
-                }
-                continue;
-            }
-
             // Check if the nominal type in question is defined in this module
             const is_this_module = original_module_ident == self.common_idents.module_name;
 
@@ -4175,6 +4160,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const original_env: *const ModuleEnv = blk: {
                 if (is_this_module) {
                     break :blk self.cir;
+                } else if (original_module_ident == self.cir.builtin_module_ident) {
+                    // For builtin types, use the builtin module environment directly
+                    if (self.common_idents.builtin_module) |builtin_env| {
+                        break :blk builtin_env;
+                    } else {
+                        // This happens when compiling the Builtin module itself
+                        break :blk self.cir;
+                    }
                 } else {
                     // TODO: The name `module_envs` is misleading - it's actually a map of
                     // auto-imported TYPE NAMES to their defining modules, not a map of module names.
@@ -4189,17 +4182,11 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     // - auto_imported_types: HashMap(TypeName, ModuleEnv) for canonicalization
                     // - imported_modules: HashMap(ModuleName, ModuleEnv) for module lookups
                     //
-                    // For now, we work around this by detecting builtin types and using the type
-                    // name as the lookup key instead of the module name.
+                    // For now, we work around this by looking up regular imports in module_envs.
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
 
-                    const lookup_key = if (original_module_ident == self.cir.builtin_module_ident)
-                        nominal_type.ident.ident_idx  // Use type name for auto-imported builtins
-                    else
-                        original_module_ident;  // Use module name for regular imports
-
-                    const mb_original_module_env = module_envs.get(lookup_key);
+                    const mb_original_module_env = module_envs.get(original_module_ident);
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }
