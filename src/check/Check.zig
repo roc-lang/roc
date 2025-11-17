@@ -594,6 +594,29 @@ fn freshBool(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(self.bool_var, env, .{ .explicit = new_region });
 }
 
+/// Create a nominal List type with the given element type
+fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
+    const builtin_module_id = if (self.common_idents.builtin_module) |builtin_env|
+        builtin_env.module_name_idx
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    const list_ident = types_mod.TypeIdent{
+        .ident_idx = self.common_idents.list,
+    };
+
+    // Create a backing var for the nominal type (same as elem_var for now)
+    const backing_var = elem_var;
+    const type_args = [_]Var{elem_var};
+
+    return try self.types.mkNominal(
+        list_ident,
+        backing_var,
+        &type_args,
+        builtin_module_id,
+    );
+}
+
 // updating vars //
 
 /// Unify the provided variable with the provided content
@@ -1615,8 +1638,9 @@ fn generateBuiltinTypeInstance(
                 return try self.freshFromContent(.err, env, anno_region);
             }
 
-            // Create the type
-            return try self.freshFromContent(.{ .structure = .{ .list = anno_args[0] } }, env, anno_region);
+            // Create the nominal List type
+            const list_content = try self.mkListContent(anno_args[0]);
+            return try self.freshFromContent(list_content, env, anno_region);
         },
         .box => {
             // Then check arity
@@ -1801,8 +1825,10 @@ fn checkPatternHelp(
         .list => |list| {
             const elems = self.cir.store.slicePatterns(list.patterns);
             if (elems.len == 0) {
-                // If we have no elems, then set the type and move on
-                try self.unifyWith(pattern_var, .{ .structure = .list_unbound }, env);
+                // Create a nominal List with a fresh unbound element type
+                const elem_var = try self.fresh(env, pattern_region);
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(pattern_var, list_content, env);
             } else {
 
                 // Here, we use the list's 1st element as the element var to
@@ -1838,8 +1864,9 @@ fn checkPatternHelp(
                     last_elem_ptrn_idx = elem_ptrn_idx;
                 }
 
-                // Now, set the type of the root variable t
-                try self.unifyWith(pattern_var, .{ .structure = .{ .list = elem_var } }, env);
+                // Create a nominal List type with the inferred element type
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(pattern_var, list_content, env);
 
                 // Then, check the "rest" pattern is bound to a variable
                 // This is if the pattern is like `.. as x`
@@ -2292,14 +2319,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // list //
         .e_empty_list => {
-            try self.unifyWith(expr_var, .{ .structure = .list_unbound }, env);
+            // Create a nominal List with a fresh unbound element type
+            const elem_var = try self.fresh(env, expr_region);
+            const list_content = try self.mkListContent(elem_var);
+            try self.unifyWith(expr_var, list_content, env);
         },
         .e_list => |list| {
             const elems = self.cir.store.exprSlice(list.elems);
 
             if (elems.len == 0) {
-                // If we have no elems, then set the type and move on
-                try self.unifyWith(expr_var, .{ .structure = .list_unbound }, env);
+                // Create a nominal List with a fresh unbound element type
+                const elem_var = try self.fresh(env, expr_region);
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(expr_var, list_content, env);
             } else {
                 // Here, we use the list's 1st element as the element var to
                 // constrain the rest of the list
@@ -2336,7 +2368,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     last_elem_expr_idx = elem_expr_idx;
                 }
 
-                try self.unifyWith(expr_var, .{ .structure = .{ .list = elem_var } }, env);
+                // Create a nominal List type with the inferred element type
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(expr_var, list_content, env);
             }
         },
         // tuple //
@@ -3260,7 +3294,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
 
                 // Check that the expr is list of the ptrn
-                const list_var = try self.freshFromContent(.{ .structure = .{ .list = for_ptrn_var } }, env, for_expr_region);
+                const list_content = try self.mkListContent(for_ptrn_var);
+                const list_var = try self.freshFromContent(list_content, env, for_expr_region);
                 _ = try self.unify(list_var, for_expr_var, env);
 
                 // Check the body

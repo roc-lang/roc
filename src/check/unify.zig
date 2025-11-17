@@ -253,7 +253,6 @@ pub fn unifyWithConf(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
-                            .list_unbound => true,
                             .record_unbound => true,
                             else => false,
                         },
@@ -281,7 +280,6 @@ pub fn unifyWithConf(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
-                            .list_unbound => true,
                             .record_unbound => true,
                             else => false,
                         },
@@ -875,32 +873,6 @@ const Unifier = struct {
                     .box => |b_var| {
                         try self.unifyGuarded(a_var, b_var);
                         self.merge(vars, vars.b.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .list => |a_var| {
-                switch (b_flat_type) {
-                    .list => |b_var| {
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .list_unbound => {
-                        // When unifying list with list_unbound, list wins
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .list_unbound => {
-                switch (b_flat_type) {
-                    .list => |_| {
-                        // When unifying list_unbound with list, list wins
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .list_unbound => {
-                        // Both are list_unbound - stay unbound
-                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -1503,8 +1475,21 @@ const Unifier = struct {
             .mark = Mark.none,
         }) catch return error.AllocatorError;
 
+        // Create nominal List(U8)
+        const list_ident = self.module_env.common.findIdent("List") orelse unreachable;
+        const builtin_module_idx = if (self.module_env.common.builtin_module) |builtin_env|
+            builtin_env.module_name_idx
+        else
+            self.module_env.module_name_idx;
+        const list_content = self.types_store.mkNominal(
+            .{ .ident_idx = list_ident },
+            u8_var,
+            &[_]Var{u8_var},
+            builtin_module_idx,
+        ) catch return error.AllocatorError;
+
         const list_var = self.types_store.register(.{
-            .content = .{ .structure = .{ .list = u8_var } },
+            .content = list_content,
             .rank = Rank.generalized,
             .mark = Mark.none,
         }) catch return error.AllocatorError;

@@ -144,9 +144,17 @@ test "addTypeVar - scalar optimization for containers" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    // Test List(Scalar)
+    // Test List(Scalar) - using nominal List type
     const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const list_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    const list_str_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        str_var,
+        &[_]types.Var{str_var},
+        builtin_module_idx,
+    );
+    const list_str_var = try lt.type_store.freshFromContent(list_str_content);
     const list_layout_idx = try lt.layout_store.addTypeVar(list_str_var, &lt.type_scope);
     const list_layout = lt.layout_store.getLayout(list_layout_idx);
     try testing.expect(list_layout.tag == .list);
@@ -160,7 +168,13 @@ test "addTypeVar - scalar optimization for containers" {
     try testing.expectEqual(layout.Idx.str, box_layout.data.box);
 
     // Test List(Box(Scalar)) - outer container uses index, inner uses scalar optimization
-    const list_box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = box_str_var } });
+    const list_box_str_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        box_str_var,
+        &[_]types.Var{box_str_var},
+        builtin_module_idx,
+    );
+    const list_box_str_var = try lt.type_store.freshFromContent(list_box_str_content);
     const list_box_idx = try lt.layout_store.addTypeVar(list_box_str_var, &lt.type_scope);
     const list_box_layout = lt.layout_store.getLayout(list_box_idx);
     try testing.expect(list_box_layout.tag == .list);
@@ -190,7 +204,15 @@ test "addTypeVar - zero-sized types (ZST)" {
     const box_zst_idx = try lt.layout_store.addTypeVar(box_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
 
-    const list_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = empty_tag_union_var } });
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    const list_zst_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        empty_tag_union_var,
+        &[_]types.Var{empty_tag_union_var},
+        builtin_module_idx,
+    );
+    const list_zst_var = try lt.type_store.freshFromContent(list_zst_content);
     const list_zst_idx = try lt.layout_store.addTypeVar(list_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_zst_idx).tag == .list_of_zst);
 }
@@ -383,11 +405,25 @@ test "deeply nested containers with inner ZST" {
     defer lt.deinit();
 
     // Create List(Box(List(Box(empty_record))))
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const inner_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
-    const inner_list = try lt.type_store.freshFromContent(.{ .structure = .{ .list = inner_box } });
+    const inner_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        inner_box,
+        &[_]types.Var{inner_box},
+        builtin_module_idx,
+    );
+    const inner_list = try lt.type_store.freshFromContent(inner_list_content);
     const outer_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
-    const outer_list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = outer_box } });
+    const outer_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        outer_box,
+        &[_]types.Var{outer_box},
+        builtin_module_idx,
+    );
+    const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
     const result_idx = try lt.layout_store.addTypeVar(outer_list_var, &lt.type_scope);
     const outer_list_layout = lt.layout_store.getLayout(result_idx);

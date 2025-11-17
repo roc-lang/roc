@@ -151,13 +151,6 @@ pub const Store = struct {
                 const deep_content = try self.deepCopyVar(store, box_var);
                 return SnapshotFlatType{ .box = deep_content };
             },
-            .list => |list_var| {
-                const deep_content = try self.deepCopyVar(store, list_var);
-                return SnapshotFlatType{ .list = deep_content };
-            },
-            .list_unbound => {
-                return SnapshotFlatType.list_unbound;
-            },
             .tuple => |tuple| SnapshotFlatType{ .tuple = try self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = try self.deepCopyNum(store, num) },
             .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = try self.deepCopyNominalType(store, nominal_type) },

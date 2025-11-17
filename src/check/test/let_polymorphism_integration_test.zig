@@ -62,7 +62,7 @@ test "polymorphic empty list" {
         \\    { empty, nums, strs }
         \\}
     ;
-    try typeCheck(source, "{ empty: List(_elem), nums: List(Num(_size)), strs: List(Str) }");
+    try typeCheck(source, "{ empty: List(_a), nums: List(Num(_size)), strs: List(Str) }");
 }
 
 test "polymorphic cons function" {
