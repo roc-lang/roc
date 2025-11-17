@@ -66,7 +66,6 @@ const BuiltinIndices = struct {
     f64_type: CIR.Statement.Idx,
 };
 
-
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
 /// This transforms standalone annotations into low-level builtin lambda operations
 /// that will be recognized by the compiler backend.
