@@ -9,26 +9,11 @@ modu
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_005.md:1:1:1:5
-MISSING MAIN! FUNCTION - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_005.md:1:1:1:5:**
-```roc
-modu
-```
-^^^^
-
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
 **fuzz_crash_005.md:1:1:1:5:**
 ```roc
 modu

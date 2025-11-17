@@ -51,20 +51,6 @@ All branches in an `if` must have compatible types.
 Note: You can wrap branches in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
-**COMPTIME EVAL ERROR**
-This definition could not be evaluated at compile time:
-**if_then_else_simple_file.md:1:7:5:6:**
-```roc
-foo = if 1 A
-
-    else {
-	"hello"
-    }
-```
-
-The evaluation failed with error:
-    **TypeMismatch**
-
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,KwIf,Int,UpperIdent,

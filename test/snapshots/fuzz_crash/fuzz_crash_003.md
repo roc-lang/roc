@@ -13,7 +13,6 @@ PARSE ERROR - fuzz_crash_003.md:1:1:1:2
 PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
 PARSE ERROR - fuzz_crash_003.md:1:6:1:6
-MISSING MAIN! FUNCTION - fuzz_crash_003.md:1:1:1:6
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -67,20 +66,6 @@ This is an unexpected parsing error. Please check your syntax.
 = "te
 ```
      ^
-
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_003.md:1:1:1:6:**
-```roc
-= "te
-```
-^^^^^
 
 
 # TOKENS
