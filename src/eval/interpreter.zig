@@ -1931,9 +1931,9 @@ pub const Interpreter = struct {
 
                 if (!treat_as_method) {
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
-                    if (receiver_value.ptr == null) return error.ZeroSizedType;
+                    // Records can have zero-sized fields
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
-                    if (rec_data.fields.count == 0) return error.ZeroSizedType;
+                    if (rec_data.fields.count == 0) return error.TypeMismatch; // No fields to access
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                     const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);
