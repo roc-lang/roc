@@ -1475,17 +1475,25 @@ const Unifier = struct {
             .mark = Mark.none,
         }) catch return error.AllocatorError;
 
-        // Create nominal List(U8)
-        const list_ident = self.module_env.common.findIdent("List") orelse unreachable;
-        const builtin_module_idx = if (self.module_env.common.builtin_module) |builtin_env|
-            builtin_env.module_name_idx
+        // Create nominal List(U8) - List is from Builtin module
+        const list_ident = self.module_env.common.findIdent("List") orelse {
+            // If List ident is not found, something is wrong with the environment
+            // This should never happen in a properly initialized compiler
+            @panic("List ident not found in module environment");
+        };
+
+        // Use the cached builtin_module_ident which represents the "Builtin" module.
+        const origin_module = if (self.module_lookup.get(self.module_env.builtin_module_ident)) |_|
+            self.module_env.builtin_module_ident
         else
+            // Builtin module not loaded (probably compiling Builtin itself), use current module
             self.module_env.module_name_idx;
+
         const list_content = self.types_store.mkNominal(
             .{ .ident_idx = list_ident },
             u8_var,
             &[_]Var{u8_var},
-            builtin_module_idx,
+            origin_module,
         ) catch return error.AllocatorError;
 
         const list_var = self.types_store.register(.{
@@ -1512,14 +1520,14 @@ const Unifier = struct {
     }
 
     fn isBuiltinTryNominal(self: *Self, nominal: NominalType) bool {
-        if (nominal.origin_module != self.module_env.builtin_module_ident) {
-            return false;
-        }
-
-        if (nominal.ident.ident_idx == self.module_env.try_ident) {
+        // Check if this is the Try type from the Builtin module
+        if (nominal.origin_module == self.module_env.builtin_module_ident and
+            nominal.ident.ident_idx == self.module_env.try_ident)
+        {
             return true;
         }
 
+        // Also check for fully qualified Builtin.Try
         if (self.module_env.common.findIdent("Builtin.Try")) |builtin_try_ident| {
             return nominal.ident.ident_idx == builtin_try_ident;
         }

@@ -12,20 +12,18 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - can_dot_access_with_vars.md:4:5:4:17
+MISSING METHOD - can_dot_access_with_vars.md:4:5:4:17
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `map` on a type that doesn't support methods:
+**MISSING METHOD**
+This **map** method is being called on the type **List(Num(_size))**, which has no method with that name:
 **can_dot_access_with_vars.md:4:5:4:17:**
 ```roc
     list.map(fn)
 ```
     ^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _List(Num(_size))_
 
-
+**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

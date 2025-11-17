@@ -362,7 +362,7 @@ transform = |_, b| b
 	(defs
 		(patt (type "c -> c"))
 		(patt (type "a -> a"))
-		(patt (type "List(_elem) -> Str"))
+		(patt (type "List(_c) -> Str"))
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
 		(patt (type "Try(_c, Str) -> Str"))
 		(patt (type "(a -> b), List(a) -> List(b)"))
@@ -370,7 +370,7 @@ transform = |_, b| b
 	(expressions
 		(expr (type "c -> c"))
 		(expr (type "a -> a"))
-		(expr (type "List(_elem) -> Str"))
+		(expr (type "List(_c) -> Str"))
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
 		(expr (type "Try(_c, Str) -> Str"))
 		(expr (type "(a -> b), List(a) -> List(b)"))

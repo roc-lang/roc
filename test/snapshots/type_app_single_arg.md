@@ -13,20 +13,18 @@ processList = |list| list.len()
 main! = |_| processList(["one","two"])
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - type_app_single_arg.md:4:22:4:32
+MISSING METHOD - type_app_single_arg.md:4:22:4:32
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `len` on a type that doesn't support methods:
+**MISSING METHOD**
+This **len** method is being called on the type **List(Str)**, which has no method with that name:
 **type_app_single_arg.md:4:22:4:32:**
 ```roc
 processList = |list| list.len()
 ```
                      ^^^^^^^^^^
 
-This type doesn't support methods:
-    _List(Str)_
 
-
+**Hint: **For this to work, the type would need to have a method named **len** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

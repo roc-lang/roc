@@ -596,8 +596,10 @@ fn freshBool(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 
 /// Create a nominal List type with the given element type
 fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
-    const builtin_module_id = if (self.common_idents.builtin_module) |builtin_env|
-        builtin_env.module_name_idx
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where List is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
@@ -613,7 +615,7 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         list_ident,
         backing_var,
         &type_args,
-        builtin_module_id,
+        origin_module_id,
     );
 }
 
@@ -4145,15 +4147,26 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // If the root type is aa flex, then we there's nothing to check
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
-            // TODO: Internal types like Str, Try, List, etc are not
-            // technically nominal types. So in those cases, we should lookup
-            // the builtin module manually and dispatch that way
-
             // If the root type is a nominal type, then this is valid static dispatch
             const nominal_type = dispatcher_content.structure.nominal_type;
 
             // Get the module ident that this type was defined in
             const original_module_ident = nominal_type.origin_module;
+
+            // Skip static dispatch checking for internal builtin types (List, Str, Dict, Set, etc.)
+            // These types don't support methods, so we can immediately report the error.
+            if (original_module_ident == self.cir.builtin_module_ident) {
+                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+                for (constraints) |constraint| {
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
+                }
+                continue;
+            }
 
             // Check if the nominal type in question is defined in this module
             const is_this_module = original_module_ident == self.common_idents.module_name;
@@ -4166,7 +4179,16 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     // Get the module env from module_envs
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
-                    const mb_original_module_env = module_envs.get(original_module_ident);
+
+                    // For auto-imported builtin types (List, Bool, Try, etc.), module_envs is keyed
+                    // by the TYPE NAME, not "Builtin". So if origin_module is "Builtin", we need
+                    // to look up using the type name instead.
+                    const lookup_key = if (original_module_ident == self.cir.builtin_module_ident)
+                        nominal_type.ident.ident_idx  // Use type name for auto-imported builtins
+                    else
+                        original_module_ident;  // Use module name for regular imports
+
+                    const mb_original_module_env = module_envs.get(lookup_key);
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }
