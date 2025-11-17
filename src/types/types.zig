@@ -395,7 +395,6 @@ pub const TypeIdent = struct {
 pub const FlatType = union(enum) {
     str,
     box: Var,
-    // NOTE: .list and .list_unbound have been removed - List is now a nominal type
     record: Record,
     record_unbound: RecordField.SafeMultiList.Range,
     tuple: Tuple,

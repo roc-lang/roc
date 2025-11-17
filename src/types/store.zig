@@ -1366,7 +1366,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
-    // List is now a nominal type
+    // List is a nominal type
     try std.testing.expect(deser_list.desc.content.structure == .nominal_type);
     const deser_nominal = deser_list.desc.content.structure.nominal_type;
     const deser_list_args = deserialized.sliceNominalArgs(deser_nominal);
