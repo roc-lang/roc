@@ -3215,7 +3215,13 @@ pub fn canonicalizeExpr(
                         } orelse {
                             // Not a module alias and not an auto-imported module
                             // Check if the qualifier is a type - if so, try to lookup associated items
-                            if (self.scopeLookupTypeBinding(module_alias)) |_| {
+                            const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
+                            const is_auto_imported_type = if (self.module_envs) |envs_map|
+                                envs_map.contains(module_alias)
+                            else
+                                false;
+
+                            if (is_type_in_scope or is_auto_imported_type) {
                                 // This is a type with a potential associated item
                                 // Build the fully qualified name and try to look it up
                                 const type_text = self.env.getIdent(module_alias);
@@ -3345,11 +3351,26 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+                                // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
+                                const is_auto_imported_type = if (self.module_envs) |envs_map|
+                                    envs_map.contains(module_name)
+                                else
+                                    false;
+
+                                const diagnostic = if (is_auto_imported_type)
+                                    Diagnostic{ .nested_value_not_found = .{
+                                        .parent_name = module_name,
+                                        .nested_name = ident,
+                                        .region = region,
+                                    } }
+                                else
+                                    Diagnostic{ .qualified_ident_does_not_exist = .{
                                         .ident = qualified_ident,
                                         .region = region,
-                                    } }),
+                                    } };
+
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
                                     .free_vars = null,
                                 };
                             };
