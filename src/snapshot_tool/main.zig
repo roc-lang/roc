@@ -1201,8 +1201,15 @@ fn processSnapshotContent(
     can_ir.debugAssertArraysInSync();
 
     // Compute dependency-based evaluation order if not already set
-    // (canonicalizeFile sets it, but other paths like .statement don't)
-    if (can_ir.evaluation_order == null) {
+    // Skip for .file/.package/.platform/.app tests because canonicalizeAndTypeCheckModule
+    // will call canonicalizeFile which sets it. Only do this for .expr/.statement which
+    // don't call canonicalizeFile.
+    const needs_evaluation_order = switch (content.meta.node_type) {
+        .expr, .statement => true,
+        .file, .package, .platform, .app, .snippet, .repl, .header => false,
+    };
+
+    if (needs_evaluation_order and can_ir.evaluation_order == null) {
         const DependencyGraph = @import("can").DependencyGraph;
         var graph = try DependencyGraph.buildDependencyGraph(
             can_ir,
@@ -1212,7 +1219,9 @@ fn processSnapshotContent(
         defer graph.deinit();
 
         const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
-        const eval_order_ptr = try allocator.create(DependencyGraph.EvaluationOrder);
+        // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
+        // will free this with self.gpa. They must match to avoid memory leaks.
+        const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
         eval_order_ptr.* = eval_order;
         can_ir.evaluation_order = eval_order_ptr;
     }
