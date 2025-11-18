@@ -2086,36 +2086,31 @@ fn checkPatternHelp(
         },
         // nums //
         .num_literal => |num| {
-            const num_type = blk: {
-                switch (num.kind) {
-                    .num_unbound => {
-                        const int_reqs = num.value.toIntRequirements();
-                        const frac_reqs = num.value.toFracRequirements();
-                        break :blk Num{ .num_unbound = .{ .int_requirements = int_reqs, .frac_requirements = frac_reqs } };
-                    },
-                    .int_unbound => {
-                        const int_reqs = num.value.toIntRequirements();
-                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = int_reqs } } }, env, pattern_region);
-                        break :blk Num{ .num_poly = int_var };
-                    },
-                    .u8 => break :blk Num{ .num_compact = Num.Compact{ .int = .u8 } },
-                    .i8 => break :blk Num{ .num_compact = Num.Compact{ .int = .i8 } },
-                    .u16 => break :blk Num{ .num_compact = Num.Compact{ .int = .u16 } },
-                    .i16 => break :blk Num{ .num_compact = Num.Compact{ .int = .i16 } },
-                    .u32 => break :blk Num{ .num_compact = Num.Compact{ .int = .u32 } },
-                    .i32 => break :blk Num{ .num_compact = Num.Compact{ .int = .i32 } },
-                    .u64 => break :blk Num{ .num_compact = Num.Compact{ .int = .u64 } },
-                    .i64 => break :blk Num{ .num_compact = Num.Compact{ .int = .i64 } },
-                    .u128 => break :blk Num{ .num_compact = Num.Compact{ .int = .u128 } },
-                    .i128 => break :blk Num{ .num_compact = Num.Compact{ .int = .i128 } },
-                    .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
-                    .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
-                    .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
-                }
-            };
-
-            // Update the pattern var
-            try self.unifyWith(pattern_var, .{ .structure = .{ .num = num_type } }, env);
+            // For unannotated literals (.num_unbound, .int_unbound), create a simple flex var
+            // The layout system will default it to Dec during layout resolution
+            switch (num.kind) {
+                .num_unbound, .int_unbound => {
+                    // Create a plain flex var with no constraints
+                    // The interpreter will default this to Dec when computing layout
+                    const flex_var = try self.fresh(env, pattern_region);
+                    _ = try self.unify(pattern_var, flex_var, env);
+                },
+                // For explicitly typed literals (e.g., from type annotations), keep using num_compact for now
+                // Phase 5 will replace these with nominal types
+                .u8 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .u8 } } } }, env),
+                .i8 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .i8 } } } }, env),
+                .u16 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .u16 } } } }, env),
+                .i16 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .i16 } } } }, env),
+                .u32 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .u32 } } } }, env),
+                .i32 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .i32 } } } }, env),
+                .u64 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .u64 } } } }, env),
+                .i64 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .i64 } } } }, env),
+                .u128 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .u128 } } } }, env),
+                .i128 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .int = .i128 } } } }, env),
+                .f32 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .frac = .f32 } } } }, env),
+                .f64 => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .frac = .f64 } } } }, env),
+                .dec => try self.unifyWith(pattern_var, .{ .structure = .{ .num = Num{ .num_compact = Num.Compact{ .frac = .dec } } } }, env),
+            }
         },
         .frac_f32_literal => |_| {
             try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, env);
@@ -2125,34 +2120,22 @@ fn checkPatternHelp(
         },
         .dec_literal => |dec| {
             if (dec.has_suffix) {
+                // Explicit suffix like `3.14dec` - use concrete type
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
             } else {
-                const f64_val = dec.value.toF64();
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.CIR.fitsInF32(f64_val),
-                    .fits_in_dec = can.CIR.fitsInDec(f64_val),
-                };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
-                } } }, env, pattern_region);
-
-                try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{
-                    .num_poly = frac_var,
-                } } }, env);
+                // Unannotated decimal literal - create flex var that will default to Dec
+                const flex_var = try self.fresh(env, pattern_region);
+                _ = try self.unify(pattern_var, flex_var, env);
             }
         },
         .small_dec_literal => |dec| {
             if (dec.has_suffix) {
+                // Explicit suffix - use concrete type
                 try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
             } else {
-                const reqs = dec.value.toFracRequirements();
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = reqs,
-                } } }, env, pattern_region);
-
-                try self.unifyWith(pattern_var, .{ .structure = .{ .num = .{
-                    .num_poly = frac_var,
-                } } }, env);
+                // Unannotated decimal literal - create flex var that will default to Dec
+                const flex_var = try self.fresh(env, pattern_region);
+                _ = try self.unify(pattern_var, flex_var, env);
             }
         },
         .runtime_error => {
