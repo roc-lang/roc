@@ -10,28 +10,28 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 # Type variable 'item' introduced in annotation
 process : List(item) -> item
 process = |list| {
-    # value identifier named 'item' is allowed - different namespace from type variable
-    item = 42
+	# value identifier named 'item' is allowed - different namespace from type variable
+	item = 42
 
-    # type variable 'item' still refers to the function annotation's type parameter
-    result : item
-    result = List.first(list).ok_or(item)
+	# type variable 'item' still refers to the function annotation's type parameter
+	result : item
+	result = List.first(list).ok_or(item)
 
-    result
+	result
 }
 
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_mismatch.md:11:37:11:41
+TYPE MISMATCH - type_var_mismatch.md:11:34:11:38
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_var_mismatch.md:11:37:11:41:**
+**type_var_mismatch.md:11:34:11:38:**
 ```roc
-    result = List.first(list).ok_or(item)
+	result = List.first(list).ok_or(item)
 ```
-                                    ^^^^
+	                                ^^^^
 
 It has the type:
     _Num(_size)_
@@ -104,22 +104,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-# Type variable 'item' introduced in annotation
-process : List(item) -> item
-process = |list| {
-	# value identifier named 'item' is allowed - different namespace from type variable
-	item = 42
-
-	# type variable 'item' still refers to the function annotation's type parameter
-	result : item
-	result = List.first(list).ok_or(item)
-
-	result
-}
-
-main! = |_| {}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
