@@ -44,23 +44,23 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - Adv.md:17:13:17:32
+TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**Adv.md:17:13:17:32:**
+**Adv.md:17:28:17:31:**
 ```roc
 	next_val = val.update_str(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^
+	                          ^^^
 
 It has the type:
-    _Adv, Num(_size) -> _ret_
+    _Num(_size)_
 
 But I expected it to be:
-    _Adv, Str -> Adv_
+    _Str_
 
 **MISSING METHOD**
 This **update_strr** method is being called on the type **Adv**, which has no method with that name:
