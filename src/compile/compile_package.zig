@@ -627,11 +627,11 @@ pub const PackageEnv = struct {
         var any_new: bool = false;
         // Mark current node as visiting (gray) before exploring imports
         st.visit_color = 1;
-        for (env.imports.imports.items.items[0..import_count], 0..) |str_idx, import_idx_int| {
+        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const mod_name = env.getString(str_idx);
 
-            // Skip Builtin module (Import.Idx 0) - it's precompiled and already available
-            if (import_idx_int == 0) {
+            // Skip "Builtin" - it's handled via the precompiled module in module_envs_map
+            if (std.mem.eql(u8, mod_name, "Builtin")) {
                 continue;
             }
 
@@ -808,12 +808,12 @@ pub const PackageEnv = struct {
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
-        for (env.imports.imports.items.items[0..import_count], 0..) |str_idx, import_idx_int| {
+        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
 
-            // Handle Builtin module (Import.Idx 0) specially - it's precompiled
-            if (import_idx_int == 0) {
-                try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+            // Skip "Builtin" - it's provided separately via builtin_types_for_eval to the evaluator
+            // and via module_envs_map to the type checker
+            if (std.mem.eql(u8, import_name, "Builtin")) {
                 continue;
             }
 
