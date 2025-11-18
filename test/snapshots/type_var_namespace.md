@@ -23,9 +23,19 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - type_var_namespace.md:11:14:11:42
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **ok_or** method is being called on the type **Try(item, [ListWasEmpty])**, which has no method with that name:
+**type_var_namespace.md:11:14:11:42:**
+```roc
+    result = List.first(list).ok_or(item)
+```
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **ok_or** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
