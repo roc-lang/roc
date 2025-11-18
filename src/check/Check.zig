@@ -607,7 +607,7 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         .ident_idx = self.common_idents.list,
     };
 
-    // Create a backing var for the nominal type (same as elem_var for now)
+    // The backing var is the element type var
     const backing_var = elem_var;
     const type_args = [_]Var{elem_var};
 

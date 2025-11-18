@@ -1305,7 +1305,7 @@ fn processSnapshotContent(
             break :blk checker;
         },
         .snippet, .statement, .header, .expr => blk: {
-            // For snippet/statement/header/expr tests, use old-style separate type checking (already canonicalized above)
+            // For snippet/statement/header/expr tests, type check the already-canonicalized IR
             // Note: .expr can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 

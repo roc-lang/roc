@@ -524,7 +524,6 @@ pub fn main() !void {
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
-    // NOTE: We no longer transform List - it stays as a nominal type throughout
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
