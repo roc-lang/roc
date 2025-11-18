@@ -1273,7 +1273,7 @@ pub const Store = struct {
                         break :blk Layout.zst();
                     },
                 },
-                .flex => |flex| blk: {
+                .flex => blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1289,15 +1289,13 @@ pub const Store = struct {
                         }
                     }
 
-                    // If the flex var has no constraints, it represents a phantom type parameter
-                    // or unused tag branch that doesn't exist at runtime.
-                    if (flex.constraints.isEmpty()) {
-                        break :blk Layout.zst();
-                    }
-
-                    // Flex vars with constraints appear in REPL/eval contexts where type constraints
+                    // Flex vars appear in REPL/eval contexts where type constraints
                     // haven't been fully solved. This is a known issue that needs proper constraint
-                    // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
+                    // solving before layout computation. For now, default to Dec for unresolved types.
+                    // This includes both constrained flex vars (with static dispatch constraints) and
+                    // unconstrained flex vars (from unannotated number literals).
+                    // TODO: Once proper constraint solving is implemented, distinguish between
+                    // phantom type parameters (which should be ZST) and number literals (which should be Dec).
                     break :blk Layout.default_num();
                 },
                 .rigid => |rigid| blk: {

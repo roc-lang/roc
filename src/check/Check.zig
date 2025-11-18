@@ -1698,68 +1698,11 @@ fn generateBuiltinTypeInstance(
             // Create the type
             return try self.freshFromContent(.{ .structure = .{ .box = anno_args[0] } }, env, anno_region);
         },
-        .num => {
-            // Then check arity
-            if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
-                    .type_name = anno_builtin_name,
-                    .region = anno_region,
-                    .num_expected_args = 1,
-                    .num_actual_args = @intCast(anno_args.len),
-                } });
-
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
-            }
-
-            // Create the type
-            return try self.freshFromContent(.{ .structure = .{
-                .num = .{ .num_poly = anno_args[0] },
-            } }, env, anno_region);
-        },
-        .frac => {
-            // Then check arity
-            if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
-                    .type_name = anno_builtin_name,
-                    .region = anno_region,
-                    .num_expected_args = 1,
-                    .num_actual_args = @intCast(anno_args.len),
-                } });
-
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
-            }
-
-            // Create the type
-            const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                .frac_unbound = Num.FracRequirements.init(),
-            } } }, env, anno_region);
-            return try self.freshFromContent(.{ .structure = .{ .num = .{
-                .num_poly = frac_var,
-            } } }, env, anno_region);
-        },
-        .int => {
-            // Then check arity
-            if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
-                    .type_name = anno_builtin_name,
-                    .region = anno_region,
-                    .num_expected_args = 1,
-                    .num_actual_args = @intCast(anno_args.len),
-                } });
-
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
-            }
-
-            // Create the type
-            const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                .int_unbound = Num.IntRequirements.init(),
-            } } }, env, anno_region);
-            return try self.freshFromContent(.{ .structure = .{ .num = .{
-                .num_poly = int_var,
-            } } }, env, anno_region);
+        // Polymorphic number types (Num, Int, Frac) are no longer supported
+        // They have been replaced with concrete nominal types (U8, I32, F64, Dec, etc.)
+        .num, .int, .frac => {
+            // Return error - these should not be used anymore
+            return try self.freshFromContent(.err, env, anno_region);
         },
     }
 }
@@ -2243,101 +2186,57 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // nums //
         .e_num => |num| {
-            const num_type = blk: {
-                switch (num.kind) {
-                    .num_unbound => {
-                        const int_reqs = num.value.toIntRequirements();
-                        const frac_reqs = num.value.toFracRequirements();
-                        break :blk Num{ .num_unbound = .{ .int_requirements = int_reqs, .frac_requirements = frac_reqs } };
-                    },
-                    .int_unbound => {
-                        const int_reqs = num.value.toIntRequirements();
-                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = int_reqs } } }, env, expr_region);
-                        break :blk Num{ .num_poly = int_var };
-                    },
-                    .u8 => break :blk Num{ .num_compact = Num.Compact{ .int = .u8 } },
-                    .i8 => break :blk Num{ .num_compact = Num.Compact{ .int = .i8 } },
-                    .u16 => break :blk Num{ .num_compact = Num.Compact{ .int = .u16 } },
-                    .i16 => break :blk Num{ .num_compact = Num.Compact{ .int = .i16 } },
-                    .u32 => break :blk Num{ .num_compact = Num.Compact{ .int = .u32 } },
-                    .i32 => break :blk Num{ .num_compact = Num.Compact{ .int = .i32 } },
-                    .u64 => break :blk Num{ .num_compact = Num.Compact{ .int = .u64 } },
-                    .i64 => break :blk Num{ .num_compact = Num.Compact{ .int = .i64 } },
-                    .u128 => break :blk Num{ .num_compact = Num.Compact{ .int = .u128 } },
-                    .i128 => break :blk Num{ .num_compact = Num.Compact{ .int = .i128 } },
-                    .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
-                    .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
-                    .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
-                }
-            };
-
-            // Update the pattern var
-            try self.unifyWith(expr_var, .{ .structure = .{ .num = num_type } }, env);
+            switch (num.kind) {
+                .num_unbound, .int_unbound => {
+                    // For unannotated literals, create a simple flex var
+                    const flex_var = try self.fresh(env, expr_region);
+                    _ = try self.unify(expr_var, flex_var, env);
+                },
+                .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U8", env), env),
+                .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I8", env), env),
+                .u16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U16", env), env),
+                .i16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I16", env), env),
+                .u32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U32", env), env),
+                .i32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I32", env), env),
+                .u64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U64", env), env),
+                .i64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I64", env), env),
+                .u128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U128", env), env),
+                .i128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I128", env), env),
+                .f32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env),
+                .f64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env),
+                .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env),
+            }
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
             } else {
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = true,
-                    .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
-                };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
-                } } }, env, expr_region);
-
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .num_poly = frac_var,
-                } } }, env);
+                const flex_var = try self.fresh(env, expr_region);
+                _ = try self.unify(expr_var, flex_var, env);
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
             } else {
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.CIR.fitsInF32(@floatCast(frac.value)),
-                    .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
-                };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
-                } } }, env, expr_region);
-
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .num_poly = frac_var,
-                } } }, env);
+                const flex_var = try self.fresh(env, expr_region);
+                _ = try self.unify(expr_var, flex_var, env);
             }
         },
         .e_dec => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                const f64_val = frac.value.toF64();
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.CIR.fitsInF32(f64_val),
-                    .fits_in_dec = can.CIR.fitsInDec(f64_val),
-                };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
-                } } }, env, expr_region);
-
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .num_poly = frac_var,
-                } } }, env);
+                const flex_var = try self.fresh(env, expr_region);
+                _ = try self.unify(expr_var, flex_var, env);
             }
         },
         .e_dec_small => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                const reqs = frac.value.toFracRequirements();
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = reqs,
-                } } }, env, expr_region);
-
-                try self.unifyWith(expr_var, .{ .structure = .{ .num = .{
-                    .num_poly = frac_var,
-                } } }, env);
+                const flex_var = try self.fresh(env, expr_region);
+                _ = try self.unify(expr_var, flex_var, env);
             }
         },
         // list //
@@ -3606,31 +3505,20 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
 // unary minus //
 
-fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, _: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check the operand expression
     const does_fx = try self.checkExpr(unary.expr, env, .no_expectation);
 
-    // For unary minus, we constrain the operand and result to be numbers
+    // For unary minus, unify the result with the operand
+    // The type will be inferred from usage context
     const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
     const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
-    // Create a fresh number variable for the operation
-    const num_content = Content{ .structure = .{ .num = .{
-        .num_unbound = .{
-            .int_requirements = Num.IntRequirements.init(),
-            .frac_requirements = Num.FracRequirements.init(),
-        },
-    } } };
-    const num_var = try self.freshFromContent(num_content, env, expr_region);
-
-    // Redirect the result to the number type
-    _ = try self.unify(result_var, num_var, env);
-
-    // Unify result with the number type
-    _ = try self.unify(num_var, operand_var, env);
+    // Unify result with operand - they must be the same type
+    _ = try self.unify(result_var, operand_var, env);
 
     return does_fx;
 }
@@ -3753,19 +3641,8 @@ fn checkBinopExpr(
                         }
                     },
                     .no_expectation => {
-                        // Start with empty requirements that can be constrained by operands
-                        const num_content = Content{ .structure = .{ .num = .{
-                            .num_unbound = .{
-                                .int_requirements = Num.IntRequirements.init(),
-                                .frac_requirements = Num.FracRequirements.init(),
-                            },
-                        } } };
-                        const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-                        const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-
-                        // Unify left and right operands with num
-                        _ = try self.unify(lhs_num_var, lhs_var, env);
-                        _ = try self.unify(rhs_num_var, rhs_var, env);
+                        // No expectation - operand types will be inferred
+                        // The unification of lhs and rhs below will ensure they're the same type
                     },
                 }
 
@@ -3798,19 +3675,8 @@ fn checkBinopExpr(
                     }
                 },
                 .no_expectation => {
-                    // Start with empty requirements that can be constrained by operands
-                    const num_content = Content{ .structure = .{ .num = .{
-                        .num_unbound = .{
-                            .int_requirements = Num.IntRequirements.init(),
-                            .frac_requirements = Num.FracRequirements.init(),
-                        },
-                    } } };
-                    const lhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-                    const rhs_num_var = try self.freshFromContent(num_content, env, expr_region);
-
-                    // Unify left and right operands with num
-                    _ = try self.unify(lhs_num_var, lhs_var, env);
-                    _ = try self.unify(rhs_num_var, rhs_var, env);
+                    // No expectation - operand types will be inferred
+                    // The unification of lhs and rhs below will ensure they're the same type
                 },
             }
 
