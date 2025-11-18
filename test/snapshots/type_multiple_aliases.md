@@ -24,22 +24,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_multiple_aliases.md:15:21:15:24
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**type_multiple_aliases.md:15:21:15:24:**
-```roc
-	user = create_user(123, "Alice", 25)
-```
-	                   ^^^
-
-This argument has the type:
-    _Num(_size)_
-
-But `create_user` needs the first argument to be:
-    _UserId_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -235,7 +222,7 @@ NO CHANGE
 	(defs
 		(patt (type "UserId, UserName, UserAge -> User"))
 		(patt (type "User -> UserName"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> UserName")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId")))
@@ -248,5 +235,5 @@ NO CHANGE
 	(expressions
 		(expr (type "UserId, UserName, UserAge -> User"))
 		(expr (type "User -> UserName"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> UserName"))))
 ~~~

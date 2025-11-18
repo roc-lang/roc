@@ -53,7 +53,7 @@ topLevelVar_ = 0
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "_a"))))
 ~~~

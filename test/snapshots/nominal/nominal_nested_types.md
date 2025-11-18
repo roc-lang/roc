@@ -83,14 +83,14 @@ Foo := [Whatever].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Num(_size)")))
+		(patt (type "_a"))
+		(patt (type "_a")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Num(_size)"))))
+		(expr (type "_a"))
+		(expr (type "_a"))))
 ~~~

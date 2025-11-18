@@ -22,37 +22,9 @@ addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_currying_constraint.md:7:14:7:26
-TYPE MISMATCH - lambda_currying_constraint.md:15:43:15:44
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:7:14:7:26:**
-```roc
-curriedAdd = makeAdder(5)
-```
-             ^^^^^^^^^^^^
-
-It has the type:
-    _Num(_size) -> Num(_size2)_
-
-But the type annotation says it should have the type:
-    _I64 -> I64_
-
-**TYPE MISMATCH**
-The second argument being passed to this function has the wrong type:
-**lambda_currying_constraint.md:15:43:15:44:**
-```roc
-addThreeTwice = |n| applyTwice(|x| x + 3, n)
-```
-                                          ^
-
-This argument has the type:
-    _I64_
-
-But `applyTwice` needs the second argument to be:
-    _Num(_size)_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,
@@ -225,12 +197,12 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> (a -> a)"))
-		(patt (type "Error"))
+		(patt (type "I64 -> I64"))
 		(patt (type "(a -> a), a -> a"))
-		(patt (type "Error -> Error")))
+		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "a -> (a -> a)"))
-		(expr (type "Error"))
+		(expr (type "I64 -> I64"))
 		(expr (type "(a -> a), a -> a"))
-		(expr (type "Error -> Error"))))
+		(expr (type "I64 -> I64"))))
 ~~~

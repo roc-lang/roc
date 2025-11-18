@@ -30,5 +30,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(Frac(_size))"))
+(expr (type "_a"))
 ~~~

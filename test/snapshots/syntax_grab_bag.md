@@ -266,7 +266,6 @@ UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
-TYPE MISMATCH - syntax_grab_bag.md:70:2:77:3
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
@@ -810,26 +809,6 @@ Right now, it has the type:
     _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:70:2:77:3:**
-```roc
-	if num {
-		dbg # After debug
-			some_func() # After debug expr
-		0
-	} else {
-		dbg 123
-		other
-	}
-```
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -2479,8 +2458,8 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Error"))
+		(patt (type "Bool -> _ret"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2525,8 +2504,8 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Error"))
+		(expr (type "Bool -> _ret"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

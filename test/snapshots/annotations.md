@@ -29,69 +29,37 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:4:11:4:26
-TYPE MISMATCH - annotations.md:13:23:13:35
-TYPE MISMATCH - annotations.md:16:28:16:28
-INVALID NOMINAL TAG - annotations.md:19:22:19:41
+TYPE MISMATCH - annotations.md:16:21:16:35
+TYPE MISMATCH - annotations.md:19:22:19:41
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**annotations.md:4:11:4:26:**
+**annotations.md:16:21:16:35:**
 ```roc
-pairU64 = Pair.Pair(1, 2)
+failPairDiffTypes = mkPair("1", 2)
 ```
-          ^^^^^^^^^^^^^^^
+                    ^^^^^^^^^^^^^^
 
 It has the type:
-    _Pair(Num(_size))_
-
-But the type annotation says it should have the type:
-    _Pair(U64)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:13:23:13:35:**
-```roc
-succeedPairSameType = mkPair(1, 2)
-```
-                      ^^^^^^^^^^^^
-
-It has the type:
-    _Pair(Num(_size))_
+    _Pair(Str)_
 
 But the type annotation says it should have the type:
     _Pair(U8)_
 
 **TYPE MISMATCH**
-The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
-**annotations.md:16:28:**
-```roc
-failPairDiffTypes = mkPair("1", 2)
-```
-                           ^^^  ^
-
-The first argument has the type:
-    _Str_
-
-But the second argument has the type:
-    _Num(_size)_
-
-`mkPair` needs these arguments to have compatible types.
-
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
+This expression is used in an unexpected way:
 **annotations.md:19:22:19:41:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                      ^^^^^^^^^^^^^^^^^^^
 
-The tag is:
-    _Pair(Num(_size), Str)_
+It has the type:
+    _Pair(Str)_
 
-But the nominal type needs it to be:
-    _Pair(Num(_size), Num(_size2))_
+But the type annotation says it should have the type:
+    _Pair(U64)_
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -342,10 +310,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "Pair(U64)"))
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
-		(patt (type "Error"))
+		(patt (type "Pair(U8)"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "a, b -> Error")))
@@ -355,10 +323,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "Pair(U64)"))
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
-		(expr (type "Error"))
+		(expr (type "Pair(U8)"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "a, b -> Error"))))

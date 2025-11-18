@@ -17,22 +17,9 @@ count = {
 expect count == 3
 ~~~
 # EXPECTED
-TYPE MISMATCH - for_loop_list_str.md:7:2:7:10
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_list_str.md:7:2:7:10:**
-```roc
-	counter_
-```
-	^^^^^^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -126,7 +113,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~

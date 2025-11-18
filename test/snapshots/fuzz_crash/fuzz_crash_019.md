@@ -868,7 +868,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    _Num(_size)_
+    __f_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -968,7 +968,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(Num(_size), Str, Error, [O]_others, (Error, Error), List(Num(_size2)))_
+    _(_field, Str, Error, [O]_others, (Error, Error), List(_f))_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1998,7 +1998,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Bool -> _ret"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
@@ -2035,7 +2035,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Bool -> _ret"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))

@@ -5002,6 +5002,7 @@ pub const Interpreter = struct {
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
                     .empty_tag_union => break,
+                    .empty_record => break,
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             const ext_tag_slice = module.types.getTagsSlice(ext_tag_union.tags);

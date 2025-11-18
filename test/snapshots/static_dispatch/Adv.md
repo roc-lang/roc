@@ -44,38 +44,19 @@ main = {
 }
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - Adv.md:16:8:16:28
-INVALID NOMINAL TAG - Adv.md:22:8:22:28
+MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
-INVALID NOMINAL TAG - Adv.md:34:8:34:28
 # PROBLEMS
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**Adv.md:16:8:16:28:**
+**MISSING METHOD**
+This **update_strr** method is being called on the type **Adv**, which has no method with that name:
+**Adv.md:23:13:23:33:**
 ```roc
-	val = Adv.Val(10, "hello")
+	next_val = val.update_strr(100)
 ```
-	      ^^^^^^^^^^^^^^^^^^^^
+	           ^^^^^^^^^^^^^^^^^^^^
 
-The tag is:
-    _Val(Num(_size), Str)_
 
-But the nominal type needs it to be:
-    _Val(U64, Str)_
-
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**Adv.md:22:8:22:28:**
-```roc
-	val = Adv.Val(10, "hello")
-```
-	      ^^^^^^^^^^^^^^^^^^^^
-
-The tag is:
-    _Val(Num(_size), Str)_
-
-But the nominal type needs it to be:
-    _Val(U64, Str)_
+**Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
 
 **TYPE DOES NOT HAVE METHODS**
 You're calling the method `update` on a type that doesn't support methods:
@@ -89,20 +70,6 @@ This type doesn't support methods:
     _Str_
 
 
-
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**Adv.md:34:8:34:28:**
-```roc
-	val = Adv.Val(10, "hello")
-```
-	      ^^^^^^^^^^^^^^^^^^^^
-
-The tag is:
-    _Val(Num(_size), Str)_
-
-But the nominal type needs it to be:
-    _Val(U64, Str)_
 
 # TOKENS
 ~~~zig
@@ -523,10 +490,10 @@ main = {
 		(patt (type "Adv -> U64"))
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
+		(patt (type "Adv"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "(Error, Error)")))
+		(patt (type "(Str, U64)")))
 	(type_decls
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
@@ -535,8 +502,8 @@ main = {
 		(expr (type "Adv -> U64"))
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
+		(expr (type "Adv"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "(Str, U64)"))))
 ~~~

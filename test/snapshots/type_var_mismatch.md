@@ -23,22 +23,9 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_mismatch.md:11:34:11:38
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_mismatch.md:11:34:11:38:**
-```roc
-	result = List.first(list).ok_or(item)
-```
-	                                ^^^^
-
-It has the type:
-    _Num(_size)_
-
-But I expected it to be:
-    _item_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -148,9 +135,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(item) -> item"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(item) -> item"))
 		(expr (type "_arg -> {}"))))
 ~~~

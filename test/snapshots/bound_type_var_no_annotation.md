@@ -35,7 +35,6 @@ main! = |_| {
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 MISSING METHOD - bound_type_var_no_annotation.md:11:14:11:19
 + - :0:0:0:0
-TYPE MISMATCH - bound_type_var_no_annotation.md:22:21:22:22
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `pair` is not used anywhere in your code.
@@ -59,20 +58,6 @@ addOne = |n| n + 1
 
 
 **Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**bound_type_var_no_annotation.md:22:21:22:22:**
-```roc
-    result = addOne(5)
-```
-                    ^
-
-This argument has the type:
-    _Num(_size)_
-
-But `addOne` needs the first argument to be:
-    _U64_
 
 # TOKENS
 ~~~zig

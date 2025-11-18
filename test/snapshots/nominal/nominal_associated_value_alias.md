@@ -17,22 +17,9 @@ result : U64
 result = myBar
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_value_alias.md:7:9:7:16
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_value_alias.md:7:9:7:16:**
-```roc
-myBar = Foo.bar
-```
-        ^^^^^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -110,14 +97,14 @@ result = myBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "_a"))
+		(patt (type "U64"))
+		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "_a"))
+		(expr (type "U64"))
+		(expr (type "U64"))))
 ~~~

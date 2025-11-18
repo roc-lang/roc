@@ -66,21 +66,25 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 
 
 **TYPE MISMATCH**
-The first and third arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
+The first and seventh arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
 **lambda_multi_arg_mismatch.md:9:5:**
 ```roc
     42,        # x1: U64 (type 'a')
     "hello",   # x2: Str (type 'b') - correct
     "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+    1.5,       # x4: F64 (type 'c') - correct
+    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
+    [1, 2],    # x6: List I64 (type 'd') - correct
+    True,      # x7: Bool (should be 'a' = U64) - MISMATCH
 ```
     ^^
-    ^^^^^^^
+    ^^^^
 
 The first argument has the type:
-    _Num(_size)_
-
-But the third argument has the type:
     _Str_
+
+But the seventh argument has the type:
+    _[True]_others_
 
 `multi_arg_fn` needs these arguments to have compatible types.
 

@@ -22,22 +22,9 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_deep_nesting.md:12:13:12:43
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_deep_nesting.md:12:13:12:43:**
-```roc
-deepValue = Foo.Level1.Level2.Level3.value
-```
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -158,8 +145,8 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "U64"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
@@ -171,7 +158,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "U64"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

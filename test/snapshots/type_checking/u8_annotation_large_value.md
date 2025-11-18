@@ -9,22 +9,9 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
-TYPE MISMATCH - u8_annotation_large_value.md:2:5:2:8
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**u8_annotation_large_value.md:2:5:2:8:**
-```roc
-x = 500
-```
-    ^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U8_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -59,7 +46,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "U8")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U8"))))
 ~~~

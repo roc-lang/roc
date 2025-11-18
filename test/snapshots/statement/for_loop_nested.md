@@ -19,22 +19,9 @@ product = {
 expect product == 180
 ~~~
 # EXPECTED
-TYPE MISMATCH - for_loop_nested.md:9:2:9:9
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_nested.md:9:2:9:9:**
-```roc
-	result_
-```
-	^^^^^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -146,7 +133,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~

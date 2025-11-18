@@ -22,36 +22,31 @@ result2 : MyType
 result2 = a.plus(b)
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - plus_operator_vs_method.md:4:5:4:18
-INVALID NOMINAL TAG - plus_operator_vs_method.md:7:5:7:19
+MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
++ - :0:0:0:0
+MISSING METHOD - plus_operator_vs_method.md:15:11:15:20
 # PROBLEMS
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**plus_operator_vs_method.md:4:5:4:18:**
+**MISSING METHOD**
+The value before this **+** operator has the type **MyType**, which has no **plus** method:
+**plus_operator_vs_method.md:11:11:11:16:**
 ```roc
-a = MyType.Val(5)
+result1 = a + b
 ```
-    ^^^^^^^^^^^^^
+          ^^^^^
 
-The tag is:
-    _Val(Num(_size))_
 
-But the nominal type needs it to be:
-    _Val(U64)_
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**plus_operator_vs_method.md:7:5:7:19:**
+**MISSING METHOD**
+This **plus** method is being called on the type **MyType**, which has no method with that name:
+**plus_operator_vs_method.md:15:11:15:20:**
 ```roc
-b = MyType.Val(10)
+result2 = a.plus(b)
 ```
-    ^^^^^^^^^^^^^^
+          ^^^^^^^^^
 
-The tag is:
-    _Val(Num(_size))_
 
-But the nominal type needs it to be:
-    _Val(U64)_
+**Hint: **For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -164,16 +159,16 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "MyType"))
+		(patt (type "MyType"))
 		(patt (type "Error"))
 		(patt (type "Error")))
 	(type_decls
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "MyType"))
+		(expr (type "MyType"))
 		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

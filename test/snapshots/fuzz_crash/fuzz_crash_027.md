@@ -225,7 +225,6 @@ UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-TYPE MISMATCH - fuzz_crash_027.md:50:2:57:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
@@ -863,26 +862,6 @@ Right now, it has the type:
     _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:50:2:57:3:**
-```roc
-	if num {
-		dbg # bug
-() #r
-		0
-	} else {
-		dbg 123
-		other
-	}
-```
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
@@ -2271,8 +2250,8 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Error"))
+		(patt (type "Bool -> _ret"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2308,8 +2287,8 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Error"))
+		(expr (type "Bool -> _ret"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

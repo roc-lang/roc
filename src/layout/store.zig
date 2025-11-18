@@ -918,9 +918,31 @@ pub const Store = struct {
                             }
                         }
 
-                        // TODO special-case the builtin Num type here.
-                        // If we have one of those, then convert it to a Num layout,
-                        // or to a runtime error if it's an invalid elem type.
+                        // Special-case builtin number types
+                        if (nominal_type.origin_module == self.env.builtin_module_ident) {
+                            const ident_text = self.env.getIdent(nominal_type.ident.ident_idx);
+                            const num_layout: ?Layout = blk: {
+                                if (std.mem.eql(u8, ident_text, "U8")) break :blk Layout.int(.u8);
+                                if (std.mem.eql(u8, ident_text, "U16")) break :blk Layout.int(.u16);
+                                if (std.mem.eql(u8, ident_text, "U32")) break :blk Layout.int(.u32);
+                                if (std.mem.eql(u8, ident_text, "U64")) break :blk Layout.int(.u64);
+                                if (std.mem.eql(u8, ident_text, "U128")) break :blk Layout.int(.u128);
+                                if (std.mem.eql(u8, ident_text, "I8")) break :blk Layout.int(.i8);
+                                if (std.mem.eql(u8, ident_text, "I16")) break :blk Layout.int(.i16);
+                                if (std.mem.eql(u8, ident_text, "I32")) break :blk Layout.int(.i32);
+                                if (std.mem.eql(u8, ident_text, "I64")) break :blk Layout.int(.i64);
+                                if (std.mem.eql(u8, ident_text, "I128")) break :blk Layout.int(.i128);
+                                if (std.mem.eql(u8, ident_text, "F32")) break :blk Layout.frac(.f32);
+                                if (std.mem.eql(u8, ident_text, "F64")) break :blk Layout.frac(.f64);
+                                if (std.mem.eql(u8, ident_text, "Dec")) break :blk Layout.frac(.dec);
+                                break :blk null;
+                            };
+                            if (num_layout) |layout| {
+                                const idx = try self.insertLayout(layout);
+                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                                return idx;
+                            }
+                        }
 
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.

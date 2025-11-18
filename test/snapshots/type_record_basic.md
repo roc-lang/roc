@@ -24,7 +24,7 @@ main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This argument has the type:
-    _{ age: Num(_size), namee: Str }_
+    _{ age: _field, namee: Str }_
 
 But `getName` needs the first argument to be:
     _{ age: U64, name: Str }_

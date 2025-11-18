@@ -18,22 +18,9 @@ double = |x| add(x, x)
 main! = add(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - pure_with_pure_annotation.md:11:13:11:14
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**pure_with_pure_annotation.md:11:13:11:14:**
-```roc
-main! = add(1, 2)
-```
-            ^
-
-This argument has the type:
-    _Num(_size)_
-
-But `add` needs the first argument to be:
-    _I32_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -158,9 +145,9 @@ NO CHANGE
 	(defs
 		(patt (type "I32, I32 -> I32"))
 		(patt (type "I32 -> I32"))
-		(patt (type "Error")))
+		(patt (type "I32")))
 	(expressions
 		(expr (type "I32, I32 -> I32"))
 		(expr (type "I32 -> I32"))
-		(expr (type "Error"))))
+		(expr (type "I32"))))
 ~~~

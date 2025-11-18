@@ -13,22 +13,9 @@ useBar : U64
 useBar = Foo.bar
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_decl.md:6:10:6:17
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_decl.md:6:10:6:17:**
-```roc
-useBar = Foo.bar
-```
-         ^^^^^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -89,12 +76,12 @@ useBar = Foo.bar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Error")))
+		(patt (type "_a"))
+		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Error"))))
+		(expr (type "_a"))
+		(expr (type "U64"))))
 ~~~

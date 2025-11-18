@@ -24,7 +24,7 @@ This expression is used in an unexpected way:
     ^^^^^^^^^^^^^^
 
 It has the type:
-    _Num(_size), Num(_size2) -> _ret_
+    __arg, _arg2 -> _ret_
 
 But I expected it to be:
     _(a, b) -> (a, b)_

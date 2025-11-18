@@ -17,22 +17,9 @@ sum = {
 expect sum == 15
 ~~~
 # EXPECTED
-TYPE MISMATCH - for_loop_list_u64.md:7:2:7:8
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_list_u64.md:7:2:7:8:**
-```roc
-	total_
-```
-	^^^^^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _U64_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -125,7 +112,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~
