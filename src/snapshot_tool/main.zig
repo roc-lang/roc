@@ -1283,11 +1283,10 @@ fn processSnapshotContent(
             // This ensures the SAME module_envs map is used for both phases (just like REPL tests)
             // For file tests, canonicalization happens INSIDE canonicalizeAndTypeCheckModule,
             // so can_ir.imports is still empty at this point. We can't use builtin_modules
-            // (which is built from can_ir.imports). Instead, just pass builtin_env directly.
+            // (which is built from can_ir.imports).
+            // Pass an empty array for imported_envs since builtin types are accessed through module_envs, not imported_envs.
             const builtin_env = config.builtin_module orelse unreachable;
-            // Cast from *const ModuleEnv to *ModuleEnv (function signature requires non-const pointer)
-            const builtin_env_nonconst: *ModuleEnv = @constCast(builtin_env);
-            const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env_nonconst};
+            const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{};
 
             // Initialize module_envs_for_file and pass it to the function
             // This way it stays alive until the defer at line 1249
