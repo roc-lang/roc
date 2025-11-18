@@ -465,8 +465,8 @@ test "nested ZST detection - List of record with ZST field" {
     // List of this record should be list_of_zst since the record only has ZST fields
     const list_ident_idx = try lt.module_env.getIdentStore().insert(lt.module_env.gpa, Ident.for_text("List"));
     const list_type_ident = types.TypeIdent{ .ident_idx = list_ident_idx };
-    const origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
-    const list_content = try lt.type_store.mkNominal(list_type_ident, record_var, &[_]types.Var{record_var}, origin_module);
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    const list_content = try lt.type_store.mkNominal(list_type_ident, record_var, &[_]types.Var{record_var}, builtin_module_idx);
     const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
@@ -530,8 +530,8 @@ test "nested ZST detection - deeply nested" {
     // List({ field: ({ field2: {} }, ()) })
     const list_ident_idx = try lt.module_env.getIdentStore().insert(lt.module_env.gpa, Ident.for_text("List"));
     const list_type_ident = types.TypeIdent{ .ident_idx = list_ident_idx };
-    const origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
-    const list_content = try lt.type_store.mkNominal(list_type_ident, outer_record_var, &[_]types.Var{outer_record_var}, origin_module);
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    const list_content = try lt.type_store.mkNominal(list_type_ident, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx);
     const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
 

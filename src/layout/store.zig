@@ -61,6 +61,9 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
+    list_ident: ?Ident.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -144,6 +147,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .list_ident = null, // Lazily initialized on first use
         };
     }
 
@@ -882,13 +886,19 @@ pub const Store = struct {
                     },
                     .nominal_type => |nominal_type| {
                         // Special handling for Builtin.List
-                        const list_ident = self.env.common.findIdent("List");
-                        if (list_ident != null and nominal_type.ident.ident_idx == list_ident.?) {
+                        // Lazily initialize list_ident if not yet cached
+                        if (self.list_ident == null) {
+                            self.list_ident = self.env.common.findIdent("List");
+                        }
+                        const is_builtin_list = if (self.list_ident) |list_ident|
+                            nominal_type.origin_module == self.env.builtin_module_ident and
+                                nominal_type.ident.ident_idx == list_ident
+                        else
+                            false;
+                        if (is_builtin_list) {
                             // Extract the element type from the type arguments
                             const type_args = self.types_store.sliceNominalArgs(nominal_type);
-                            if (type_args.len != 1) {
-                                @panic("List nominal type must have exactly 1 type parameter");
-                            }
+                            std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
                             const elem_var = type_args[0];
 
                             // Check if the element type is unbound (flex or rigid)
