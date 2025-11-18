@@ -321,7 +321,7 @@ pub fn setupAutoImportedBuiltinTypes(
 
                 try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                     .external_nominal = .{
-                        .module_ident = builtin_ident, // Module is "Builtin", not the type name
+                        .module_ident = builtin_ident,
                         .original_ident = type_ident,
                         .target_node_idx = target_node_idx,
                         .import_idx = builtin_import_idx,
@@ -338,7 +338,7 @@ pub fn setupAutoImportedBuiltinTypes(
 
             try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                 .external_nominal = .{
-                    .module_ident = builtin_ident, // Module is "Builtin", not the type name
+                    .module_ident = builtin_ident,
                     .original_ident = type_ident,
                     .target_node_idx = null,
                     .import_idx = builtin_import_idx,
