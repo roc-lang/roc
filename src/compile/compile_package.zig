@@ -789,6 +789,7 @@ pub const PackageEnv = struct {
         // Canonicalize
         var czer = try Can.init(env, parse_ast, module_envs_out);
         try czer.canonicalizeFile();
+        try czer.validateForChecking();
         czer.deinit();
 
         // Type check using the SAME module_envs_map

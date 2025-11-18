@@ -8,9 +8,22 @@ type=file
 helper = |x| x + 1
 ~~~
 # EXPECTED
-NIL
+MISSING MAIN! FUNCTION - default_app_no_main.md:1:1:1:19
 # PROBLEMS
-NIL
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**default_app_no_main.md:1:1:1:19:**
+```roc
+helper = |x| x + 1
+```
+^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,

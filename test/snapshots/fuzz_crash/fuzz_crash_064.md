@@ -8,9 +8,22 @@ type=file
 
 ~~~
 # EXPECTED
-NIL
+MISSING MAIN! FUNCTION - fuzz_crash_064.md:2:1:2:1
 # PROBLEMS
-NIL
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_064.md:2:1:2:1:**
+```roc
+
+```
+^
+
+
 # TOKENS
 ~~~zig
 EndOfFile,

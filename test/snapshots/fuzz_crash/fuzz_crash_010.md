@@ -18,6 +18,7 @@ PARSE ERROR - fuzz_crash_010.md:1:2:1:3
 PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
+MISSING MAIN! FUNCTION - fuzz_crash_010.md:1:1:5:35
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -88,6 +89,23 @@ This is an unexpected parsing error. Please check your syntax.
     ]
 ```
      ^
+
+
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_010.md:1:1:5:35:**
+```roc
+H{o,
+    ]
+foo =
+
+    "on        (string 'onmo %')))
+```
 
 
 # TOKENS
