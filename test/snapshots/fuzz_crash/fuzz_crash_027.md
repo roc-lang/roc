@@ -229,6 +229,7 @@ INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -947,6 +948,23 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     __d_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:143:2:147:3:**
+```roc
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+```
+
+It has the type:
+    _[Stdoline!(Error)][Err(_d), Ok({  })]_
+
+But the type annotation says it should have the type:
+    _Try({  }, _d)_
 
 # TOKENS
 ~~~zig

@@ -4214,7 +4214,21 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // TODO: This works for top-level types, but not for deeply
                 // nested types like: MyModule.A.B.C.my_func
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
+
+                // Check if type_name_bytes already starts with "module_name."
+                const module_prefix = original_env.module_name;
+                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
+                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
+                    type_name_bytes[module_prefix.len] == '.';
+
                 if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}",
+                        .{ type_name_bytes, constraint_fn_name_bytes },
+                    );
+                } else if (already_qualified) {
+                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}",
@@ -4279,10 +4293,20 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
 
                 // Copy the actual method from the dest module env to this module env
-                const real_method_var = if (is_this_module)
-                    try self.instantiateVar(def_var, env, .{ .explicit = region })
-                else
-                    try self.copyVar(def_var, original_env, region);
+                const real_method_var = if (is_this_module) blk: {
+                    break :blk try self.instantiateVar(def_var, env, .{ .explicit = region });
+                } else blk: {
+                    // Copy the method from the other module's type store
+                    const copied_var = try self.copyVar(def_var, original_env, region);
+                    // For builtin methods, we need to instantiate the copied var to convert
+                    // rigid type variables to flex, so they can unify with the call site
+                    const is_builtin = original_module_ident == self.cir.builtin_module_ident;
+                    if (is_builtin) {
+                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+                    } else {
+                        break :blk copied_var;
+                    }
+                };
 
                 // Unify the actual function var against the inferred var
                 //

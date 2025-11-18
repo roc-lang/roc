@@ -13,24 +13,9 @@ processList = |list| list.len()
 main! = |_| processList(["one","two"])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_single_arg.md:4:22:4:32
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_single_arg.md:4:22:4:32:**
-```roc
-processList = |list| list.len()
-```
-                     ^^^^^^^^^^
-
-It has the type:
-    _List(Str) -> Num(Int(Unsigned64))_
-
-But I expected it to be:
-    _List(_item) -> Num(Int(Unsigned64))_
-
-**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -131,9 +116,9 @@ main! = |_| processList(["one", "two"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
-		(patt (type "_arg -> Error")))
+		(patt (type "List(Str) -> Num(Int(Unsigned64))"))
+		(patt (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr (type "Error -> Error"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "List(Str) -> Num(Int(Unsigned64))"))
+		(expr (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~
