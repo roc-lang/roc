@@ -14,9 +14,29 @@ useBar : Foo.Bar
 useBar = Something
 ~~~
 # EXPECTED
-NIL
+TYPE MODULE MISSING MATCHING TYPE - nominal_associated_vs_module.md:1:1:7:19
 # PROBLEMS
-NIL
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This file is named `nominal_associated_vs_module`.roc, but no top-level type declaration named `nominal_associated_vs_module` was found.
+
+Add either:
+`nominal_associated_vs_module := ...` (nominal type)
+or:
+`nominal_associated_vs_module : ...` (type alias)
+**nominal_associated_vs_module.md:1:1:7:19:**
+```roc
+Foo := [Whatever].{
+    Bar := [Something]
+}
+
+# This should resolve to the local Foo.Bar, not try to import from a Foo module
+useBar : Foo.Bar
+useBar = Something
+```
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

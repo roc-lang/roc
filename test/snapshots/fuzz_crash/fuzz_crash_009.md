@@ -19,6 +19,7 @@ PARSE ERROR - fuzz_crash_009.md:1:3:1:4
 PARSE ERROR - fuzz_crash_009.md:1:4:1:5
 PARSE ERROR - fuzz_crash_009.md:1:5:1:6
 PARSE ERROR - fuzz_crash_009.md:2:6:2:7
+MISSING MAIN! FUNCTION - fuzz_crash_009.md:1:2:6:12
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -83,6 +84,24 @@ This is an unexpected parsing error. Please check your syntax.
      ]
 ```
      ^
+
+
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_009.md:1:2:6:12:**
+```roc
+ f{o,
+     ]
+
+foo =
+
+    "onmo %
+```
 
 
 # TOKENS
