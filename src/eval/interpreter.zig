@@ -4610,7 +4610,8 @@ pub const Interpreter = struct {
             return found;
         }
 
-        // Insert a placeholder to break cycles in recursive type translation
+        // Insert a placeholder to break cycles during recursive type translation.
+        // If we recurse back to this type, we'll return the placeholder instead of infinite looping.
         const placeholder = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
         try self.translate_cache.put(key, placeholder);
 
