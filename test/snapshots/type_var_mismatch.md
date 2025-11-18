@@ -23,21 +23,21 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_mismatch.md:11:14:11:42
+TYPE MISMATCH - type_var_mismatch.md:11:37:11:41
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_var_mismatch.md:11:14:11:42:**
+**type_var_mismatch.md:11:37:11:41:**
 ```roc
     result = List.first(list).ok_or(item)
 ```
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                    ^^^^
 
 It has the type:
-    _Try(item, [ListWasEmpty]), Num(_size) -> item_
+    _Num(_size)_
 
 But I expected it to be:
-    _Try(item, [ListWasEmpty]), item -> item_
+    _item_
 
 # TOKENS
 ~~~zig

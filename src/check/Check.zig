@@ -4309,13 +4309,46 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 };
 
                 // Unify the actual function var against the inferred var
-                //
-                // TODO: For better error messages, we should check if these
-                // types are functions, unify each arg, etc. This should look
-                // similar to e_call
-                const result = try self.unify(real_method_var, constraint.fn_var, env);
+                // We break this down into arg-by-arg and return type unification
+                // for better error messages (instead of showing the whole function types)
 
-                if (result.isProblem()) {
+                // Extract the function type from the real method
+                const resolved_real = self.types.resolveVar(real_method_var);
+                const mb_real_func = resolved_real.desc.content.unwrapFunc();
+                if (mb_real_func == null) {
+                    // This shouldn't happen - the method should be a function
+                    std.debug.assert(false);
+                    try self.unifyWith(deferred_constraint.var_, .err, env);
+                    try self.unifyWith(resolved_func.ret, .err, env);
+                    continue;
+                }
+                const real_func = mb_real_func.?;
+
+                // Check arity matches
+                const constraint_args = self.types.sliceVars(resolved_func.args);
+                const real_args = self.types.sliceVars(real_func.args);
+
+                if (constraint_args.len != real_args.len) {
+                    // Arity mismatch - shouldn't happen if method was found correctly
+                    std.debug.assert(false);
+                    try self.unifyWith(deferred_constraint.var_, .err, env);
+                    try self.unifyWith(resolved_func.ret, .err, env);
+                    continue;
+                }
+
+                // Unify each argument pair
+                var any_arg_failed = false;
+                for (constraint_args, real_args) |constraint_arg, real_arg| {
+                    const arg_result = try self.unify(real_arg, constraint_arg, env);
+                    if (arg_result.isProblem()) {
+                        any_arg_failed = true;
+                    }
+                }
+
+                // Unify return types - this will generate the error with the expression region
+                const ret_result = try self.unify(real_func.ret, resolved_func.ret, env);
+
+                if (any_arg_failed or ret_result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
                 }
