@@ -26,23 +26,27 @@ This means `FlatType.num` will be completely removed, and number types will use 
 ## Important Scope Limitations
 
 **Out of scope for this plan:**
-- Interpreter support for polymorphic number literals (those without type annotations)
 - Literal requirements checking (bits needed, sign needed, etc.)
 - Special error messages for literals that don't fit in their annotated type
 
-**Important clarification about type inference:**
-The `from_num_literal` constraint **is** type inference - it allows the type system to infer what type a number literal should have. However, the interpreter needs to know the *concrete* type to execute code.
+**Type inference and interpreter support:**
+The `from_num_literal` constraint enables type inference - it allows the type system to infer what type a number literal should have. The interpreter handles polymorphic number types by defaulting to `Dec`.
 
-With this plan:
+**Interpreter strategy for unresolved polymorphic types:**
+When the interpreter encounters an unresolved polymorphic type (a flex var, possibly with static dispatch constraints) during layout resolution:
+1. Attempt to unify the type with `Builtin.Num.Dec`
+2. If unification fails: crash with an error explaining the incompatibility with `Dec`
+3. If unification succeeds: use `Dec` layout and continue
+
+This allows:
 - ✅ **Type inference works**: `x = 42` will have type `num where [num.from_num_literal : ...]`
-- ❌ **Interpreter can't execute it yet**: The interpreter doesn't know how to handle polymorphic number types
-- ✅ **With annotation, interpreter works**: `x : U8` then `x = 42` gives concrete type `U8` that interpreter understands
+- ✅ **Interpreter works with polymorphic numbers**: Defaults to `Dec` automatically
+- ✅ **Type annotations still work**: `x : U8` then `x = 42` gives concrete type `U8`
 
 **Consequence:**
-- All tests must be updated to use **explicit type annotations** for all number literals
-- Example: `42` becomes two lines: `x : U8` then `x = 42`
-- Note: Suffix notation like `42u8` is **invalid Roc syntax** (was removed from the language)
-- This is temporary scaffolding; future work will add interpreter support for polymorphic numbers
+- Tests can use unannotated number literals (they'll default to `Dec`)
+- Only tests that specifically need non-`Dec` types need annotations
+- This matches the eventual runtime behavior
 
 ## Affected Files
 
@@ -68,14 +72,13 @@ Based on comprehensive codebase analysis, here are all files that reference spec
 - `src/layout/store.zig` - Layout computation
 - `src/eval/interpreter.zig` - Interpreter
 
-### Tests (High Priority - need annotation updates)
+### Tests (High Priority)
 - `src/check/test/unify_test.zig` - Unification tests
-- `src/check/test/num_type_inference_test.zig` - Number type inference tests
-- `src/check/test/num_type_requirements_test.zig` - Number literal requirements tests
+- `src/check/test/num_type_inference_test.zig` - Number type inference tests (may need removal/revision)
+- `src/check/test/num_type_requirements_test.zig` - Number literal requirements tests (may need removal/revision)
 - `src/types/test/test_rigid_instantiation.zig` - Instantiation tests
 - `src/layout/store_test.zig` - Layout tests
 - `src/canonicalize/test/int_test.zig` - Integer canonicalization tests
-- **All other tests that use number literals**
 
 ### Error Reporting (Medium Priority)
 - `crates/reporting/src/error/canonicalize.rs` - Rust error reporting
@@ -92,9 +95,9 @@ Based on comprehensive codebase analysis, here are all files that reference spec
 
 ## Incremental Removal Strategy
 
-The strategy is to work **outside-in**: first set up the new infrastructure (NumLiteral + from_num_literal), annotate all tests so they don't rely on inference, then replace number literal creation, then remove the special-case infrastructure.
+The strategy is to work **outside-in**: first set up the new infrastructure (NumLiteral + from_num_literal), update the interpreter to default polymorphic types to `Dec`, then replace number literal creation, then remove the special-case infrastructure.
 
-**Critical ordering**: Tests must be annotated BEFORE changing literal type creation, otherwise we'll have a broken state with many test failures.
+**Key insight**: By having the interpreter default to `Dec` for unresolved polymorphic number types, we avoid needing to annotate all test literals. Tests will continue to work throughout the transition.
 
 ---
 
@@ -170,78 +173,51 @@ zig build snapshot && zig build test
 
 ---
 
-### Phase 3: Annotate All Test Number Literals
-**Goal**: Add explicit type annotations to all number literals in tests BEFORE changing literal type creation
+### Phase 3: Update Interpreter to Default Polymorphic Numbers to Dec
+**Goal**: Make the interpreter handle unresolved polymorphic number types by defaulting to `Dec`
 
-**Files**: All test files
-
-**⚠️ CRITICAL**: This phase must happen BEFORE Phase 4 (changing literal type creation) to avoid a broken state!
+**Files**:
+- `src/layout/store.zig` - Layout computation (where type resolution happens)
+- `src/eval/interpreter.zig` - Interpreter
 
 **Changes needed**:
 
-For every test file, update number literals to have explicit annotations:
+When the layout system encounters an unresolved flex var during layout resolution:
 
-**Before**:
-```roc
-x = 42
-y = 3.14
+1. **Detect polymorphic number types**: Check if the flex var has a `from_num_literal` static dispatch constraint
+2. **Attempt Dec unification**: Try to unify the flex var with `Builtin.Num.Dec`
+3. **Handle the result**:
+   - If unification succeeds: use `Dec` layout and continue
+   - If unification fails: provide a clear error message explaining the type is incompatible with `Dec`
+
+**Implementation approach**:
+
+```zig
+// In layout resolution code (src/layout/store.zig)
+fn layoutFromVar(self: *Self, var_id: Var) !Layout {
+    const content = self.type_store.getContent(var_id);
+
+    switch (content) {
+        .flex_var => {
+            // Check if this is a polymorphic number (has from_num_literal constraint)
+            if (self.hasFromNumLiteralConstraint(var_id)) {
+                // Try to unify with Dec
+                const dec_var = try self.getBuiltinType("Builtin.Num.Dec");
+                if (self.tryUnify(var_id, dec_var)) {
+                    // Unification succeeded - use Dec layout
+                    return Layout.dec();
+                } else {
+                    // Unification failed - error
+                    return error.PolymorphicNumberIncompatibleWithDec;
+                }
+            }
+            // Regular flex var - error as before
+            return error.UnresolvedType;
+        },
+        // ... rest of cases
+    }
+}
 ```
-
-**After (with TODO comments)**:
-```roc
-# TODO: Remove annotation once number literal inference is re-added
-# x = 42
-x : U32
-x = 42
-
-# TODO: Remove annotation once number literal inference is re-added
-# y = 3.14
-y : F64
-y = 3.14
-```
-
-**Note**: Suffix notation like `42u8` or `3.14f64` is **not valid Roc syntax** (it was removed from the language). Type annotations are the only way to give number literals concrete types that the interpreter can execute.
-
-**Important TODO Comment Convention**:
-
-For EVERY number literal annotation added in this phase:
-1. **Comment out the original unannotated version** above the annotated version
-2. **Add a TODO comment** explaining to remove the annotation later
-3. This makes it trivial to revert once interpreter support for polymorphic numbers is added
-
-Note: The annotations are needed for the **interpreter**, not the type system. Type inference will work fine without annotations, but the interpreter needs concrete types to execute.
-
-**Example in actual test code**:
-```roc
-# TODO: Remove annotations once interpreter supports polymorphic numbers
-# a = 10
-# b = 20
-# expected = 30
-a : I32
-a = 10
-b : I32
-b = 20
-expected : I32
-expected = 30
-
-result = a + b
-expect(result == expected)
-```
-
-**Specific test files to update**:
-1. `src/check/test/unify_test.zig` - Update all number literals in test cases
-2. `src/check/test/num_type_inference_test.zig` - May need to remove or significantly revise
-3. `src/check/test/num_type_requirements_test.zig` - May need to remove or significantly revise
-4. `src/types/test/test_rigid_instantiation.zig` - Update number literals
-5. `src/layout/store_test.zig` - Update number literals
-6. All other test files with number literals
-
-**Strategy**:
-- Start with a single test file to establish pattern
-- Add annotations systematically, file by file
-- For each number literal, follow the TODO comment convention
-- Choose reasonable default types (e.g., `I64` for integers, `F64` for decimals)
-- Since tests still pass with old inference, we can verify each file incrementally
 
 **Test after this phase**:
 ```bash
@@ -249,9 +225,9 @@ zig build snapshot && zig build test
 ```
 
 **Expected outcome**:
-- All tests still pass (inference still works at this point!)
-- All number literals in tests have explicit annotations with TODO comments
-- Ready for Phase 4 to change literal type creation
+- Tests still pass (still using old number type creation)
+- Interpreter is ready to handle polymorphic numbers
+- When we switch to the new approach, tests won't need annotations
 
 ---
 
@@ -260,7 +236,7 @@ zig build snapshot && zig build test
 
 **File**: `src/check/Check.zig`
 
-**⚠️ PREREQUISITE**: Phase 3 must be complete first!
+**Prerequisites**: Phase 3 must be complete (interpreter can handle polymorphic numbers)
 
 **Current behavior** (around lines 2060-2127):
 - Integer literals create `num_unbound` or `int_unbound` wrapped in `num_poly`
@@ -268,6 +244,7 @@ zig build snapshot && zig build test
 
 **New behavior**:
 - All number literals (integer or decimal) create a flex var with a static dispatch constraint
+- Unannotated literals will be inferred and default to `Dec` in the interpreter
 
 **Changes needed**:
 
@@ -314,9 +291,9 @@ zig build snapshot && zig build test
 ```
 
 **Expected outcome**:
-- Tests still pass because all literals have explicit annotations from Phase 3!
-- Unannotated number literals would fail, but we don't have any
+- Tests still pass because the interpreter defaults unannotated literals to `Dec`
 - Literal type creation now uses the new constraint-based approach
+- Number literals work with type inference
 
 ---
 
@@ -909,10 +886,10 @@ Each phase should be a separate commit with a clear message. If a phase causes u
 ## Future Work (Out of Scope)
 
 After this plan is complete, future work can add:
-1. Interpreter support for polymorphic number types (numbers without explicit type annotations)
-2. Better error messages for invalid number literals
-3. Literal requirements checking (bits needed, sign needed)
-4. Optimizations for the common case of concrete number types
+1. Better error messages for invalid number literals
+2. Literal requirements checking (bits needed, sign needed)
+3. Optimizations for the common case of concrete number types
+4. More sophisticated defaulting strategy (e.g., defaulting to smaller types when possible)
 
 ## Next Steps
 
