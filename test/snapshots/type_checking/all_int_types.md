@@ -36,9 +36,157 @@ j : I128
 j = -170141183460469231731687303715884105728
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - all_int_types.md:2:5:2:8
+TYPE MISMATCH - all_int_types.md:5:5:5:10
+TYPE MISMATCH - all_int_types.md:8:5:8:15
+TYPE MISMATCH - all_int_types.md:11:5:11:25
+TYPE MISMATCH - all_int_types.md:14:5:14:44
+TYPE MISMATCH - all_int_types.md:17:5:17:9
+TYPE MISMATCH - all_int_types.md:20:5:20:11
+TYPE MISMATCH - all_int_types.md:23:5:23:16
+TYPE MISMATCH - all_int_types.md:26:5:26:25
+TYPE MISMATCH - all_int_types.md:29:5:29:45
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:2:5:2:8:**
+```roc
+a = 255
+```
+    ^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U8_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:5:5:5:10:**
+```roc
+b = 65535
+```
+    ^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U16_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:8:5:8:15:**
+```roc
+c = 4294967295
+```
+    ^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U32_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:11:5:11:25:**
+```roc
+d = 18446744073709551615
+```
+    ^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:14:5:14:44:**
+```roc
+e = 340282366920938463463374607431768211455
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U128_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:17:5:17:9:**
+```roc
+f = -128
+```
+    ^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I8_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:20:5:20:11:**
+```roc
+g = -32768
+```
+    ^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I16_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:23:5:23:16:**
+```roc
+h = -2147483648
+```
+    ^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I32_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:26:5:26:25:**
+```roc
+i = -9223372036854775808
+```
+    ^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_int_types.md:29:5:29:45:**
+```roc
+j = -170141183460469231731687303715884105728
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I128_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -181,25 +329,25 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8))"))
-		(patt (type "Num(Int(Unsigned16))"))
-		(patt (type "Num(Int(Unsigned32))"))
-		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned128))"))
-		(patt (type "Num(Int(Signed8))"))
-		(patt (type "Num(Int(Signed16))"))
-		(patt (type "Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed64))"))
-		(patt (type "Num(Int(Signed128))")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned8))"))
-		(expr (type "Num(Int(Unsigned16))"))
-		(expr (type "Num(Int(Unsigned32))"))
-		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Num(Int(Unsigned128))"))
-		(expr (type "Num(Int(Signed8))"))
-		(expr (type "Num(Int(Signed16))"))
-		(expr (type "Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed64))"))
-		(expr (type "Num(Int(Signed128))"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

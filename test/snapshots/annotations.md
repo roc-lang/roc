@@ -29,10 +29,40 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
+TYPE MISMATCH - annotations.md:4:11:4:26
+TYPE MISMATCH - annotations.md:13:23:13:35
 TYPE MISMATCH - annotations.md:16:28:16:28
 INVALID NOMINAL TAG - annotations.md:19:22:19:41
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**annotations.md:4:11:4:26:**
+```roc
+pairU64 = Pair.Pair(1, 2)
+```
+          ^^^^^^^^^^^^^^^
+
+It has the type:
+    _Pair(Num(_size))_
+
+But the type annotation says it should have the type:
+    _Pair(U64)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**annotations.md:13:23:13:35:**
+```roc
+succeedPairSameType = mkPair(1, 2)
+```
+                      ^^^^^^^^^^^^
+
+It has the type:
+    _Pair(Num(_size))_
+
+But the type annotation says it should have the type:
+    _Pair(U8)_
+
 **TYPE MISMATCH**
 The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
 **annotations.md:16:28:**
@@ -312,10 +342,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Pair(Num(Int(Unsigned64)))"))
+		(patt (type "Error"))
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
-		(patt (type "Pair(Num(Int(Unsigned8)))"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "a, b -> Error")))
@@ -325,10 +355,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Pair(Num(Int(Unsigned64)))"))
+		(expr (type "Error"))
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
-		(expr (type "Pair(Num(Int(Unsigned8)))"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "a, b -> Error"))))

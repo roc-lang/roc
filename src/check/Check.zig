@@ -619,6 +619,42 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     );
 }
 
+/// Create a nominal number type content (e.g., U8, I32, Dec)
+/// Number types are defined in Builtin.roc as: U8 :: [].{...}
+/// They have no type parameters and their backing is the empty tag union []
+fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    // Insert the ident for the type name (e.g., "U8", "I32", "Dec")
+    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(type_name));
+    const type_ident = types_mod.TypeIdent{
+        .ident_idx = type_name_ident,
+    };
+
+    // Number types backing is [] (empty tag union with closed extension)
+    const empty_record_content = Content{ .structure = .{ .empty_record = {} } };
+    const ext_var = try self.freshFromContent(empty_record_content, env, Region.zero());
+    const empty_tag_union = types_mod.TagUnion{
+        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
+        .ext = ext_var,
+    };
+    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
+    // Number types have no type arguments
+    const no_type_args: []const Var = &.{};
+
+    return try self.types.mkNominal(
+        type_ident,
+        backing_var,
+        no_type_args,
+        origin_module_id,
+    );
+}
+
 // updating vars //
 
 /// Unify the provided variable with the provided content
@@ -1613,19 +1649,20 @@ fn generateBuiltinTypeInstance(
 ) std.mem.Allocator.Error!Var {
     switch (anno_builtin_type) {
         .str => return try self.freshFromContent(.{ .structure = .str }, env, anno_region),
-        .u8 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u8 } }, env, anno_region),
-        .u16 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u16 } }, env, anno_region),
-        .u32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u32 } }, env, anno_region),
-        .u64 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u64 } }, env, anno_region),
-        .u128 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u128 } }, env, anno_region),
-        .i8 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i8 } }, env, anno_region),
-        .i16 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i16 } }, env, anno_region),
-        .i32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i32 } }, env, anno_region),
-        .i64 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i64 } }, env, anno_region),
-        .i128 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i128 } }, env, anno_region),
-        .f32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.frac_f32 } }, env, anno_region),
-        .f64 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.frac_f64 } }, env, anno_region),
-        .dec => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.frac_dec } }, env, anno_region),
+        // Phase 5: Use nominal types from Builtin instead of special .num content
+        .u8 => return try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, anno_region),
+        .u16 => return try self.freshFromContent(try self.mkNumberTypeContent("U16", env), env, anno_region),
+        .u32 => return try self.freshFromContent(try self.mkNumberTypeContent("U32", env), env, anno_region),
+        .u64 => return try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, anno_region),
+        .u128 => return try self.freshFromContent(try self.mkNumberTypeContent("U128", env), env, anno_region),
+        .i8 => return try self.freshFromContent(try self.mkNumberTypeContent("I8", env), env, anno_region),
+        .i16 => return try self.freshFromContent(try self.mkNumberTypeContent("I16", env), env, anno_region),
+        .i32 => return try self.freshFromContent(try self.mkNumberTypeContent("I32", env), env, anno_region),
+        .i64 => return try self.freshFromContent(try self.mkNumberTypeContent("I64", env), env, anno_region),
+        .i128 => return try self.freshFromContent(try self.mkNumberTypeContent("I128", env), env, anno_region),
+        .f32 => return try self.freshFromContent(try self.mkNumberTypeContent("F32", env), env, anno_region),
+        .f64 => return try self.freshFromContent(try self.mkNumberTypeContent("F64", env), env, anno_region),
+        .dec => return try self.freshFromContent(try self.mkNumberTypeContent("Dec", env), env, anno_region),
         .list => {
             // Then check arity
             if (anno_args.len != 1) {

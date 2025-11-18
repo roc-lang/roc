@@ -23,9 +23,37 @@ result = {
 expect result == 32
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - for_loop_var_conditional_persist.md:13:2:13:11
+TYPE MISMATCH - for_loop_var_conditional_persist.md:13:14:13:24
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_conditional_persist.md:13:2:13:11:**
+```roc
+	lastEven_ * evenCount_
+```
+	^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_conditional_persist.md:13:14:13:24:**
+```roc
+	lastEven_ * evenCount_
+```
+	            ^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -170,7 +198,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))))
 ~~~

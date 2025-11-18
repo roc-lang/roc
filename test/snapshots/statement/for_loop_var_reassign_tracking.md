@@ -23,9 +23,22 @@ result = {
 expect result == 31
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - for_loop_var_reassign_tracking.md:13:2:13:6
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_reassign_tracking.md:13:2:13:6:**
+```roc
+	sum_ + max_
+```
+	^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -162,7 +175,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))))
 ~~~

@@ -18,9 +18,22 @@ double = |x| add(x, x)
 main! = add(1, 2)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - pure_with_pure_annotation.md:11:13:11:14
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**pure_with_pure_annotation.md:11:13:11:14:**
+```roc
+main! = add(1, 2)
+```
+            ^
+
+This argument has the type:
+    _Num(_size)_
+
+But `add` needs the first argument to be:
+    _I32_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -143,11 +156,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed32))")))
+		(patt (type "I32, I32 -> I32"))
+		(patt (type "I32 -> I32"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed32))"))))
+		(expr (type "I32, I32 -> I32"))
+		(expr (type "I32 -> I32"))
+		(expr (type "Error"))))
 ~~~

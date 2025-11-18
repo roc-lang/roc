@@ -20,9 +20,22 @@ nested : { bar : Foo.Bar, count : U64 }
 nested = { bar: A, count: 1 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:10:13:30
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_lookup_in_containers.md:13:10:13:30:**
+```roc
+nested = { bar: A, count: 1 }
+```
+         ^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _{ bar: Foo.Bar, count: Num(_size) }_
+
+But the type annotation says it should have the type:
+    _{ bar: Foo.Bar, count: U64 }_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -172,7 +185,7 @@ nested = { bar: A, count: 1 }
 	(defs
 		(patt (type "List(Foo.Bar)"))
 		(patt (type "Try(Foo.Bar, Foo.Error)"))
-		(patt (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -183,5 +196,5 @@ nested = { bar: A, count: 1 }
 	(expressions
 		(expr (type "List(Foo.Bar)"))
 		(expr (type "Try(Foo.Bar, Foo.Error)"))
-		(expr (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }"))))
+		(expr (type "Error"))))
 ~~~

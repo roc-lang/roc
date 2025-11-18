@@ -27,7 +27,7 @@ This argument has the type:
     _{ age: Num(_size), namee: Str }_
 
 But `getName` needs the first argument to be:
-    _{ age: Num(Int(Unsigned64)), name: Str }_
+    _{ age: U64, name: Str }_
 
 # TOKENS
 ~~~zig
@@ -131,9 +131,9 @@ main! = |_| getName({ namee: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
+		(patt (type "{ age: U64, name: Str } -> Str"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
+		(expr (type "{ age: U64, name: Str } -> Str"))
 		(expr (type "_arg -> Error"))))
 ~~~

@@ -39,7 +39,14 @@ PARSE ERROR - fuzz_crash_025.md:12:48:12:49
 PARSE ERROR - fuzz_crash_025.md:13:1:13:2
 PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
+TYPE MISMATCH - fuzz_crash_025.md:2:5:2:8
+TYPE MISMATCH - fuzz_crash_025.md:5:5:5:10
+TYPE MISMATCH - fuzz_crash_025.md:8:5:8:14
 TYPE MISMATCH - fuzz_crash_025.md:12:5:12:48
+TYPE MISMATCH - fuzz_crash_025.md:16:5:16:11
+TYPE MISMATCH - fuzz_crash_025.md:19:5:19:12
+TYPE MISMATCH - fuzz_crash_025.md:22:5:22:17
+TYPE MISMATCH - fuzz_crash_025.md:25:5:25:29
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -144,6 +151,48 @@ f =8
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
+**fuzz_crash_025.md:2:5:2:8:**
+```roc
+a = 255
+```
+    ^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U8_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_025.md:5:5:5:10:**
+```roc
+b = 65535
+```
+    ^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U16_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_025.md:8:5:8:14:**
+```roc
+c = 429496729 U64
+```
+    ^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U32_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **fuzz_crash_025.md:12:5:12:48:**
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
@@ -154,9 +203,63 @@ It has the type:
     _Num(Frac(_size))_
 
 But the type annotation says it should have the type:
-    _Num(Int(Unsigned128))_
+    _U128_
 
-**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_025.md:16:5:16:11:**
+```roc
+g = -32768
+```
+    ^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I16_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_025.md:19:5:19:12:**
+```roc
+h = -483648
+```
+    ^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I32_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_025.md:22:5:22:17:**
+```roc
+i = -92233725808
+```
+    ^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_025.md:25:5:25:29:**
+```roc
+j = -17011687303715884105728
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I128_
 
 # TOKENS
 ~~~zig
@@ -310,21 +413,21 @@ j = -17011687303715884105728
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8))"))
-		(patt (type "Num(Int(Unsigned16))"))
-		(patt (type "Num(Int(Unsigned32))"))
 		(patt (type "Error"))
-		(patt (type "Num(Int(Signed16))"))
-		(patt (type "Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed64))"))
-		(patt (type "Num(Int(Signed128))")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned8))"))
-		(expr (type "Num(Int(Unsigned16))"))
-		(expr (type "Num(Int(Unsigned32))"))
 		(expr (type "Error"))
-		(expr (type "Num(Int(Signed16))"))
-		(expr (type "Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed64))"))
-		(expr (type "Num(Int(Signed128))"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

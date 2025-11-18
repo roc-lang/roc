@@ -9,18 +9,21 @@ x : U8
 x = -1
 ~~~
 # EXPECTED
-NEGATIVE UNSIGNED INTEGER - u8_negative_value.md:2:5:2:7
+TYPE MISMATCH - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-**NEGATIVE UNSIGNED INTEGER**
-The number **-1** is **signed** because it is negative:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **u8_negative_value.md:2:5:2:7:**
 ```roc
 x = -1
 ```
     ^^
 
-However, its inferred type is **unsigned**:
-    _Num(Int(Unsigned8))_
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U8_
 
 # TOKENS
 ~~~zig

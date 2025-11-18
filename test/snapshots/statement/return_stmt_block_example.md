@@ -16,8 +16,23 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - return_stmt_block_example.md:3:21:3:23
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**return_stmt_block_example.md:3:21:3:23:**
+```roc
+    str = if (num > 10) {
+```
+                    ^^
+
+It has the type:
+    _Num(_size)_
+
+But I expected it to be:
+    _U64_
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:3:11:**
@@ -150,7 +165,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64)) -> Try(Error, [TooBig])")))
+		(patt (type "U64 -> Try(Error, [TooBig])")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64)) -> Try(Error, [TooBig])"))))
+		(expr (type "U64 -> Try(Error, [TooBig])"))))
 ~~~

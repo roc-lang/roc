@@ -14,9 +14,22 @@ main : I64, I64 -> I64
 main = |_, _| helper(5)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - lambda_ret_constraint_bug.md:4:18:4:19
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_ret_constraint_bug.md:4:18:4:19:**
+```roc
+helper = |n| n * 2
+```
+                 ^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I64_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -111,9 +124,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(patt (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))")))
+		(patt (type "Error -> Error"))
+		(patt (type "I64, I64 -> Error")))
 	(expressions
-		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(expr (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))"))))
+		(expr (type "Error -> Error"))
+		(expr (type "I64, I64 -> Error"))))
 ~~~

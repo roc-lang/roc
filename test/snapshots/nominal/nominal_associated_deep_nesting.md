@@ -22,9 +22,22 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_deep_nesting.md:12:13:12:43
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_deep_nesting.md:12:13:12:43:**
+```roc
+deepValue = Foo.Level1.Level2.Level3.value
+```
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -146,7 +159,7 @@ deepType = C
 (inferred-types
 	(defs
 		(patt (type "Num(_size)"))
-		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Error"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
@@ -159,6 +172,6 @@ deepType = C
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
 		(expr (type "Num(_size)"))
-		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Error"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

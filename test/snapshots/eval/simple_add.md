@@ -12,9 +12,20 @@ expect addU8(1, 2) == 3
 expect addU8(0, 10) == 10
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - simple_add.md:2:16:2:21
++ - :0:0:0:0
 # PROBLEMS
-NIL
+**MISSING METHOD**
+The value before this **+** operator has the type **U8**, which has no **plus** method:
+**simple_add.md:2:16:2:21:**
+```roc
+addU8 = |a, b| a + b
+```
+               ^^^^^
+
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,
@@ -101,7 +112,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))")))
+		(patt (type "U8, U8 -> Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))"))))
+		(expr (type "U8, U8 -> Error"))))
 ~~~

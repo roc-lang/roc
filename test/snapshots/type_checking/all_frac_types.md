@@ -15,9 +15,52 @@ c : Dec
 c = 123.456
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - all_frac_types.md:2:5:2:9
+TYPE MISMATCH - all_frac_types.md:5:5:5:12
+TYPE MISMATCH - all_frac_types.md:8:5:8:12
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_frac_types.md:2:5:2:9:**
+```roc
+a = 3.14
+```
+    ^^^^
+
+It has the type:
+    _Num(Frac(_size))_
+
+But the type annotation says it should have the type:
+    _F32_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_frac_types.md:5:5:5:12:**
+```roc
+b = 2.71828
+```
+    ^^^^^^^
+
+It has the type:
+    _Num(Frac(_size))_
+
+But the type annotation says it should have the type:
+    _F64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**all_frac_types.md:8:5:8:12:**
+```roc
+c = 123.456
+```
+    ^^^^^^^
+
+It has the type:
+    _Num(Frac(_size))_
+
+But the type annotation says it should have the type:
+    _Dec_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -76,11 +119,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Frac(Float32))"))
-		(patt (type "Num(Frac(Float64))"))
-		(patt (type "Num(Frac(Decimal))")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Frac(Float32))"))
-		(expr (type "Num(Frac(Float64))"))
-		(expr (type "Num(Frac(Decimal))"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

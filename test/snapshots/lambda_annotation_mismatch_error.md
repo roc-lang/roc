@@ -43,9 +43,7 @@ It has the type:
     _Num(Frac(_size))_
 
 But the type annotation says it should have the type:
-    _Num(Int(Signed64))_
-
-**Hint:** This might be because the numeric literal is too large to fit in the target type.
+    _I64_
 
 # TOKENS
 ~~~zig

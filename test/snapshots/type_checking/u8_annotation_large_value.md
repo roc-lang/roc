@@ -9,18 +9,21 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
-NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:2:5:2:8
+TYPE MISMATCH - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
-**NUMBER DOES NOT FIT IN TYPE**
-The number **500** does not fit in its inferred type:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **u8_annotation_large_value.md:2:5:2:8:**
 ```roc
 x = 500
 ```
     ^^^
 
-Its inferred type is:
-    _Num(Int(Unsigned8))_
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U8_
 
 # TOKENS
 ~~~zig

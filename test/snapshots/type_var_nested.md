@@ -35,9 +35,22 @@ wrap_in_result = |value| Ok(Ok(value))
 main = |_| "done"
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_var_nested.md:22:22:22:24
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_var_nested.md:22:22:22:24:**
+```roc
+list_length = |_lst| 42
+```
+                     ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -345,14 +358,14 @@ main = |_| "done"
 		(patt (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
-		(patt (type "List(_a) -> Num(Int(Unsigned64))"))
+		(patt (type "List(_a) -> Error"))
 		(patt (type "a -> Try(Try(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
-		(expr (type "List(_a) -> Num(Int(Unsigned64))"))
+		(expr (type "List(_a) -> Error"))
 		(expr (type "a -> Try(Try(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

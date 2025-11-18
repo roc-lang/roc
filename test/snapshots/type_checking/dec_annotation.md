@@ -9,9 +9,22 @@ x : Dec
 x = 123.456
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - dec_annotation.md:2:5:2:12
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**dec_annotation.md:2:5:2:12:**
+```roc
+x = 123.456
+```
+    ^^^^^^^
+
+It has the type:
+    _Num(Frac(_size))_
+
+But the type annotation says it should have the type:
+    _Dec_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -46,7 +59,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Frac(Decimal))")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Frac(Decimal))"))))
+		(expr (type "Error"))))
 ~~~

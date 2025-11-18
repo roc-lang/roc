@@ -23,9 +23,37 @@ countEvens = {
 expect countEvens == 150
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - for_loop_complex_mutation.md:13:2:13:8
+TYPE MISMATCH - for_loop_complex_mutation.md:13:11:13:15
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_complex_mutation.md:13:2:13:8:**
+```roc
+	count_ * sum_
+```
+	^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_complex_mutation.md:13:11:13:15:**
+```roc
+	count_ * sum_
+```
+	         ^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -179,7 +207,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))))
 ~~~

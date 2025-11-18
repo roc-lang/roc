@@ -15,9 +15,22 @@ foo = {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - for_stmt.md:7:2:7:8
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_stmt.md:7:2:7:8:**
+```roc
+	result
+```
+	^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -103,7 +116,7 @@ foo = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))))
 ~~~

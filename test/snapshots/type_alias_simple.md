@@ -15,9 +15,37 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_alias_simple.md:6:25:6:27
+TYPE MISMATCH - type_alias_simple.md:8:21:8:24
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_simple.md:6:25:6:27:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+                        ^^
+
+It has the type:
+    _Num(_size)_
+
+But I expected it to be:
+    _UserId_
+
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**type_alias_simple.md:8:21:8:24:**
+```roc
+main! = |_| getUser(100)
+```
+                    ^^^
+
+This argument has the type:
+    _Num(_size)_
+
+But `getUser` needs the first argument to be:
+    _UserId_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -122,11 +150,11 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "UserId -> Str"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> Error")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId"))))
 	(expressions
 		(expr (type "UserId -> Str"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> Error"))))
 ~~~

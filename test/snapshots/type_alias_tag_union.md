@@ -27,9 +27,22 @@ getNumber = |_opt| 0
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_alias_tag_union.md:18:20:18:21
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_tag_union.md:18:20:18:21:**
+```roc
+getNumber = |_opt| 0
+```
+                   ^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _I32_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -200,9 +213,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyTry(Str, Num(Int(Signed32))) -> Str"))
+		(patt (type "MyTry(Str, I32) -> Str"))
 		(patt (type "Option(Str) -> Str"))
-		(patt (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
+		(patt (type "Option(I32) -> Error"))
 		(patt (type "_arg -> {}")))
 	(type_decls
 		(alias (type "MyTry(ok, err)")
@@ -215,8 +228,8 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "MyTry(Str, Num(Int(Signed32))) -> Str"))
+		(expr (type "MyTry(Str, I32) -> Str"))
 		(expr (type "Option(Str) -> Str"))
-		(expr (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
+		(expr (type "Option(I32) -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

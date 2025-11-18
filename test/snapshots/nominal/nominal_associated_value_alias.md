@@ -17,9 +17,22 @@ result : U64
 result = myBar
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_value_alias.md:7:9:7:16
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_value_alias.md:7:9:7:16:**
+```roc
+myBar = Foo.bar
+```
+        ^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -98,13 +111,13 @@ result = myBar
 (inferred-types
 	(defs
 		(patt (type "Num(_size)"))
-		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Num(_size)"))
-		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

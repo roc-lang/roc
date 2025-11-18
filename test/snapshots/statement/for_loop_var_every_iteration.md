@@ -19,9 +19,37 @@ result = {
 expect result == 55
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - for_loop_var_every_iteration.md:9:2:9:7
+TYPE MISMATCH - for_loop_var_every_iteration.md:9:10:9:16
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_every_iteration.md:9:2:9:7:**
+```roc
+	prev_ + count_
+```
+	^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_every_iteration.md:9:10:9:16:**
+```roc
+	prev_ + count_
+```
+	        ^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -132,7 +160,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))))
 ~~~

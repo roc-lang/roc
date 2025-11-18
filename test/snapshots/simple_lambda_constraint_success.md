@@ -14,9 +14,33 @@ addTwoF64 : F64 -> F64
 addTwoF64 = |x| x + 2.0
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - simple_lambda_constraint_success.md:3:14:3:19
++ - :0:0:0:0
+MISSING METHOD - simple_lambda_constraint_success.md:7:17:7:24
++ - :0:0:0:0
 # PROBLEMS
-NIL
+**MISSING METHOD**
+The value before this **+** operator has the type **I64**, which has no **plus** method:
+**simple_lambda_constraint_success.md:3:14:3:19:**
+```roc
+addTwo = |x| x + 2
+```
+             ^^^^^
+
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
+**MISSING METHOD**
+The value before this **+** operator has the type **F64**, which has no **plus** method:
+**simple_lambda_constraint_success.md:7:17:7:24:**
+```roc
+addTwoF64 = |x| x + 2.0
+```
+                ^^^^^^^
+
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -93,9 +117,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(patt (type "Num(Frac(Float64)) -> Num(Frac(Float64))")))
+		(patt (type "I64 -> Error"))
+		(patt (type "F64 -> Error")))
 	(expressions
-		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(expr (type "Num(Frac(Float64)) -> Num(Frac(Float64))"))))
+		(expr (type "I64 -> Error"))
+		(expr (type "F64 -> Error"))))
 ~~~

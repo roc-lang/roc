@@ -13,9 +13,22 @@ useBar : U64
 useBar = Foo.bar
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_lookup_decl.md:6:10:6:17
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_lookup_decl.md:6:10:6:17:**
+```roc
+useBar = Foo.bar
+```
+         ^^^^^^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _U64_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -77,11 +90,11 @@ useBar = Foo.bar
 (inferred-types
 	(defs
 		(patt (type "Num(_size)"))
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Num(_size)"))
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "Error"))))
 ~~~

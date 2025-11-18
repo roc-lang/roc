@@ -35,6 +35,9 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
+MISSING METHOD - type_annotation_basic.md:13:14:13:19
++ - :0:0:0:0
+TYPE MISMATCH - type_annotation_basic.md:24:21:24:22
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `pair` is not used anywhere in your code.
@@ -47,6 +50,31 @@ The unused variable is declared here:
 ```
     ^^^^
 
+
+**MISSING METHOD**
+The value before this **+** operator has the type **U64**, which has no **plus** method:
+**type_annotation_basic.md:13:14:13:19:**
+```roc
+addOne = |n| n + 1
+```
+             ^^^^^
+
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**type_annotation_basic.md:24:21:24:22:**
+```roc
+    result = addOne(5)
+```
+                    ^
+
+This argument has the type:
+    _Num(_size)_
+
+But `addOne` needs the first argument to be:
+    _U64_
 
 # TOKENS
 ~~~zig
@@ -274,11 +302,11 @@ main! = |_| {
 	(defs
 		(patt (type "a -> a"))
 		(patt (type "a, b -> (a, b)"))
-		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt (type "_arg -> Num(Int(Unsigned64))")))
+		(patt (type "U64 -> Error"))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "a -> a"))
 		(expr (type "a, b -> (a, b)"))
-		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr (type "_arg -> Num(Int(Unsigned64))"))))
+		(expr (type "U64 -> Error"))
+		(expr (type "_arg -> Error"))))
 ~~~

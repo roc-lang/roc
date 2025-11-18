@@ -13,9 +13,22 @@ processList = |list| list.len()
 main! = |_| processList(["one","two","three"])
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_application_basic.md:4:22:4:32
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_application_basic.md:4:22:4:32:**
+```roc
+processList = |list| list.len()
+```
+                     ^^^^^^^^^^
+
+It has the type:
+    _U64_
+
+But I expected it to be:
+    _Num(Int(Unsigned64))_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -120,9 +133,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> Num(Int(Unsigned64))"))
-		(patt (type "_arg -> Num(Int(Unsigned64))")))
+		(patt (type "Error -> Error"))
+		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "List(Str) -> Num(Int(Unsigned64))"))
-		(expr (type "_arg -> Num(Int(Unsigned64))"))))
+		(expr (type "Error -> Error"))
+		(expr (type "_arg -> Error"))))
 ~~~
