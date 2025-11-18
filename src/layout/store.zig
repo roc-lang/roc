@@ -147,7 +147,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
-            .list_ident = null, // Lazily initialized on first use
+            .list_ident = env.common.findIdent("List"),
         };
     }
 
@@ -886,10 +886,6 @@ pub const Store = struct {
                     },
                     .nominal_type => |nominal_type| {
                         // Special handling for Builtin.List
-                        // Lazily initialize list_ident if not yet cached
-                        if (self.list_ident == null) {
-                            self.list_ident = self.env.common.findIdent("List");
-                        }
                         const is_builtin_list = if (self.list_ident) |list_ident|
                             nominal_type.origin_module == self.env.builtin_module_ident and
                                 nominal_type.ident.ident_idx == list_ident
