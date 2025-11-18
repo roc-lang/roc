@@ -140,13 +140,24 @@ test "addTypeVar - scalar optimization for containers" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Insert List ident before Store.init()
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
     // Test List(Scalar)
     const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const list_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
+    const list_str_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        str_var,
+        &[_]types.Var{str_var},
+        builtin_module_idx,
+    );
+    const list_str_var = try lt.type_store.freshFromContent(list_str_content);
     const list_layout_idx = try lt.layout_store.addTypeVar(list_str_var, &lt.type_scope);
     const list_layout = lt.layout_store.getLayout(list_layout_idx);
     try testing.expect(list_layout.tag == .list);
@@ -160,7 +171,13 @@ test "addTypeVar - scalar optimization for containers" {
     try testing.expectEqual(layout.Idx.str, box_layout.data.box);
 
     // Test List(Box(Scalar)) - outer container uses index, inner uses scalar optimization
-    const list_box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = box_str_var } });
+    const list_box_str_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        box_str_var,
+        &[_]types.Var{box_str_var},
+        builtin_module_idx,
+    );
+    const list_box_str_var = try lt.type_store.freshFromContent(list_box_str_content);
     const list_box_idx = try lt.layout_store.addTypeVar(list_box_str_var, &lt.type_scope);
     const list_box_layout = lt.layout_store.getLayout(list_box_idx);
     try testing.expect(list_box_layout.tag == .list);
@@ -174,6 +191,11 @@ test "addTypeVar - zero-sized types (ZST)" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Insert List ident before Store.init()
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
@@ -191,8 +213,13 @@ test "addTypeVar - zero-sized types (ZST)" {
     const box_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
     const box_zst_idx = try lt.layout_store.addTypeVar(box_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
-
-    const list_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = empty_tag_union_var } });
+    const list_zst_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        empty_tag_union_var,
+        &[_]types.Var{empty_tag_union_var},
+        builtin_module_idx,
+    );
+    const list_zst_var = try lt.type_store.freshFromContent(list_zst_content);
     const list_zst_idx = try lt.layout_store.addTypeVar(list_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_zst_idx).tag == .list_of_zst);
 }
@@ -384,6 +411,11 @@ test "deeply nested containers with inner ZST" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Insert List ident before Store.init()
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
@@ -391,9 +423,21 @@ test "deeply nested containers with inner ZST" {
     // Create List(Box(List(Box(empty_record))))
     const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const inner_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
-    const inner_list = try lt.type_store.freshFromContent(.{ .structure = .{ .list = inner_box } });
+    const inner_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        inner_box,
+        &[_]types.Var{inner_box},
+        builtin_module_idx,
+    );
+    const inner_list = try lt.type_store.freshFromContent(inner_list_content);
     const outer_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
-    const outer_list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = outer_box } });
+    const outer_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        outer_box,
+        &[_]types.Var{outer_box},
+        builtin_module_idx,
+    );
+    const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
     const result_idx = try lt.layout_store.addTypeVar(outer_list_var, &lt.type_scope);
     const outer_list_layout = lt.layout_store.getLayout(result_idx);
@@ -416,6 +460,12 @@ test "nested ZST detection - List of record with ZST field" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Insert List ident before Store.init()
+    const list_ident_idx = try lt.module_env.getIdentStore().insert(lt.module_env.gpa, Ident.for_text("List"));
+    const list_type_ident = types.TypeIdent{ .ident_idx = list_ident_idx };
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
@@ -427,7 +477,8 @@ test "nested ZST detection - List of record with ZST field" {
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
     // List of this record should be list_of_zst since the record only has ZST fields
-    const list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
+    const list_content = try lt.type_store.mkNominal(list_type_ident, record_var, &[_]types.Var{record_var}, builtin_module_idx);
+    const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }
@@ -464,6 +515,12 @@ test "nested ZST detection - deeply nested" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Insert List ident before Store.init()
+    const list_ident_idx = try lt.module_env.getIdentStore().insert(lt.module_env.gpa, Ident.for_text("List"));
+    const list_type_ident = types.TypeIdent{ .ident_idx = list_ident_idx };
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
@@ -488,7 +545,8 @@ test "nested ZST detection - deeply nested" {
     const outer_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_record_fields, .ext = empty_record_var } } });
 
     // List({ field: ({ field2: {} }, ()) })
-    const list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = outer_record_var } });
+    const list_content = try lt.type_store.mkNominal(list_type_ident, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx);
+    const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
 
     // Since the entire nested structure is ZST, the list should be list_of_zst

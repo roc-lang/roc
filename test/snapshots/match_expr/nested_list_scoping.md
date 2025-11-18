@@ -35,7 +35,7 @@ This expression is used in an unexpected way:
                 ^
 
 It has the type:
-    _List(_elem)_
+    _List(_a)_
 
 But I expected it to be:
     _Num(_size)_

@@ -61,6 +61,9 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
+    list_ident: ?Ident.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -144,6 +147,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .list_ident = env.common.findIdent("List"),
         };
     }
 
@@ -880,34 +884,40 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
-                    .list => |elem_var| {
-                        const elem_content = self.types_store.resolveVar(elem_var).desc.content;
-                        if (elem_content == .flex or elem_content == .rigid) {
-                            // For unbound lists (empty lists), use list of zero-sized type
-                            const layout = Layout.listOfZst();
-                            const idx = try self.insertLayout(layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                            return idx;
-                        } else {
-                            // Otherwise, add this to the stack of pending work
-                            try self.work.pending_containers.append(self.env.gpa, .{
-                                .var_ = current.var_,
-                                .container = .list,
-                            });
-
-                            // Push a pending List container and "recurse" on the elem type
-                            current = self.types_store.resolveVar(elem_var);
-                            continue;
-                        }
-                    },
-                    .list_unbound => {
-                        // For unbound lists (empty lists), use list of zero-sized type
-                        const layout = Layout.listOfZst();
-                        const idx = try self.insertLayout(layout);
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                        return idx;
-                    },
                     .nominal_type => |nominal_type| {
+                        // Special handling for Builtin.List
+                        const is_builtin_list = if (self.list_ident) |list_ident|
+                            nominal_type.origin_module == self.env.builtin_module_ident and
+                                nominal_type.ident.ident_idx == list_ident
+                        else
+                            false;
+                        if (is_builtin_list) {
+                            // Extract the element type from the type arguments
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                            std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
+                            const elem_var = type_args[0];
+
+                            // Check if the element type is unbound (flex or rigid)
+                            const elem_content = self.types_store.resolveVar(elem_var).desc.content;
+                            if (elem_content == .flex or elem_content == .rigid) {
+                                // For unbound element types (e.g., empty lists), use list of zero-sized type
+                                const layout = Layout.listOfZst();
+                                const idx = try self.insertLayout(layout);
+                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                                return idx;
+                            } else {
+                                // Otherwise, add this to the stack of pending work
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = current.var_,
+                                    .container = .list,
+                                });
+
+                                // Push a pending List container and "recurse" on the elem type
+                                current = self.types_store.resolveVar(elem_var);
+                                continue;
+                            }
+                        }
+
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.

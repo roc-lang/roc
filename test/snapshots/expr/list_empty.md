@@ -30,5 +30,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(_elem)"))
+(expr (type "List(_a)"))
 ~~~

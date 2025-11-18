@@ -164,12 +164,6 @@ const CheckOccurs = struct {
                         .box => |sub_var| {
                             try self.occursSubVar(root, sub_var, ctx.allowRecursion());
                         },
-                        .list => |sub_var| {
-                            try self.occursSubVar(root, sub_var, ctx.allowRecursion());
-                        },
-                        .list_unbound => {
-                            // list_unbound has no sub-variables to check
-                        },
                         .tuple => |tuple| {
                             const elems = self.types_store.sliceVars(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
@@ -383,51 +377,6 @@ test "occurs: no recurcion (v = Str)" {
 
     const result = occurs(&types_store, &scratch, str_var);
     try std.testing.expectEqual(.not_recursive, result);
-}
-
-test "occurs: direct recursion (v = List v)" {
-    const gpa = std.testing.allocator;
-    var types_store = try Store.init(gpa);
-    defer types_store.deinit();
-
-    var scratch = try Scratch.init(gpa);
-    defer scratch.deinit();
-
-    const list_var = try types_store.fresh();
-    const list_content = Content{
-        .structure = .{ .list = list_var },
-    };
-    try types_store.setRootVarContent(list_var, list_content);
-
-    const result = occurs(&types_store, &scratch, list_var);
-    try std.testing.expectEqual(.recursive_anonymous, result);
-
-    const err_chain = scratch.errChainSlice();
-    try std.testing.expectEqual(1, err_chain.len);
-    try std.testing.expectEqual(list_var, err_chain[0]);
-}
-
-test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
-    const gpa = std.testing.allocator;
-    var types_store = try Store.init(gpa);
-    defer types_store.deinit();
-
-    var scratch = try Scratch.init(gpa);
-    defer scratch.deinit();
-
-    const v1 = try types_store.fresh();
-    const v2 = try types_store.fresh();
-
-    try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
-    try types_store.setRootVarContent(v2, Content{ .structure = .{ .list = v1 } });
-
-    const result = occurs(&types_store, &scratch, v1);
-    try std.testing.expectEqual(.recursive_anonymous, result);
-
-    const err_chain = scratch.errChainSlice();
-    try std.testing.expectEqual(2, err_chain.len);
-    try std.testing.expectEqual(v2, err_chain[0]);
-    try std.testing.expectEqual(v1, err_chain[1]);
 }
 
 test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {

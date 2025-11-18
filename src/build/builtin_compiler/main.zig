@@ -400,65 +400,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     return new_def_indices;
 }
 
-/// Transform all List nominal types to .list primitive types in a module.
-/// This is similar to transformStrNominalToPrimitive but handles List's type parameter.
-///
-/// List is parameterized (List(a)), so we need to preserve the element type parameter
-/// when transforming from nominal to primitive. The transformation replaces
-/// nominal List(a) with FlatType{ .list = element_type_var }.
-fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
-    // Get the List identifier in this module
-    const list_ident = env.common.findIdent("List") orelse {
-        @panic("List identifier not found in Builtin module");
-    };
-
-    // Iterate through all slots in the type store
-    for (0..env.types.len()) |i| {
-        const var_idx = @as(Var, @enumFromInt(i));
-
-        // Skip redirects, only process roots
-        if (!env.types.resolveVar(var_idx).is_root) {
-            continue;
-        }
-
-        const resolved = env.types.resolveVar(var_idx);
-        const desc = resolved.desc;
-
-        // Check if this descriptor contains a nominal type
-        switch (desc.content) {
-            .structure => |structure| {
-                switch (structure) {
-                    .nominal_type => |nominal| {
-                        // Check if this is the List nominal type
-                        if (nominal.ident.ident_idx == list_ident) {
-                            // List should have exactly 1 type parameter (the element type)
-                            // sliceNominalArgs returns only the type arguments (excludes backing var)
-                            const type_args = env.types.sliceNominalArgs(nominal);
-
-                            if (type_args.len != 1) {
-                                @panic("List nominal type must have exactly 1 type parameter");
-                            }
-
-                            const element_type_var = type_args[0];
-
-                            // Replace with .list primitive type with the element type
-                            const new_content = Content{ .structure = .{ .list = element_type_var } };
-                            const new_desc = types.Descriptor{
-                                .content = new_content,
-                                .rank = desc.rank,
-                                .mark = desc.mark,
-                            };
-                            try env.types.setVarDesc(var_idx, new_desc);
-                        }
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
-}
-
 fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
         var file = try std.fs.openFileAbsolute(path, .{});
@@ -583,7 +524,6 @@ pub fn main() !void {
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
-    try transformListNominalToPrimitive(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");

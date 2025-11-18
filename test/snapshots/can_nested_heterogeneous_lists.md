@@ -65,5 +65,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(Error))"))
+(expr (type "List(List(Num(_size)))"))
 ~~~
