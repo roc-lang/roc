@@ -1921,22 +1921,10 @@ pub const Interpreter = struct {
 
                 const method_args = dot_access.args;
                 const field_name = self.env.getIdent(dot_access.field_name);
-                const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
-                const is_list_receiver = blk: {
-                    if (resolved_receiver.desc.content != .structure) break :blk false;
-                    switch (resolved_receiver.desc.content.structure) {
-                        .nominal_type => |nominal| {
-                            // Check if this is Builtin.List
-                            const list_ident = self.env.common.findIdent("List");
-                            break :blk (list_ident != null and nominal.ident.ident_idx == list_ident.?);
-                        },
-                        else => break :blk false,
-                    }
-                };
-                const is_list_method = is_list_receiver and (std.mem.eql(u8, field_name, "len") or std.mem.eql(u8, field_name, "isEmpty"));
-                const treat_as_method = method_args != null or is_list_method;
 
-                if (!treat_as_method) {
+                // Field access vs method call
+                if (method_args == null) {
+                    // This is field access on a record, not a method call
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
                     // Records can have zero-sized fields
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
@@ -1946,6 +1934,9 @@ pub const Interpreter = struct {
                     const field_value = try accessor.getFieldByIndex(field_idx);
                     return try self.pushCopy(field_value, roc_ops);
                 }
+
+                // This is a method call - resolve receiver type for dispatch
+                const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
 
                 const arg_count = if (method_args) |span| span.span.len else 0;
                 var arg_values: []StackValue = &.{};
