@@ -4606,7 +4606,13 @@ pub const Interpreter = struct {
         const resolved = module.types.resolveVar(compile_var);
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
-        if (self.translate_cache.get(key)) |found| return found;
+        if (self.translate_cache.get(key)) |found| {
+            return found;
+        }
+
+        // Insert a placeholder to break cycles in recursive type translation
+        const placeholder = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+        try self.translate_cache.put(key, placeholder);
 
         const out_var = blk: {
             switch (resolved.desc.content) {
@@ -4907,7 +4913,15 @@ pub const Interpreter = struct {
             break :blk current;
         } else out_var;
 
+        // Update the cache with the final var
         try self.translate_cache.put(key, final_var);
+
+        // Redirect the placeholder to the final var so any code that grabbed the placeholder
+        // during recursion will now resolve to the correct type
+        if (@intFromEnum(placeholder) != @intFromEnum(final_var)) {
+            try self.runtime_types.setVarRedirect(placeholder, final_var);
+        }
+
         return final_var;
     }
 
