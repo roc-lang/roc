@@ -13,23 +13,8 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:4:22:4:34
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_with_vars.md:4:22:4:34:**
-```roc
-mapList = |list, fn| list.map(fn)
-```
-                     ^^^^^^^^^^^^
-
-It has the type:
-    _List(a), (a -> b) -> List(b)_
-
-But I expected it to be:
-    _List(a), (a -> b) -> List(b)_
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_app_with_vars.md:6:13:6:33:**
@@ -42,7 +27,7 @@ It has the type:
     _List(Num(_size)) -> _ret_
 
 But I expected it to be:
-    _Error, (a -> b) -> Error_
+    _List(a), (a -> b) -> List(b)_
 
 # TOKENS
 ~~~zig
@@ -161,9 +146,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error, (a -> b) -> Error"))
+		(patt (type "List(a), (a -> b) -> List(b)"))
 		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "Error, (a -> b) -> Error"))
+		(expr (type "List(a), (a -> b) -> List(b)"))
 		(expr (type "_arg -> _ret"))))
 ~~~

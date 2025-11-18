@@ -8,14 +8,14 @@ type=file
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 # Type variable 'item' introduced in annotation
-process : List(item) -> item
-process = |list| {
+process : List(item), item -> item
+process = |list, fallback| {
     # value identifier named 'item' is allowed - different namespace from type variable
     item = 42
 
     # type variable 'item' still refers to the function annotation's type parameter
     result : item
-    result = List.first(list).ok_or(item)
+    result = List.first(list).ok_or(fallback)
 
     result
 }
@@ -23,14 +23,25 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `item` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_item` to suppress this warning.
+The unused variable is declared here:
+**type_var_namespace.md:7:5:7:9:**
+```roc
+    item = 42
+```
+    ^^^^
+
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
-LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,LowerIdent,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpColon,LowerIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
@@ -59,12 +70,14 @@ EndOfFile,
 				(ty-apply
 					(ty (name "List"))
 					(ty-var (raw "item")))
+				(ty-var (raw "item"))
 				(ty-var (raw "item"))))
 		(s-decl
 			(p-ident (raw "process"))
 			(e-lambda
 				(args
-					(p-ident (raw "list")))
+					(p-ident (raw "list"))
+					(p-ident (raw "fallback")))
 				(e-block
 					(statements
 						(s-decl
@@ -80,7 +93,7 @@ EndOfFile,
 									(e-ident (raw "list")))
 								(e-apply
 									(e-ident (raw "ok_or"))
-									(e-ident (raw "item")))))
+									(e-ident (raw "fallback")))))
 						(e-ident (raw "result"))))))
 		(s-decl
 			(p-ident (raw "main!"))
@@ -94,14 +107,14 @@ EndOfFile,
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 # Type variable 'item' introduced in annotation
-process : List(item) -> item
-process = |list| {
+process : List(item), item -> item
+process = |list, fallback| {
 	# value identifier named 'item' is allowed - different namespace from type variable
 	item = 42
 
 	# type variable 'item' still refers to the function annotation's type parameter
 	result : item
-	result = List.first(list).ok_or(item)
+	result = List.first(list).ok_or(fallback)
 
 	result
 }
@@ -115,7 +128,8 @@ main! = |_| {}
 		(p-assign (ident "process"))
 		(e-lambda
 			(args
-				(p-assign (ident "list")))
+				(p-assign (ident "list"))
+				(p-assign (ident "fallback")))
 			(e-block
 				(s-let
 					(p-assign (ident "item"))
@@ -131,13 +145,14 @@ main! = |_| {}
 									(p-assign (ident "list")))))
 						(args
 							(e-lookup-local
-								(p-assign (ident "item"))))))
+								(p-assign (ident "fallback"))))))
 				(e-lookup-local
 					(p-assign (ident "result")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "item")))
+				(ty-rigid-var-lookup (ty-rigid-var (name "item")))
 				(ty-rigid-var-lookup (ty-rigid-var (name "item"))))))
 	(d-let
 		(p-assign (ident "main!"))
@@ -150,9 +165,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(item), item -> item"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(item), item -> item"))
 		(expr (type "_arg -> {}"))))
 ~~~
