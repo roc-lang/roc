@@ -422,11 +422,6 @@ fn writeAlias(self: *TypeWriter, alias: Alias, root_var: Var) std.mem.Allocator.
 /// Convert a flat type to a type string
 fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.Allocator.Error!void {
     switch (flat_type) {
-        .box => |sub_var| {
-            _ = try self.buf.writer().write("Box(");
-            try self.writeVar(sub_var, root_var);
-            _ = try self.buf.writer().write(")");
-        },
         .tuple => |tuple| {
             try self.writeTuple(tuple, root_var);
         },
@@ -970,7 +965,6 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
 fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) std.mem.Allocator.Error!void {
     switch (flat_type) {
         .empty_record, .empty_tag_union => {},
-        .box => |sub_var| try self.countVar(search_var, sub_var, count),
         .num => {},
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
