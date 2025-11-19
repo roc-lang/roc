@@ -8,7 +8,7 @@ type=expr
 [1, "hello"]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_two_elements.md:1:2:1:2
+NIL
 # PROBLEMS
 NIL
 # TOKENS

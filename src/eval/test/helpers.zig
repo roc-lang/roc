@@ -51,7 +51,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -79,7 +79,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -93,7 +93,18 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
-    try std.testing.expectEqual(expected_int, result.asI128());
+    // Check if this is an integer or Dec
+    const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+        // Suffixed integer literals (e.g., 255u8, 42i32) remain as integers
+        break :blk result.asI128();
+    } else blk: {
+        // Unsuffixed numeric literals default to Dec, so extract the integer value
+        const dec_value = result.asDec();
+        const RocDec = builtins.dec.RocDec;
+        // Convert Dec to integer by dividing by the decimal scale factor
+        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+    };
+    try std.testing.expectEqual(expected_int, int_value);
 }
 
 /// Helper function to run an expression and expect a boolean result.
@@ -105,7 +116,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -140,7 +151,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -172,7 +183,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -206,7 +217,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -236,7 +247,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -285,7 +296,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -311,11 +322,17 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         // Get the element at the specified index
         const element = try tuple_accessor.getElement(@intCast(expected_element.index));
 
-        // Verify it's an integer
-        try std.testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
-
-        // Get the integer value from the element
-        const int_val = element.asI128();
+        // Check if this is an integer or Dec
+        try std.testing.expect(element.layout.tag == .scalar);
+        const int_val = if (element.layout.data.scalar.tag == .int) blk: {
+            // Suffixed integer literals remain as integers
+            break :blk element.asI128();
+        } else blk: {
+            // Unsuffixed numeric literals default to Dec
+            const dec_value = element.asDec();
+            const RocDec = builtins.dec.RocDec;
+            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        };
         try std.testing.expectEqual(expected_element.value, int_val);
     }
 }
@@ -329,7 +346,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -360,7 +377,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
             if (std.mem.eql(u8, field_name, expected_field.name)) {
                 found = true;
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
-                try std.testing.expect(field_layout.tag == .scalar and field_layout.data.scalar.tag == .int);
+                try std.testing.expect(field_layout.tag == .scalar);
 
                 const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
@@ -369,7 +386,16 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     .ptr = field_ptr,
                     .is_initialized = true,
                 };
-                const int_val = field_value.asI128();
+                // Check if this is an integer or Dec
+                const int_val = if (field_layout.data.scalar.tag == .int) blk: {
+                    // Suffixed integer literals remain as integers
+                    break :blk field_value.asI128();
+                } else blk: {
+                    // Unsuffixed numeric literals default to Dec
+                    const dec_value = field_value.asDec();
+                    const RocDec = builtins.dec.RocDec;
+                    break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+                };
                 try std.testing.expectEqual(expected_field.value, int_val);
                 break;
             }
@@ -568,7 +594,7 @@ test "eval tag - already primitive" {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -597,7 +623,7 @@ test "interpreter reuse across multiple evaluations" {
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();

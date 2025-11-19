@@ -168,8 +168,9 @@ pub const ComptimeEvaluator = struct {
         other_envs: []const *const ModuleEnv,
         problems: *ProblemStore,
         builtin_types: BuiltinTypes,
+        builtin_module_env: ?*const ModuleEnv,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, other_envs);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs);
 
         return ComptimeEvaluator{
             .allocator = allocator,

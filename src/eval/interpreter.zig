@@ -169,6 +169,7 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
+    builtin_module_env: ?*const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
@@ -194,7 +195,7 @@ pub const Interpreter = struct {
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, other_envs: []const *const can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -230,7 +231,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -246,6 +247,7 @@ pub const Interpreter = struct {
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
+        builtin_module_env: ?*const can.ModuleEnv,
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -262,6 +264,7 @@ pub const Interpreter = struct {
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
+            .builtin_module_env = builtin_module_env,
             .module_envs = module_envs,
             .module_ids = module_ids,
             .import_envs = import_envs,
@@ -680,29 +683,16 @@ pub const Interpreter = struct {
             .e_binop => |binop| {
                 if (binop.op == .add) {
                     // Desugar `a + b` to `a.plus(b)` using method lookup
-                    // For built-in numeric types (represented as .num), fall back to direct arithmetic
+                    // All numeric types (built-in and user-defined) use static dispatch to their .plus() methods
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
-                    // Check if lhs is a numeric type (could be .num structure or flex/rigid with numeric content)
-                    // For built-in numeric types, use direct arithmetic; for user nominal types, use method dispatch
+                    // Resolve the lhs type to get nominal type information
                     const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-                    const is_user_nominal = switch (lhs_resolved.desc.content) {
-                        .structure => |s| s == .nominal_type,
-                        else => false,
-                    };
 
-                    if (!is_user_nominal) {
-                        // For built-in numeric types (or any non-nominal type), use direct arithmetic evaluation
-                        // This includes .num, flex vars, rigid vars, etc.
-                        const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                        const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                        return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
-                    }
-
-                    // For user-defined nominal types with plus methods, use method dispatch
+                    // Evaluate both operands
                     var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                     defer lhs.decref(&self.runtime_layout_store, roc_ops);
                     var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
@@ -4349,6 +4339,10 @@ pub const Interpreter = struct {
     /// Get the module environment for a given origin module identifier.
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
+        // Check if it's the Builtin module
+        if (origin_module == self.env.builtin_module_ident) {
+            return self.builtin_module_env;
+        }
         // Check if it's the current module
         if (self.env.module_name_idx == origin_module) {
             return self.env;
@@ -5193,7 +5187,7 @@ test "interpreter: translateTypeVar for str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Get the actual Str type from the Builtin module using the str_stmt index
@@ -5230,7 +5224,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -5282,7 +5276,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -5339,7 +5333,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -5367,7 +5361,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -5405,7 +5399,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create nominal Str type (no constraints)
@@ -5453,7 +5447,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -5503,7 +5497,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -5559,7 +5553,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Register module B

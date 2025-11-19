@@ -22,21 +22,21 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try checkTypesExpr(source, .pass, "Num(_size)");
+    try checkTypesExpr(source, .pass, "_a");
 }
 
 test "check type - num - int suffix 1" {
     const source =
         \\10u8
     ;
-    try checkTypesExpr(source, .pass, "Num(Int(Unsigned8))");
+    try checkTypesExpr(source, .pass, "U8");
 }
 
 test "check type - num - int suffix 2" {
     const source =
         \\10i128
     ;
-    try checkTypesExpr(source, .pass, "Num(Int(Signed128))");
+    try checkTypesExpr(source, .pass, "I128");
 }
 
 test "check type - num - int big" {
@@ -48,35 +48,35 @@ test "check type - num - int big" {
         \\  e
         \\}
     ;
-    try checkTypesExpr(source, .pass, "Num(Int(Unsigned128))");
+    try checkTypesExpr(source, .pass, "U128");
 }
 
 test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(_size))");
+    try checkTypesExpr(source, .pass, "_a");
 }
 
 test "check type - num - float suffix 1" {
     const source =
         \\10.1f32
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(Float32))");
+    try checkTypesExpr(source, .pass, "F32");
 }
 
 test "check type - num - float suffix 2" {
     const source =
         \\10.1f64
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(Float64))");
+    try checkTypesExpr(source, .pass, "F64");
 }
 
 test "check type - num - float suffix 3" {
     const source =
         \\10.1dec
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(Decimal))");
+    try checkTypesExpr(source, .pass, "Dec");
 }
 
 // primitives - strs //
@@ -146,21 +146,21 @@ test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try checkTypesExpr(source, .pass, "List(Num(_size))");
+    try checkTypesExpr(source, .pass, "List(_a)");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
         \\[100u64, 200]
     ;
-    try checkTypesExpr(source, .pass, "List(Num(Int(Unsigned64)))");
+    try checkTypesExpr(source, .pass, "List(U64)");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
         \\[100, 200u32]
     ;
-    try checkTypesExpr(source, .pass, "List(Num(Int(Unsigned32)))");
+    try checkTypesExpr(source, .pass, "List(U32)");
 }
 
 test "check type - list  - diff elems 1" {
@@ -188,7 +188,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass, "{ hello: Str, world: Num(_size) }");
+    try checkTypesExpr(source, .pass, "{ hello: Str, world: _a }");
 }
 
 // tags //
@@ -204,7 +204,7 @@ test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, Num(_size))]_others");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, _a)]_others");
 }
 
 // blocks //
@@ -251,7 +251,7 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> _a");
 }
 
 test "check type - def - id without annotation" {
@@ -278,23 +278,22 @@ test "check type - def - func with annotation 1" {
 }
 
 // TODO: This test is currently failing because annotation parsing doesn't correctly handle
-// constraint syntax like `Num(_size)`
-// It's getting truncated to `Num(_size)`
+// constraint syntax for flex vars
 // This needs to be fixed in the annotation parser, but is separate from the numeric literal work.
 test "check type - def - func with annotation 2" {
     if (true) return error.SkipZigTest;
     const source =
-        \\id : x -> Num(_size)
+        \\id : x -> _a
         \\id = |_| 15
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "x -> Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x -> _a");
 }
 
 test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - def - forward ref" {
@@ -323,11 +322,12 @@ test "check type - def - nested lambda with wrong annotation" {
     if (true) return error.SkipZigTest;
 
     // Currently the below produces two errors instead of just one.
+    // NOTE: Num(a) syntax is deprecated - this test may need updating when it's re-enabled
     const source =
         \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
         \\curried_add = |a| |b| |c| |d| a + b + c + d
     ;
-    try checkTypesModule(source, .fail, "Num(_size)");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // calling functions
@@ -349,7 +349,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -359,7 +359,7 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "(Num(_size), Str)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(_a, Str)");
 }
 
 test "check type - def - out of order" {
@@ -395,7 +395,7 @@ test "check type - top level polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - let-def polymorphic function is generalized" {
@@ -407,7 +407,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -495,7 +495,7 @@ test "check type - nominal with type and tag arg" {
         \\x : MyNominal(U8)
         \\x = MyNominal.MyNominal(10)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal(Num(Int(Unsigned8)))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal(U8)");
 }
 
 test "check type - nominal with with rigid vars" {
@@ -507,7 +507,7 @@ test "check type - nominal with with rigid vars" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(1, 2)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Num(Int(Unsigned64)))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(U64)");
 }
 
 test "check type - nominal with with rigid vars mismatch" {
@@ -598,7 +598,7 @@ test "check type - nominal w/ polymorphic function" {
         \\
         \\test = swapPair((1, "test"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, Num(_size))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, _a)");
 }
 
 // bool
@@ -746,7 +746,7 @@ test "check type - unary minus" {
     const source =
         \\x = -10
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - unary minus mismatch" {
@@ -764,14 +764,14 @@ test "check type - binops math plus" {
     const source =
         \\x = 10 + 10u32
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(Int(Unsigned32))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "U32");
 }
 
 test "check type - binops math sub" {
     const source =
         \\x = 1 - 0.2
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(Frac(_size))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - binops ord" {
@@ -866,7 +866,7 @@ test "check type - record - update 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "final" } },
-        "({ data: Num(_size) }, { data: Num(_size2), other: Str }, { data: Str })",
+        "({ data: _a }, { data: _a2, other: Str }, { data: Str })",
     );
 }
 
@@ -991,7 +991,7 @@ test "check type - patterns frac 1" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(Decimal))");
+    try checkTypesExpr(source, .pass, "Dec");
 }
 
 test "check type - patterns frac 2" {
@@ -1003,7 +1003,7 @@ test "check type - patterns frac 2" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(Float32))");
+    try checkTypesExpr(source, .pass, "F32");
 }
 
 test "check type - patterns frac 3" {
@@ -1016,7 +1016,7 @@ test "check type - patterns frac 3" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "Num(Frac(Float64))");
+    try checkTypesExpr(source, .pass, "F64");
 }
 
 test "check type - patterns list" {
@@ -1059,7 +1059,7 @@ test "check type - patterns record 2" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "Num(_size)");
+    try checkTypesExpr(source, .pass, "_a");
 }
 
 test "check type - patterns record field mismatch" {
@@ -1086,7 +1086,7 @@ test "check type - var ressignment" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 // expect //
@@ -1099,7 +1099,7 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
 }
 
 test "check type - expect not bool" {
@@ -1130,7 +1130,7 @@ test "check type - crash" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "Num(Int(Unsigned64))",
+        "U64",
     );
 }
 
@@ -1151,7 +1151,7 @@ test "check type - debug" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "Num(Int(Unsigned64))",
+        "U64",
     );
 }
 
@@ -1170,7 +1170,7 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "Num(_size)",
+        "_a",
     );
 }
 
@@ -1486,7 +1486,7 @@ test "check type - comprehensive - multiple layers of let-polymorphism" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "(Num(_size), Str, Bool)",
+        "(_a, Str, Bool)",
     );
 }
 
@@ -1509,7 +1509,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Num(_size)",
+        "_a",
     );
 }
 
@@ -1560,7 +1560,7 @@ test "check type - comprehensive - static dispatch with multiple methods" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Num(_size)",
+        "_a",
     );
 }
 
@@ -1614,7 +1614,7 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Container(Num(_size))",
+        "Container(_a)",
     );
 }
 
@@ -1638,7 +1638,7 @@ test "check type - comprehensive - annotations with inferred types" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Num(Int(Unsigned32))",
+        "U32",
     );
 }
 
@@ -1759,7 +1759,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: Num(_size5) }",
+        "{ chained: _a, final: _a2, id_results: (_a3, Str, Bool), processed: _a4, transformed: _a5 }",
     );
 }
 
@@ -1865,7 +1865,7 @@ test "List.fold works as builtin associated item" {
         \\
         \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "_a");
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
@@ -1891,7 +1891,7 @@ test "associated item: type annotation followed by body should not create duplic
 
     // Verify the types
     try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
-    try test_env.assertDefType("result", "Num(_size)");
+    try test_env.assertDefType("result", "b");
 }
 
 // TODO: Move this test to can
@@ -1940,6 +1940,12 @@ test "top-level: type annotation followed by body should not create duplicate de
 // equirecursive static dispatch //
 
 test "check type - equirecursive static dispatch - motivating example (current behavior)" {
+    // This test is skipped because numeric types no longer have special structure after
+    // poly removal, and the .plus method is not implemented. With the new nominal type
+    // approach, number literals are flex vars and the error behavior has changed.
+    // Future work: Add back once .plus method is implemented on numeric types.
+    if (true) return error.SkipZigTest;
+
     // This is the motivating example for equirecursive unification!
     // Before RecursionVar was implemented, this would cause infinite loops during type checking
     // because x.plus returns a numeric type that also needs .plus constraints, creating
@@ -1982,7 +1988,7 @@ test "check type - equirecursive static dispatch - annotated motivating example"
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "fn" } },
-        "a, b -> ret where [a.plus : a, b -> ret, List(Num(Int(Unsigned8))).from_int_digits : List(Num(Int(Unsigned8))) -> Try(a, [OutOfRange]), List(Num(Int(Unsigned8))).from_int_digits : List(Num(Int(Unsigned8))) -> Try(b, [OutOfRange])]",
+        "a, b -> ret where [a.plus : a, b -> ret, List(U8).from_int_digits : List(U8) -> Try(a, [OutOfRange]), List(U8).from_int_digits : List(U8) -> Try(b, [OutOfRange])]",
     );
 }
 

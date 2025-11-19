@@ -29,8 +29,8 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:16:28:16:28
-INVALID NOMINAL TAG - annotations.md:19:22:19:41
+TYPE MISMATCH - annotations.md:16:21:16:35
+TYPE MISMATCH - annotations.md:19:22:19:41
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**

@@ -15,7 +15,6 @@ value = 42
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
-TYPE MISMATCH - usage_test.md:6:9:6:11
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.

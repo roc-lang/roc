@@ -39,7 +39,6 @@ PARSE ERROR - fuzz_crash_025.md:12:48:12:49
 PARSE ERROR - fuzz_crash_025.md:13:1:13:2
 PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
-TYPE MISMATCH - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.

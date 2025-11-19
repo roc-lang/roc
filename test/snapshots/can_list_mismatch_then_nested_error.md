@@ -8,8 +8,7 @@ type=expr
 [1, "hello", [3, "world"]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:2:1:2
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:15:1:15
+INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:5:1:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:

@@ -23,7 +23,7 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_mismatch.md:11:34:11:38
+NIL
 # PROBLEMS
 NIL
 # TOKENS

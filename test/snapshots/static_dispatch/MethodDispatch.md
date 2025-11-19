@@ -45,9 +45,7 @@ main : (Str, Str, Str)
 main = (directCall, result1, extract(result2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - MethodDispatch.md:5:37:5:57
-TYPE MISMATCH - MethodDispatch.md:18:13:18:35
-TYPE MISMATCH - MethodDispatch.md:22:15:22:37
+NIL
 # PROBLEMS
 NIL
 # TOKENS

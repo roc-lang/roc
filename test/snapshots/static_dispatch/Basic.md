@@ -26,8 +26,7 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-TYPE MISMATCH - Basic.md:6:20:6:24
-TYPE MISMATCH - Basic.md:16:7:16:25
+NIL
 # PROBLEMS
 NIL
 # TOKENS

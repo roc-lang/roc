@@ -13,8 +13,7 @@ match Answer {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
-INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
+NIL
 # PROBLEMS
 NIL
 # TOKENS

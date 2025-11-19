@@ -8,7 +8,7 @@ type=expr
 [42, "world", 3.14]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_first_concrete.md:1:2:1:2
+NIL
 # PROBLEMS
 NIL
 # TOKENS

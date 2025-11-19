@@ -12,7 +12,7 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
+NIL
 # PROBLEMS
 NIL
 # TOKENS

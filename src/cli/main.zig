@@ -2513,7 +2513,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     defer builtin_module.deinit();
 
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };

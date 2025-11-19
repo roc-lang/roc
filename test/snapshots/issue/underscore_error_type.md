@@ -38,7 +38,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
-TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:14:7:14:32
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12

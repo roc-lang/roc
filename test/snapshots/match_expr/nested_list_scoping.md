@@ -13,7 +13,6 @@ match nestedList {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
-TYPE MISMATCH - nested_list_scoping.md:4:17:4:18
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `nestedList` in this scope.

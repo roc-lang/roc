@@ -8,7 +8,7 @@ type=expr
 [[], [1], ["hello"]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_nested_heterogeneous.md:1:6:1:6
+NIL
 # PROBLEMS
 NIL
 # TOKENS

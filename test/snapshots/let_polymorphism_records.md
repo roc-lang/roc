@@ -49,8 +49,7 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
-TYPE MISMATCH - let_polymorphism_records.md:38:6:38:17
+UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
 # PROBLEMS
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

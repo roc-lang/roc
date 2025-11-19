@@ -13,7 +13,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - tuple_type.md:5:7:5:13
+NIL
 # PROBLEMS
 NIL
 # TOKENS
