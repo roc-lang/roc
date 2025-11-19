@@ -468,8 +468,6 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
 
-    // Note: Both Str and List are now nominal types (no longer transformed to primitives).
-    // The type system handles them directly as nominal types with special runtime support.
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");

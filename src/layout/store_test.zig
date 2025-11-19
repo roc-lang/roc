@@ -113,10 +113,6 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     try testing.expectEqual(layout.Idx.opaque_ptr, box_rigid_layout.data.box);
 }
 
-// Test deleted: was using .str primitive type which no longer exists.
-// .str is now a nominal type (Builtin.Str) and requires the actual Builtin module.
-// Proper string layout testing requires loading the actual Builtin module.
-
 test "addTypeVar - zero-sized types (ZST)" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
