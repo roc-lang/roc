@@ -13,8 +13,7 @@ const test_exclusions = [_][]const u8{
 };
 
 const test_file_exclusions = [_][]const u8{
-    // TODO: This test got out of sync and is not straightforward to fix
-    "src/eval/test/low_level_interp_test.zig",
+    // No exclusions currently
 };
 
 const TermColor = struct {

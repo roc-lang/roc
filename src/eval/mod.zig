@@ -43,4 +43,5 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
+    std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
 }
