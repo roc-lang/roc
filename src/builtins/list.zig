@@ -329,7 +329,7 @@ pub const RocList = extern struct {
                     return result;
                 } else {
                     const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted, roc_ops);
                     const result = RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
                     return result;
                 }

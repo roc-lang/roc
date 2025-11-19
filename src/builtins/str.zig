@@ -289,6 +289,7 @@ pub const RocStr = extern struct {
                 new_capacity,
                 element_width,
                 false,
+                roc_ops,
             );
 
             return RocStr{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
