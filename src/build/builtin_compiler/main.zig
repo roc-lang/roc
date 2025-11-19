@@ -468,7 +468,6 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
 
-
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
 
