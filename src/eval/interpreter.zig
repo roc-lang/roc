@@ -1025,24 +1025,30 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
 
-                // Get the first element's variables, which is representative of all the element vars
-                const elems = self.env.store.sliceExpr(list_expr.elems);
-                std.debug.assert(elems.len > 0);
-                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-
-                const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
-                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
-
                 var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
                 defer values.deinit();
 
-                for (elem_indices) |elem_idx| {
-                    const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
+                // Evaluate first element without expected type to get its concrete layout
+                const first_val = try self.evalExprMinimal(elem_indices[0], roc_ops, null);
+                const elem_layout = first_val.layout;
+                try values.append(first_val);
+                std.debug.print("DEBUG LIST CREATE: First element has layout={s}\n", .{@tagName(elem_layout.tag)});
+
+                // Evaluate remaining elements using first element's type as expected type
+                // Get the runtime type variable for the first element
+                const first_elem_ct_var = can.ModuleEnv.varFrom(elem_indices[0]);
+                const first_elem_rt_var = try self.translateTypeVar(self.env, first_elem_ct_var);
+
+                for (elem_indices[1..]) |elem_idx| {
+                    const val = try self.evalExprMinimal(elem_idx, roc_ops, first_elem_rt_var);
                     try values.append(val);
                 }
 
+                std.debug.print("DEBUG LIST CREATE: About to get list_layout for list_rt_var={}\n", .{list_rt_var});
                 const list_layout = try self.getRuntimeLayout(list_rt_var);
+                std.debug.print("DEBUG LIST CREATE: list_layout tag={s}\n", .{@tagName(list_layout.tag)});
                 const dest = try self.pushRaw(list_layout, 0);
+                std.debug.print("DEBUG LIST CREATE: dest layout tag={s}\n", .{@tagName(dest.layout.tag)});
                 if (dest.ptr == null) return dest;
                 const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
@@ -1343,12 +1349,14 @@ pub const Interpreter = struct {
                 }
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
+                std.debug.print("DEBUG TAG CREATE: Creating tag '{s}' with rt_var={any}, layout={s}\n", .{name_text, rt_var, @tagName(layout_val.tag)});
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
                     try self.prepareBoolIndices(rt_var);
                     return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
                 }
                 if (layout_val.tag == .scalar) {
                     // No payload union
+                    std.debug.print("DEBUG TAG CREATE: Taking SCALAR path for tag '{s}'\n", .{name_text});
                     var out = try self.pushRaw(layout_val, 0);
                     if (layout_val.data.scalar.tag == .bool) {
                         const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
@@ -1362,6 +1370,7 @@ pub const Interpreter = struct {
                     }
                     return error.NotImplemented;
                 } else if (layout_val.tag == .record) {
+                    std.debug.print("DEBUG TAG CREATE: Taking RECORD path for tag '{s}'\n", .{name_text});
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
@@ -3768,10 +3777,12 @@ pub const Interpreter = struct {
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                     tag_index = @intCast(tmp.asI128());
+                    std.debug.print("DEBUG EXTRACT: Got tag_index={} from int field\n", .{tag_index});
                 } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
                     const ptr = tag_field.ptr orelse return error.TypeMismatch;
                     const b: *const u8 = @ptrCast(@alignCast(ptr));
                     tag_index = b.*;
+                    std.debug.print("DEBUG EXTRACT: Got tag_index={} from bool field\n", .{tag_index});
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
@@ -3794,6 +3805,11 @@ pub const Interpreter = struct {
                                 .ptr = field_value.ptr,
                                 .is_initialized = field_value.is_initialized,
                             };
+                            if (arg_layout.tag == .scalar and arg_layout.data.scalar.tag == .int) {
+                                std.debug.print("DEBUG EXTRACT: Single arg payload is int with value={}\n", .{payload_value.?.asI128()});
+                            } else {
+                                std.debug.print("DEBUG EXTRACT: Single arg payload layout={s}\n", .{@tagName(arg_layout.tag)});
+                            }
                         } else {
                             var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
                             defer self.allocator.free(elem_layouts);
@@ -4159,6 +4175,7 @@ pub const Interpreter = struct {
                 return true;
             },
             .list => |list_pat| {
+                std.debug.print("DEBUG MATCH LIST: value.layout.tag={s}\n", .{@tagName(value.layout.tag)});
                 if (value.layout.tag != .list and value.layout.tag != .list_of_zst) return false;
 
                 const list_layout = try self.getRuntimeLayout(value_rt_var);
@@ -4171,7 +4188,10 @@ pub const Interpreter = struct {
                 const nominal = list_rt_content.structure.nominal_type;
                 const nominal_args = self.runtime_types.sliceNominalArgs(nominal);
                 const elem_rt_var = nominal_args[0];
+                const elem_resolved_match = self.runtime_types.resolveVar(elem_rt_var);
+                std.debug.print("DEBUG MATCH: elem_rt_var={}, resolved content={s}\n", .{elem_rt_var, @tagName(elem_resolved_match.desc.content)});
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
+                std.debug.print("DEBUG MATCH: elem_layout tag={s}\n", .{@tagName(elem_layout.tag)});
 
                 var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
                 const total_len = accessor.len();
@@ -4186,9 +4206,11 @@ pub const Interpreter = struct {
                     var idx: usize = 0;
                     while (idx < prefix_len) : (idx += 1) {
                         const elem_value = try accessor.getElement(idx);
+                        std.debug.print("DEBUG: List element {} layout tag: {s}, elem_rt_var: {}\n", .{idx, @tagName(elem_value.layout.tag), elem_rt_var});
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
+                            std.debug.print("DEBUG: Pattern match failed for element {}\n", .{idx});
                             self.trimBindingList(out_binds, before, roc_ops);
                             return false;
                         }

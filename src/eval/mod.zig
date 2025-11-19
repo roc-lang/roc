@@ -63,4 +63,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
+    std.testing.refAllDecls(@import("test/list_of_tags_bug_test.zig"));
 }

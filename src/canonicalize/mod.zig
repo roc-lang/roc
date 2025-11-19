@@ -39,4 +39,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/import_store_test.zig"));
     std.testing.refAllDecls(@import("test/scope_test.zig"));
     std.testing.refAllDecls(@import("test/record_test.zig"));
+    std.testing.refAllDecls(@import("test/tag_test.zig"));
 }

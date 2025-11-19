@@ -861,6 +861,7 @@ pub const Store = struct {
 
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
+            std.debug.print("DEBUG LAYOUT CACHE HIT: var={}, cached_layout={s}\n", .{current.var_, @tagName(self.getLayout(cached_idx).tag)});
             return cached_idx;
         }
 
@@ -877,6 +878,12 @@ pub const Store = struct {
             if (iterations > max_iterations) {
                 @panic("Layout computation exceeded iteration limit - possible infinite loop");
             }
+
+            std.debug.print("DEBUG LAYOUT: var={any}, content={s}", .{current.var_, @tagName(current.desc.content)});
+            if (current.desc.content == .structure) {
+                std.debug.print(", structure={s}", .{@tagName(current.desc.content.structure)});
+            }
+            std.debug.print("\n", .{});
 
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
@@ -901,11 +908,13 @@ pub const Store = struct {
                         }
 
                         // Special handling for Builtin.List
+                        std.debug.print("DEBUG LAYOUT nominal_type: list_ident={any}, origin_module={any}, builtin_module={any}, ident_idx={any}\n", .{self.list_ident, nominal_type.origin_module, self.env.builtin_module_ident, nominal_type.ident.ident_idx});
                         const is_builtin_list = if (self.list_ident) |list_ident|
                             nominal_type.origin_module == self.env.builtin_module_ident and
                                 nominal_type.ident.ident_idx == list_ident
                         else
                             false;
+                        std.debug.print("DEBUG LAYOUT nominal_type: is_builtin_list={}\n", .{is_builtin_list});
                         if (is_builtin_list) {
                             // Extract the element type from the type arguments
                             const type_args = self.types_store.sliceNominalArgs(nominal_type);
@@ -938,10 +947,12 @@ pub const Store = struct {
                                 });
 
                                 // Push a pending List container and "recurse" on the elem type
+                                std.debug.print("DEBUG LAYOUT: Pushed pending list container, continuing with elem_var={}\n", .{elem_var});
                                 current = elem_resolved;
                                 continue;
                             }
                         }
+                        std.debug.print("DEBUG LAYOUT: After is_builtin_list block\n", .{});
 
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
@@ -1236,8 +1247,8 @@ pub const Store = struct {
                                 self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
                             }
                         }
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
-                        return rec_idx;
+                        // Break to fall through to pending container processing instead of returning directly
+                        break :flat_type self.getLayout(rec_idx);
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1374,6 +1385,8 @@ pub const Store = struct {
             // If this was part of a pending container that we're working on, update that container.
             while (self.work.pending_containers.len > 0) {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
+                const container_tag = @as(std.meta.Tag(@TypeOf(self.work.pending_containers.slice().items(.container)[0])), self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]);
+                std.debug.print("DEBUG LAYOUT pending container: type={s}, layout_idx={}\n", .{@tagName(container_tag), layout_idx});
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
                         // Check if the element type is zero-sized (recursively)
