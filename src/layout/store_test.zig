@@ -32,6 +32,18 @@ const LayoutTest = struct {
         self.type_store.deinit();
         self.module_env.deinit();
     }
+
+    /// Helper to create a nominal Box type with the given element type
+    /// Note: Caller must have already inserted "Box" and "Builtin" idents and set builtin_module_ident
+    fn mkBoxType(self: *LayoutTest, elem_var: types.Var, box_ident_idx: base.Ident.Idx, builtin_module_idx: base.Ident.Idx) !types.Var {
+        const box_content = try self.type_store.mkNominal(
+            .{ .ident_idx = box_ident_idx },
+            elem_var,
+            &[_]types.Var{elem_var},
+            builtin_module_idx,
+        );
+        return try self.type_store.freshFromContent(box_content);
+    }
 };
 
 test "addTypeVar - bool type" {
@@ -91,13 +103,19 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Set up builtin module ident and Box ident for Box recognition
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
     // Box of flex_var
     const flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
-    const box_flex_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
+    const box_flex_var = try lt.mkBoxType(flex_var, box_ident_idx, builtin_module_idx);
     const box_flex_idx = try lt.layout_store.addTypeVar(box_flex_var, &lt.type_scope);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
     try testing.expect(box_flex_layout.tag == .box);
@@ -106,7 +124,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     // Box of rigid_var
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
     const rigid_var = try lt.type_store.freshFromContent(.{ .rigid = types.Rigid.init(ident_idx) });
-    const box_rigid_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
+    const box_rigid_var = try lt.mkBoxType(rigid_var, box_ident_idx, builtin_module_idx);
     const box_rigid_idx = try lt.layout_store.addTypeVar(box_rigid_var, &lt.type_scope);
     const box_rigid_layout = lt.layout_store.getLayout(box_rigid_idx);
     try testing.expect(box_rigid_layout.tag == .box);
@@ -119,8 +137,9 @@ test "addTypeVar - zero-sized types (ZST)" {
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
 
-    // Setup identifiers BEFORE Store.init so list_ident gets set correctly
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.builtin_module_ident = builtin_module_idx;
@@ -139,7 +158,7 @@ test "addTypeVar - zero-sized types (ZST)" {
     try testing.expect(lt.layout_store.getLayout(empty_tag_union_idx).tag == .zst);
 
     // ZSTs inside containers should use optimized layouts
-    const box_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
+    const box_zst_var = try lt.mkBoxType(empty_record_var, box_ident_idx, builtin_module_idx);
     const box_zst_idx = try lt.layout_store.addTypeVar(box_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
 
@@ -186,6 +205,12 @@ test "addTypeVar - record with only zero-sized fields" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Set up builtin module ident and Box ident for Box recognition
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
@@ -205,7 +230,7 @@ test "addTypeVar - record with only zero-sized fields" {
     try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
     // Box of such a record should be box_of_zst since the record only contains ZST fields
-    const box_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
+    const box_record_var = try lt.mkBoxType(record_var, box_ident_idx, builtin_module_idx);
     const box_idx = try lt.layout_store.addTypeVar(box_record_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
@@ -343,13 +368,16 @@ test "record extension with empty_record succeeds" {
 }
 
 test "deeply nested containers with inner ZST" {
+    // Test: List(Box(List(Box(empty_record))))
+    // Expected layout chain: list -> box -> list -> box_of_zst
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
 
-    // Setup identifiers BEFORE Store.init so list_ident gets set correctly
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.builtin_module_ident = builtin_module_idx;
@@ -360,7 +388,7 @@ test "deeply nested containers with inner ZST" {
 
     // Create List(Box(List(Box(empty_record))))
     const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const inner_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
+    const inner_box = try lt.mkBoxType(empty_record, box_ident_idx, builtin_module_idx);
     const inner_list_content = try lt.type_store.mkNominal(
         .{ .ident_idx = list_ident_idx },
         inner_box,
@@ -368,7 +396,7 @@ test "deeply nested containers with inner ZST" {
         builtin_module_idx,
     );
     const inner_list = try lt.type_store.freshFromContent(inner_list_content);
-    const outer_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
+    const outer_box = try lt.mkBoxType(inner_list, box_ident_idx, builtin_module_idx);
     const outer_list_content = try lt.type_store.mkNominal(
         .{ .ident_idx = list_ident_idx },
         outer_box,
@@ -399,8 +427,9 @@ test "nested ZST detection - List of record with ZST field" {
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
 
-    // Setup identifiers BEFORE Store.init so list_ident gets set correctly
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.builtin_module_ident = builtin_module_idx;
@@ -428,6 +457,12 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Set up builtin module ident and Box ident for Box recognition
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
@@ -443,7 +478,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     try testing.expect(lt.layout_store.layoutSize(tuple_layout) == 0);
 
     // Box of it should be box_of_zst
-    const box_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = tuple_var } });
+    const box_var = try lt.mkBoxType(tuple_var, box_ident_idx, builtin_module_idx);
     const box_idx = try lt.layout_store.addTypeVar(box_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
@@ -455,8 +490,9 @@ test "nested ZST detection - deeply nested" {
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
 
-    // Setup identifiers BEFORE Store.init so list_ident gets set correctly
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.builtin_module_ident = builtin_module_idx;

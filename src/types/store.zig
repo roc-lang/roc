@@ -398,7 +398,6 @@ pub const Store = struct {
 
     pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) bool {
         return switch (flat_type) {
-            .box => |box_var| self.needsInstantiation(box_var),
             .tuple => |tuple| blk: {
                 const elems_slice = self.sliceVars(tuple.elems);
                 for (elems_slice) |elem_var| {

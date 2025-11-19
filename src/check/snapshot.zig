@@ -146,10 +146,6 @@ pub const Store = struct {
 
     fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) std.mem.Allocator.Error!SnapshotFlatType {
         return switch (flat_type) {
-            .box => |box_var| {
-                const deep_content = try self.deepCopyVar(store, box_var);
-                return SnapshotFlatType{ .box = deep_content };
-            },
             .tuple => |tuple| SnapshotFlatType{ .tuple = try self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = try self.deepCopyNum(store, num) },
             .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = try self.deepCopyNominalType(store, nominal_type) },

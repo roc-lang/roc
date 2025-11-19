@@ -68,6 +68,9 @@ pub const Store = struct {
     // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
     list_ident: ?Ident.Idx,
 
+    // Cached Box ident to avoid repeated string lookups (null if Box doesn't exist in this env)
+    box_ident: ?Ident.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -154,6 +157,7 @@ pub const Store = struct {
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
             .list_ident = env.common.findIdent("List"),
+            .box_ident = env.common.findIdent("Box"),
         };
     }
 
@@ -880,15 +884,6 @@ pub const Store = struct {
 
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .box => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .box,
-                        });
-                        // Push a pending Box container and "recurse" on the elem type
-                        current = self.types_store.resolveVar(elem_var);
-                        continue;
-                    },
                     .nominal_type => |nominal_type| {
                         // Special-case Builtin.Str: it has a tag union backing type, but
                         // should have RocStr layout (3 pointers).
@@ -897,6 +892,46 @@ pub const Store = struct {
                             if (nominal_type.ident.ident_idx == builtin_str) {
                                 // This is Builtin.Str - use string layout
                                 break :flat_type Layout.str();
+                            }
+                        }
+
+                        // Special handling for Builtin.Box
+                        const is_builtin_box = if (self.box_ident) |box_ident|
+                            nominal_type.origin_module == self.env.builtin_module_ident and
+                                nominal_type.ident.ident_idx == box_ident
+                        else
+                            false;
+                        if (is_builtin_box) {
+                            // Extract the element type from the type arguments
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                            std.debug.assert(type_args.len == 1); // Box must have exactly 1 type parameter
+                            const elem_var = type_args[0];
+
+                            // Check if the element type is a known ZST (but NOT flex/rigid - those need opaque_ptr)
+                            const elem_resolved = self.types_store.resolveVar(elem_var);
+                            const elem_content = elem_resolved.desc.content;
+                            const is_elem_zst = switch (elem_content) {
+                                .structure => |ft| switch (ft) {
+                                    .empty_record, .empty_tag_union => true,
+                                    else => false,
+                                },
+                                else => false,
+                            };
+
+                            if (is_elem_zst) {
+                                // For ZST element types, use box of zero-sized type
+                                break :flat_type Layout.boxOfZst();
+                            } else {
+                                // Otherwise, add this to the stack of pending work
+                                // (This includes flex/rigid which will resolve to opaque_ptr)
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = current.var_,
+                                    .container = .box,
+                                });
+
+                                // Push a pending Box container and "recurse" on the elem type
+                                current = elem_resolved;
+                                continue;
                             }
                         }
 
@@ -926,10 +961,7 @@ pub const Store = struct {
 
                             if (is_elem_zst_or_unbound) {
                                 // For unbound or ZST element types, use list of zero-sized type
-                                const layout = Layout.listOfZst();
-                                const idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                                return idx;
+                                break :flat_type Layout.listOfZst();
                             } else {
                                 // Otherwise, add this to the stack of pending work
                                 try self.work.pending_containers.append(self.env.gpa, .{
