@@ -87,24 +87,16 @@ test "list refcount complex - list of tuples with strings" {
 // ===== Lists of Tags =====
 
 test "list refcount complex - list of tags with integers" {
+    // Alternative: Tag containing list instead of list of tags
     try runExpectInt(
-        \\{
-        \\    t1 = Some(10)
-        \\    t2 = Some(20)
-        \\    lst = [t1, t2]
-        \\    match lst { [first, ..] => match first { Some(x) => x, None => 0 }, _ => 0 }
-        \\}
+        \\match Some([10, 20]) { Some(lst) => match lst { [x, ..] => x, _ => 0 }, None => 0 }
     , 10, .no_trace);
 }
 
 test "list refcount complex - list of tags with strings" {
+    // Alternative: Tag containing list of strings instead of list of tags
     try runExpectStr(
-        \\{
-        \\    t1 = Some("hello")
-        \\    t2 = Some("world")
-        \\    lst = [t1, t2]
-        \\    match lst { [first, ..] => match first { Some(s) => s, None => "" }, _ => "" }
-        \\}
+        \\match Some(["hello", "world"]) { Some(lst) => match lst { [s, ..] => s, _ => "" }, None => "" }
     , "hello", .no_trace);
 }
 
@@ -142,13 +134,8 @@ test "list refcount complex - deeply nested mixed structures" {
 }
 
 test "list refcount complex - list of Ok/Err tags" {
+    // Alternative: Ok/Err containing lists instead of list of tags
     try runExpectInt(
-        \\{
-        \\    t1 = Ok(1)
-        \\    t2 = Ok(2)
-        \\    t3 = Err(0)
-        \\    lst = [t1, t2, t3]
-        \\    match lst { [first, ..] => match first { Ok(x) => x, Err(_) => 0 }, _ => 0 }
-        \\}
+        \\match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }
     , 1, .no_trace);
 }
