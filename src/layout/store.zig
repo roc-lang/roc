@@ -920,10 +920,7 @@ pub const Store = struct {
 
                             if (is_elem_zst) {
                                 // For ZST element types, use box of zero-sized type
-                                const layout = Layout.boxOfZst();
-                                const idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                                return idx;
+                                break :flat_type Layout.boxOfZst();
                             } else {
                                 // Otherwise, add this to the stack of pending work
                                 // (This includes flex/rigid which will resolve to opaque_ptr)
@@ -964,10 +961,7 @@ pub const Store = struct {
 
                             if (is_elem_zst_or_unbound) {
                                 // For unbound or ZST element types, use list of zero-sized type
-                                const layout = Layout.listOfZst();
-                                const idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                                return idx;
+                                break :flat_type Layout.listOfZst();
                             } else {
                                 // Otherwise, add this to the stack of pending work
                                 try self.work.pending_containers.append(self.env.gpa, .{
