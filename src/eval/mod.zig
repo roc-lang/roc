@@ -65,4 +65,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
+    // Bug reproduction test file exists but not included in build:
+    // src/eval/test/bug_list_of_tags_repro.zig
+    // See BUG_LIST_OF_TAGS.md for details
 }
