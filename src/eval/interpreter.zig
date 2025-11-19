@@ -698,10 +698,13 @@ pub const Interpreter = struct {
                     }
 
                     // For user-defined nominal types with plus methods, use method dispatch
+                    std.debug.print("DEBUG: binop.lhs = {}, binop.rhs = {}\n", .{binop.lhs, binop.rhs});
                     var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                     defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    std.debug.print("DEBUG: lhs value = {}\n", .{lhs.asI128()});
                     var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
                     defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                    std.debug.print("DEBUG: rhs value = {}\n", .{rhs.asI128()});
 
                     // Get the nominal type information from lhs
                     const nominal_info = switch (lhs_resolved.desc.content) {
