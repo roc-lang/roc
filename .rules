@@ -19,6 +19,8 @@ Roc uses two different test strategies to Verify Correctness, and Validate Behav
 1. **Verify Correctness:** Where necessary, we add unit tests to ensure low-level or specific implementation details remain correct. These are written in `.zig` files using the `test` keyword alongside the code they are testing. These tests are typically limited in scope to a single function.
 2. **Validate Behaviour:** More commonly, we add snapshot tests to provide assurance that the compiler continues to behave as expected. Snapshot files `.md` concurrently exercise many parts of the compiler by presenting the output of each stage for a given snippet of Roc code. Unlike unit tests, this has relevant debug-level information depth and multiple-compiler stage breadth.
 
+When you are requested to add a test without a specific location, take some time to look around and find the best location for the test in the repo.
+
 ### Common Commands
 
 - Run all tests: `zig build test`. To run a specific test: `zig build test -- --test-filter "name of test"`. NEVER use the standard `zig test`, it does not work with our project.
