@@ -1,5 +1,3 @@
-module [main]
-
 main! = |_| {}
 
 x : I64
