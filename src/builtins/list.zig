@@ -325,11 +325,13 @@ pub const RocList = extern struct {
             if (self.isUnique() and !self.isSeamlessSlice()) {
                 const capacity = self.capacity_or_alloc_ptr;
                 if (capacity >= new_length) {
-                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
+                    const result = RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
+                    return result;
                 } else {
                     const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
                     const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
-                    return RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
+                    const result = RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
+                    return result;
                 }
             }
             return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc_context, inc, roc_ops);
@@ -1124,7 +1126,11 @@ pub fn listConcat(
         // These must exist, otherwise, the lists would have been empty.
         const source_a = resized_list_a.bytes orelse unreachable;
         const source_b = list_b.bytes orelse unreachable;
-        @memcpy(source_a[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
+
+        // Use std.mem.copyForwards instead of @memcpy to handle potential aliasing
+        const dest_slice = source_a[(list_a.len() * element_width)..(total_length * element_width)];
+        const src_slice = source_b[0..(list_b.len() * element_width)];
+        std.mem.copyForwards(u8, dest_slice, src_slice);
 
         // Increment refcount of all cloned elements.
         if (elements_refcounted) {

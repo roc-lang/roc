@@ -33,9 +33,10 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
 
-    // Allocate exactly what Roc requested - it already includes any header space it needs
-    const result = evaluator.allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
-    const base_ptr = result orelse {
+    // Use C allocator for Roc's allocations to bypass GPA canary checks
+    const c_alloc = std.heap.c_allocator;
+    const allocation = c_alloc.rawAlloc(alloc_args.length, align_enum, @returnAddress());
+    const base_ptr = allocation orelse {
         const msg = "Out of memory during compile-time evaluation (alloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -46,13 +47,12 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
         return;
     };
 
-    // Track this allocation for later dealloc/realloc
     const ptr_addr = @intFromPtr(base_ptr);
-    evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {
-        // If we can't track it, just continue - we'll leak memory but won't crash
-    };
 
-    // Return the allocation start - Roc will manage its own header offsets
+    // Track this allocation
+    evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {};
+
+    // Return the allocation start
     alloc_args.answer = @ptrFromInt(ptr_addr);
 }
 
@@ -62,32 +62,29 @@ fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) v
     const ptr_addr = @intFromPtr(dealloc_args.ptr);
 
     // Look up the allocation size from our tracking map
-    const size = evaluator.roc_allocations.get(ptr_addr) orelse {
-        // Not found - might be a double-free or pointer we didn't allocate
-        // Just ignore it to avoid crashing
-        return;
-    };
+    const size = evaluator.roc_allocations.get(ptr_addr) orelse return;
 
     // Remove from tracking map
     _ = evaluator.roc_allocations.remove(ptr_addr);
 
-    // Free the memory
+    // Free the memory using c_allocator
+    const c_alloc = std.heap.c_allocator;
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
     const ptr: [*]u8 = @ptrFromInt(ptr_addr);
     const slice = ptr[0..size];
-    evaluator.allocator.rawFree(slice, align_enum, @returnAddress());
+    c_alloc.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
 
     const old_ptr_addr = @intFromPtr(realloc_args.answer);
+    const c_alloc = std.heap.c_allocator;
 
     // Look up the old allocation size
     const old_size = evaluator.roc_allocations.get(old_ptr_addr) orelse {
-        // Not found - this shouldn't happen, but if it does, just allocate new memory
         const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
-        const new_ptr = evaluator.allocator.rawAlloc(realloc_args.new_length, align_enum, @returnAddress()) orelse {
+        const new_ptr = c_alloc.rawAlloc(realloc_args.new_length, align_enum, @returnAddress()) orelse {
             const msg = "Out of memory during compile-time evaluation (realloc)";
             const crashed = RocCrashed{
                 .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -103,10 +100,10 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         return;
     };
 
-    // Try to use the allocator's realloc for efficiency
+    // Realloc using c_allocator
     const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
     const old_slice = old_ptr[0..old_size];
-    const new_slice = evaluator.allocator.realloc(old_slice, realloc_args.new_length) catch {
+    const new_slice = c_alloc.realloc(old_slice, realloc_args.new_length) catch {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),

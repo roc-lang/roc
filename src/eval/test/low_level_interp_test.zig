@@ -251,6 +251,17 @@ test "e_low_level_lambda - List.concat with two empty lists" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
+test "e_low_level_lambda - List.first on literal list" {
+    const src =
+        \\x = [10, 20, 30, 40, 50]
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok 10", first_value);
+}
+
 test "e_low_level_lambda - List.concat preserves order" {
     const src =
         \\x = List.concat([10, 20], [30, 40, 50])
