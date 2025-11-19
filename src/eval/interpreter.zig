@@ -4693,10 +4693,6 @@ pub const Interpreter = struct {
                             const range = try self.runtime_types.appendVars(buf);
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
                         },
-                        .box => |elem_var| {
-                            const rt_elem = try self.translateTypeVar(module, elem_var);
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
-                        },
                         .record => |rec| {
                             var acc = try FieldAccumulator.init(self.allocator);
                             defer acc.deinit();
@@ -4949,12 +4945,6 @@ pub const Interpreter = struct {
                         const new_ret = try self.instantiateType(f.ret, subst_map);
                         const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
                         break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .box => |boxed_var| blk_box: {
-                        // Recursively instantiate the boxed type
-                        const new_boxed = try self.instantiateType(boxed_var, subst_map);
-                        const content = types.Content{ .structure = .{ .box = new_boxed } };
-                        break :blk_box try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .tuple => |tuple| blk_tuple: {
                         // Recursively instantiate tuple element types

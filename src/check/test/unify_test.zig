@@ -248,6 +248,10 @@ const TestEnv = struct {
         return try self.mkNominalType("List", elem_var, &[_]Var{elem_var});
     }
 
+    fn mkBox(self: *Self, elem_var: Var) std.mem.Allocator.Error!Content {
+        return try self.mkNominalType("Box", elem_var, &[_]Var{elem_var});
+    }
+
     // helpers - structure - func //
 
     fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
@@ -672,7 +676,7 @@ test "unify - a & b box with same arg unify" {
     const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
-    const box_str = Content{ .structure = .{ .box = str_var } };
+    const box_str = try env.mkBox(str_var);
 
     const a = try env.module_env.types.freshFromContent(box_str);
     const b = try env.module_env.types.freshFromContent(box_str);
@@ -696,8 +700,8 @@ test "unify - a & b box with diff args (fail)" {
     const i64_ = Content{ .structure = .{ .num = Num.int_i64 } };
     const i64_var = try env.module_env.types.freshFromContent(i64_);
 
-    const box_str = Content{ .structure = .{ .box = str_var } };
-    const box_i64 = Content{ .structure = .{ .box = i64_var } };
+    const box_str = try env.mkBox(str_var);
+    const box_i64 = try env.mkBox(i64_var);
 
     const a = try env.module_env.types.freshFromContent(box_str);
     const b = try env.module_env.types.freshFromContent(box_i64);

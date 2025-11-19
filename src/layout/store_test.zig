@@ -32,6 +32,19 @@ const LayoutTest = struct {
         self.type_store.deinit();
         self.module_env.deinit();
     }
+
+    /// Helper to create a nominal Box type with the given element type
+    fn mkBoxType(self: *LayoutTest, elem_var: types.Var) !types.Var {
+        const box_ident_idx = try self.module_env.insertIdent(base.Ident.for_text("Box"));
+        const builtin_module_idx = try self.module_env.insertIdent(base.Ident.for_text("Builtin"));
+        const box_content = try self.type_store.mkNominal(
+            .{ .ident_idx = box_ident_idx },
+            elem_var,
+            &[_]types.Var{elem_var},
+            builtin_module_idx,
+        );
+        return try self.type_store.freshFromContent(box_content);
+    }
 };
 
 test "addTypeVar - bool type" {
@@ -97,7 +110,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
 
     // Box of flex_var
     const flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
-    const box_flex_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
+    const box_flex_var = try lt.mkBoxType(flex_var);
     const box_flex_idx = try lt.layout_store.addTypeVar(box_flex_var, &lt.type_scope);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
     try testing.expect(box_flex_layout.tag == .box);
@@ -106,7 +119,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     // Box of rigid_var
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
     const rigid_var = try lt.type_store.freshFromContent(.{ .rigid = types.Rigid.init(ident_idx) });
-    const box_rigid_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
+    const box_rigid_var = try lt.mkBoxType(rigid_var);
     const box_rigid_idx = try lt.layout_store.addTypeVar(box_rigid_var, &lt.type_scope);
     const box_rigid_layout = lt.layout_store.getLayout(box_rigid_idx);
     try testing.expect(box_rigid_layout.tag == .box);
@@ -139,7 +152,7 @@ test "addTypeVar - zero-sized types (ZST)" {
     try testing.expect(lt.layout_store.getLayout(empty_tag_union_idx).tag == .zst);
 
     // ZSTs inside containers should use optimized layouts
-    const box_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
+    const box_zst_var = try lt.mkBoxType(empty_record_var);
     const box_zst_idx = try lt.layout_store.addTypeVar(box_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
 
@@ -205,7 +218,7 @@ test "addTypeVar - record with only zero-sized fields" {
     try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
     // Box of such a record should be box_of_zst since the record only contains ZST fields
-    const box_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
+    const box_record_var = try lt.mkBoxType(record_var);
     const box_idx = try lt.layout_store.addTypeVar(box_record_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
@@ -360,7 +373,7 @@ test "deeply nested containers with inner ZST" {
 
     // Create List(Box(List(Box(empty_record))))
     const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const inner_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
+    const inner_box = try lt.mkBoxType(empty_record);
     const inner_list_content = try lt.type_store.mkNominal(
         .{ .ident_idx = list_ident_idx },
         inner_box,
@@ -368,7 +381,7 @@ test "deeply nested containers with inner ZST" {
         builtin_module_idx,
     );
     const inner_list = try lt.type_store.freshFromContent(inner_list_content);
-    const outer_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
+    const outer_box = try lt.mkBoxType(inner_list);
     const outer_list_content = try lt.type_store.mkNominal(
         .{ .ident_idx = list_ident_idx },
         outer_box,
@@ -443,7 +456,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     try testing.expect(lt.layout_store.layoutSize(tuple_layout) == 0);
 
     // Box of it should be box_of_zst
-    const box_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = tuple_var } });
+    const box_var = try lt.mkBoxType(tuple_var);
     const box_idx = try lt.layout_store.addTypeVar(box_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
