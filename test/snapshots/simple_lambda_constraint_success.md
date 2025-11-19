@@ -93,9 +93,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(patt (type "Num(Frac(Float64)) -> Num(Frac(Float64))")))
+		(patt (type "I64 -> I64"))
+		(patt (type "F64 -> F64")))
 	(expressions
-		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(expr (type "Num(Frac(Float64)) -> Num(Frac(Float64))"))))
+		(expr (type "I64 -> I64"))
+		(expr (type "F64 -> F64"))))
 ~~~

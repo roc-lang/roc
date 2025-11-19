@@ -203,7 +203,6 @@ fn copyFlatType(
     return switch (flat_type) {
         .box => |box_var| FlatType{ .box = try copyVar(source_store, dest_store, box_var, var_mapping, source_idents, dest_idents, allocator) },
         .tuple => |tuple| FlatType{ .tuple = try copyTuple(source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
-        .num => |num| FlatType{ .num = try copyNum(source_store, dest_store, num, var_mapping, source_idents, dest_idents, allocator) },
         .nominal_type => |nominal| FlatType{ .nominal_type = try copyNominalType(source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
         .fn_pure => |func| FlatType{ .fn_pure = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
         .fn_effectful => |func| FlatType{ .fn_effectful = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
@@ -238,29 +237,6 @@ fn copyTuple(
     const dest_range = try dest_store.appendVars(dest_elems.items);
     return types_mod.Tuple{ .elems = dest_range };
 }
-
-fn copyNum(
-    source_store: *const TypesStore,
-    dest_store: *TypesStore,
-    num: Num,
-    var_mapping: *VarMapping,
-    source_idents: *const base.Ident.Store,
-    dest_idents: *base.Ident.Store,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!Num {
-    return switch (num) {
-        .num_poly => |poly_var| Num{ .num_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .int_poly => |poly_var| Num{ .int_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .frac_poly => |poly_var| Num{ .frac_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .num_unbound => |unbound| Num{ .num_unbound = unbound },
-        .int_unbound => |unbound| Num{ .int_unbound = unbound },
-        .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
-        .int_precision => |precision| Num{ .int_precision = precision },
-        .frac_precision => |precision| Num{ .frac_precision = precision },
-        .num_compact => |compact| Num{ .num_compact = compact },
-    };
-}
-
 fn copyFunc(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -270,6 +246,9 @@ fn copyFunc(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Func {
+    const start_idx: usize = @intFromEnum(func.args.start);
+    const end_idx: usize = start_idx + func.args.count;
+    std.debug.print("DEBUG copyFunc: start={}, count={}, end={}, len={}\n", .{ start_idx, func.args.count, end_idx, source_store.vars.items.items.len });
     const args_slice = source_store.sliceVars(func.args);
 
     var dest_args = std.ArrayList(Var).empty;

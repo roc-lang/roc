@@ -606,7 +606,7 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 }
 
 /// Create a nominal List type with the given element type
-fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
+fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where List is defined.
     const origin_module_id = if (self.common_idents.builtin_module) |_|
@@ -618,8 +618,22 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         .ident_idx = self.common_idents.list,
     };
 
-    // The backing var is the element type var
-    const backing_var = elem_var;
+    // List's backing is [ProvidedByCompiler] with closed extension
+    // The element type is a type parameter, not the backing
+    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
+    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
+
+    // Create the [ProvidedByCompiler] tag
+    const provided_tag_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("ProvidedByCompiler"));
+    const provided_tag = try self.types.mkTag(provided_tag_ident, &.{});
+
+    const tag_union = types_mod.TagUnion{
+        .tags = try self.types.appendTags(&[_]types_mod.Tag{provided_tag}),
+        .ext = ext_var,
+    };
+    const backing_content = Content{ .structure = .{ .tag_union = tag_union } };
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
     const type_args = [_]Var{elem_var};
 
     return try self.types.mkNominal(
@@ -648,8 +662,8 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     };
 
     // Number types backing is [] (empty tag union with closed extension)
-    const empty_record_content = Content{ .structure = .{ .empty_record = {} } };
-    const ext_var = try self.freshFromContent(empty_record_content, env, Region.zero());
+    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
+    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
     const empty_tag_union = types_mod.TagUnion{
         .tags = types_mod.Tag.SafeMultiList.Range.empty(),
         .ext = ext_var,
@@ -1666,7 +1680,6 @@ fn generateBuiltinTypeInstance(
     env: *Env,
 ) std.mem.Allocator.Error!Var {
     switch (anno_builtin_type) {
-        .str => return try self.freshFromContent(.{ .structure = .str }, env, anno_region),
         // Phase 5: Use nominal types from Builtin instead of special .num content
         .u8 => return try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, anno_region),
         .u16 => return try self.freshFromContent(try self.mkNumberTypeContent("U16", env), env, anno_region),
@@ -1696,7 +1709,7 @@ fn generateBuiltinTypeInstance(
             }
 
             // Create the nominal List type
-            const list_content = try self.mkListContent(anno_args[0]);
+            const list_content = try self.mkListContent(anno_args[0], env);
             return try self.freshFromContent(list_content, env, anno_region);
         },
         .box => {
@@ -1828,7 +1841,7 @@ fn checkPatternHelp(
             if (elems.len == 0) {
                 // Create a nominal List with a fresh unbound element type
                 const elem_var = try self.fresh(env, pattern_region);
-                const list_content = try self.mkListContent(elem_var);
+                const list_content = try self.mkListContent(elem_var, env);
                 try self.unifyWith(pattern_var, list_content, env);
             } else {
 
@@ -1866,7 +1879,7 @@ fn checkPatternHelp(
                 }
 
                 // Create a nominal List type with the inferred element type
-                const list_content = try self.mkListContent(elem_var);
+                const list_content = try self.mkListContent(elem_var, env);
                 try self.unifyWith(pattern_var, list_content, env);
 
                 // Then, check the "rest" pattern is bound to a variable
@@ -2209,7 +2222,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_num => |num| {
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
-                    // For unannotated literals, create a simple flex var
+                    // For unannotated literals, create a simple flex var with NumLiteral constraint
                     const flex_var = try self.fresh(env, expr_region);
                     _ = try self.unify(expr_var, flex_var, env);
                 },
@@ -2264,7 +2277,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_empty_list => {
             // Create a nominal List with a fresh unbound element type
             const elem_var = try self.fresh(env, expr_region);
-            const list_content = try self.mkListContent(elem_var);
+            const list_content = try self.mkListContent(elem_var, env);
             try self.unifyWith(expr_var, list_content, env);
         },
         .e_list => |list| {
@@ -2273,7 +2286,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (elems.len == 0) {
                 // Create a nominal List with a fresh unbound element type
                 const elem_var = try self.fresh(env, expr_region);
-                const list_content = try self.mkListContent(elem_var);
+                const list_content = try self.mkListContent(elem_var, env);
                 try self.unifyWith(expr_var, list_content, env);
             } else {
                 // Here, we use the list's 1st element as the element var to
@@ -2312,7 +2325,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
 
                 // Create a nominal List type with the inferred element type
-                const list_content = try self.mkListContent(elem_var);
+                const list_content = try self.mkListContent(elem_var, env);
                 try self.unifyWith(expr_var, list_content, env);
             }
         },
@@ -3237,7 +3250,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
 
                 // Check that the expr is list of the ptrn
-                const list_content = try self.mkListContent(for_ptrn_var);
+                const list_content = try self.mkListContent(for_ptrn_var, env);
                 const list_var = try self.freshFromContent(list_content, env, for_expr_region);
                 _ = try self.unify(list_var, for_expr_var, env);
 

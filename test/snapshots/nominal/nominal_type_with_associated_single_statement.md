@@ -57,10 +57,10 @@ Foo := [A, B, C].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "_a")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "_a"))))
 ~~~

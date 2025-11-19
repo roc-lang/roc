@@ -3503,7 +3503,7 @@ pub fn canonicalizeExpr(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumLiteralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -3648,7 +3648,7 @@ pub fn canonicalizeExpr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumLiteralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -4989,7 +4989,7 @@ fn canonicalizePattern(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumLiteralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -5133,7 +5133,7 @@ fn canonicalizePattern(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumLiteralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -5775,15 +5775,15 @@ const FracLiteralResult = union(enum) {
     small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
     dec: struct {
         value: RocDec,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
     f64: struct {
         value: f64,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
 };
 
@@ -5873,7 +5873,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 .small = .{
                     .numerator = small.numerator,
                     .denominator_power_of_ten = small.denominator_power_of_ten,
-                    .requirements = types.Num.Frac.Requirements{
+                    .requirements = types.Frac.Requirements{
                         .fits_in_f32 = CIR.fitsInF32(small_f64_val),
                         .fits_in_dec = true,
                     },
@@ -5890,7 +5890,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             .small = .{
                 .numerator = @as(i16, @intFromFloat(rounded)),
                 .denominator_power_of_ten = 0,
-                .requirements = types.Num.Frac.Requirements{
+                .requirements = types.Frac.Requirements{
                     .fits_in_f32 = CIR.fitsInF32(f64_val),
                     .fits_in_dec = true,
                 },
@@ -5922,7 +5922,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 return FracLiteralResult{
                     .f64 = .{
                         .value = f64_val,
-                        .requirements = types.Num.Frac.Requirements{
+                        .requirements = types.Frac.Requirements{
                             .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
@@ -5940,7 +5940,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 return FracLiteralResult{
                     .f64 = .{
                         .value = f64_val,
-                        .requirements = types.Num.Frac.Requirements{
+                        .requirements = types.Frac.Requirements{
                             .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
@@ -5951,7 +5951,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             return FracLiteralResult{
                 .dec = .{
                     .value = RocDec{ .num = dec_num },
-                    .requirements = types.Num.Frac.Requirements{
+                    .requirements = types.Frac.Requirements{
                         .fits_in_f32 = CIR.fitsInF32(f64_val),
                         .fits_in_dec = true,
                     },
@@ -5964,7 +5964,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     return FracLiteralResult{
         .f64 = .{
             .value = f64_val,
-            .requirements = types.Num.Frac.Requirements{
+            .requirements = types.Frac.Requirements{
                 .fits_in_f32 = CIR.fitsInF32(f64_val),
                 .fits_in_dec = false,
             },

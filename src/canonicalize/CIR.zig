@@ -338,9 +338,9 @@ pub const SmallDecValue = struct {
     }
 
     /// Calculate the int requirements of a SmallDecValue
-    pub fn toFracRequirements(self: SmallDecValue) types_mod.Num.FracRequirements {
+    pub fn toFracRequirements(self: SmallDecValue) types_mod.FracRequirements {
         const f64_val = self.toF64();
-        return types_mod.Num.FracRequirements{
+        return types_mod.FracRequirements{
             .fits_in_f32 = fitsInF32(f64_val),
             .fits_in_dec = fitsInDec(f64_val),
         };
@@ -451,7 +451,7 @@ pub const IntValue = struct {
 
     /// Calculate the int requirements of an IntValue
     /// TODO: Review, claude generated
-    pub fn toIntRequirements(self: IntValue) types_mod.Num.IntRequirements {
+    pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
 
@@ -485,8 +485,8 @@ pub const IntValue = struct {
         // For minimum signed values, subtract 1 from the magnitude
         // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
         const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
-        const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.Num.IntRequirements{
+        const bits_needed = types_mod.Int.BitsNeeded.fromValue(adjusted_val);
+        return types_mod.IntRequirements{
             .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
             .bits_needed = bits_needed.toBits(),
             .is_minimum_signed = is_minimum_signed,
@@ -496,7 +496,7 @@ pub const IntValue = struct {
     /// Calculate the frac requirements of an IntValue
     /// TODO: Review, claude generated
     /// Calculate the frac requirements of an IntValue
-    pub fn toFracRequirements(self: IntValue) types_mod.Num.FracRequirements {
+    pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
             .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
@@ -524,7 +524,7 @@ pub const IntValue = struct {
 
         const fits_in_dec = fitsInDec(f64_val);
 
-        return types_mod.Num.FracRequirements{
+        return types_mod.FracRequirements{
             .fits_in_f32 = fits_in_f32,
             .fits_in_dec = fits_in_dec,
         };

@@ -67,6 +67,21 @@ pub const Store = struct {
 
     // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
     list_ident: ?Ident.Idx,
+
+    // Cached numeric type idents to avoid repeated string lookups
+    u8_ident: ?Ident.Idx,
+    i8_ident: ?Ident.Idx,
+    u16_ident: ?Ident.Idx,
+    i16_ident: ?Ident.Idx,
+    u32_ident: ?Ident.Idx,
+    i32_ident: ?Ident.Idx,
+    u64_ident: ?Ident.Idx,
+    i64_ident: ?Ident.Idx,
+    u128_ident: ?Ident.Idx,
+    i128_ident: ?Ident.Idx,
+    f32_ident: ?Ident.Idx,
+    f64_ident: ?Ident.Idx,
+    dec_ident: ?Ident.Idx,
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -153,6 +168,19 @@ pub const Store = struct {
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
             .list_ident = env.common.findIdent("List"),
+            .u8_ident = env.common.findIdent("Num.U8"),
+            .i8_ident = env.common.findIdent("Num.I8"),
+            .u16_ident = env.common.findIdent("Num.U16"),
+            .i16_ident = env.common.findIdent("Num.I16"),
+            .u32_ident = env.common.findIdent("Num.U32"),
+            .i32_ident = env.common.findIdent("Num.I32"),
+            .u64_ident = env.common.findIdent("Num.U64"),
+            .i64_ident = env.common.findIdent("Num.I64"),
+            .u128_ident = env.common.findIdent("Num.U128"),
+            .i128_ident = env.common.findIdent("Num.I128"),
+            .f32_ident = env.common.findIdent("Num.F32"),
+            .f64_ident = env.common.findIdent("Num.F64"),
+            .dec_ident = env.common.findIdent("Num.Dec"),
         };
     }
 
@@ -942,29 +970,29 @@ pub const Store = struct {
                             }
                         }
 
-                        // Special-case builtin number types
+                        // Special handling for built-in numeric types from Builtin module
+                        // These have empty tag union backings but need scalar layouts
                         if (nominal_type.origin_module == self.env.builtin_module_ident) {
-                            const ident_text = self.env.getIdent(nominal_type.ident.ident_idx);
+                            const ident_idx = nominal_type.ident.ident_idx;
                             const num_layout: ?Layout = blk: {
-                                if (std.mem.eql(u8, ident_text, "U8")) break :blk Layout.int(.u8);
-                                if (std.mem.eql(u8, ident_text, "U16")) break :blk Layout.int(.u16);
-                                if (std.mem.eql(u8, ident_text, "U32")) break :blk Layout.int(.u32);
-                                if (std.mem.eql(u8, ident_text, "U64")) break :blk Layout.int(.u64);
-                                if (std.mem.eql(u8, ident_text, "U128")) break :blk Layout.int(.u128);
-                                if (std.mem.eql(u8, ident_text, "I8")) break :blk Layout.int(.i8);
-                                if (std.mem.eql(u8, ident_text, "I16")) break :blk Layout.int(.i16);
-                                if (std.mem.eql(u8, ident_text, "I32")) break :blk Layout.int(.i32);
-                                if (std.mem.eql(u8, ident_text, "I64")) break :blk Layout.int(.i64);
-                                if (std.mem.eql(u8, ident_text, "I128")) break :blk Layout.int(.i128);
-                                if (std.mem.eql(u8, ident_text, "F32")) break :blk Layout.frac(.f32);
-                                if (std.mem.eql(u8, ident_text, "F64")) break :blk Layout.frac(.f64);
-                                if (std.mem.eql(u8, ident_text, "Dec")) break :blk Layout.frac(.dec);
+                                if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
+                                if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
+                                if (self.u16_ident) |u16_id| if (ident_idx == u16_id) break :blk Layout.int(types.Int.Precision.u16);
+                                if (self.i16_ident) |i16_id| if (ident_idx == i16_id) break :blk Layout.int(types.Int.Precision.i16);
+                                if (self.u32_ident) |u32_id| if (ident_idx == u32_id) break :blk Layout.int(types.Int.Precision.u32);
+                                if (self.i32_ident) |i32_id| if (ident_idx == i32_id) break :blk Layout.int(types.Int.Precision.i32);
+                                if (self.u64_ident) |u64_id| if (ident_idx == u64_id) break :blk Layout.int(types.Int.Precision.u64);
+                                if (self.i64_ident) |i64_id| if (ident_idx == i64_id) break :blk Layout.int(types.Int.Precision.i64);
+                                if (self.u128_ident) |u128_id| if (ident_idx == u128_id) break :blk Layout.int(types.Int.Precision.u128);
+                                if (self.i128_ident) |i128_id| if (ident_idx == i128_id) break :blk Layout.int(types.Int.Precision.i128);
+                                if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
+                                if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
+                                if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
                                 break :blk null;
                             };
+
                             if (num_layout) |layout| {
-                                const idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                                return idx;
+                                break :flat_type layout;
                             }
                         }
 
@@ -975,64 +1003,6 @@ pub const Store = struct {
 
                         current = resolved;
                         continue;
-                    },
-                    .num => |initial_num| {
-                        var num = initial_num;
-
-                        while (true) {
-                            switch (num) {
-                                // TODO: Unwrap number to get the root precision or requiremnets
-                                .num_compact => |compact| switch (compact) {
-                                    .int => |precision| break :flat_type Layout.int(precision),
-                                    .frac => |precision| break :flat_type Layout.frac(precision),
-                                },
-                                .int_precision => |precision| break :flat_type Layout.int(precision),
-                                .frac_precision => |precision| break :flat_type Layout.frac(precision),
-                                // For polymorphic types, use default precision
-                                .num_unbound => |_| {
-                                    // Default unbound number types to Dec
-                                    break :flat_type Layout.default_num();
-                                },
-                                .int_unbound => {
-                                    // Default unbound int types to Dec
-                                    break :flat_type Layout.default_num();
-                                },
-                                .frac_unbound => {
-                                    // Default unbound frac types to Dec
-                                    break :flat_type Layout.default_num();
-                                },
-                                .num_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.default_num();
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .int_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.default_num();
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .frac_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.default_num();
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                            }
-                        }
                     },
                     .tuple => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);

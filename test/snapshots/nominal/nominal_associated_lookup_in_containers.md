@@ -172,7 +172,7 @@ nested = { bar: A, count: 1 }
 	(defs
 		(patt (type "List(Foo.Bar)"))
 		(patt (type "Try(Foo.Bar, Foo.Error)"))
-		(patt (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }")))
+		(patt (type "{ bar: Foo.Bar, count: U64 }")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -183,5 +183,5 @@ nested = { bar: A, count: 1 }
 	(expressions
 		(expr (type "List(Foo.Bar)"))
 		(expr (type "Try(Foo.Bar, Foo.Error)"))
-		(expr (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }"))))
+		(expr (type "{ bar: Foo.Bar, count: U64 }"))))
 ~~~

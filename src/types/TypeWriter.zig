@@ -430,9 +430,6 @@ fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.
         .tuple => |tuple| {
             try self.writeTuple(tuple, root_var);
         },
-        .num => |num| {
-            try self.writeNum(num, root_var);
-        },
         .nominal_type => |nominal_type| {
             try self.writeNominalType(nominal_type, root_var);
         },
@@ -738,112 +735,6 @@ fn writeTag(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error!
     }
 }
 
-/// Convert a num type to a type string
-fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!void {
-    switch (num) {
-        .num_poly => |poly_var| {
-            _ = try self.buf.writer().write("Num(");
-            try self.writeVarWithContext(poly_var, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .int_poly => |poly| {
-            _ = try self.buf.writer().write("Int(");
-            try self.writeVarWithContext(poly, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .frac_poly => |poly| {
-            _ = try self.buf.writer().write("Frac(");
-            try self.writeVarWithContext(poly, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .num_unbound => |_| {
-            _ = try self.buf.writer().write("Num(_");
-            try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
-        },
-        .int_unbound => |_| {
-            _ = try self.buf.writer().write("Int(_");
-            try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
-        },
-        .frac_unbound => |_| {
-            _ = try self.buf.writer().write("Frac(_");
-            try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
-        },
-        .int_precision => |prec| {
-            try self.writeIntType(prec, .precision);
-        },
-        .frac_precision => |prec| {
-            try self.writeFracType(prec, .precision);
-        },
-        .num_compact => |compact| {
-            switch (compact) {
-                .int => |prec| {
-                    try self.writeIntType(prec, .compacted);
-                },
-                .frac => |prec| {
-                    try self.writeFracType(prec, .compacted);
-                },
-            }
-        },
-    }
-}
-
-const NumPrecType = enum { precision, compacted };
-
-fn writeIntType(self: *TypeWriter, prec: Num.Int.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-    switch (num_type) {
-        .compacted => {
-            _ = switch (prec) {
-                .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
-                .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
-                .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
-                .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
-                .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
-                .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
-                .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
-                .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
-                .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
-                .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
-            };
-        },
-        .precision => {
-            _ = switch (prec) {
-                .u8 => try self.buf.writer().write("Unsigned8"),
-                .i8 => try self.buf.writer().write("Signed8"),
-                .u16 => try self.buf.writer().write("Unsigned16"),
-                .i16 => try self.buf.writer().write("Signed16"),
-                .u32 => try self.buf.writer().write("Unsigned32"),
-                .i32 => try self.buf.writer().write("Signed32"),
-                .u64 => try self.buf.writer().write("Unsigned64"),
-                .i64 => try self.buf.writer().write("Signed64"),
-                .u128 => try self.buf.writer().write("Unsigned128"),
-                .i128 => try self.buf.writer().write("Signed128"),
-            };
-        },
-    }
-}
-
-fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-    switch (num_type) {
-        .compacted => {
-            _ = switch (prec) {
-                .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
-                .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
-                .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
-            };
-        },
-        .precision => {
-            _ = switch (prec) {
-                .f32 => try self.buf.writer().write("Float32"),
-                .f64 => try self.buf.writer().write("Float64"),
-                .dec => try self.buf.writer().write("Decimal"),
-            };
-        },
-    }
-}
-
 /// Append a constraint to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
     for (self.static_dispatch_constraints.items) |constraint| {
@@ -864,7 +755,6 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
         try self.generateContextualName(context);
         return;
     }
-
     // Check if we've seen this flex var before.
     if (self.flex_var_names_map.get(resolved_var)) |range| {
         // If so, then use that name
@@ -971,7 +861,6 @@ fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, c
     switch (flat_type) {
         .empty_record, .empty_tag_union => {},
         .box => |sub_var| try self.countVar(search_var, sub_var, count),
-        .num => {},
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem| {

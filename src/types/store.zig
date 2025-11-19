@@ -406,15 +406,6 @@ pub const Store = struct {
                 }
                 break :blk false;
             },
-            .num => |num| switch (num) {
-                .num_poly => |poly_var| self.needsInstantiation(poly_var),
-                .num_unbound => true,
-                .int_poly => |poly_var| self.needsInstantiation(poly_var),
-                .int_unbound => true,
-                .frac_poly => |poly_var| self.needsInstantiation(poly_var),
-                .frac_unbound => true,
-                else => false, // Concrete numeric types don't need instantiation
-            },
             .nominal_type => false, // Nominal types are concrete
             .fn_pure => |func| func.needs_instantiation,
             .fn_effectful => |func| func.needs_instantiation,
@@ -1133,42 +1124,6 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
 
     const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, result.desc.content);
-    try std.testing.expectEqual(c, result.var_);
-    try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
-}
-
-test "resolveVarAndCompressPath - no-op on already root" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
-    const num_var = try store.freshFromContent(num);
-
-    const result = store.resolveVarAndCompressPath(num_var);
-
-    try std.testing.expectEqual(num, result.desc.content);
-    try std.testing.expectEqual(num_var, result.var_);
-    // try std.testing.expectEqual(store.getSlot(num_var), Slot{ .root = num_desc_idx });
-}
-
-test "resolveVarAndCompressPath - flattens redirect chain to structure" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
-    const c = try store.freshFromContent(num);
-    const b = try store.freshRedirect(c);
-    const a = try store.freshRedirect(b);
-
-    const result = store.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(num, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
