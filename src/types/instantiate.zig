@@ -221,7 +221,6 @@ pub const Instantiator = struct {
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
         return switch (flat_type) {
-            .str => FlatType.str,
             .box => |box_var| FlatType{ .box = try self.instantiateVar(box_var) },
             .tuple => |tuple| FlatType{ .tuple = try self.instantiateTuple(tuple) },
             .num => |num| FlatType{ .num = try self.instantiateNum(num) },

@@ -88,6 +88,44 @@ test "check type - str" {
     try checkTypesExpr(source, .pass, "Str");
 }
 
+test "check type - str annotation mismatch with number" {
+    const source =
+        \\x : I64
+        \\x = "hello"
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - number annotation mismatch with string" {
+    const source =
+        \\x : Str
+        \\x = 42
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - i64 annotation mismatch with f64" {
+    const source =
+        \\x : I64
+        \\x = 3.14
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - string plus number should fail" {
+    const source =
+        \\x = "hello" + 123
+    ;
+    try checkTypesModule(source, .fail, "MISSING METHOD");
+}
+
+test "check type - string plus string should fail (no plus method)" {
+    const source =
+        \\x = "hello" + "world"
+    ;
+    try checkTypesModule(source, .fail, "MISSING METHOD");
+}
+
 // primitives - lists //
 
 test "check type - list empty" {

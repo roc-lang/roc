@@ -61,6 +61,10 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Identifier for "Builtin.Str" to recognize the string type without string comparisons
+    // (null when compiling Builtin module itself or when Builtin.Str isn't available)
+    builtin_str_ident: ?Ident.Idx,
+
     // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
     list_ident: ?Ident.Idx,
 
@@ -108,6 +112,7 @@ pub const Store = struct {
     pub fn init(
         env: *ModuleEnv,
         type_store: *const types_store.Store,
+        builtin_str_ident: ?Ident.Idx,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -147,6 +152,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .builtin_str_ident = builtin_str_ident,
             .list_ident = env.common.findIdent("List"),
         };
     }
@@ -874,7 +880,6 @@ pub const Store = struct {
 
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => Layout.str(),
                     .box => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .{
                             .var_ = current.var_,
@@ -885,6 +890,16 @@ pub const Store = struct {
                         continue;
                     },
                     .nominal_type => |nominal_type| {
+                        // Special-case Builtin.Str: it has a tag union backing type, but
+                        // should have RocStr layout (3 pointers).
+                        // Check if this nominal type's identifier matches "Builtin.Str"
+                        if (self.builtin_str_ident) |builtin_str| {
+                            if (nominal_type.ident.ident_idx == builtin_str) {
+                                // This is Builtin.Str - use string layout
+                                break :flat_type Layout.str();
+                            }
+                        }
+
                         // Special handling for Builtin.List
                         const is_builtin_list = if (self.list_ident) |list_ident|
                             nominal_type.origin_module == self.env.builtin_module_ident and
@@ -897,10 +912,20 @@ pub const Store = struct {
                             std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
                             const elem_var = type_args[0];
 
-                            // Check if the element type is unbound (flex or rigid)
-                            const elem_content = self.types_store.resolveVar(elem_var).desc.content;
-                            if (elem_content == .flex or elem_content == .rigid) {
-                                // For unbound element types (e.g., empty lists), use list of zero-sized type
+                            // Check if the element type is unbound (flex or rigid) or a known ZST
+                            const elem_resolved = self.types_store.resolveVar(elem_var);
+                            const elem_content = elem_resolved.desc.content;
+                            const is_elem_zst_or_unbound = switch (elem_content) {
+                                .flex, .rigid => true,
+                                .structure => |ft| switch (ft) {
+                                    .empty_record, .empty_tag_union => true,
+                                    else => false,
+                                },
+                                else => false,
+                            };
+
+                            if (is_elem_zst_or_unbound) {
+                                // For unbound or ZST element types, use list of zero-sized type
                                 const layout = Layout.listOfZst();
                                 const idx = try self.insertLayout(layout);
                                 try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
@@ -913,7 +938,7 @@ pub const Store = struct {
                                 });
 
                                 // Push a pending List container and "recurse" on the elem type
-                                current = self.types_store.resolveVar(elem_var);
+                                current = elem_resolved;
                                 continue;
                             }
                         }

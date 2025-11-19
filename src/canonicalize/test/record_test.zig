@@ -212,7 +212,7 @@ test "record with extension variable" {
     // Test that regular records have extension variables
     // Create { x: 42, y: "hi" }* (open record)
     const num_var = try env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    const str_var = try env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const fields = [_]types.RecordField{
         .{ .name = try env.insertIdent(Ident.for_text("x")), .var_ = num_var },

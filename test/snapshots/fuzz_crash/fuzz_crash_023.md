@@ -985,7 +985,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red][Blue, Green]_others_
+    _[Red][Blue, Green][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -1015,7 +1015,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red][Blue, Green]_others, _arg -> Error_
+    _[Red][Blue, Green][ProvidedByCompiler], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2574,7 +2574,7 @@ expect {
 	(defs
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Error -> Num(Int(Unsigned64))"))
-		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2621,7 +2621,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Error -> Num(Int(Unsigned64))"))
-		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

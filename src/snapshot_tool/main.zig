@@ -1137,6 +1137,7 @@ fn processSnapshotContent(
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
         .builtin_module = config.builtin_module,
     };
 

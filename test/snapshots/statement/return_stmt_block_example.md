@@ -34,7 +34,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[Err([TooBig]_others)]_others2_
+    _[Err([TooBig]_others)][ProvidedByCompiler]_
 
 All branches in an `if` must have compatible types.
 

@@ -321,3 +321,48 @@ test "roc fmt --stdin does not change well-formatted input" {
     // 2. Stdout contains the same content as input (no changes)
     try testing.expectEqualStrings(input_content, stdout);
 }
+
+test "roc check reports type error - annotation mismatch" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code) due to type error
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains type error information
+    try testing.expect(result.stderr.len > 0);
+
+    // 3. Error message mentions type mismatch or error
+    const has_type_error = std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.indexOf(u8, result.stderr, "error") != null or
+        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    try testing.expect(has_type_error);
+}
+
+test "roc check reports type error - plus operator with incompatible types" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_plus_operator.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code) due to type error
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains type error information
+    try testing.expect(result.stderr.len > 0);
+
+    // 3. Error message mentions missing method or type error
+    const has_type_error = std.mem.indexOf(u8, result.stderr, "MISSING METHOD") != null or
+        std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.indexOf(u8, result.stderr, "error") != null or
+        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    try testing.expect(has_type_error);
+}
