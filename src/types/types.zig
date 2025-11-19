@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(40, @sizeOf(StaticDispatchConstraint)); // Increased due to recursion_info field
+    try std.testing.expectEqual(96, @sizeOf(StaticDispatchConstraint)); // Increased due to recursion_info + num_literal fields
 }
 
 /// A type variable
@@ -782,6 +782,25 @@ pub const TwoTags = struct {
 
 // content //
 
+/// Information about a numeric literal for from_num_literal constraint checking
+///
+/// Stores the parsed numeric value and metadata needed to validate conversion
+/// to a specific numeric type at compile-time.
+pub const NumLiteralInfo = struct {
+    /// The parsed numeric value as i128
+    /// For fractional literals, this is scaled by 10^18 (Dec representation)
+    value: i128,
+
+    /// Whether the literal was negative
+    is_negative: bool,
+
+    /// Whether the literal had a decimal point
+    is_fractional: bool,
+
+    /// Source region for error reporting
+    region: base.Region,
+};
+
 /// Information about a recursive static dispatch constraint
 ///
 /// When we detect that a constraint refers to itself (e.g., through a chain
@@ -811,12 +830,15 @@ pub const StaticDispatchConstraint = struct {
     origin: Origin,
     /// Optional recursion information if this constraint is recursive
     recursion_info: ?RecursionInfo = null,
+    /// Optional numeric literal info for from_num_literal constraints
+    num_literal: ?NumLiteralInfo = null,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u2) {
         desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
         method_call, // From .method() syntax
         where_clause, // From where clause in type annotation
+        from_num_literal, // From numeric literal conversion
     };
 
     /// A safe list of static dispatch constraints

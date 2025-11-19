@@ -690,7 +690,16 @@ pub const Interpreter = struct {
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
                     // Resolve the lhs type to get nominal type information
-                    const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+                    var lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+
+                    // If the type is still a flex/rigid var, default to Dec
+                    // (Unsuffixed numeric literals default to Dec in Roc)
+                    if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
+                        // Create Dec nominal type content
+                        const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                        const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                        lhs_resolved = self.runtime_types.resolveVar(dec_var);
+                    }
 
                     // Evaluate both operands
                     var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
@@ -710,6 +719,31 @@ pub const Interpreter = struct {
                         else => return error.InvalidMethodReceiver,
                     };
 
+                    // Check if this is an intrinsic numeric operation
+                    const nominal_name = self.env.common.getIdentStore().getText(nominal_info.ident);
+                    const origin_name = self.env.common.getIdentStore().getText(nominal_info.origin);
+
+                    // Handle Dec arithmetic intrinsics directly (they don't have implementations in Builtin.roc)
+                    if (std.mem.eql(u8, origin_name, "Builtin") and std.mem.eql(u8, nominal_name, "Num.Dec")) {
+                        // Extract Dec values from lhs and rhs
+                        const lhs_dec: *const RocDec = @ptrCast(@alignCast(lhs.ptr.?));
+                        const rhs_dec: *const RocDec = @ptrCast(@alignCast(rhs.ptr.?));
+
+                        // Perform the addition
+                        const result_dec = RocDec.add(lhs_dec.*, rhs_dec.*, roc_ops);
+
+                        // Allocate space for the result using pushRaw (like literals do)
+                        const result_layout = lhs.layout;  // Dec has same layout
+                        var value = try self.pushRaw(result_layout, 0);
+                        value.is_initialized = false;
+                        const result_dec_ptr: *RocDec = @ptrCast(@alignCast(value.ptr.?));
+                        result_dec_ptr.* = result_dec;
+                        value.is_initialized = true;
+
+                        return value;
+                    }
+
+                    // For non-intrinsic methods, resolve and call as regular closures
                     // Get the pre-cached "plus" identifier from the ModuleEnv
                     const method_name = self.env.plus_ident;
 
@@ -4415,13 +4449,14 @@ pub const Interpreter = struct {
         var qualified_name_buf: [256]u8 = undefined;
         const qualified_name = try self.getMethodQualifiedIdent(nominal_ident, method_name, &qualified_name_buf);
 
+        const method_name_str = self.env.common.getIdentStore().getText(method_name);
+
         // Try to find the method in the origin module's exposed items
         const method_ident = blk: {
             if (origin_env.common.findIdent(qualified_name)) |ident| {
                 break :blk ident;
             }
             // Try unqualified name as fallback
-            const method_name_str = self.env.common.getIdentStore().getText(method_name);
             if (origin_env.common.findIdent(method_name_str)) |ident| {
                 break :blk ident;
             }
