@@ -196,6 +196,7 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
+        env: *ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
@@ -229,10 +230,15 @@ pub const Store = struct {
             }
         };
 
+        // Handle empty records specially to avoid NonEmptyRange with count=0
+        if (temp_fields.items.len == 0) {
+            return self.getEmptyRecordLayout();
+        }
+
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -1224,7 +1230,7 @@ pub const Store = struct {
 
                         var field_names = [_]Ident.Idx{ name_payload, name_tag };
 
-                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        const rec_idx = try self.putRecord(self.env, &field_layouts, &field_names);
                         if (max_payload_alignment_any.toByteUnits() > 1) {
                             const desired_alignment = max_payload_alignment_any;
                             var rec_layout = self.getLayout(rec_idx);

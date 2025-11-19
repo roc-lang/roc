@@ -9182,10 +9182,12 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const import_idx = self.scopeLookupImportedModule(module_text) orelse blk: {
         // Module not in import scope - check if it's an auto-imported module in module_envs
         if (self.module_envs) |envs_map| {
-            if (envs_map.get(module_name)) |_| {
-                // This is an auto-imported module (like Bool, Try, etc.)
-                // Create an import for it dynamically
-                break :blk try self.getOrCreateAutoImport(module_text);
+            if (envs_map.get(module_name)) |auto_imported_type| {
+                // This is an auto-imported module (like Bool, Try, Str, List, etc.)
+                // Use the ACTUAL module name from the environment, not the alias
+                // This ensures all auto-imported types from the same module share the same Import.Idx
+                const actual_module_name = auto_imported_type.env.module_name;
+                break :blk try self.getOrCreateAutoImport(actual_module_name);
             }
         }
 

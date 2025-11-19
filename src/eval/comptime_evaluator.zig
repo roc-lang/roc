@@ -211,7 +211,7 @@ pub const ComptimeEvaluator = struct {
         self.expect.deinit();
     }
 
-    fn get_ops(self: *ComptimeEvaluator) *RocOps {
+    pub fn get_ops(self: *ComptimeEvaluator) *RocOps {
         if (self.roc_ops == null) {
             self.roc_ops = RocOps{
                 .env = @ptrCast(self),

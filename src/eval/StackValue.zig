@@ -133,6 +133,37 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+
+    // Skip memcpy if source and destination overlap to avoid aliasing error
+    const src_start = @intFromPtr(src.ptr);
+    const src_end = src_start + result_size;
+    const dst_start = @intFromPtr(dst.ptr);
+    const dst_end = dst_start + result_size;
+
+    // Check if ranges overlap
+    if ((src_start < dst_end) and (dst_start < src_end)) {
+        // Overlapping regions - skip if they're identical, otherwise use memmove
+        if (src.ptr == dst.ptr) {
+            return;
+        }
+        // Use manual copy for overlapping but non-identical regions
+        if (dst_start < src_start) {
+            // Copy forward
+            var i: usize = 0;
+            while (i < result_size) : (i += 1) {
+                dst[i] = src[i];
+            }
+        } else {
+            // Copy backward
+            var i: usize = result_size;
+            while (i > 0) {
+                i -= 1;
+                dst[i] = src[i];
+            }
+        }
+        return;
+    }
+
     @memcpy(dst, src);
 }
 
@@ -660,10 +691,12 @@ pub const RecordAccessor = struct {
     }
 
     /// Find field index by comparing field names (requires env access for name comparison)
-    pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
+    pub fn findFieldIndex(self: RecordAccessor, _: anytype, field_name: []const u8) ?usize {
+        // Use the environment from the layout cache, not the passed env parameter
+        // This ensures we use the same environment that was used to create the layout
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, env.getIdent(field.name), field_name)) {
+            if (std.mem.eql(u8, self.layout_cache.env.getIdent(field.name), field_name)) {
                 return idx;
             }
         }
