@@ -41,6 +41,21 @@ const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = @import("snapshot.zig").Store;
 const ProblemStore = @import("problem.zig").Store;
 
+/// Deferred numeric literal for compile-time validation
+/// These are collected during type checking and validated during comptime evaluation
+pub const DeferredNumericLiteral = struct {
+    /// The e_num expression index
+    expr_idx: CIR.Expr.Idx,
+    /// The type variable that the literal unified with
+    type_var: Var,
+    /// The from_num_literal constraint attached to this literal
+    constraint: StaticDispatchConstraint,
+    /// Source region for error reporting
+    region: Region,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 const Self = @This();
 
 gpa: std.mem.Allocator,
@@ -2312,9 +2327,35 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_num => |num| {
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
-                    // For unannotated literals, create a simple flex var with NumLiteral constraint
-                    const flex_var = try self.fresh(env, expr_region);
+                    // For unannotated literals, create a flex var with from_num_literal constraint
+                    const num_literal_info = types_mod.NumLiteralInfo{
+                        .value = num.value.toI128(),
+                        .is_negative = num.value.kind == .i128 and num.value.toI128() < 0,
+                        .is_fractional = false, // Integer literals are never fractional
+                        .region = expr_region,
+                    };
+
+                    // Create from_num_literal constraint
+                    const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                    const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+                    // Create flex var with the constraint
+                    const flex_content = types_mod.Content{
+                        .flex = types_mod.Flex{
+                            .name = null,
+                            .constraints = constraint_range,
+                        },
+                    };
+                    const flex_var = try self.freshFromContent(flex_content, env, expr_region);
                     _ = try self.unify(expr_var, flex_var, env);
+
+                    // Record this literal for deferred validation during comptime eval
+                    _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                        .expr_idx = expr_idx,
+                        .type_var = flex_var,
+                        .constraint = constraint,
+                        .region = expr_region,
+                    });
                 },
                 .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U8", env), env),
                 .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I8", env), env),
@@ -2335,32 +2376,118 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
             } else {
-                const flex_var = try self.fresh(env, expr_region);
+                // Unsuffixed fractional literal - create constrained flex var
+                const num_literal_info = types_mod.NumLiteralInfo{
+                    .value = @as(i128, @as(u32, @bitCast(frac.value))),
+                    .is_negative = frac.value < 0,
+                    .is_fractional = true,
+                    .region = expr_region,
+                };
+                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                const flex_content = types_mod.Content{
+                    .flex = types_mod.Flex{
+                        .name = null,
+                        .constraints = constraint_range,
+                    },
+                };
+                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
                 _ = try self.unify(expr_var, flex_var, env);
+                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    .expr_idx = expr_idx,
+                    .type_var = flex_var,
+                    .constraint = constraint,
+                    .region = expr_region,
+                });
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
             } else {
-                const flex_var = try self.fresh(env, expr_region);
+                // Unsuffixed fractional literal - create constrained flex var
+                const num_literal_info = types_mod.NumLiteralInfo{
+                    .value = @as(i128, @as(u64, @bitCast(frac.value))),
+                    .is_negative = frac.value < 0,
+                    .is_fractional = true,
+                    .region = expr_region,
+                };
+                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                const flex_content = types_mod.Content{
+                    .flex = types_mod.Flex{
+                        .name = null,
+                        .constraints = constraint_range,
+                    },
+                };
+                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
                 _ = try self.unify(expr_var, flex_var, env);
+                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    .expr_idx = expr_idx,
+                    .type_var = flex_var,
+                    .constraint = constraint,
+                    .region = expr_region,
+                });
             }
         },
         .e_dec => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                const flex_var = try self.fresh(env, expr_region);
+                // Unsuffixed Dec literal - create constrained flex var
+                const num_literal_info = types_mod.NumLiteralInfo{
+                    .value = frac.value.num,
+                    .is_negative = frac.value.num < 0,
+                    .is_fractional = true,
+                    .region = expr_region,
+                };
+                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                const flex_content = types_mod.Content{
+                    .flex = types_mod.Flex{
+                        .name = null,
+                        .constraints = constraint_range,
+                    },
+                };
+                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
                 _ = try self.unify(expr_var, flex_var, env);
+                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    .expr_idx = expr_idx,
+                    .type_var = flex_var,
+                    .constraint = constraint,
+                    .region = expr_region,
+                });
             }
         },
         .e_dec_small => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                const flex_var = try self.fresh(env, expr_region);
+                // Unsuffixed small Dec literal - create constrained flex var
+                // Scale the value to i128 representation
+                const scaled_value = @as(i128, frac.value.numerator) * std.math.pow(i128, 10, 18 - frac.value.denominator_power_of_ten);
+                const num_literal_info = types_mod.NumLiteralInfo{
+                    .value = scaled_value,
+                    .is_negative = scaled_value < 0,
+                    .is_fractional = true,
+                    .region = expr_region,
+                };
+                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                const flex_content = types_mod.Content{
+                    .flex = types_mod.Flex{
+                        .name = null,
+                        .constraints = constraint_range,
+                    },
+                };
+                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
                 _ = try self.unify(expr_var, flex_var, env);
+                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    .expr_idx = expr_idx,
+                    .type_var = flex_var,
+                    .constraint = constraint,
+                    .region = expr_region,
+                });
             }
         },
         // list //

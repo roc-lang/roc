@@ -95,6 +95,20 @@ builtin_module_ident: Ident.Idx,
 /// Interned identifier for "plus" - used for + operator desugaring
 plus_ident: Ident.Idx,
 
+/// Deferred numeric literals collected during type checking
+/// These will be validated during comptime evaluation
+deferred_numeric_literals: DeferredNumericLiteral.SafeList,
+
+/// Deferred numeric literal for compile-time validation
+pub const DeferredNumericLiteral = struct {
+    expr_idx: CIR.Expr.Idx,
+    type_var: TypeVar,
+    constraint: types_mod.StaticDispatchConstraint,
+    region: Region,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -171,6 +185,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
+        .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
 
@@ -180,6 +195,7 @@ pub fn deinit(self: *Self) void {
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
+    self.deferred_numeric_literals.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 

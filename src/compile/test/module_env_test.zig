@@ -108,6 +108,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
     };
 
     // Verify the data was preserved
