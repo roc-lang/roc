@@ -1043,5 +1043,13 @@ fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
         return self.idents.getText(display_idx);
     }
 
-    return self.idents.getText(idx);
+    const name = self.idents.getText(idx);
+
+    // Strip "Num." prefix from builtin number types for display
+    // Number types are stored as "Num.U8", "Num.F32", etc. but should display as "U8", "F32"
+    if (std.mem.startsWith(u8, name, "Num.")) {
+        return name[4..]; // Skip "Num."
+    }
+
+    return name;
 }
