@@ -31,9 +31,12 @@ const layout_mod = @import("layout");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+    // We need to store a usize for the length, so allocate with at least usize alignment
+    const actual_alignment = @max(alloc_args.alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(actual_alignment)));
     // Store user data size in header (we'll use this in realloc to know how much to copy)
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
+    // IMPORTANT: size_storage_bytes must be aligned to actual_alignment so user data starts at correct alignment
+    const size_storage_bytes = std.mem.alignForward(usize, @sizeOf(usize), actual_alignment);
     const total_size = alloc_args.length + size_storage_bytes;
     const result = evaluator.allocator.rawAlloc(total_size, align_enum, @returnAddress());
     const base_ptr = result orelse {
@@ -66,9 +69,10 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     // Allocate new memory and copy old data, but don't free old memory
     // Old memory is leaked to avoid double-free issues with refcounting
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const actual_alignment = @max(realloc_args.alignment, @alignOf(usize));
+    const size_storage_bytes = std.mem.alignForward(usize, @sizeOf(usize), actual_alignment);
     const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(actual_alignment)));
 
     // Get old user data length (we now store the user length, not total size)
     const old_user_length_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));

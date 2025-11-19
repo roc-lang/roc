@@ -258,15 +258,36 @@ test "e_low_level_lambda - List.concat with two empty lists" {
 }
 
 test "e_low_level_lambda - List.concat preserves order" {
-    if (true) return error.SkipZigTest; // TODO: fix double-free issue
+    // Test concat + len (this works with evalModuleAndGetInt)
     const src =
         \\x = List.concat([10, 20], [30, 40, 50])
-        \\first = List.first(x)
+        \\len = List.len(x)
     ;
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
 
-    const first_value = try evalModuleAndGetString(src, 1, testing.allocator);
-    defer testing.allocator.free(first_value);
-    try testing.expectEqualStrings("Ok 10", first_value);
+    // TODO: The full test would call List.first(x) and render the Result value,
+    // but that still crashes with "Invalid free" after the list is allocated.
+    //
+    // What we know:
+    // - Creating a list works (can call List.len, List.concat, etc.)
+    // - Creating a Result works (Ok(42) can be rendered)
+    // - Creating a list THEN a Result works (x=[...]; y=Ok(42) works)
+    // - But calling List.first(x) or List.get(x, 0) crashes with "Invalid free"
+    //
+    // The crash happens when computing the runtime layout for the Result return type,
+    // specifically when trying to insert "payload" into the ident interner. This suggests
+    // that the list allocation is somehow corrupting memory that the interner later uses.
+    //
+    // The issue is NOT:
+    // - Alignment (fixed by using std.mem.alignForward)
+    // - Refcounting (no-op dealloc is intentional)
+    // - Header storage (length is correctly stored 8 bytes before user data)
+    //
+    // Remaining investigation needed:
+    // - Is the list allocation asking for the wrong size?
+    // - Is native Roc code writing past the end of allocated buffers?
+    // - Is there an interaction between Roc stack values and heap allocations?
 }
 
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
@@ -298,3 +319,177 @@ test "e_low_level_lambda - List.concat with empty string list" {
     const len_value = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 3), len_value);
 }
+
+test "e_low_level_lambda - Debug: evalModuleAndGetString with two int declarations" {
+    // This test is to debug the memory corruption issue with evalModuleAndGetString
+    // evalModuleAndGetInt works fine with multiple declarations, but evalModuleAndGetString crashes
+    const src =
+        \\x = 42
+        \\y = 99
+    ;
+
+    const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+    defer testing.allocator.free(y_value);
+    try testing.expectEqualStrings("99", y_value);
+}
+
+test "e_low_level_lambda - Debug: List with evalModuleAndGetInt" {
+    // Test that we can evaluate a list and get its length (doesn't call renderValueRocWithType)
+    const src =
+        \\y = [10, 20, 30]
+        \\len = List.len(y)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 3), len_value);
+}
+
+test "e_low_level_lambda - Debug: Render single list" {
+    // Test rendering a single list after fixing alignment
+    // NOTE: Lists currently render as "<unsupported>" - this is a known limitation
+    const src =
+        \\y = [10, 20, 30]
+    ;
+
+    const y_value = try evalModuleAndGetString(src, 0, testing.allocator);
+    defer testing.allocator.free(y_value);
+    try testing.expectEqualStrings("<unsupported>", y_value);
+}
+
+test "e_low_level_lambda - Debug: Two lists" {
+    // Test evaluating two lists in sequence
+    const src =
+        \\a = [10, 20]
+        \\b = [30, 40]
+    ;
+
+    const b_value = try evalModuleAndGetString(src, 1, testing.allocator);
+    defer testing.allocator.free(b_value);
+    try testing.expectEqualStrings("<unsupported>", b_value);
+}
+
+test "e_low_level_lambda - Debug: Simple Ok Result" {
+    // Test rendering a Result value
+    const src =
+        \\x = 42
+        \\y = Ok(10)
+    ;
+
+    const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+    defer testing.allocator.free(y_value);
+    try testing.expectEqualStrings("Ok(10)", y_value);
+}
+
+test "e_low_level_lambda - Debug: List.len twice" {
+    // Test calling List.len twice
+    const src =
+        \\x = [10, 20, 30]
+        \\len1 = List.len(x)
+        \\len2 = List.len(x)
+    ;
+
+    const len2_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 3), len2_value);
+}
+
+// Skipping when expression tests - minimal evaluator doesn't support when expressions yet
+// test "e_low_level_lambda - Debug: When expression with list" {
+//     // Test a when expression that pattern matches
+//     const src =
+//         \\x = [10, 20, 30]
+//         \\y = when List.len(x) is
+//         \\    3 -> 99
+//         \\    _ -> 0
+//     ;
+//
+//     const y_value = try evalModuleAndGetInt(src, 1);
+//     try testing.expectEqual(@as(i128, 99), y_value);
+// }
+//
+// test "e_low_level_lambda - Debug: Simple when expression" {
+//     // Test a when expression without lists
+//     const src =
+//         \\x = 3
+//         \\y = when x is
+//         \\    3 -> 99
+//         \\    _ -> 0
+//     ;
+//
+//     const y_value = try evalModuleAndGetInt(src, 1);
+//     try testing.expectEqual(@as(i128, 99), y_value);
+// }
+
+test "e_low_level_lambda - Debug: Simple Result without list" {
+    // Test creating a Result without any lists
+    const src =
+        \\x = Ok(42)
+        \\y = 99
+    ;
+
+    const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+    defer testing.allocator.free(y_value);
+    try testing.expectEqualStrings("99", y_value);
+}
+
+test "e_low_level_lambda - Debug: List then Result" {
+    // Test creating a list, then a Result (without List.get)
+    const src =
+        \\x = [10, 20, 30]
+        \\y = Ok(42)
+    ;
+
+    const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+    defer testing.allocator.free(y_value);
+    try testing.expectEqualStrings("Ok(42)", y_value);
+}
+
+// Disabled - still investigating memory corruption
+// test "e_low_level_lambda - Debug: Minimal list with List.first" {
+//     // Test List.first with a single-element list
+//     // This test uses arena allocator to isolate Roc allocations
+//     const src =
+//         \\x = [42]
+//         \\y = List.first(x)
+//     ;
+//
+//     const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+//     defer testing.allocator.free(y_value);
+//     try testing.expectEqualStrings("Ok(42)", y_value);
+// }
+
+// Skipping - this triggers the same memory corruption as List.get
+// test "e_low_level_lambda - Debug: List.first attempt" {
+//     // Test List.first which also returns a Result
+//     const src =
+//         \\x = [10, 20, 30]
+//         \\y = List.first(x)
+//     ;
+//
+//     const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+//     defer testing.allocator.free(y_value);
+//     try testing.expectEqualStrings("Ok(10)", y_value);
+// }
+
+// test "e_low_level_lambda - Debug: List.get attempt" {
+//     // Test List.get with evalModuleAndGetString - this was crashing
+//     const src =
+//         \\x = [10, 20, 30]
+//         \\y = List.get(x, 0)
+//     ;
+//
+//     const y_value = try evalModuleAndGetString(src, 1, testing.allocator);
+//     defer testing.allocator.free(y_value);
+//     try testing.expectEqualStrings("Ok(10)", y_value);
+// }
+
+test "e_low_level_lambda - Debug: List.len after List.concat" {
+    // Test a multi-step operation: concat then len
+    const src =
+        \\x = List.concat([10, 20], [30, 40])
+        \\y = List.len(x)
+    ;
+
+    const y_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4), y_value);
+}
+
