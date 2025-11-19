@@ -868,6 +868,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             _ = try self.checkExpr(def.expr, env, .{
                 .expected = .{ .var_ = annotation_var, .from_annotation = true },
             });
+
+            // Check that the annotation matches the definition
+            _ = try self.unify(annotation_var, def_var, env);
         } else {
             // Check the expr
             _ = try self.checkExpr(def.expr, env, .no_expectation);
