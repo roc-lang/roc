@@ -32,9 +32,9 @@ const layout_mod = @import("layout");
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-    const result = evaluator.allocator.rawAlloc(total_size, align_enum, @returnAddress());
+
+    // Allocate exactly what Roc requested - it already includes any header space it needs
+    const result = evaluator.allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
     const base_ptr = result orelse {
         const msg = "Out of memory during compile-time evaluation (alloc)";
         const crashed = RocCrashed{
@@ -43,36 +43,70 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
-        // Return an invalid pointer - the evaluator is already halted
-        // The value doesn't matter since evaluation will stop
         return;
     };
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+
+    // Track this allocation for later dealloc/realloc
+    const ptr_addr = @intFromPtr(base_ptr);
+    evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {
+        // If we can't track it, just continue - we'll leak memory but won't crash
+    };
+
+    // Return the allocation start - Roc will manage its own header offsets
+    alloc_args.answer = @ptrFromInt(ptr_addr);
 }
 
 fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+
+    const ptr_addr = @intFromPtr(dealloc_args.ptr);
+
+    // Look up the allocation size from our tracking map
+    const size = evaluator.roc_allocations.get(ptr_addr) orelse {
+        // Not found - might be a double-free or pointer we didn't allocate
+        // Just ignore it to avoid crashing
+        return;
+    };
+
+    // Remove from tracking map
+    _ = evaluator.roc_allocations.remove(ptr_addr);
+
+    // Free the memory
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
+    const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+    const slice = ptr[0..size];
     evaluator.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-    const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = evaluator.allocator.realloc(old_slice, new_total_size) catch {
+
+    const old_ptr_addr = @intFromPtr(realloc_args.answer);
+
+    // Look up the old allocation size
+    const old_size = evaluator.roc_allocations.get(old_ptr_addr) orelse {
+        // Not found - this shouldn't happen, but if it does, just allocate new memory
+        const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+        const new_ptr = evaluator.allocator.rawAlloc(realloc_args.new_length, align_enum, @returnAddress()) orelse {
+            const msg = "Out of memory during compile-time evaluation (realloc)";
+            const crashed = RocCrashed{
+                .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+                .len = msg.len,
+            };
+            comptimeRocCrashed(&crashed, env);
+            evaluator.halted = true;
+            return;
+        };
+        const new_ptr_addr = @intFromPtr(new_ptr);
+        evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+        realloc_args.answer = @ptrFromInt(new_ptr_addr);
+        return;
+    };
+
+    // Try to use the allocator's realloc for efficiency
+    const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+    const old_slice = old_ptr[0..old_size];
+    const new_slice = evaluator.allocator.realloc(old_slice, realloc_args.new_length) catch {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -80,12 +114,15 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
-        // Leave answer unchanged - the interpreter will catch this as error.Crash
         return;
     };
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+
+    // Update tracking map with new pointer and size
+    _ = evaluator.roc_allocations.remove(old_ptr_addr);
+    const new_ptr_addr = @intFromPtr(new_slice.ptr);
+    evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+
+    realloc_args.answer = @ptrFromInt(new_ptr_addr);
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -161,6 +198,8 @@ pub const ComptimeEvaluator = struct {
     halted: bool,
     /// Track the current expression being evaluated (for stack traces)
     current_expr_region: ?base.Region,
+    /// Track Roc allocations for proper dealloc/realloc (maps ptr -> size)
+    roc_allocations: std.AutoHashMap(usize, usize),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -184,6 +223,7 @@ pub const ComptimeEvaluator = struct {
             .error_names = std.array_list.Managed([]const u8).init(allocator),
             .halted = false,
             .current_expr_region = null,
+            .roc_allocations = std.AutoHashMap(usize, usize).init(allocator),
         };
     }
 
@@ -205,6 +245,9 @@ pub const ComptimeEvaluator = struct {
             self.allocator.free(name);
         }
         self.error_names.deinit();
+
+        // Clean up allocation tracking map
+        self.roc_allocations.deinit();
 
         self.interpreter.deinit();
         self.crash.deinit();

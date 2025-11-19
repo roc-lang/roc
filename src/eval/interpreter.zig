@@ -2158,7 +2158,8 @@ pub const Interpreter = struct {
                             }
                             // e_low_level_lambda is always a closure, so no special check needed
                         }
-                        return try self.pushCopy(b.value, roc_ops);
+                        // Use pushIncref for variable lookups to increment refcount instead of cloning
+                        return self.pushIncref(b.value);
                     }
                 }
                 // If not found, try active closure captures by variable name
@@ -2178,7 +2179,8 @@ pub const Interpreter = struct {
                             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                             if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
                                 const field_val = try accessor.getFieldByIndex(fidx);
-                                return try self.pushCopy(field_val, roc_ops);
+                                // Closure capture lookup - use pushIncref like regular variable lookup
+                                return self.pushIncref(field_val);
                             }
                         }
                     }
@@ -2330,6 +2332,23 @@ pub const Interpreter = struct {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
+    }
+
+    /// Create a new reference to a value by incrementing its refcount (for refcounted types)
+    /// or returning the value directly (for non-refcounted types like integers).
+    /// This is used for variable lookups where we want to alias the value, not copy it.
+    pub fn pushIncref(self: *Interpreter, src: StackValue) StackValue {
+        _ = self; // Interpreter not needed for incref, but kept for API consistency
+
+        // For refcounted types, increment the refcount and return the same value
+        if (src.layout.isRefcounted()) {
+            src.incref();
+            return src;
+        }
+
+        // For non-refcounted types (integers, booleans, etc.), just return the value
+        // These are typically small and copied by value anyway
+        return src;
     }
 
     fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps) !StackValue {
@@ -4072,8 +4091,10 @@ pub const Interpreter = struct {
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
-                const copied = try self.pushCopy(value, roc_ops);
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx });
+                // NOTE: We do NOT incref here! The value passed in already has the correct refcount.
+                // When this value came from a variable lookup, the lookup already incref'd it.
+                // The defer val.decref in the statement handler will balance things out.
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = value, .expr_idx = expr_idx });
                 return true;
             },
             .as => |as_pat| {
@@ -4692,10 +4713,6 @@ pub const Interpreter = struct {
                             const range = try self.runtime_types.appendVars(buf);
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
                         },
-                        .box => |elem_var| {
-                            const rt_elem = try self.translateTypeVar(module, elem_var);
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
-                        },
                         .record => |rec| {
                             var acc = try FieldAccumulator.init(self.allocator);
                             defer acc.deinit();
@@ -4948,12 +4965,6 @@ pub const Interpreter = struct {
                         const new_ret = try self.instantiateType(f.ret, subst_map);
                         const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
                         break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .box => |boxed_var| blk_box: {
-                        // Recursively instantiate the boxed type
-                        const new_boxed = try self.instantiateType(boxed_var, subst_map);
-                        const content = types.Content{ .structure = .{ .box = new_boxed } };
-                        break :blk_box try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .tuple => |tuple| blk_tuple: {
                         // Recursively instantiate tuple element types

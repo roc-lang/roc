@@ -630,6 +630,31 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     );
 }
 
+/// Create a nominal Box type with the given element type
+fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where Box is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    const box_ident = types_mod.TypeIdent{
+        .ident_idx = self.common_idents.box,
+    };
+
+    // The backing var is the element type var
+    const backing_var = elem_var;
+    const type_args = [_]Var{elem_var};
+
+    return try self.types.mkNominal(
+        box_ident,
+        backing_var,
+        &type_args,
+        origin_module_id,
+    );
+}
+
 // updating vars //
 
 /// Unify the provided variable with the provided content
@@ -868,6 +893,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             _ = try self.checkExpr(def.expr, env, .{
                 .expected = .{ .var_ = annotation_var, .from_annotation = true },
             });
+
+            // Check that the annotation matches the definition
+            _ = try self.unify(annotation_var, def_var, env);
         } else {
             // Check the expr
             _ = try self.checkExpr(def.expr, env, .no_expectation);
@@ -1674,8 +1702,9 @@ fn generateBuiltinTypeInstance(
                 return try self.freshFromContent(.err, env, anno_region);
             }
 
-            // Create the type
-            return try self.freshFromContent(.{ .structure = .{ .box = anno_args[0] } }, env, anno_region);
+            // Create the nominal Box type
+            const box_content = try self.mkBoxContent(anno_args[0]);
+            return try self.freshFromContent(box_content, env, anno_region);
         },
         .num => {
             // Then check arity

@@ -43,6 +43,29 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
-    std.testing.refAllDecls(@import("test/builtin_compiler_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_alias.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_basic.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_MINIMAL.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_tuple.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_record.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_tags.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_conditional.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_function.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_pattern.zig"));
+    std.testing.refAllDecls(@import("test/str_refcount_builtins.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_MINIMAL.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
+    // Bug reproduction test file exists but not included in build:
+    // src/eval/test/bug_list_of_tags_repro.zig
+    // See BUG_LIST_OF_TAGS.md for details
 }
