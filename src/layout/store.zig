@@ -907,11 +907,10 @@ pub const Store = struct {
                             std.debug.assert(type_args.len == 1); // Box must have exactly 1 type parameter
                             const elem_var = type_args[0];
 
-                            // Check if the element type is unbound (flex or rigid) or a known ZST
+                            // Check if the element type is a known ZST (but NOT flex/rigid - those need opaque_ptr)
                             const elem_resolved = self.types_store.resolveVar(elem_var);
                             const elem_content = elem_resolved.desc.content;
-                            const is_elem_zst_or_unbound = switch (elem_content) {
-                                .flex, .rigid => true,
+                            const is_elem_zst = switch (elem_content) {
                                 .structure => |ft| switch (ft) {
                                     .empty_record, .empty_tag_union => true,
                                     else => false,
@@ -919,14 +918,15 @@ pub const Store = struct {
                                 else => false,
                             };
 
-                            if (is_elem_zst_or_unbound) {
-                                // For unbound or ZST element types, use box of zero-sized type
+                            if (is_elem_zst) {
+                                // For ZST element types, use box of zero-sized type
                                 const layout = Layout.boxOfZst();
                                 const idx = try self.insertLayout(layout);
                                 try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
                                 return idx;
                             } else {
                                 // Otherwise, add this to the stack of pending work
+                                // (This includes flex/rigid which will resolve to opaque_ptr)
                                 try self.work.pending_containers.append(self.env.gpa, .{
                                     .var_ = current.var_,
                                     .container = .box,
