@@ -1005,12 +1005,15 @@ fn compileSource(source: []const u8) !CompilerStageData {
     result.bool_stmt = bool_stmt_in_builtin_module;
     result.builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
 
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 

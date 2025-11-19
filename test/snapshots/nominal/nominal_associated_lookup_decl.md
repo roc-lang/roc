@@ -76,12 +76,12 @@ useBar = Foo.bar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
-		(patt (type "U64")))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "_a"))
-		(expr (type "U64"))))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(Int(Unsigned64))"))))
 ~~~

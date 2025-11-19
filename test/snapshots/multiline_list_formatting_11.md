@@ -69,5 +69,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(_a))"))
+(expr (type "List(List(Num(_size)))"))
 ~~~

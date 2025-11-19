@@ -38,6 +38,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
+TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:14:7:14:32
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
@@ -122,6 +123,20 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
+**underscore_error_type.md:4:7:4:9:**
+```roc
+foo = 42
+```
+      ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _BadType_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **underscore_error_type.md:9:7:9:16:**
 ```roc
 bar = [1, 2, 3]
@@ -129,7 +144,7 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(_a)_
+    _List(Num(_size))_
 
 But the type annotation says it should have the type:
     _BadList_
@@ -143,7 +158,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: _field2 }_
+    _{ field: Str, other: Num(_size) }_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -171,7 +186,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, _field2)_
+    _(Str, Num(_size))_
 
 But the type annotation says it should have the type:
     _BadTuple_
@@ -372,7 +387,7 @@ quux = ("hello", 42)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "BadType"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -389,7 +404,7 @@ quux = ("hello", 42)
 		(nominal (type "BadTuple")
 			(ty-header (name "BadTuple"))))
 	(expressions
-		(expr (type "BadType"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

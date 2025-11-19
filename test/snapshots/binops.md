@@ -177,5 +177,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(_field, _field2, _field3, _field4, _field5, Bool, Bool, Bool, Bool, Bool, Bool, _field6, Bool, Bool, _field7)"))
+(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Bool, Bool, _field)"))
 ~~~

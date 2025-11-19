@@ -40,7 +40,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "Num(_size)")))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "Num(_size)"))))
 ~~~

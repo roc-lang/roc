@@ -299,12 +299,16 @@ pub fn setupAutoImportedBuiltinTypes(
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
         const current_scope = &self.scopes.items[0];
 
+        // NOTE: Auto-imported types come from the Builtin module.
+        // We add "Builtin" to env.imports so that type checking can find it,
+        // but compile_package.zig has special handling to not try parsing it as a local file.
+
+        const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
         const builtin_import_idx = try self.env.imports.getOrPut(
             gpa,
             self.env.common.getStringStore(),
             "Builtin",
         );
-        try self.import_indices.put(gpa, "Builtin", builtin_import_idx);
 
         const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
         for (builtin_types) |type_name_text| {
@@ -317,7 +321,7 @@ pub fn setupAutoImportedBuiltinTypes(
 
                 try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                     .external_nominal = .{
-                        .module_ident = type_ident,
+                        .module_ident = builtin_ident,
                         .original_ident = type_ident,
                         .target_node_idx = target_node_idx,
                         .import_idx = builtin_import_idx,
@@ -334,10 +338,10 @@ pub fn setupAutoImportedBuiltinTypes(
 
             try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                 .external_nominal = .{
-                    .module_ident = type_ident,
+                    .module_ident = builtin_ident,
                     .original_ident = type_ident,
                     .target_node_idx = null,
-                    .import_idx = @enumFromInt(0),
+                    .import_idx = builtin_import_idx,
                     .origin_region = zero_region,
                     .module_not_found = false,
                 },

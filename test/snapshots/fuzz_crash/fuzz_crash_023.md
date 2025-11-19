@@ -915,7 +915,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _U64_
+    _Num(Int(Unsigned64))_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -985,7 +985,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red][Blue, Green]_others_
+    _[Red][Blue, Green][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -1015,7 +1015,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red][Blue, Green]_others, _arg -> Error_
+    _[Red][Blue, Green][ProvidedByCompiler], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2572,9 +2572,9 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> _ret"))
-		(patt (type "Error -> U64"))
-		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Error -> Num(Int(Unsigned64))"))
+		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2619,9 +2619,9 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> _ret"))
-		(expr (type "Error -> U64"))
-		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Error -> Num(Int(Unsigned64))"))
+		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

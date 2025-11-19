@@ -12,8 +12,22 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
+INVALID IF CONDITION - if_then_else_simple_file.md:1:10:1:10
 INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:1:7:1:7
 # PROBLEMS
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**if_then_else_simple_file.md:1:10:**
+```roc
+foo = if 1 A
+```
+         ^
+
+Right now, it has the type:
+    _Num(_size)_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **if_then_else_simple_file.md:1:7:**
@@ -30,7 +44,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[A]_others_
+    _[A][ProvidedByCompiler]_
 
 All branches in an `if` must have compatible types.
 

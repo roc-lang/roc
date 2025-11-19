@@ -15,6 +15,7 @@ value = 42
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
+TYPE MISMATCH - usage_test.md:6:9:6:11
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -37,6 +38,20 @@ UnusedType := _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**usage_test.md:6:9:6:11:**
+```roc
+value = 42
+```
+        ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _UsedType_
 
 # TOKENS
 ~~~zig
@@ -88,12 +103,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "UsedType")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "UnusedType")
 			(ty-header (name "UnusedType")))
 		(nominal (type "UsedType")
 			(ty-header (name "UsedType"))))
 	(expressions
-		(expr (type "UsedType"))))
+		(expr (type "Error"))))
 ~~~

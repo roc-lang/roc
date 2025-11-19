@@ -92,5 +92,5 @@ match (1, 2) {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(_field, _field2)"))
+(expr (type "(Num(_size), Num(_size2))"))
 ~~~

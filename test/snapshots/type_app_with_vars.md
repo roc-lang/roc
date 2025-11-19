@@ -24,7 +24,7 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _List(_c) -> _ret_
+    _List(Num(_size)) -> _ret_
 
 But I expected it to be:
     _List(a), (a -> b) -> List(b)_

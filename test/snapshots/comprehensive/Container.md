@@ -1224,7 +1224,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a }")))
+		(patt (type "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, [True]_others), processed: Num(_size4), transformed: Num(_size5) }")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1238,5 +1238,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a }"))))
+		(expr (type "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, [True]_others), processed: Num(_size4), transformed: Num(_size5) }"))))
 ~~~

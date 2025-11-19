@@ -43,5 +43,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(_a)"))
+(expr (type "List(Num(_size))"))
 ~~~

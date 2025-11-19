@@ -89,5 +89,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_c"))
+(expr (type "Num(_size)"))
 ~~~

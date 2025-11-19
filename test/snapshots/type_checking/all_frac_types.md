@@ -76,11 +76,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "F32"))
-		(patt (type "F64"))
-		(patt (type "Dec")))
+		(patt (type "Num(Frac(Float32))"))
+		(patt (type "Num(Frac(Float64))"))
+		(patt (type "Num(Frac(Decimal))")))
 	(expressions
-		(expr (type "F32"))
-		(expr (type "F64"))
-		(expr (type "Dec"))))
+		(expr (type "Num(Frac(Float32))"))
+		(expr (type "Num(Frac(Float64))"))
+		(expr (type "Num(Frac(Decimal))"))))
 ~~~

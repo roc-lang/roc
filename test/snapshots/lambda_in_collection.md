@@ -89,5 +89,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(c, c -> c, d, d -> d)"))
+(expr (type "(Num(_size), Num(_size2) -> Num(_size3), Num(_size4), Num(_size5) -> Num(_size6))"))
 ~~~

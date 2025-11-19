@@ -120,5 +120,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_f"))
+(expr (type "Num(_size)"))
 ~~~

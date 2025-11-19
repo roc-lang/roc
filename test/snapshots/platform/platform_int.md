@@ -77,7 +77,7 @@ multiplyInts : I64, I64 -> I64
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "I64, I64 -> I64")))
+		(patt (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))")))
 	(expressions
-		(expr (type "I64, I64 -> I64"))))
+		(expr (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))"))))
 ~~~

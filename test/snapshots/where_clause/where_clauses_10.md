@@ -91,7 +91,7 @@ decode_things # After member name
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(List(U8)) -> List(a)")))
+		(patt (type "List(List(Num(Int(Unsigned8)))) -> List(a)")))
 	(expressions
-		(expr (type "List(List(U8)) -> List(a)"))))
+		(expr (type "List(List(Num(Int(Unsigned8)))) -> List(a)"))))
 ~~~

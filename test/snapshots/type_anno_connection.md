@@ -12,20 +12,9 @@ my_number : U64
 my_number = add_one(42)
 ~~~
 # EXPECTED
-MISSING METHOD - type_anno_connection.md:2:15:2:20
-+ - :0:0:0:0
+NIL
 # PROBLEMS
-**MISSING METHOD**
-The value before this **+** operator has the type **U64**, which has no **plus** method:
-**type_anno_connection.md:2:15:2:20:**
-```roc
-add_one = |x| x + 1
-```
-              ^^^^^
-
-
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -92,9 +81,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64 -> Error"))
-		(patt (type "Error")))
+		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned64))")))
 	(expressions
-		(expr (type "U64 -> Error"))
-		(expr (type "Error"))))
+		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned64))"))))
 ~~~

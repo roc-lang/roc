@@ -19,9 +19,29 @@ type=expr
 ]
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:9:5:9:5
 # PROBLEMS
-NIL
+**INCOMPATIBLE LIST ELEMENTS**
+The eighth and ninth elements in this list have incompatible types:
+**tag_applications_simple.md:9:5:**
+```roc
+    Right(2),
+    Some(Ok(Just(42))),
+```
+    ^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^
+
+The eighth element has this type:
+    _[Err(Str), Just(Num(_size)), Left(Num(_size2)), None, Nothing, Ok(Str), Some(Num(_size3)), Right(Num(_size4))]_others_
+
+However, the ninth element has this type:
+    _[Some([Ok([Just(Num(_size))]_others)]_others2)][Err(Str), Just(Num(_size2)), Left(Num(_size3)), None, Nothing, Ok(Str), Right(Num(_size4))]_others3_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 OpenSquare,
@@ -136,5 +156,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List([Err(Str), Just(_a), Left(_b), None, Nothing, Ok(Str), Right(_c), Some([Ok([Just(_d)]_others)]_others2), Try([Ok([Some([True]_others3)]_others4)]_others5)]_others6)"))
+(expr (type "List(Error)"))
 ~~~

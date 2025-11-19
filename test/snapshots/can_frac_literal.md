@@ -56,11 +56,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a")))
+		(patt (type "Num(Frac(_size))"))
+		(patt (type "Num(Frac(_size))"))
+		(patt (type "Num(Frac(_size))")))
 	(expressions
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))))
+		(expr (type "Num(Frac(_size))"))
+		(expr (type "Num(Frac(_size))"))
+		(expr (type "Num(Frac(_size))"))))
 ~~~

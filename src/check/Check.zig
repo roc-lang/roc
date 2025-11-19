@@ -100,6 +100,8 @@ import_cache: ImportCache,
 constraint_origins: std.AutoHashMap(Var, Var),
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
+/// Copied Str type from Builtin module (for use in string literals, etc.)
+str_var: Var,
 /// Used when looking up static dispatch functions
 static_dispatch_method_name_buf: std.ArrayList(u8),
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
@@ -131,6 +133,8 @@ pub const CommonIdents = struct {
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Try type in the current module (injected from Builtin.bin)
     try_stmt: can.CIR.Statement.Idx,
+    /// Statement index of Str type in the current module (injected from Builtin.bin)
+    str_stmt: can.CIR.Statement.Idx,
     /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
     builtin_module: ?*const ModuleEnv,
 };
@@ -178,6 +182,7 @@ pub fn init(
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
+        .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
@@ -594,6 +599,12 @@ fn freshBool(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(self.bool_var, env, .{ .explicit = new_region });
 }
 
+/// Create a str var
+fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
+    // Use the copied Str type from the type store (set by copyBuiltinTypes)
+    return try self.instantiateVar(self.str_var, env, .{ .explicit = new_region });
+}
+
 /// Create a nominal List type with the given element type
 fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
@@ -656,7 +667,6 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
         origin_module_id,
     );
 }
-
 // updating vars //
 
 /// Unify the provided variable with the provided content
@@ -708,15 +718,21 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
     const bool_stmt_idx = self.common_idents.bool_stmt;
+    const str_stmt_idx = self.common_idents.str_stmt;
 
     if (self.common_idents.builtin_module) |builtin_env| {
         // Copy Bool type from Builtin module using the direct reference
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
+
+        // Copy Str type from Builtin module using the direct reference
+        const str_type_var = ModuleEnv.varFrom(str_stmt_idx);
+        self.str_var = try self.copyVar(str_type_var, builtin_env, Region.zero());
     } else {
         // If Builtin module reference is null, use the statement from the current module
         // This happens when compiling the Builtin module itself
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
+        self.str_var = ModuleEnv.varFrom(str_stmt_idx);
     }
 
     // Try type is accessed via external references, no need to copy it here
@@ -1761,7 +1777,8 @@ fn checkPatternHelp(
         },
         // str //
         .str_literal => {
-            try self.unifyWith(pattern_var, .{ .structure = .str }, env);
+            const str_var = try self.freshStr(env, pattern_region);
+            _ = try self.unify(pattern_var, str_var, env);
         },
         // as //
         .as => |p| {
@@ -2163,7 +2180,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     switch (expr) {
         // str //
         .e_str_segment => |_| {
-            try self.unifyWith(expr_var, .{ .structure = .str }, env);
+            const str_var = try self.freshStr(env, expr_region);
+            _ = try self.unify(expr_var, str_var, env);
         },
         .e_str => |str| {
             // Iterate over the string segments, capturing if any error'd
@@ -2182,8 +2200,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // If any segment errored, propgate that error to the root string
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                // Otherwise, set the type of this expr to be string
-                try self.unifyWith(expr_var, .{ .structure = .str }, env);
+                // Otherwise, set the type of this expr to be nominal Str
+                const str_var = try self.freshStr(env, expr_region);
+                _ = try self.unify(expr_var, str_var, env);
             }
         },
         // nums //

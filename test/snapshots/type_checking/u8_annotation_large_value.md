@@ -9,9 +9,19 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
-NIL
+NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
-NIL
+**NUMBER DOES NOT FIT IN TYPE**
+The number **500** does not fit in its inferred type:
+**u8_annotation_large_value.md:2:5:2:8:**
+```roc
+x = 500
+```
+    ^^^
+
+Its inferred type is:
+    _Num(Int(Unsigned8))_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -46,7 +56,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U8")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U8"))))
+		(expr (type "Error"))))
 ~~~

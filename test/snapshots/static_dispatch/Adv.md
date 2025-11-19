@@ -44,9 +44,24 @@ main = {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:13:23:33
-TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:28:13:28:32
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:17:28:17:31:**
+```roc
+	next_val = val.update_str(100)
+```
+	                          ^^^
+
+It has the type:
+    _Num(_size)_
+
+But I expected it to be:
+    _Str_
+
 **MISSING METHOD**
 This **update_strr** method is being called on the type **Adv**, which has no method with that name:
 **Adv.md:23:13:23:33:**
@@ -58,18 +73,16 @@ This **update_strr** method is being called on the type **Adv**, which has no me
 
 **Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `update` on a type that doesn't support methods:
+**MISSING METHOD**
+This **update** method is being called on the type **Str**, which has no method with that name:
 **Adv.md:28:13:28:32:**
 ```roc
 	next_val = "Hello".update(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
 
-
+**Hint: **For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -487,23 +500,23 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "Adv -> Str"))
-		(patt (type "Adv -> U64"))
+		(patt (type "Adv -> Num(Int(Unsigned64))"))
 		(patt (type "Adv, Str -> Adv"))
-		(patt (type "Adv, U64 -> Adv"))
-		(patt (type "Adv"))
+		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "(Str, U64)")))
+		(patt (type "Error"))
+		(patt (type "(Str, Num(Int(Unsigned64)))")))
 	(type_decls
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
 	(expressions
 		(expr (type "Adv -> Str"))
-		(expr (type "Adv -> U64"))
+		(expr (type "Adv -> Num(Int(Unsigned64))"))
 		(expr (type "Adv, Str -> Adv"))
-		(expr (type "Adv, U64 -> Adv"))
-		(expr (type "Adv"))
+		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "(Str, U64)"))))
+		(expr (type "Error"))
+		(expr (type "(Str, Num(Int(Unsigned64)))"))))
 ~~~

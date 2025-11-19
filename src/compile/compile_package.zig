@@ -624,6 +624,11 @@ pub const PackageEnv = struct {
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const mod_name = env.getString(str_idx);
 
+            // Skip "Builtin" - it's handled via the precompiled module in module_envs_map
+            if (std.mem.eql(u8, mod_name, "Builtin")) {
+                continue;
+            }
+
             // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
             const qualified = hadQualifiedImport(env, mod_name);
 
@@ -799,6 +804,7 @@ pub const PackageEnv = struct {
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
+            .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
         };
 
@@ -862,6 +868,7 @@ pub const PackageEnv = struct {
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
+            .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
         };
 
@@ -910,6 +917,13 @@ pub const PackageEnv = struct {
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
+
+            // Skip "Builtin" - it's provided separately via builtin_types_for_eval to the evaluator
+            // and via module_envs_map to the type checker
+            if (std.mem.eql(u8, import_name, "Builtin")) {
+                continue;
+            }
+
             // Determine external vs local from CIR s_import qualifier metadata directly
             const is_ext = hadQualifiedImport(env, import_name);
 

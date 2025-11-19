@@ -34,8 +34,6 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
-MISSING METHOD - lambda_parameter_unused.md:24:5:24:22
-+ - :0:0:0:0
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `unused` is not used anywhere in your code.
@@ -60,17 +58,6 @@ multiply = |_factor| _factor * 2
 ```
                      ^^^^^^^
 
-
-**MISSING METHOD**
-The value before this **+** operator has the type **U64**, which has no **plus** method:
-**lambda_parameter_unused.md:24:5:24:22:**
-```roc
-    result1 + result2 + result3 + result4
-```
-    ^^^^^^^^^^^^^^^^^
-
-
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -315,15 +302,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64 -> U64"))
-		(patt (type "U64 -> U64"))
-		(patt (type "U64 -> U64"))
-		(patt (type "U64 -> U64"))
-		(patt (type "_arg -> Error")))
+		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

@@ -868,7 +868,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    __f_
+    _Num(_size)_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -899,7 +899,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]_others_
+    _[Blue][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -929,7 +929,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Blue]_others, [Tb]_others2 -> Error_
+    _[Blue][ProvidedByCompiler], [Tb]_others -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -968,7 +968,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(_field, Str, Error, [O]_others, (Error, Error), List(_f))_
+    _(Num(_size), Str, Error, [O]_others, (Error, Error), List(Num(_size2)))_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1998,10 +1998,10 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> _ret"))
+		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(patt (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{  }"))
@@ -2035,10 +2035,10 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> _ret"))
+		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(expr (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{  }"))

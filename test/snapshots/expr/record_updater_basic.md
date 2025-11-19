@@ -69,9 +69,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: _field, name: Str }"))
-		(patt (type "{ age: _field, name: Str }")))
+		(patt (type "{ age: Num(_size), name: Str }"))
+		(patt (type "{ age: Num(_size), name: Str }")))
 	(expressions
-		(expr (type "{ age: _field, name: Str }"))
-		(expr (type "{ age: _field, name: Str }"))))
+		(expr (type "{ age: Num(_size), name: Str }"))
+		(expr (type "{ age: Num(_size), name: Str }"))))
 ~~~

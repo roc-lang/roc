@@ -429,9 +429,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Register Builtin as import so Bool, Try, and Str are available
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
 
-    // Get Bool and Try statement indices from Builtin module
+    // Get Bool, Try, and Str statement indices from Builtin module
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
@@ -439,6 +440,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 

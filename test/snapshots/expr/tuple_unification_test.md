@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List((_field, Str))"))
+(expr (type "List((Num(Frac(_size)), Str))"))
 ~~~

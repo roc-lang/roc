@@ -69,7 +69,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{  } -> U64")))
+		(patt (type "{  } -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr (type "{  } -> U64"))))
+		(expr (type "{  } -> Num(Int(Unsigned64))"))))
 ~~~

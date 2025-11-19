@@ -108,9 +108,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _ret"))
-		(patt (type "_a")))
+		(patt (type "_arg -> Num(_size)"))
+		(patt (type "Num(_size)")))
 	(expressions
-		(expr (type "_arg -> _ret"))
-		(expr (type "_a"))))
+		(expr (type "_arg -> Num(_size)"))
+		(expr (type "Num(_size)"))))
 ~~~

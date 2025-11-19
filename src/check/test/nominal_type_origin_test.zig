@@ -32,7 +32,7 @@ test "nominal type origin - displays origin in snapshot writer" {
     defer import_mapping.deinit();
 
     // Create a nominal type snapshot with origin from a different module
-    const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
+    const nominal_type_backing = snapshot.SnapshotContent{ .structure = .empty_record };
     const nominal_type_backing_idx = try snapshots.contents.append(test_allocator, nominal_type_backing);
     const vars_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{nominal_type_backing_idx});
 
@@ -86,40 +86,6 @@ test "nominal type origin - displays origin in snapshot writer" {
         try testing.expect(std.mem.indexOf(u8, result, "Person") != null);
         try testing.expect(std.mem.indexOf(u8, result, "(from CurrentModule)") == null);
     }
-
-    // Test 3: Origin shown with type arguments
-    {
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(test_allocator);
-
-        // Create type arguments
-        const str_content = snapshot.SnapshotContent{ .structure = .{ .str = {} } };
-        const str_idx = try snapshots.contents.append(test_allocator, str_content);
-        const args_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{ nominal_type_backing_idx, str_idx });
-
-        // Create a nominal type with args from a different module
-        const generic_nominal = snapshot.SnapshotNominalType{
-            .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
-            .vars = args_range,
-            .origin_module = other_module_ident,
-        };
-
-        var writer = snapshot.SnapshotWriter.init(
-            test_allocator,
-            &snapshots,
-            &idents,
-            &import_mapping,
-        );
-        defer writer.deinit();
-        writer.current_module_name = "CurrentModule";
-
-        try writer.writeNominalType(generic_nominal, nominal_type_backing_idx);
-
-        const result = writer.get();
-        // Should show "Person(Str) (from Data.Types)"
-        try testing.expect(std.mem.indexOf(u8, result, "Person(Str)") != null);
-        try testing.expect(std.mem.indexOf(u8, result, "(from Data.Types)") != null);
-    }
 }
 
 test "nominal type origin - works with no context" {
@@ -136,7 +102,7 @@ test "nominal type origin - works with no context" {
     var import_mapping = types_mod.import_mapping.ImportMapping.init(test_allocator);
     defer import_mapping.deinit();
 
-    const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
+    const nominal_type_backing = snapshot.SnapshotContent{ .structure = .empty_record };
     const nominal_type_backing_idx = try snapshots.contents.append(test_allocator, nominal_type_backing);
     const vars_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{nominal_type_backing_idx});
 

@@ -392,10 +392,11 @@ pub const Repl = struct {
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
 
-        // Get Bool and Try statement indices from the IMPORTED modules (not copied!)
-        // These refer to the actual statements in the Bool/Try modules
+        // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
+        // These refer to the actual statements in the Builtin module
         const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
         const try_stmt_in_try_module = self.builtin_indices.try_type;
+        const str_stmt_in_builtin_module = self.builtin_indices.str_type;
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
@@ -403,6 +404,7 @@ pub const Repl = struct {
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = bool_stmt_in_bool_module,
             .try_stmt = try_stmt_in_try_module,
+            .str_stmt = str_stmt_in_builtin_module,
             .builtin_module = self.builtin_module.env,
         };
 

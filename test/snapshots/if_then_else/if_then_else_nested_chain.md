@@ -125,7 +125,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Str")))
+		(patt (type "Num(_size) -> Str")))
 	(expressions
-		(expr (type "_arg -> Str"))))
+		(expr (type "Num(_size) -> Str"))))
 ~~~

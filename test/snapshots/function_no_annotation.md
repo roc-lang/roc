@@ -164,13 +164,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, a -> a"))
+		(patt (type "Num(_size), Num(_size2) -> Num(_size3)"))
 		(patt (type "_arg -> Error"))
-		(patt (type "_arg -> Error"))
+		(patt (type "Num(_size) -> Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "a, a -> a"))
+		(expr (type "Num(_size), Num(_size2) -> Num(_size3)"))
 		(expr (type "_arg -> Error"))
-		(expr (type "_arg -> Error"))
+		(expr (type "Num(_size) -> Error"))
 		(expr (type "Error"))))
 ~~~
