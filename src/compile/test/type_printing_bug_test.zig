@@ -90,8 +90,6 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     try type_writer.write(map_result_var.?);
     const type_str = type_writer.get();
 
-    std.debug.print("\nActual type: {s}\n", .{type_str});
-
     // The type should be "Try(a, e), (a -> b) -> Try(b, e)"
     // But the bug causes it to be "Error, (a -> b) -> Error"
 
