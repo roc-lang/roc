@@ -54,4 +54,13 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/str_refcount_function.zig"));
     std.testing.refAllDecls(@import("test/str_refcount_pattern.zig"));
     std.testing.refAllDecls(@import("test/str_refcount_builtins.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_MINIMAL.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
 }
