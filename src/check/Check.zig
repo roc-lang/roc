@@ -620,7 +620,7 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 }
 
 /// Create a nominal number type content (e.g., U8, I32, Dec)
-/// Number types are defined in Builtin.roc as: U8 :: [].{...}
+/// Number types are defined in Builtin.roc nested inside Num module: Num.U8 :: [].{...}
 /// They have no type parameters and their backing is the empty tag union []
 fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
     const origin_module_id = if (self.common_idents.builtin_module) |_|
@@ -628,8 +628,10 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Insert the ident for the type name (e.g., "U8", "I32", "Dec")
-    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(type_name));
+    // Number types are nested in Num module, so the qualified name is "Num.U8", "Num.I32", etc.
+    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Num.{s}", .{type_name});
+    defer self.gpa.free(qualified_type_name);
+    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
     const type_ident = types_mod.TypeIdent{
         .ident_idx = type_name_ident,
     };
