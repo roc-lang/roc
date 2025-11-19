@@ -394,8 +394,6 @@ pub const TypeIdent = struct {
 /// takes after resolving type variables and aliases.
 pub const FlatType = union(enum) {
     box: Var,
-    list: Var,
-    list_unbound,
     record: Record,
     record_unbound: RecordField.SafeMultiList.Range,
     tuple: Tuple,

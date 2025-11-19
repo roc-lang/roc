@@ -351,9 +351,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try(List(Error), Error) -> List(_elem)"))
+		(patt (type "Try(List(Error), Error) -> List(_c)"))
 		(patt (type "Error -> _ret"))
-		(patt (type "_arg -> List(_elem)")))
+		(patt (type "_arg -> List(_c)")))
 	(type_decls
 		(alias (type "ComplexType(a, b)")
 			(ty-header (name "ComplexType")
@@ -361,7 +361,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Try(List(Error), Error) -> List(_elem)"))
+		(expr (type "Try(List(Error), Error) -> List(_c)"))
 		(expr (type "Error -> _ret"))
-		(expr (type "_arg -> List(_elem)"))))
+		(expr (type "_arg -> List(_c)"))))
 ~~~

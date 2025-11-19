@@ -1926,15 +1926,10 @@ pub const Interpreter = struct {
 
                 const method_args = dot_access.args;
                 const field_name = self.env.getIdent(dot_access.field_name);
-                const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
-                const is_list_receiver = resolved_receiver.desc.content == .structure and switch (resolved_receiver.desc.content.structure) {
-                    .list, .list_unbound => true,
-                    else => false,
-                };
-                const is_list_method = is_list_receiver and (std.mem.eql(u8, field_name, "len") or std.mem.eql(u8, field_name, "isEmpty"));
-                const treat_as_method = method_args != null or is_list_method;
 
-                if (!treat_as_method) {
+                // Field access vs method call
+                if (method_args == null) {
+                    // This is field access on a record, not a method call
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
                     // Records can have zero-sized fields
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
@@ -1944,6 +1939,9 @@ pub const Interpreter = struct {
                     const field_value = try accessor.getFieldByIndex(field_idx);
                     return try self.pushCopy(field_value, roc_ops);
                 }
+
+                // This is a method call - resolve receiver type for dispatch
+                const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
 
                 const arg_count = if (method_args) |span| span.span.len else 0;
                 var arg_values: []StackValue = &.{};
@@ -1965,32 +1963,10 @@ pub const Interpreter = struct {
                 const base_content = resolved_receiver.desc.content;
                 if (base_content == .structure) {
                     switch (base_content.structure) {
-                        .list, .list_unbound => {
-                            if (std.mem.eql(u8, field_name, "len")) {
-                                const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
-                                const result_layout = try self.getRuntimeLayout(result_rt_var);
-                                const length: usize = if (receiver_value.ptr) |ptr| blk: {
-                                    const header: *const RocList = @ptrCast(@alignCast(ptr));
-                                    break :blk header.len();
-                                } else 0;
-                                var out = try self.pushRaw(result_layout, 0);
-                                out.is_initialized = false;
-                                out.setInt(@intCast(length));
-                                out.is_initialized = true;
-                                return out;
-                            }
-
-                            if (std.mem.eql(u8, field_name, "isEmpty")) {
-                                const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
-                                const length: usize = if (receiver_value.ptr) |ptr| blk: {
-                                    const header: *const RocList = @ptrCast(@alignCast(ptr));
-                                    break :blk header.len();
-                                } else 0;
-                                return try self.makeBoolValue(result_rt_var, length == 0);
-                            }
-                        },
                         .nominal_type => |nominal| {
                             const nominal_name = self.env.getIdent(nominal.ident.ident_idx);
+
+                            // Check if this is Box
                             if (std.mem.eql(u8, nominal_name, "Box")) {
                                 if (std.mem.eql(u8, field_name, "box")) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
@@ -4169,9 +4145,11 @@ pub const Interpreter = struct {
                 const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
                 const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
                 std.debug.assert(list_rt_content == .structure);
-                std.debug.assert(list_rt_content.structure == .list);
+                std.debug.assert(list_rt_content.structure == .nominal_type);
 
-                const elem_rt_var = list_rt_content.structure.list;
+                const nominal = list_rt_content.structure.nominal_type;
+                const nominal_args = self.runtime_types.sliceNominalArgs(nominal);
+                const elem_rt_var = nominal_args[0];
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
 
                 var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
@@ -4719,14 +4697,6 @@ pub const Interpreter = struct {
                             const rt_elem = try self.translateTypeVar(module, elem_var);
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
                         },
-                        .list => |elem_var| {
-                            const rt_elem = try self.translateTypeVar(module, elem_var);
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
-                        },
-                        .list_unbound => {
-                            const elem_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = elem_var } });
-                        },
                         .record => |rec| {
                             var acc = try FieldAccumulator.init(self.allocator);
                             defer acc.deinit();
@@ -4979,12 +4949,6 @@ pub const Interpreter = struct {
                         const new_ret = try self.instantiateType(f.ret, subst_map);
                         const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
                         break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .list => |elem_var| blk_list: {
-                        // Recursively instantiate the element type
-                        const new_elem = try self.instantiateType(elem_var, subst_map);
-                        const content = types.Content{ .structure = .{ .list = new_elem } };
-                        break :blk_list try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .box => |boxed_var| blk_box: {
                         // Recursively instantiate the boxed type

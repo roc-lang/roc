@@ -605,6 +605,31 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(self.str_var, env, .{ .explicit = new_region });
 }
 
+/// Create a nominal List type with the given element type
+fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where List is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    const list_ident = types_mod.TypeIdent{
+        .ident_idx = self.common_idents.list,
+    };
+
+    // The backing var is the element type var
+    const backing_var = elem_var;
+    const type_args = [_]Var{elem_var};
+
+    return try self.types.mkNominal(
+        list_ident,
+        backing_var,
+        &type_args,
+        origin_module_id,
+    );
+}
+
 // updating vars //
 
 /// Unify the provided variable with the provided content
@@ -1631,8 +1656,9 @@ fn generateBuiltinTypeInstance(
                 return try self.freshFromContent(.err, env, anno_region);
             }
 
-            // Create the type
-            return try self.freshFromContent(.{ .structure = .{ .list = anno_args[0] } }, env, anno_region);
+            // Create the nominal List type
+            const list_content = try self.mkListContent(anno_args[0]);
+            return try self.freshFromContent(list_content, env, anno_region);
         },
         .box => {
             // Then check arity
@@ -1818,8 +1844,10 @@ fn checkPatternHelp(
         .list => |list| {
             const elems = self.cir.store.slicePatterns(list.patterns);
             if (elems.len == 0) {
-                // If we have no elems, then set the type and move on
-                try self.unifyWith(pattern_var, .{ .structure = .list_unbound }, env);
+                // Create a nominal List with a fresh unbound element type
+                const elem_var = try self.fresh(env, pattern_region);
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(pattern_var, list_content, env);
             } else {
 
                 // Here, we use the list's 1st element as the element var to
@@ -1855,8 +1883,9 @@ fn checkPatternHelp(
                     last_elem_ptrn_idx = elem_ptrn_idx;
                 }
 
-                // Now, set the type of the root variable t
-                try self.unifyWith(pattern_var, .{ .structure = .{ .list = elem_var } }, env);
+                // Create a nominal List type with the inferred element type
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(pattern_var, list_content, env);
 
                 // Then, check the "rest" pattern is bound to a variable
                 // This is if the pattern is like `.. as x`
@@ -2311,14 +2340,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // list //
         .e_empty_list => {
-            try self.unifyWith(expr_var, .{ .structure = .list_unbound }, env);
+            // Create a nominal List with a fresh unbound element type
+            const elem_var = try self.fresh(env, expr_region);
+            const list_content = try self.mkListContent(elem_var);
+            try self.unifyWith(expr_var, list_content, env);
         },
         .e_list => |list| {
             const elems = self.cir.store.exprSlice(list.elems);
 
             if (elems.len == 0) {
-                // If we have no elems, then set the type and move on
-                try self.unifyWith(expr_var, .{ .structure = .list_unbound }, env);
+                // Create a nominal List with a fresh unbound element type
+                const elem_var = try self.fresh(env, expr_region);
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(expr_var, list_content, env);
             } else {
                 // Here, we use the list's 1st element as the element var to
                 // constrain the rest of the list
@@ -2355,7 +2389,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     last_elem_expr_idx = elem_expr_idx;
                 }
 
-                try self.unifyWith(expr_var, .{ .structure = .{ .list = elem_var } }, env);
+                // Create a nominal List type with the inferred element type
+                const list_content = try self.mkListContent(elem_var);
+                try self.unifyWith(expr_var, list_content, env);
             }
         },
         // tuple //
@@ -3279,7 +3315,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
 
                 // Check that the expr is list of the ptrn
-                const list_var = try self.freshFromContent(.{ .structure = .{ .list = for_ptrn_var } }, env, for_expr_region);
+                const list_content = try self.mkListContent(for_ptrn_var);
+                const list_var = try self.freshFromContent(list_content, env, for_expr_region);
                 _ = try self.unify(list_var, for_expr_var, env);
 
                 // Check the body
@@ -4142,6 +4179,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const original_env: *const ModuleEnv = blk: {
                 if (is_this_module) {
                     break :blk self.cir;
+                } else if (original_module_ident == self.cir.builtin_module_ident) {
+                    // For builtin types, use the builtin module environment directly
+                    if (self.common_idents.builtin_module) |builtin_env| {
+                        break :blk builtin_env;
+                    } else {
+                        // This happens when compiling the Builtin module itself
+                        break :blk self.cir;
+                    }
                 } else {
                     // TODO: The name `module_envs` is misleading - it's actually a map of
                     // auto-imported TYPE NAMES to their defining modules, not a map of module names.
@@ -4156,30 +4201,11 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     // - auto_imported_types: HashMap(TypeName, ModuleEnv) for canonicalization
                     // - imported_modules: HashMap(ModuleName, ModuleEnv) for module lookups
                     //
-                    // For now, we work around this by detecting builtin types and using the type
-                    // name as the lookup key instead of the module name.
+                    // For now, we work around this by looking up regular imports in module_envs.
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
 
-                    const lookup_key = if (original_module_ident == self.cir.builtin_module_ident) lookup_blk: {
-                        // For Builtin types, the nominal_type.ident contains the fully qualified name
-                        // like "Builtin.Str", but module_envs is keyed by just the unqualified name "Str".
-                        // We need to extract just the type name without the module prefix.
-                        const full_name = self.cir.getIdent(nominal_type.ident.ident_idx);
-                        const dot_index = std.mem.indexOfScalar(u8, full_name, '.') orelse {
-                            // No dot found - use as-is (shouldn't happen for Builtin types, but handle gracefully)
-                            break :lookup_blk nominal_type.ident.ident_idx;
-                        };
-                        const unqualified_name = full_name[dot_index + 1 ..];
-                        // Look up the unqualified name in the identifier store
-                        const unqualified_ident = self.cir.common.findIdent(unqualified_name) orelse {
-                            // If we can't find it, fall back to the original (will likely fail the assertion below)
-                            break :lookup_blk nominal_type.ident.ident_idx;
-                        };
-                        break :lookup_blk unqualified_ident;
-                    } else original_module_ident; // Use module name for user-defined modules
-
-                    const mb_original_module_env = module_envs.get(lookup_key);
+                    const mb_original_module_env = module_envs.get(original_module_ident);
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }
@@ -4207,7 +4233,21 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // TODO: This works for top-level types, but not for deeply
                 // nested types like: MyModule.A.B.C.my_func
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
+
+                // Check if type_name_bytes already starts with "module_name."
+                const module_prefix = original_env.module_name;
+                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
+                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
+                    type_name_bytes[module_prefix.len] == '.';
+
                 if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}",
+                        .{ type_name_bytes, constraint_fn_name_bytes },
+                    );
+                } else if (already_qualified) {
+                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}",
@@ -4272,19 +4312,62 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
 
                 // Copy the actual method from the dest module env to this module env
-                const real_method_var = if (is_this_module)
-                    try self.instantiateVar(def_var, env, .{ .explicit = region })
-                else
-                    try self.copyVar(def_var, original_env, region);
+                const real_method_var = if (is_this_module) blk: {
+                    break :blk try self.instantiateVar(def_var, env, .{ .explicit = region });
+                } else blk: {
+                    // Copy the method from the other module's type store
+                    const copied_var = try self.copyVar(def_var, original_env, region);
+                    // For builtin methods, we need to instantiate the copied var to convert
+                    // rigid type variables to flex, so they can unify with the call site
+                    const is_builtin = original_module_ident == self.cir.builtin_module_ident;
+                    if (is_builtin) {
+                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+                    } else {
+                        break :blk copied_var;
+                    }
+                };
 
                 // Unify the actual function var against the inferred var
-                //
-                // TODO: For better error messages, we should check if these
-                // types are functions, unify each arg, etc. This should look
-                // similar to e_call
-                const result = try self.unify(real_method_var, constraint.fn_var, env);
+                // We break this down into arg-by-arg and return type unification
+                // for better error messages (instead of showing the whole function types)
 
-                if (result.isProblem()) {
+                // Extract the function type from the real method
+                const resolved_real = self.types.resolveVar(real_method_var);
+                const mb_real_func = resolved_real.desc.content.unwrapFunc();
+                if (mb_real_func == null) {
+                    // This shouldn't happen - the method should be a function
+                    std.debug.assert(false);
+                    try self.unifyWith(deferred_constraint.var_, .err, env);
+                    try self.unifyWith(resolved_func.ret, .err, env);
+                    continue;
+                }
+                const real_func = mb_real_func.?;
+
+                // Check arity matches
+                const constraint_args = self.types.sliceVars(resolved_func.args);
+                const real_args = self.types.sliceVars(real_func.args);
+
+                if (constraint_args.len != real_args.len) {
+                    // Arity mismatch - shouldn't happen if method was found correctly
+                    std.debug.assert(false);
+                    try self.unifyWith(deferred_constraint.var_, .err, env);
+                    try self.unifyWith(resolved_func.ret, .err, env);
+                    continue;
+                }
+
+                // Unify each argument pair
+                var any_arg_failed = false;
+                for (constraint_args, real_args) |constraint_arg, real_arg| {
+                    const arg_result = try self.unify(real_arg, constraint_arg, env);
+                    if (arg_result.isProblem()) {
+                        any_arg_failed = true;
+                    }
+                }
+
+                // Unify return types - this will generate the error with the expression region
+                const ret_result = try self.unify(real_func.ret, resolved_func.ret, env);
+
+                if (any_arg_failed or ret_result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
                 }

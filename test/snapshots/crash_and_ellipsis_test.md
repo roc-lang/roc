@@ -269,10 +269,10 @@ main! = |_| {
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt (type "_arg -> List(_elem)")))
+		(patt (type "_arg -> List(_a)")))
 	(expressions
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr (type "_arg -> List(_elem)"))))
+		(expr (type "_arg -> List(_a)"))))
 ~~~

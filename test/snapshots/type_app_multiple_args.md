@@ -19,6 +19,9 @@ TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 **DOES NOT EXIST**
 `Dict.empty` does not exist.
 
+`Dict` is in scope, but it has no associated `empty`.
+
+It's referenced here:
 **type_app_multiple_args.md:6:25:6:35:**
 ```roc
 main! = |_| processDict(Dict.empty().insert("one", 1))
@@ -124,7 +127,7 @@ NO CHANGE
 					(e-dot-access (field "insert")
 						(receiver
 							(e-call
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))))
+								(e-runtime-error (tag "nested_value_not_found"))))
 						(args
 							(e-string
 								(e-literal (string "one")))

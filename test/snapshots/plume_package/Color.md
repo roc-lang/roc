@@ -203,6 +203,9 @@ The unused variable is declared here:
 **DOES NOT EXIST**
 `Set.from_list` does not exist.
 
+`Set` is in scope, but it has no associated `from_list`.
+
+It's referenced here:
 **Color.md:68:14:68:27:**
 ```roc
     colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -1217,7 +1220,7 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "colors"))
 					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
+						(e-runtime-error (tag "nested_value_not_found"))
 						(e-list
 							(elems
 								(e-string

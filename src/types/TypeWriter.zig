@@ -427,16 +427,6 @@ fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.
             try self.writeVar(sub_var, root_var);
             _ = try self.buf.writer().write(")");
         },
-        .list => |sub_var| {
-            _ = try self.buf.writer().write("List(");
-            try self.writeVarWithContext(sub_var, .ListContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .list_unbound => {
-            _ = try self.buf.writer().write("List(_");
-            try self.generateContextualName(.ListContent);
-            _ = try self.buf.writer().write(")");
-        },
         .tuple => |tuple| {
             try self.writeTuple(tuple, root_var);
         },
@@ -981,8 +971,7 @@ fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, c
     switch (flat_type) {
         .empty_record, .empty_tag_union => {},
         .box => |sub_var| try self.countVar(search_var, sub_var, count),
-        .list => |sub_var| try self.countVar(search_var, sub_var, count),
-        .list_unbound, .num => {},
+        .num => {},
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem| {
