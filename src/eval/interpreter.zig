@@ -4472,6 +4472,39 @@ pub const Interpreter = struct {
         @memset(self.var_to_layout_slot.items[old_len..], 0);
     }
 
+    /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
+    fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
+        const origin_module_id = self.env.builtin_module_ident;
+
+        // Number types are nested in Num module, so the qualified name is "Num.Dec", "Num.I64", etc.
+        const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Num.{s}", .{type_name});
+        defer self.allocator.free(qualified_type_name);
+        const type_name_ident = try @constCast(self.env.getIdentStore()).insert(self.allocator, base_pkg.Ident.for_text(qualified_type_name));
+        const type_ident = types.TypeIdent{
+            .ident_idx = type_name_ident,
+        };
+
+        // Number types backing is [] (empty tag union with closed extension)
+        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+        const empty_tag_union = types.TagUnion{
+            .tags = types.Tag.SafeMultiList.Range.empty(),
+            .ext = ext_var,
+        };
+        const backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+        const backing_var = try self.runtime_types.freshFromContent(backing_content);
+
+        // Number types have no type arguments
+        const no_type_args: []const types.Var = &.{};
+
+        return try self.runtime_types.mkNominal(
+            type_ident,
+            backing_var,
+            no_type_args,
+            origin_module_id,
+        );
+    }
+
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         var resolved = self.runtime_types.resolveVar(type_var);
@@ -4490,6 +4523,16 @@ pub const Interpreter = struct {
         const idx: usize = @intFromEnum(resolved.var_);
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
+
+        // If we have a flex var, default it to Dec
+        // This is the interpreter-time defaulting for numeric literals
+        if (resolved.desc.content == .flex) {
+            // Directly return Dec's scalar layout
+            const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
+            const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
+            slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;
+            return dec_layout;
+        }
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
             const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);

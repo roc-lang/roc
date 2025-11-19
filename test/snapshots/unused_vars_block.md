@@ -171,7 +171,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

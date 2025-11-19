@@ -49,34 +49,6 @@ TYPE MISMATCH - Adv.md:12:44:12:66
 MISSING METHOD - Adv.md:23:13:23:33
 MISSING METHOD - Adv.md:28:13:28:32
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Adv.md:9:44:9:66:**
-```roc
-  update_str = |Adv.Val(u64, _), next_str| Adv.Val(u64, next_str)
-```
-                                           ^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Adv_
-
-But the type annotation says it should have the type:
-    _Adv_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Adv.md:12:44:12:66:**
-```roc
-  update_u64 = |Adv.Val(_, str), next_u64| Adv.Val(next_u64, str)
-```
-                                           ^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Adv_
-
-But the type annotation says it should have the type:
-    _Adv_
-
 **MISSING METHOD**
 This **update_strr** method is being called on the type **Adv**, which has no method with that name:
 **Adv.md:23:13:23:33:**
@@ -516,9 +488,9 @@ main = {
 	(defs
 		(patt (type "Adv -> Str"))
 		(patt (type "Adv -> U64"))
-		(patt (type "Adv, Str -> Error"))
-		(patt (type "Adv, U64 -> Error"))
-		(patt (type "Error"))
+		(patt (type "Adv, Str -> Adv"))
+		(patt (type "Adv, U64 -> Adv"))
+		(patt (type "Adv"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "(Str, U64)")))
@@ -528,9 +500,9 @@ main = {
 	(expressions
 		(expr (type "Adv -> Str"))
 		(expr (type "Adv -> U64"))
-		(expr (type "Adv, Str -> Error"))
-		(expr (type "Adv, U64 -> Error"))
-		(expr (type "Error"))
+		(expr (type "Adv, Str -> Adv"))
+		(expr (type "Adv, U64 -> Adv"))
+		(expr (type "Adv"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "(Str, U64)"))))

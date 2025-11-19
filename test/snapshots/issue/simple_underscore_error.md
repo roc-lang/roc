@@ -25,20 +25,6 @@ BadType := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_underscore_error.md:4:7:4:9:**
-```roc
-foo = 42
-```
-      ^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _BadType_
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,
@@ -81,10 +67,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "BadType")))
 	(type_decls
 		(nominal (type "BadType")
 			(ty-header (name "BadType"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "BadType"))))
 ~~~

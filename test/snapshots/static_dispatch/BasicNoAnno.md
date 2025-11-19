@@ -24,34 +24,7 @@ main = (helper1(val), helper2(val))
 TYPE MISMATCH - BasicNoAnno.md:7:12:7:13
 TYPE MISMATCH - BasicNoAnno.md:11:7:11:31
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**BasicNoAnno.md:7:12:7:13:**
-```roc
-helper1 = |x| x.to_str()
-```
-           ^
-
-It has the type:
-    _BasicNoAnno_
-
-But I expected it to be:
-    _BasicNoAnno_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**BasicNoAnno.md:11:7:11:31:**
-```roc
-val = BasicNoAnno.Val("hello")
-```
-      ^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _BasicNoAnno_
-
-But I expected it to be:
-    _BasicNoAnno_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -233,7 +206,7 @@ main = (helper1(val), helper2(val))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "BasicNoAnno"))
-		(patt (type "(Error, Error)")))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "BasicNoAnno")
 			(ty-header (name "BasicNoAnno"))))
@@ -243,5 +216,5 @@ main = (helper1(val), helper2(val))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "BasicNoAnno"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "(Str, Str)"))))
 ~~~

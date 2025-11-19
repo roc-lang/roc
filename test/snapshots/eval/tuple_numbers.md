@@ -85,5 +85,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(Int(Unsigned8)), Num(Int(Signed8)), Num(Int(Unsigned16)), Num(Int(Signed16)), Num(Int(Unsigned32)), Num(Int(Signed32)), Num(Int(Unsigned64)), Num(Int(Signed64)), Num(Int(Unsigned128)), Num(Int(Signed128)), Num(Frac(Float32)), Num(Frac(Float64)), Num(Frac(Decimal)), Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Num(_size6), Num(Frac(_size7)), Num(_size8), Num(_size9), Num(Frac(_size10)), Num(Frac(_size11)), Num(Frac(_size12)), Num(Frac(_size13)), Num(Frac(_size14)))"))
+(expr (type "(U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec, _field, _field2, _field3, _field4, _field5, _field6, _field7, _field8, _field9, _field10, _field11, _field12, _field13, _field14)"))
 ~~~

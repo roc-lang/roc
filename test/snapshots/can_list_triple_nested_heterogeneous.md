@@ -10,25 +10,7 @@ type=expr
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - can_list_triple_nested_heterogeneous.md:1:6:1:6
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The second and third elements in this list have incompatible types:
-**can_list_triple_nested_heterogeneous.md:1:6:**
-```roc
-[[], [[], [1]], [[], ["hello"]]]
-```
-     ^^^^^^^^^  ^^^^^^^^^^^^^^^
-
-The second element has this type:
-    _List(List(Num(_size)))_
-
-However, the third element has this type:
-    _List(List(Str))_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,Int,CloseSquare,CloseSquare,Comma,OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,StringStart,StringPart,StringEnd,CloseSquare,CloseSquare,CloseSquare,
@@ -73,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(List(List(Str)))"))
 ~~~

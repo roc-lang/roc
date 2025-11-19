@@ -859,7 +859,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num(Int(Unsigned64))_
+    _Num.U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -964,7 +964,7 @@ It has the type:
     _[Stdoline!(Error)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
-    _Try({  }, _d)_
+    _Try(_d)_
 
 # TOKENS
 ~~~zig
@@ -2250,8 +2250,8 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Num(Int(Unsigned64))"))
+		(patt (type "Bool -> _ret"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2287,8 +2287,8 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Num(Int(Unsigned64))"))
+		(expr (type "Bool -> _ret"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

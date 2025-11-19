@@ -49,48 +49,7 @@ TYPE MISMATCH - MethodDispatch.md:5:37:5:57
 TYPE MISMATCH - MethodDispatch.md:18:13:18:35
 TYPE MISMATCH - MethodDispatch.md:22:15:22:37
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**MethodDispatch.md:5:37:5:57:**
-```roc
-	transform = |Container.Box(s), fn| Container.Box(fn(s))
-```
-	                                   ^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Container_
-
-But the type annotation says it should have the type:
-    _Container_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**MethodDispatch.md:18:13:18:35:**
-```roc
-container = Container.Box("hello")
-```
-            ^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Container_
-
-But the type annotation says it should have the type:
-    _Container_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**MethodDispatch.md:22:15:22:37:**
-```roc
-myContainer = Container.Box("world")
-```
-              ^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Container_
-
-But the type annotation says it should have the type:
-    _Container_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -446,27 +405,27 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Container -> Str"))
-		(patt (type "Container, (Str -> Str) -> Error"))
+		(patt (type "Container, (Str -> Str) -> Container"))
 		(patt (type "a -> Str where [a.get_value : a -> Str]"))
 		(patt (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "(Error, Error, Error)")))
+		(patt (type "Container"))
+		(patt (type "Container"))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Container"))
+		(patt (type "(Str, Str, Str)")))
 	(type_decls
 		(nominal (type "Container")
 			(ty-header (name "Container"))))
 	(expressions
 		(expr (type "Container -> Str"))
-		(expr (type "Container, (Str -> Str) -> Error"))
+		(expr (type "Container, (Str -> Str) -> Container"))
 		(expr (type "a -> Str where [a.get_value : a -> Str]"))
 		(expr (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "(Error, Error, Error)"))))
+		(expr (type "Container"))
+		(expr (type "Container"))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Container"))
+		(expr (type "(Str, Str, Str)"))))
 ~~~

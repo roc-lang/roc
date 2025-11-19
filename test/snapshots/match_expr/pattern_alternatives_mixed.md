@@ -18,7 +18,7 @@ match ... {
 INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
 # PROBLEMS
 **INCOMPATIBLE MATCH PATTERNS**
-The pattern first pattern in this second`match` differs from previous ones:
+The pattern first pattern in this third`match` differs from previous ones:
 **pattern_alternatives_mixed.md:1:1:**
 ```roc
 match ... {
@@ -30,13 +30,13 @@ match ... {
 	_ => "other"
 }
 ```
- ^^^^^^^
+ ^^^^^
 
-The second pattern has this type:
-    _Str_
+The third pattern has this type:
+    _[Ok(_a)][ProvidedByCompiler]_
 
 But all the previous patterns have this type: 
-    _Num(_size)_
+    _Str_
 
 All patterns in an `match` must have compatible types.
 

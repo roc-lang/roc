@@ -29,34 +29,7 @@ main = (helper1(val), helper2(val))
 TYPE MISMATCH - Basic.md:6:20:6:24
 TYPE MISMATCH - Basic.md:16:7:16:25
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Basic.md:6:20:6:24:**
-```roc
-  to_str2 = |test| test.to_str()
-```
-                   ^^^^
-
-It has the type:
-    _Basic_
-
-But I expected it to be:
-    _Basic_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Basic.md:16:7:16:25:**
-```roc
-val = Basic.Val("hello")
-```
-      ^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Basic_
-
-But the type annotation says it should have the type:
-    _Basic_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -300,19 +273,19 @@ main = (helper1(val), helper2(val))
 (inferred-types
 	(defs
 		(patt (type "Basic -> Str"))
-		(patt (type "Error -> Error"))
+		(patt (type "Basic -> Str"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
-		(patt (type "Error"))
-		(patt (type "(Error, Error)")))
+		(patt (type "Basic"))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
 		(expr (type "Basic -> Str"))
-		(expr (type "Error -> Error"))
+		(expr (type "Basic -> Str"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
-		(expr (type "Error"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "Basic"))
+		(expr (type "(Str, Str)"))))
 ~~~

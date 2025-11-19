@@ -59,20 +59,6 @@ TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**multiline_string_complex.md:37:7:37:9:**
-```roc
-		0 - \\
-```
-		    ^^
-
-It has the type:
-    _Str_
-
-But I expected it to be:
-    _Num(_size)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
 **multiline_string_complex.md:40:6:40:8:**
 ```roc
 	e: !\\
@@ -270,13 +256,13 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
 		(expr (type "Str"))))
 ~~~

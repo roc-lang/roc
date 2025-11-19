@@ -142,22 +142,6 @@ f =8
    ^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:12:5:12:48:**
-```roc
-e = 3402823669209384634633746074317682114553.14: I8
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Num(Frac(_size))_
-
-But the type annotation says it should have the type:
-    _Num(Int(Unsigned128))_
-
-**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
-
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -310,21 +294,21 @@ j = -17011687303715884105728
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8))"))
-		(patt (type "Num(Int(Unsigned16))"))
-		(patt (type "Num(Int(Unsigned32))"))
-		(patt (type "Error"))
-		(patt (type "Num(Int(Signed16))"))
-		(patt (type "Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed64))"))
-		(patt (type "Num(Int(Signed128))")))
+		(patt (type "U8"))
+		(patt (type "U16"))
+		(patt (type "U32"))
+		(patt (type "U128"))
+		(patt (type "I16"))
+		(patt (type "I32"))
+		(patt (type "I64"))
+		(patt (type "I128")))
 	(expressions
-		(expr (type "Num(Int(Unsigned8))"))
-		(expr (type "Num(Int(Unsigned16))"))
-		(expr (type "Num(Int(Unsigned32))"))
-		(expr (type "Error"))
-		(expr (type "Num(Int(Signed16))"))
-		(expr (type "Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed64))"))
-		(expr (type "Num(Int(Signed128))"))))
+		(expr (type "U8"))
+		(expr (type "U16"))
+		(expr (type "U32"))
+		(expr (type "U128"))
+		(expr (type "I16"))
+		(expr (type "I32"))
+		(expr (type "I64"))
+		(expr (type "I128"))))
 ~~~

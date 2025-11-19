@@ -213,18 +213,16 @@ It's referenced here:
              ^^^^^^^^^^^^^
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_frac` on a type that doesn't support methods:
+**MISSING METHOD**
+This **to_frac** method is being called on the type **Num.U8**, which has no method with that name:
 **Color.md:22:15:22:26:**
 ```roc
     rounded = a.to_frac() / 255.0
 ```
               ^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(Unsigned8))_
 
-
+**Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **to_utf8** method is being called on the type **Str**, which has no method with that name:
@@ -236,84 +234,6 @@ This **to_utf8** method is being called on the type **Str**, which has no method
 
 
 **Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:35:17:35:41:**
-```roc
-                a.is_char_in_hex_range()
-```
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:36:21:36:45:**
-```roc
-                and b.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:37:21:37:45:**
-```roc
-                and c.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:38:21:38:45:**
-```roc
-                and d.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:39:21:39:45:**
-```roc
-                and e.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:40:21:40:45:**
-```roc
-                and f.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1300,8 +1220,8 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(patt (type "U8, U8, U8 -> Color"))
+		(patt (type "U8, U8, U8, U8 -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Color -> Error"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
@@ -1310,8 +1230,8 @@ is_named_color = |str| {
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(expr (type "U8, U8, U8 -> Color"))
+		(expr (type "U8, U8, U8, U8 -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Color -> Error"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))

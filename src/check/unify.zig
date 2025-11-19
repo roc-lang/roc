@@ -877,32 +877,7 @@ const Unifier = struct {
                             return;
                         }
 
-                        if (a_type.ident.ident_idx == b_type.ident.ident_idx and
-                            a_type.origin_module == b_type.origin_module)
-                        {
-                            // Unify type arguments
-                            const a_args = self.types_store.sliceNominalArgs(a_type);
-                            const b_args = self.types_store.sliceNominalArgs(b_type);
-                            for (a_args, b_args) |a_arg, b_arg| {
-                                try self.unifyGuarded(a_arg, b_arg);
-                            }
-
-                            // After unifying type args, merge the backing vars
-                            // We merge rather than recursively unify to avoid infinite loops
-                            // since the backings are structurally equivalent by definition
-                            const a_backing = self.types_store.getNominalBackingVar(a_type);
-                            const b_backing = self.types_store.getNominalBackingVar(b_type);
-                            const a_backing_root = self.getRoot(a_backing);
-                            const b_backing_root = self.getRoot(b_backing);
-                            if (a_backing_root != b_backing_root) {
-                                // Merge the backing vars without recursive unification
-                                self.types_store.redirectVar(b_backing_root, a_backing_root);
-                            }
-
-                            self.merge(vars, vars.a.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
+                        try self.unifyNominalType(vars, a_type, b_type);
                     },
                     .tag_union => |b_tag_union| {
                         // Try to unify nominal tag union (a) with anonymous tag union (b)
@@ -1494,6 +1469,50 @@ const Unifier = struct {
             const new_var = @as(Var, @enumFromInt(@as(u32, @intCast(slot))));
             _ = self.scratch.fresh_vars.append(self.scratch.gpa, new_var) catch return error.AllocatorError;
         }
+    }
+
+    // Unify nominal type //
+
+    /// Unify when `a` was a nominal type
+    fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // Check if either nominal type has an invalid backing variable
+        const a_backing_var = self.types_store.getNominalBackingVar(a_type);
+        const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
+        if (a_backing_resolved.desc.content == .err) {
+            // Invalid nominal type - treat as transparent
+            self.merge(vars, vars.b.desc.content);
+            return;
+        }
+
+        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+        if (b_backing_resolved.desc.content == .err) {
+            // Invalid nominal type - treat as transparent
+            self.merge(vars, vars.a.desc.content);
+            return;
+        }
+
+        if (!TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident)) {
+            return error.TypeMismatch;
+        }
+
+        if (a_type.vars.nonempty.count != b_type.vars.nonempty.count) {
+            return error.TypeMismatch;
+        }
+
+        // Unify each pair of arguments using iterators
+        const a_slice = self.types_store.sliceNominalArgs(a_type);
+        const b_slice = self.types_store.sliceNominalArgs(b_type);
+        for (a_slice, b_slice) |a_arg, b_arg| {
+            try self.unifyGuarded(a_arg, b_arg);
+        }
+
+        // Note that we *do not* unify backing variable
+
+        self.merge(vars, vars.b.desc.content);
     }
 
     fn unifyTagUnionWithNominal(

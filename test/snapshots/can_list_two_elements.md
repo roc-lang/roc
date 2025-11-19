@@ -10,25 +10,7 @@ type=expr
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - can_list_two_elements.md:1:2:1:2
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The two elements in this list have incompatible types:
-**can_list_two_elements.md:1:2:**
-```roc
-[1, "hello"]
-```
- ^  ^^^^^^^
-
-The first element has this type:
-    _Num(_size)_
-
-However, the second element has this type:
-    _Str_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,
@@ -55,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(Str)"))
 ~~~

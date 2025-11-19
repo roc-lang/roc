@@ -52,33 +52,16 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
 TYPE MISMATCH - let_polymorphism_records.md:38:6:38:17
 # PROBLEMS
-**TYPE MISMATCH**
-The second argument being passed to this function has the wrong type:
-**let_polymorphism_records.md:26:47:26:49:**
-```roc
-updated_mismatch = update_data(str_container, 99)
-```
-                                              ^^
-
-This argument has the type:
-    _Num(_size)_
-
-But `update_data` needs the second argument to be:
-    _Str_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_records.md:38:6:38:17:**
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**let_polymorphism_records.md:38:2:38:17:**
 ```roc
 	1 + update_data
 ```
-	    ^^^^^^^^^^^
+	^^^^^^^^^^^^^^^
 
 It has the type:
     _{ ..a, data: b }, b -> { ..a, data: b }_
-
-But I expected it to be:
-    _Num(_size)_
 
 # TOKENS
 ~~~zig
@@ -402,41 +385,41 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Num(Frac(_size))"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "Str"))
 		(patt (type "List(_a)"))
-		(patt (type "List(Num(Frac(_size)))"))
-		(patt (type "a -> { count: Num(_size), data: a }"))
-		(patt (type "{ count: Num(_size), data: Num(_size2) }"))
-		(patt (type "{ count: Num(_size), data: Str }"))
-		(patt (type "{ count: Num(_size), data: List(_a) }"))
+		(patt (type "List(_a)"))
+		(patt (type "a -> { count: _field, data: a }"))
+		(patt (type "{ count: _field, data: _field2 }"))
+		(patt (type "{ count: _field, data: Str }"))
+		(patt (type "{ count: _field, data: List(_a) }"))
 		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(patt (type "{ count: Num(_size), data: Num(_size2) }"))
-		(patt (type "{ count: Num(_size), data: Str }"))
-		(patt (type "Error"))
+		(patt (type "{ count: _field, data: _field2 }"))
+		(patt (type "{ count: _field, data: Str }"))
+		(patt (type "{ count: _field, data: Str }"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: Num(_size) }"))
+		(patt (type "{ value: _field }"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(Num(_size)) }"))
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "{ value: List(_a) }"))
+		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Num(Frac(_size))"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "Str"))
 		(expr (type "List(_a)"))
-		(expr (type "List(Num(Frac(_size)))"))
-		(expr (type "a -> { count: Num(_size), data: a }"))
-		(expr (type "{ count: Num(_size), data: Num(_size2) }"))
-		(expr (type "{ count: Num(_size), data: Str }"))
-		(expr (type "{ count: Num(_size), data: List(_a) }"))
+		(expr (type "List(_a)"))
+		(expr (type "a -> { count: _field, data: a }"))
+		(expr (type "{ count: _field, data: _field2 }"))
+		(expr (type "{ count: _field, data: Str }"))
+		(expr (type "{ count: _field, data: List(_a) }"))
 		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(expr (type "{ count: Num(_size), data: Num(_size2) }"))
-		(expr (type "{ count: Num(_size), data: Str }"))
-		(expr (type "Error"))
+		(expr (type "{ count: _field, data: _field2 }"))
+		(expr (type "{ count: _field, data: Str }"))
+		(expr (type "{ count: _field, data: Str }"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: Num(_size) }"))
+		(expr (type "{ value: _field }"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(Num(_size)) }"))
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "{ value: List(_a) }"))
+		(expr (type "_arg -> _ret"))))
 ~~~

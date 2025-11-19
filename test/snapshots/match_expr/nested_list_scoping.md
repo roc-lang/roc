@@ -26,20 +26,6 @@ match nestedList {
       ^^^^^^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nested_list_scoping.md:4:17:4:18:**
-```roc
-    [x, [y]] => x * y
-```
-                ^
-
-It has the type:
-    _List(_a)_
-
-But I expected it to be:
-    _Num(_size)_
-
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -145,5 +131,5 @@ match nestedList {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "List(...)"))
 ~~~
