@@ -32,7 +32,6 @@ const layout_mod = @import("layout");
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    // Store user data size in header (we'll use this in realloc to know how much to copy)
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
     const total_size = alloc_args.length + size_storage_bytes;
     const result = evaluator.allocator.rawAlloc(total_size, align_enum, @returnAddress());
@@ -48,34 +47,32 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
         // The value doesn't matter since evaluation will stop
         return;
     };
-    // Store the USER data length (not total size) so realloc knows how much to copy
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = alloc_args.length;  // Store user data length, not total size
+    size_ptr.* = total_size;
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
 fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    // No-op: Don't actually free the memory to avoid double-free issues with refcounting
-    // The allocator will track it as a leak, but that's acceptable for now
-    // Memory will be reclaimed when the test finishes
-    _ = dealloc_args;
-    _ = env;
+    const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
+    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+    const total_size = size_ptr.*;
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+    evaluator.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    // Allocate new memory and copy old data, but don't free old memory
-    // Old memory is leaked to avoid double-free issues with refcounting
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+    const old_total_size = old_size_ptr.*;
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
     const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
-
-    // Get old user data length (we now store the user length, not total size)
-    const old_user_length_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-    const old_user_length = old_user_length_ptr.*;
-
-    // Allocate new memory
-    const new_base_ptr = evaluator.allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    const new_slice = evaluator.allocator.realloc(old_slice, new_total_size) catch {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -83,22 +80,12 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
+        // Leave answer unchanged - the interpreter will catch this as error.Crash
         return;
     };
-
-    // Copy old user data to new location
-    // We copy the minimum of the old user length and new user length
-    const old_user_ptr: [*]const u8 = @ptrCast(realloc_args.answer);
-    const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
-    const bytes_to_copy = @min(old_user_length, realloc_args.new_length);
-    @memcpy(new_user_ptr[0..bytes_to_copy], old_user_ptr[0..bytes_to_copy]);
-
-    // Store new user data length
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = realloc_args.new_length;  // Store user data length, not total size
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
-
-    // Old memory at realloc_args.answer is intentionally leaked
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    new_size_ptr.* = new_total_size;
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -218,12 +205,6 @@ pub const ComptimeEvaluator = struct {
             self.allocator.free(name);
         }
         self.error_names.deinit();
-
-        // TODO: Properly cleanup bindings - currently causes double-free issues
-        // due to inconsistent ownership semantics in low-level builtins
-        // for (self.interpreter.bindings.items) |binding| {
-        //     binding.value.decref(&self.interpreter.runtime_layout_store, ops);
-        // }
 
         self.interpreter.deinit();
         self.crash.deinit();

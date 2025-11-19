@@ -79,7 +79,6 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
-        InvalidListLayout,
         InvalidMethodReceiver,
         InvalidNumExt,
         InvalidTagExt,
@@ -1029,36 +1028,16 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
 
-                // Get element layout from either first element or the list type
-                const elem_layout = blk: {
-                    const elems = self.env.store.sliceExpr(list_expr.elems);
-                    if (elems.len > 0) {
-                        // Non-empty list: get element type from first element
-                        const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-                        const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
-                        break :blk try self.getRuntimeLayout(elem_rt_var);
-                    } else {
-                        // Empty list: extract element type from List(T) type
-                        const list_layout = try self.getRuntimeLayout(list_rt_var);
-                        if (list_layout.tag == .list) {
-                            break :blk self.runtime_layout_store.getLayout(list_layout.data.list);
-                        } else if (list_layout.tag == .list_of_zst) {
-                            // Zero-sized element type
-                            break :blk try self.getRuntimeLayout(list_rt_var);
-                        } else {
-                            return error.InvalidListLayout;
-                        }
-                    }
-                };
+                // Get the first element's variables, which is representative of all the element vars
+                const elems = self.env.store.sliceExpr(list_expr.elems);
+                std.debug.assert(elems.len > 0);
+                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
+
+                const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
+                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
 
                 var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
                 defer values.deinit();
-
-                // Compute element runtime var if we have elements
-                const elem_rt_var = if (elem_indices.len > 0) blk: {
-                    const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elem_indices[0]));
-                    break :blk try self.translateTypeVar(self.env, first_elem_var);
-                } else null;
 
                 for (elem_indices) |elem_idx| {
                     const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
@@ -1890,12 +1869,12 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-
-                        // NOTE: Low-level builtins have inconsistent ownership semantics:
-                        // - Some (like list_concat) consume their arguments
-                        // - Others (like list_len) just read them
-                        // We don't decref here; cleanup happens in ComptimeEvaluator.deinit()
                         const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
 
                         return result;
                     }

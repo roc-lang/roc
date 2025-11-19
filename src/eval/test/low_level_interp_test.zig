@@ -23,21 +23,7 @@ const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
-
-// Custom allocator that catches double-frees but doesn't fail on leaks
-const IgnoreLeaksAllocator = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{
-        .safety = true,  // Catch double-frees so we can fix them
-        .never_unmap = true,  // Don't fail on leaks
-    }),
-
-    pub fn allocator(self: *@This()) std.mem.Allocator {
-        return self.gpa.allocator();
-    }
-};
-
-var ignore_leaks_allocator = IgnoreLeaksAllocator{ .gpa = .{} };
-const test_allocator = ignore_leaks_allocator.allocator();
+const test_allocator = testing.allocator;
 
 fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env: *ModuleEnv,
@@ -115,9 +101,17 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
 }
 
 fn cleanupEvalModule(result: anytype) void {
-    // Skip cleanup to avoid double-free issues
-    // Memory leaks from tests are acceptable for now
-    _ = result;
+    var evaluator_mut = result.evaluator;
+    evaluator_mut.deinit();
+
+    var problems_mut = result.problems;
+    problems_mut.deinit(test_allocator);
+    test_allocator.destroy(result.problems);
+    result.module_env.deinit();
+    test_allocator.destroy(result.module_env);
+
+    var builtin_module_mut = result.builtin_module;
+    builtin_module_mut.deinit();
 }
 
 /// Helper to evaluate multi-declaration modules and get the integer value of a specific declaration
@@ -149,6 +143,7 @@ fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
 
         // Return the value if this is the declaration we want
         if (i == decl_index) {
+            defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             return stack_value.asI128();
         }
     }
@@ -157,7 +152,7 @@ fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
 }
 
 /// Helper to evaluate multi-declaration modules and get the string representation of a specific declaration
-fn evalModuleAndGetString(src: []const u8, decl_index: usize, out_allocator: std.mem.Allocator) ![]u8 {
+fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocator) ![]u8 {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
@@ -184,10 +179,9 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, out_allocator: std
 
         // Return the rendered value if this is the declaration we want
         if (i == decl_index) {
+            defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, can.ModuleEnv.varFrom(def.expr));
-            const internal_string = try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var);
-            // Copy to caller's allocator
-            return try out_allocator.dupe(u8, internal_string);
+            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var);
         }
     }
 
@@ -198,8 +192,8 @@ test "e_low_level_lambda - Str.is_empty returns True for empty string" {
     const src =
         \\x = Str.is_empty("")
     ;
-    const value = try evalModuleAndGetString(src, 0, testing.allocator);
-    defer testing.allocator.free(value);
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
     try testing.expectEqualStrings("True", value);
 }
 
@@ -207,8 +201,8 @@ test "e_low_level_lambda - Str.is_empty returns False for non-empty string" {
     const src =
         \\x = Str.is_empty("hello")
     ;
-    const value = try evalModuleAndGetString(src, 0, testing.allocator);
-    defer testing.allocator.free(value);
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
     try testing.expectEqualStrings("False", value);
 }
 
@@ -220,8 +214,8 @@ test "e_low_level_lambda - Str.is_empty in conditional" {
         \\    False
         \\}
     ;
-    const value = try evalModuleAndGetString(src, 0, testing.allocator);
-    defer testing.allocator.free(value);
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
     try testing.expectEqualStrings("True", value);
 }
 
@@ -258,14 +252,13 @@ test "e_low_level_lambda - List.concat with two empty lists" {
 }
 
 test "e_low_level_lambda - List.concat preserves order" {
-    if (true) return error.SkipZigTest; // TODO: fix double-free issue
     const src =
         \\x = List.concat([10, 20], [30, 40, 50])
         \\first = List.first(x)
     ;
 
-    const first_value = try evalModuleAndGetString(src, 1, testing.allocator);
-    defer testing.allocator.free(first_value);
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
     try testing.expectEqualStrings("Ok 10", first_value);
 }
 
