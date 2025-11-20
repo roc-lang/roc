@@ -741,14 +741,7 @@ pub const Num = union(enum) {
             pub fn size(self: @This()) u32 {
                 // int values always have the same size as their alignment
                 const result = @as(u32, @intCast(self.alignment().toByteUnits()));
-                if (std.debug.runtime_safety) {
-                    std.debug.print("[Int.Precision.size] self={}, enum_int={}, alignment_log2={}, size_bytes={}\n", .{
-                        self,
-                        @intFromEnum(self),
-                        @intFromEnum(self) / 2,
-                        result,
-                    });
-                }
+                if (std.debug.runtime_safety) {}
                 return result;
             }
 

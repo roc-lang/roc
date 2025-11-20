@@ -138,86 +138,72 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
-                    std.debug.print("[BUG] Appended tag name: {s}\n", .{tag_name});
                     // Get payload from element 0
                     const payload = try tuple_acc.getElement(0);
                     const args_range = tags.items(.args)[tag_index];
                     const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
-                    std.debug.print("[BUG] Tag {s}: arg_vars.len = {}\n", .{tag_name, arg_vars.len});
                     if (arg_vars.len > 0) {
-                            std.debug.print("[BUG] Entering arg_vars > 0 block\n", .{});
-                            try out.append('(');
-                            if (arg_vars.len == 1) {
-                                std.debug.print("[BUG] arg_vars.len == 1, rendering single arg\n", .{});
-                                const arg_var = arg_vars[0];
-                                const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
-                                std.debug.print("[BUG] addTypeVar succeeded, getting layout\n", .{});
-                                const arg_layout = ctx.layout_store.getLayout(layout_idx);
-                                std.debug.print("[BUG] Got arg_layout, creating payload_value\n", .{});
-                                const payload_value = StackValue{
-                                    .layout = arg_layout,
-                                    .ptr = payload.ptr,
-                                    .is_initialized = payload.is_initialized,
-                                };
-                                std.debug.print("[BUG] About to recursively render payload\n", .{});
-                                const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
-                                defer gpa.free(rendered);
-                                std.debug.print("[BUG] Payload rendered as: {s}, appending\n", .{rendered});
-                                try out.appendSlice(rendered);
-                                std.debug.print("[BUG] Appended payload\n", .{});
-                            } else {
-                                var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
-                                defer ctx.allocator.free(elem_layouts);
-                                var i: usize = 0;
-                                while (i < arg_vars.len) : (i += 1) {
-                                    const idx = try ctx.layout_store.addTypeVar(arg_vars[i], ctx.type_scope);
-                                    elem_layouts[i] = ctx.layout_store.getLayout(idx);
+                        try out.append('(');
+                        if (arg_vars.len == 1) {
+                            const arg_var = arg_vars[0];
+                            const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
+                            const arg_layout = ctx.layout_store.getLayout(layout_idx);
+                            const payload_value = StackValue{
+                                .layout = arg_layout,
+                                .ptr = payload.ptr,
+                                .is_initialized = payload.is_initialized,
+                            };
+                            const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
+                            defer gpa.free(rendered);
+                            try out.appendSlice(rendered);
+                        } else {
+                            var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
+                            defer ctx.allocator.free(elem_layouts);
+                            var i: usize = 0;
+                            while (i < arg_vars.len) : (i += 1) {
+                                const idx = try ctx.layout_store.addTypeVar(arg_vars[i], ctx.type_scope);
+                                elem_layouts[i] = ctx.layout_store.getLayout(idx);
+                            }
+                            const tuple_idx = try ctx.layout_store.putTuple(elem_layouts);
+                            const tuple_layout = ctx.layout_store.getLayout(tuple_idx);
+                            const tuple_size = ctx.layout_store.layoutSize(tuple_layout);
+                            var tuple_value = StackValue{
+                                .layout = tuple_layout,
+                                .ptr = payload.ptr,
+                                .is_initialized = payload.is_initialized,
+                            };
+                            if (tuple_size == 0 or payload.ptr == null) {
+                                var j: usize = 0;
+                                while (j < arg_vars.len) : (j += 1) {
+                                    const rendered = try renderValueRocWithType(
+                                        ctx,
+                                        StackValue{
+                                            .layout = elem_layouts[j],
+                                            .ptr = null,
+                                            .is_initialized = true,
+                                        },
+                                        arg_vars[j],
+                                    );
+                                    defer gpa.free(rendered);
+                                    try out.appendSlice(rendered);
+                                    if (j + 1 < arg_vars.len) try out.appendSlice(", ");
                                 }
-                                const tuple_idx = try ctx.layout_store.putTuple(elem_layouts);
-                                const tuple_layout = ctx.layout_store.getLayout(tuple_idx);
-                                const tuple_size = ctx.layout_store.layoutSize(tuple_layout);
-                                var tuple_value = StackValue{
-                                    .layout = tuple_layout,
-                                    .ptr = payload.ptr,
-                                    .is_initialized = payload.is_initialized,
-                                };
-                                if (tuple_size == 0 or payload.ptr == null) {
-                                    var j: usize = 0;
-                                    while (j < arg_vars.len) : (j += 1) {
-                                        const rendered = try renderValueRocWithType(
-                                            ctx,
-                                            StackValue{
-                                                .layout = elem_layouts[j],
-                                                .ptr = null,
-                                                .is_initialized = true,
-                                            },
-                                            arg_vars[j],
-                                        );
-                                        defer gpa.free(rendered);
-                                        try out.appendSlice(rendered);
-                                        if (j + 1 < arg_vars.len) try out.appendSlice(", ");
-                                    }
-                                } else {
-                                    var tup_acc = try tuple_value.asTuple(ctx.layout_store);
-                                    var j: usize = 0;
-                                    while (j < arg_vars.len) : (j += 1) {
-                                        const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                        const elem_value = try tup_acc.getElement(sorted_idx);
-                                        const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
-                                        defer gpa.free(rendered);
-                                        try out.appendSlice(rendered);
-                                        if (j + 1 < arg_vars.len) try out.appendSlice(", ");
-                                    }
+                            } else {
+                                var tup_acc = try tuple_value.asTuple(ctx.layout_store);
+                                var j: usize = 0;
+                                while (j < arg_vars.len) : (j += 1) {
+                                    const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
+                                    const elem_value = try tup_acc.getElement(sorted_idx);
+                                    const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
+                                    defer gpa.free(rendered);
+                                    try out.appendSlice(rendered);
+                                    if (j + 1 < arg_vars.len) try out.appendSlice(", ");
                                 }
                             }
-                            std.debug.print("[BUG] About to append closing paren\n", .{});
-                            try out.append(')');
-                            std.debug.print("[BUG] Appended closing paren\n", .{});
                         }
-                    std.debug.print("[BUG] Returning: {s}\n", .{out.items});
-                    const result = try out.toOwnedSlice();
-                    std.debug.print("[BUG] toOwnedSlice returned: {s} (len={})\n", .{result, result.len});
-                    return result;
+                        try out.append(')');
+                    }
+                    return out.toOwnedSlice();
                 }
             }
         },

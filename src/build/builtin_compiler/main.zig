@@ -572,7 +572,7 @@ fn compileModule(
             const end = diag.region.end;
             const context_start = if (start > 50) start - 50 else 0;
             const context_end = if (end + 50 < source.len) end + 50 else source.len;
-            std.debug.print("  Parse error at bytes {d}-{d}: {s}\n", .{start, end, @tagName(diag.tag)});
+            std.debug.print("  Parse error at bytes {d}-{d}: {s}\n", .{ start, end, @tagName(diag.tag) });
             std.debug.print("    Context: {s}\n", .{source[context_start..context_end]});
         }
 

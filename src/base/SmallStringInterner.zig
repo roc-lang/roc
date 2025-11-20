@@ -60,16 +60,6 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     self.hash_table.items.items.len = hash_table_capacity;
     @memset(self.hash_table.items.items, .unused);
 
-    if (std.debug.runtime_safety) {
-        const interner_addr = @intFromPtr(&self);
-        const bytes_addr = @intFromPtr(self.bytes.items.items.ptr);
-        std.debug.print("[INTERNER INIT] instance=0x{x:0>16}, bytes_buffer=0x{x:0>16}, capacity={}\n", .{
-            interner_addr,
-            bytes_addr,
-            self.bytes.items.capacity,
-        });
-    }
-
     return self;
 }
 
@@ -141,21 +131,8 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    if (std.debug.runtime_safety) {
-        const interner_addr = @intFromPtr(self);
-        std.debug.print("[INTERNER] insert(\"{s}\") on instance 0x{x:0>16}\n", .{string, interner_addr});
-        std.debug.print("[INTERNER] Current state: bytes.len={}, hash_table.len={}, entry_count={}\n", .{
-            self.bytes.len(),
-            self.hash_table.len(),
-            self.entry_count,
-        });
-    }
-
     // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
     if (self.entry_count * 5 >= self.hash_table.len() * 4) {
-        if (std.debug.runtime_safety) {
-            std.debug.print("[INTERNER] Hash table is 80% full, need to resize\n", .{});
-        }
         try self.resizeHashTable(gpa);
     }
 
@@ -164,141 +141,17 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
 
     if (result.idx) |existing_idx| {
         // String already exists
-        if (std.debug.runtime_safety) {
-            std.debug.print("[INTERNER] String already exists at idx={}\n", .{@intFromEnum(existing_idx)});
-        }
         return existing_idx;
     } else {
         // String doesn't exist, add it to bytes
         const new_offset: Idx = @enumFromInt(self.bytes.len());
 
-        if (std.debug.runtime_safety) {
-            std.debug.print("[INTERNER] String not found, appending to bytes at offset={}\n", .{@intFromEnum(new_offset)});
-            std.debug.print("[INTERNER] bytes ArrayList capacity={}, len={}\n", .{
-                self.bytes.items.capacity,
-                self.bytes.items.items.len,
-            });
-
-            // Log the ArrayList buffer address
-            const buffer_ptr = self.bytes.items.items.ptr;
-            const buffer_addr = @intFromPtr(buffer_ptr);
-            const buffer_end = buffer_addr + self.bytes.items.capacity;
-            std.debug.print("[INTERNER] bytes buffer address: 0x{x:0>16} - 0x{x:0>16} (size={})\n", .{
-                buffer_addr,
-                buffer_end,
-                self.bytes.items.capacity,
-            });
-
-            // Check if we're at capacity and will trigger a resize
-            const will_resize = self.bytes.items.items.len + string.len + 1 > self.bytes.items.capacity;
-            if (will_resize) {
-                std.debug.print("[INTERNER] ⚠️  WILL TRIGGER RESIZE! Current len={}, adding {} bytes (+ null), capacity={}\n", .{
-                    self.bytes.items.items.len,
-                    string.len,
-                    self.bytes.items.capacity,
-                });
-                std.debug.print("[INTERNER] ⚠️  This will call GPA.realloc, which will check canaries!\n", .{});
-
-                // DEBUGGING: Try to peek at the last few bytes of the buffer to see what's there
-                std.debug.print("[INTERNER] Last 16 bytes of buffer:\n", .{});
-                const start_offset = if (self.bytes.items.items.len >= 16) self.bytes.items.items.len - 16 else 0;
-                const bytes_to_show = self.bytes.items.items[start_offset..self.bytes.items.items.len];
-                for (bytes_to_show, 0..) |byte, i| {
-                    std.debug.print("  [{:>4}]: 0x{x:0>2}\n", .{start_offset + i, byte});
-                }
-            }
-
-            std.debug.print("[INTERNER] About to appendSlice(\"{s}\")...\n", .{string});
-
-            // SANITY CHECK: Verify len <= capacity
-            if (self.bytes.items.items.len > self.bytes.items.capacity) {
-                std.debug.print("[INTERNER] ⚠️⚠️⚠️ CORRUPTED STATE! len={} > capacity={}!\n", .{
-                    self.bytes.items.items.len,
-                    self.bytes.items.capacity,
-                });
-                @panic("ArrayList len > capacity!");
-            }
-        }
-
-        const capacity_before = self.bytes.items.capacity;
         _ = try self.bytes.appendSlice(gpa, string);
-        const capacity_after = self.bytes.items.capacity;
-
-        if (std.debug.runtime_safety) {
-            if (capacity_after != capacity_before) {
-                std.debug.print("[INTERNER] ⚠️  BYTES ARRAYLIST RESIZED! {} -> {} (grew by {})\n", .{
-                    capacity_before,
-                    capacity_after,
-                    capacity_after - capacity_before,
-                });
-                const new_buffer_addr = @intFromPtr(self.bytes.items.items.ptr);
-                std.debug.print("[INTERNER] New buffer address: 0x{x:0>16}\n", .{new_buffer_addr});
-            } else {
-                std.debug.print("[INTERNER] appendSlice succeeded (no resize), now appending null terminator...\n", .{});
-            }
-        }
-
-        const capacity_before_null = self.bytes.items.capacity;
         _ = try self.bytes.append(gpa, 0);
-        const capacity_after_null = self.bytes.items.capacity;
-
-        if (std.debug.runtime_safety and capacity_after_null != capacity_before_null) {
-            std.debug.print("[INTERNER] ⚠️  BYTES ARRAYLIST RESIZED on null terminator! {} -> {}\n", .{
-                capacity_before_null,
-                capacity_after_null,
-            });
-            const new_buffer_addr = @intFromPtr(self.bytes.items.items.ptr);
-            std.debug.print("[INTERNER] New buffer address: 0x{x:0>16}\n", .{new_buffer_addr});
-        }
-
-        if (std.debug.runtime_safety) {
-            std.debug.print("[INTERNER] Null terminator appended successfully\n", .{});
-        }
 
         // Add to hash table
         self.hash_table.items.items[@intCast(result.slot)] = new_offset;
         self.entry_count += 1;
-
-        if (std.debug.runtime_safety) {
-            std.debug.print("[INTERNER] Insert complete, returning idx={}, bytes capacity={}\n", .{@intFromEnum(new_offset), self.bytes.items.capacity});
-
-            // GPA VALIDATION: Check if any GPA corruption exists after insert
-            const test_alloc = gpa.alloc(u8, 1) catch |err| {
-                std.debug.print("[INTERNER] ⚠️⚠️⚠️ GPA CORRUPTED AFTER INSERT! Error: {}\n", .{err});
-                std.debug.print("[INTERNER] Just inserted: \"{s}\"\n", .{string});
-                std.debug.print("[INTERNER] bytes.len={}, capacity={}\n", .{
-                    self.bytes.items.items.len,
-                    self.bytes.items.capacity,
-                });
-                @panic("GPA corrupted during identifier insert!");
-            };
-            gpa.free(test_alloc);
-
-            // FORCED CANARY CHECK: If bytes buffer is at specific capacity, force a resize check
-            // This will trigger GPA to check the canary of the bytes allocation
-            if (self.bytes.items.capacity >= 8000 and self.bytes.items.capacity <= 9000) {
-                std.debug.print("[INTERNER] 🔍 FORCING CANARY CHECK (capacity={})...\n", .{self.bytes.items.capacity});
-                const old_cap = self.bytes.items.capacity;
-                const old_len = self.bytes.items.items.len;
-
-                // Try to grow by 1, which will trigger realloc and canary check
-                self.bytes.items.ensureTotalCapacityPrecise(gpa, old_cap + 1) catch |err| {
-                    std.debug.print("[INTERNER] ⚠️⚠️⚠️ CANARY CHECK FAILED! Just inserted: \"{s}\"\n", .{string});
-                    std.debug.print("[INTERNER] old_cap={}, old_len={}\n", .{old_cap, old_len});
-                    std.debug.print("[INTERNER] Error: {}\n", .{err});
-                    @panic("Canary corrupted - detected by forced resize!");
-                };
-
-                // Shrink back to original capacity
-                self.bytes.items.shrinkAndFree(gpa, old_len);
-                self.bytes.items.ensureTotalCapacityPrecise(gpa, old_cap) catch |err| {
-                    std.debug.print("[INTERNER] Failed to restore capacity: {}\n", .{err});
-                    @panic("Failed to restore capacity!");
-                };
-
-                std.debug.print("[INTERNER] ✓ Canary check passed\n", .{});
-            }
-        }
 
         return new_offset;
     }

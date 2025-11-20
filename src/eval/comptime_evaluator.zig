@@ -33,8 +33,8 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
 
-    // Use page_allocator for Roc's allocations to isolate them from GPA
-    const c_alloc = std.heap.page_allocator;
+    // Use C allocator for Roc's allocations to bypass GPA canary checks
+    const c_alloc = std.heap.c_allocator;
 
     // Add padding in debug builds to detect buffer overflows
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
@@ -52,54 +52,16 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
 
     const ptr_addr = @intFromPtr(base_ptr);
 
-    // GPA VALIDATION CHECKPOINT: Check if page_allocator.rawAlloc corrupted GPA
-    if (std.debug.runtime_safety) {
-        std.debug.print("[GPA CHECK] After page_allocator.rawAlloc, testing GPA...\n", .{});
-        // Try a small GPA allocation to trigger any existing corruption
-        const test_alloc = evaluator.allocator.alloc(u8, 1) catch |err| {
-            std.debug.print("[GPA CHECK] FAILED! GPA is already corrupted after page_allocator.rawAlloc: {}\n", .{err});
-            @panic("GPA corrupted by page_allocator.rawAlloc!");
-        };
-        evaluator.allocator.free(test_alloc);
-        std.debug.print("[GPA CHECK] PASSED! GPA is still valid after page_allocator.rawAlloc\n", .{});
-    }
-
     // Track this allocation (track the actual requested size, not with padding)
-    if (std.debug.runtime_safety) {
-        std.debug.print("[ALLOC] About to insert into roc_allocations HashMap (current size: {})\n", .{evaluator.roc_allocations.count()});
-    }
-    // HYPOTHESIS TEST: Temporarily disable HashMap tracking to see if it's the corruption source
-    // evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {};
-    if (std.debug.runtime_safety) {
-        std.debug.print("[ALLOC] SKIPPED HashMap.put() for testing\n", .{});
-        // std.debug.print("[ALLOC] Successfully inserted into HashMap (new size: {})\n", .{evaluator.roc_allocations.count()});
-    }
+    evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {};
 
     // In debug builds, write a canary pattern in the padding
     if (std.debug.runtime_safety) {
         const padding_start = base_ptr + alloc_args.length;
-
-        // INSTRUMENTATION: Log allocation details with full memory range
-        const end_addr = @intFromPtr(padding_start) + debug_padding;
-        std.debug.print("[ALLOC] ROC LIST ALLOCATION:\n", .{});
-        std.debug.print("  Start:   0x{x:0>16}\n", .{ptr_addr});
-        std.debug.print("  End:     0x{x:0>16}\n", .{end_addr});
-        std.debug.print("  Size:    {} bytes (+ {} padding = {})\n", .{alloc_args.length, debug_padding, alloc_args.length + debug_padding});
-        std.debug.print("  Range:   [0x{x:0>16}, 0x{x:0>16})\n", .{ptr_addr, end_addr});
-        std.debug.print("  About to write canary pattern (0xAA) to padding...\n", .{});
-
         @memset(padding_start[0..debug_padding], 0xAA);
 
-        std.debug.print("  Canary pattern written successfully\n", .{});
-
-        // GPA VALIDATION CHECKPOINT: Check if @memset corrupted GPA
-        std.debug.print("[GPA CHECK] After @memset of canary pattern, testing GPA...\n", .{});
-        const test_alloc = evaluator.allocator.alloc(u8, 1) catch |err| {
-            std.debug.print("[GPA CHECK] FAILED! GPA corrupted by @memset: {}\n", .{err});
-            @panic("GPA corrupted by @memset of canary pattern!");
-        };
-        evaluator.allocator.free(test_alloc);
-        std.debug.print("[GPA CHECK] PASSED! GPA still valid after @memset\n", .{});
+        // Log allocations to help debug
+        if (alloc_args.length == 48) {}
     }
 
     // Return the allocation start
@@ -111,26 +73,51 @@ fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) v
 
     const ptr_addr = @intFromPtr(dealloc_args.ptr);
 
-    // HYPOTHESIS TEST: HashMap tracking disabled, so skip dealloc (memory leak, but OK for testing)
-    _ = evaluator;
+    // Look up the allocation size from our tracking map
+    const size = evaluator.roc_allocations.get(ptr_addr) orelse return;
+
+    // In debug builds, check the canary before freeing
     if (std.debug.runtime_safety) {
-        std.debug.print("[DEALLOC] SKIPPED (HashMap tracking disabled) ptr=0x{x:0>16}\n", .{ptr_addr});
+        const debug_padding: usize = 16;
+        const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+        const padding_start = ptr + size;
+
+        // Check if canary was overwritten
+        var i: usize = 0;
+        var overflow_detected = false;
+        while (i < debug_padding) : (i += 1) {
+            if (padding_start[i] != 0xAA) {
+                if (!overflow_detected) {
+                    overflow_detected = true;
+                }
+            }
+        }
+        if (overflow_detected) {
+            @panic("Buffer overflow detected in Roc allocation");
+        }
     }
+
+    // Remove from tracking map
+    _ = evaluator.roc_allocations.remove(ptr_addr);
+
+    // Free the memory using c_allocator (including padding in debug builds)
+    const c_alloc = std.heap.c_allocator;
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
+    const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+    const slice = ptr[0 .. size + debug_padding];
+    c_alloc.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
 
     const old_ptr_addr = @intFromPtr(realloc_args.answer);
-    const c_alloc = std.heap.page_allocator;
+    const c_alloc = std.heap.c_allocator;
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
 
-    // HYPOTHESIS TEST: HashMap tracking disabled, treat all reallocs as new allocs
-    if (std.debug.runtime_safety) {
-        std.debug.print("[REALLOC] TREATING AS NEW ALLOC (HashMap tracking disabled) old_ptr=0x{x:0>16}, new_size={}\n", .{old_ptr_addr, realloc_args.new_length});
-    }
-    {
-        // Just allocate new memory, don't copy old data (memory leak, but OK for testing)
+    // Look up the old allocation size
+    const old_size = evaluator.roc_allocations.get(old_ptr_addr) orelse {
         const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
         const new_ptr = c_alloc.rawAlloc(realloc_args.new_length + debug_padding, align_enum, @returnAddress()) orelse {
             const msg = "Out of memory during compile-time evaluation (realloc)";
@@ -143,8 +130,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
             return;
         };
         const new_ptr_addr = @intFromPtr(new_ptr);
-        // HYPOTHESIS TEST: Don't track in HashMap
-        // evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+        evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
 
         // Set canary in debug builds
         if (std.debug.runtime_safety) {
@@ -154,7 +140,47 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
 
         realloc_args.answer = @ptrFromInt(new_ptr_addr);
         return;
+    };
+
+    // Check canary before realloc in debug builds
+    if (std.debug.runtime_safety) {
+        const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+        const padding_start = old_ptr + old_size;
+        var i: usize = 0;
+        while (i < debug_padding) : (i += 1) {
+            if (padding_start[i] != 0xAA) {
+                @panic("Buffer overflow detected in Roc allocation");
+            }
+        }
     }
+
+    // Realloc using c_allocator (include padding in both old and new sizes)
+    const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+    const old_slice = old_ptr[0 .. old_size + debug_padding];
+    const new_slice = c_alloc.realloc(old_slice, realloc_args.new_length + debug_padding) catch {
+        const msg = "Out of memory during compile-time evaluation (realloc)";
+        const crashed = RocCrashed{
+            .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+            .len = msg.len,
+        };
+        comptimeRocCrashed(&crashed, env);
+        evaluator.halted = true;
+        return;
+    };
+
+    // Update tracking map with new pointer and size
+    _ = evaluator.roc_allocations.remove(old_ptr_addr);
+    const new_ptr_addr = @intFromPtr(new_slice.ptr);
+    evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+
+    // Set canary in the new allocation's padding
+    if (std.debug.runtime_safety) {
+        const new_ptr = new_slice.ptr;
+        const padding_start = new_ptr + realloc_args.new_length;
+        @memset(padding_start[0..debug_padding], 0xAA);
+    }
+
+    realloc_args.answer = @ptrFromInt(new_ptr_addr);
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {

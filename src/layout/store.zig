@@ -990,6 +990,21 @@ pub const Store = struct {
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
                         const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+                        const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                        std.debug.print("[NOMINAL TYPE] backing_var = {}, num type_args = {}\n", .{ backing_var, type_args.len });
+                        for (type_args, 0..) |arg_var, i| {
+                            const arg_resolved = self.types_store.resolveVar(arg_var);
+                            std.debug.print("[NOMINAL TYPE] type_arg[{}] = {}, resolved content = {s}\n", .{ i, arg_var, @tagName(arg_resolved.desc.content) });
+                            if (arg_resolved.desc.content == .structure and arg_resolved.desc.content.structure == .num) {
+                                const num = arg_resolved.desc.content.structure.num;
+                                if (num == .num_compact) {
+                                    switch (num.num_compact) {
+                                        .int => |prec| std.debug.print("[NOMINAL TYPE]   int precision = {s}\n", .{@tagName(prec)}),
+                                        .frac => |prec| std.debug.print("[NOMINAL TYPE]   frac precision = {s}\n", .{@tagName(prec)}),
+                                    }
+                                }
+                            }
+                        }
                         const resolved = self.types_store.resolveVar(backing_var);
 
                         current = resolved;
@@ -1224,59 +1239,41 @@ pub const Store = struct {
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
 
-                        // GPA CHECKPOINT: Before tag union layout loop
-                        if (std.debug.runtime_safety) {
-                            std.debug.print("[GPA CHECK] Before tag union layout loop\n", .{});
-                            const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
-                                std.debug.print("[GPA CHECK] FAILED before loop: {}\n", .{err});
-                                @panic("GPA corrupted before tag union layout loop!");
-                            };
-                            self.env.gpa.free(test_alloc);
-                            std.debug.print("[GPA CHECK] PASSED before loop\n", .{});
-                        }
-
                         for (tags_slice.items(.args), 0..) |tag_args, tag_idx| {
-                            // GPA CHECKPOINT: Start of each iteration
-                            if (std.debug.runtime_safety) {
-                                std.debug.print("[GPA CHECK] Start of tag iteration {}\n", .{tag_idx});
-                                const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
-                                    std.debug.print("[GPA CHECK] FAILED at start of iteration {}: {}\n", .{tag_idx, err});
-                                    @panic("GPA corrupted at start of tag iteration!");
-                                };
-                                self.env.gpa.free(test_alloc);
-                            }
-
+                            _ = tag_idx;
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
                                 // No payload arguments
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
-
-                                // GPA CHECKPOINT: Before addTypeVar
-                                if (std.debug.runtime_safety) {
-                                    std.debug.print("[GPA CHECK] Before addTypeVar (tag {})\n", .{tag_idx});
-                                    const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
-                                        std.debug.print("[GPA CHECK] FAILED before addTypeVar: {}\n", .{err});
-                                        @panic("GPA corrupted before addTypeVar!");
-                                    };
-                                    self.env.gpa.free(test_alloc);
+                                const resolved_arg = self.types_store.resolveVar(arg_var);
+                                std.debug.print("[TAG UNION PAYLOAD] arg_var = {}\n", .{arg_var});
+                                std.debug.print("[TAG UNION PAYLOAD] resolved_arg.var_ = {}\n", .{resolved_arg.var_});
+                                std.debug.print("[TAG UNION PAYLOAD] resolved type content = {s}\n", .{@tagName(resolved_arg.desc.content)});
+                                if (resolved_arg.desc.content == .structure) {
+                                    std.debug.print("[TAG UNION PAYLOAD] structure type = {s}\n", .{@tagName(resolved_arg.desc.content.structure)});
+                                    if (resolved_arg.desc.content.structure == .num) {
+                                        const num = resolved_arg.desc.content.structure.num;
+                                        std.debug.print("[TAG UNION PAYLOAD] num type = {s}\n", .{@tagName(num)});
+                                        switch (num) {
+                                            .num_compact => |compact| {
+                                                std.debug.print("[TAG UNION PAYLOAD] compact type = {s}\n", .{@tagName(compact)});
+                                                switch (compact) {
+                                                    .int => |prec| std.debug.print("[TAG UNION PAYLOAD] compact int precision = {s}\n", .{@tagName(prec)}),
+                                                    .frac => |prec| std.debug.print("[TAG UNION PAYLOAD] compact frac precision = {s}\n", .{@tagName(prec)}),
+                                                }
+                                            },
+                                            else => {},
+                                        }
+                                    }
                                 }
-
                                 const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
-
-                                // GPA CHECKPOINT: After addTypeVar
-                                if (std.debug.runtime_safety) {
-                                    std.debug.print("[GPA CHECK] After addTypeVar (tag {})\n", .{tag_idx});
-                                    const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
-                                        std.debug.print("[GPA CHECK] FAILED after addTypeVar: {}\n", .{err});
-                                        @panic("GPA corrupted by addTypeVar!");
-                                    };
-                                    self.env.gpa.free(test_alloc);
-                                    std.debug.print("[GPA CHECK] PASSED after addTypeVar\n", .{});
-                                }
-
                                 const layout_val = self.getLayout(arg_layout_idx);
+                                std.debug.print("[TAG UNION PAYLOAD] layout.tag = {s}\n", .{@tagName(layout_val.tag)});
+                                if (layout_val.tag == .scalar and layout_val.data.scalar.tag == .int) {
+                                    std.debug.print("[TAG UNION PAYLOAD] int precision = {s}\n", .{@tagName(layout_val.data.scalar.data.int)});
+                                }
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
                                 // Build tuple layout from argument layouts (including ZSTs)
@@ -1291,17 +1288,6 @@ pub const Store = struct {
                                 const tuple_layout = self.getLayout(tuple_idx);
                                 updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             }
-                        }
-
-                        // GPA CHECKPOINT: After tag union layout loop
-                        if (std.debug.runtime_safety) {
-                            std.debug.print("[GPA CHECK] After tag union layout loop, before identifier insert\n", .{});
-                            const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
-                                std.debug.print("[GPA CHECK] FAILED after loop: {}\n", .{err});
-                                @panic("GPA corrupted after tag union layout loop!");
-                            };
-                            self.env.gpa.free(test_alloc);
-                            std.debug.print("[GPA CHECK] PASSED after loop\n", .{});
                         }
 
                         // Use a tuple instead of a record to avoid needing field name identifiers

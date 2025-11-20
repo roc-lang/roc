@@ -1060,15 +1060,7 @@ pub const Interpreter = struct {
                 const elements_refcounted = elem_layout.isRefcounted();
 
                 if (std.debug.runtime_safety) {
-                    std.debug.print("[LIST ALLOC] elem_layout={}, elem_size={}, elem_align={}, count={}\n", .{
-                        elem_layout,
-                        elem_size,
-                        elem_alignment,
-                        values.items.len,
-                    });
-                    if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .int) {
-                        std.debug.print("[LIST ALLOC] int precision={}\n", .{elem_layout.data.scalar.data.int});
-                    }
+                    if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .int) {}
                 }
 
                 var runtime_list = RocList.allocateExact(
@@ -1414,6 +1406,15 @@ pub const Interpreter = struct {
                         const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
                         defer arg_val.decref(&self.runtime_layout_store, roc_ops);
                         if (payload_field.ptr) |payload_ptr| {
+                            std.debug.print("[COPY DEBUG] arg_val.layout.tag={s}, payload_field.layout.tag={s}\n", .{ @tagName(arg_val.layout.tag), @tagName(payload_field.layout.tag) });
+                            if (arg_val.layout.tag == .scalar and arg_val.layout.data.scalar.tag == .int) {
+                                std.debug.print("[COPY DEBUG] arg_val int precision={s}\n", .{@tagName(arg_val.layout.data.scalar.data.int)});
+                            }
+                            if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .int) {
+                                std.debug.print("[COPY DEBUG] payload_field int precision={s}\n", .{@tagName(payload_field.layout.data.scalar.data.int)});
+                            }
+                            const ptr_addr = @intFromPtr(payload_ptr);
+                            std.debug.print("[COPY DEBUG] payload_ptr address=0x{x}, mod 16={}\n", .{ ptr_addr, ptr_addr % 16 });
                             try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
                         return dest;
