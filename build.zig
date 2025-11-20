@@ -391,15 +391,23 @@ pub fn build(b: *std.Build) void {
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
 
-        // Test int platform
-        const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
-        test_int.step.dependOn(&install.step);
-        test_cli_step.dependOn(&test_int.step);
+        // Roc subcommands integration test
+        const roc_subcommands_test = b.addTest(.{
+            .name = "roc_subcommands_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/roc_subcommands.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
 
-        // Test str platform
-        const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
-        test_str.step.dependOn(&install.step);
-        test_cli_step.dependOn(&test_str.step);
+        const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
+        if (run_args.len != 0) {
+            run_roc_subcommands_test.addArgs(run_args);
+        }
+        run_roc_subcommands_test.step.dependOn(&install.step);
+        test_cli_step.dependOn(&run_roc_subcommands_test.step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
@@ -634,26 +642,6 @@ pub fn build(b: *std.Build) void {
             run_cli_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_cli_test.step);
-    }
-
-    // roc subcommands (check, help, version...) integration tests
-    const enable_roc_subcommands_tests = b.option(bool, "roc-subcommands-tests", "Enable roc subcommands integration tests") orelse true;
-    if (enable_roc_subcommands_tests) {
-        const roc_subcommands_test = b.addTest(.{
-            .name = "roc_subcommands_test",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/roc_subcommands.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-            .filters = test_filters,
-        });
-
-        const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
-        if (run_args.len != 0) {
-            run_roc_subcommands_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_roc_subcommands_test.step);
     }
 
     // Add watch tests

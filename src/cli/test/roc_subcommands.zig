@@ -393,3 +393,29 @@ test "roc check reports type error - plus operator with incompatible types" {
         std.mem.indexOf(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
 }
+
+test "roc test/int/app.roc runs successfully" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc test/str/app.roc runs successfully" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/str/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
