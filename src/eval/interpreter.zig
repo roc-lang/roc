@@ -1496,8 +1496,13 @@ pub const Interpreter = struct {
             },
             .e_match => |m| {
                 // Evaluate scrutinee once
-                const scrutinee = try self.evalExprMinimal(m.cond, roc_ops, null);
+                const scrutinee_temp = try self.evalExprMinimal(m.cond, roc_ops, null);
+
+                // Make a copy to protect from stack reuse during pattern matching
+                // pushCopy increments refcount, so we only decref the copy, not the temp
+                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
                 defer scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
                 const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
                 const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
                 const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
