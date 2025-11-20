@@ -26,16 +26,6 @@ pub const LibcInfo = struct {
 
     /// System architecture (e.g., "x86_64", "aarch64")
     arch: []const u8,
-
-    /// Allocator used for all allocations
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *LibcInfo) void {
-        self.allocator.free(self.dynamic_linker);
-        self.allocator.free(self.libc_path);
-        self.allocator.free(self.lib_dir);
-        self.allocator.free(self.arch);
-    }
 };
 
 /// Validate that a path is safe (absolute and no traversal)
@@ -122,7 +112,6 @@ fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
             .libc_path = libc_path,
             .lib_dir = lib_dir,
             .arch = arch,
-            .allocator = arena,
         };
     }
 
@@ -169,7 +158,6 @@ fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
                 .dynamic_linker = dynamic_linker,
                 .libc_path = libc_path,
                 .arch = arch,
-                .allocator = arena,
             };
         }
     }
@@ -330,10 +318,6 @@ test "libc detection integration test" {
         },
         else => return err,
     };
-    defer {
-        var info = libc_info;
-        info.deinit();
-    }
 
     // Verify we got valid information
     try std.testing.expect(libc_info.arch.len > 0);

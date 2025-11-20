@@ -870,11 +870,6 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
                     const libc_finder = @import("libc_finder.zig");
                     if (libc_finder.findLibc(allocs)) |libc_info| {
-                        defer {
-                            var info = libc_info;
-                            info.deinit();
-                        }
-
                         // Use system CRT files from the detected lib directory
                         // TODO: Remove this once platforms provide their own CRT files
                         const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {
