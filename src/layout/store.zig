@@ -358,7 +358,14 @@ pub const Store = struct {
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
-        return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
+        const idx_int = @intFromEnum(idx);
+        const layout = self.layouts.get(@enumFromInt(idx_int)).*;
+        if (idx_int == 15) {
+            if (layout.tag != .scalar or layout.data.scalar.tag != .frac) {
+                std.debug.print("[getLayout] ERROR: idx=15 returned NON-DEC layout! tag={s}\n", .{@tagName(layout.tag)});
+            }
+        }
+        return layout;
     }
 
     pub fn getRecordData(self: *const Self, idx: RecordIdx) *const RecordData {
@@ -511,7 +518,7 @@ pub const Store = struct {
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list => 3 * target_usize.size(), // ptr, length, capacity
-            .list_of_zst => target_usize.size(), // Zero-sized lists might be different
+            .list_of_zst => 3 * target_usize.size(), // list_of_zst has same header structure as list
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => {
@@ -939,11 +946,12 @@ pub const Store = struct {
                             std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
                             const elem_var = type_args[0];
 
-                            // Check if the element type is unbound (flex or rigid) or a known ZST
+                            // Check if the element type is a known ZST
+                            // Note: We do NOT treat flex/rigid as ZST because they may be defaulted
+                            // to non-ZST types (e.g., flex numeric literals default to Dec which is 16 bytes)
                             const elem_resolved = self.types_store.resolveVar(elem_var);
                             const elem_content = elem_resolved.desc.content;
-                            const is_elem_zst_or_unbound = switch (elem_content) {
-                                .flex, .rigid => true,
+                            const is_elem_zst = switch (elem_content) {
                                 .structure => |ft| switch (ft) {
                                     .empty_record, .empty_tag_union => true,
                                     else => false,
@@ -951,8 +959,8 @@ pub const Store = struct {
                                 else => false,
                             };
 
-                            if (is_elem_zst_or_unbound) {
-                                // For unbound or ZST element types, use list of zero-sized type
+                            if (is_elem_zst) {
+                                // For ZST element types, use list of zero-sized type
                                 const layout = Layout.listOfZst();
                                 const idx = try self.insertLayout(layout);
                                 try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
@@ -1450,11 +1458,16 @@ pub const Store = struct {
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            return idxFromScalar(layout.data.scalar);
+            const result = idxFromScalar(layout.data.scalar);
+            std.debug.print("[insertLayout] Scalar detected - returning sentinel idx={}\n", .{@intFromEnum(result)});
+            return result;
         }
 
         // For non-scalar types, insert as normal
+        std.debug.print("[insertLayout] Non-scalar tag={s} - appending to array\n", .{@tagName(layout.tag)});
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
-        return @enumFromInt(@intFromEnum(safe_list_idx));
+        const result: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        std.debug.print("[insertLayout] Appended - returning array idx={}\n", .{@intFromEnum(result)});
+        return result;
     }
 };

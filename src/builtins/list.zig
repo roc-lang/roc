@@ -299,7 +299,7 @@ pub const RocList = extern struct {
         }
 
         const data_bytes = length * element_width;
-        return RocList{
+        const result = RocList{
             .bytes = utils.allocateWithRefcount(
                 data_bytes,
                 alignment,
@@ -309,6 +309,9 @@ pub const RocList = extern struct {
             .length = length,
             .capacity_or_alloc_ptr = length,
         };
+
+
+        return result;
     }
 
     pub fn reallocate(

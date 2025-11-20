@@ -1096,7 +1096,24 @@ pub const Interpreter = struct {
                 }
 
                 const list_layout = try self.getRuntimeLayout(list_rt_var);
-                const dest = try self.pushRaw(list_layout, 0);
+
+                // Ensure the list layout's element layout matches the actual evaluated element layout.
+                // This handles cases where the type system's layout doesn't match the actual
+                // element layout after runtime defaulting (e.g., numeric literals defaulting to Dec).
+                const actual_list_layout = if (list_layout.tag == .list) blk: {
+                    const stored_elem_layout_idx = list_layout.data.list;
+                    const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+
+                    const layouts_match = std.meta.eql(stored_elem_layout, elem_layout);
+                    if (!layouts_match) {
+                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
+                        break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                    } else {
+                        break :blk list_layout;
+                    }
+                } else list_layout;
+
+                const dest = try self.pushRaw(actual_list_layout, 0);
                 if (dest.ptr == null) return dest;
                 const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
@@ -4043,7 +4060,23 @@ pub const Interpreter = struct {
         start: usize,
         count: usize,
     ) !StackValue {
-        const dest = try self.pushRaw(list_layout, 0);
+        // Apply layout correction if needed.
+        // This handles cases where the type system's layout doesn't match the actual
+        // element layout after runtime defaulting (e.g., numeric literals defaulting to Dec).
+        const actual_list_layout = if (list_layout.tag == .list) blk: {
+            const stored_elem_layout_idx = list_layout.data.list;
+            const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+
+            const layouts_match = std.meta.eql(stored_elem_layout, elem_layout);
+            if (!layouts_match) {
+                const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
+                break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+            } else {
+                break :blk list_layout;
+            }
+        } else list_layout;
+
+        const dest = try self.pushRaw(actual_list_layout, 0);
         if (dest.ptr == null) return dest;
         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
@@ -4212,17 +4245,23 @@ pub const Interpreter = struct {
             .list => |list_pat| {
                 if (value.layout.tag != .list and value.layout.tag != .list_of_zst) return false;
 
-                const list_layout = try self.getRuntimeLayout(value_rt_var);
+                // Use the layout from the StackValue instead of re-querying the type system.
+                // The StackValue has the correct layout that was used to allocate the list,
+                // which may differ from the type system's layout if runtime defaulting occurred.
+                const list_layout = value.layout;
 
                 const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
                 const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
                 std.debug.assert(list_rt_content == .structure);
                 std.debug.assert(list_rt_content.structure == .nominal_type);
 
-                const nominal = list_rt_content.structure.nominal_type;
-                const nominal_args = self.runtime_types.sliceNominalArgs(nominal);
-                const elem_rt_var = nominal_args[0];
-                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
+                // Get element layout from the actual list layout, not from the type system.
+                // The list's runtime layout may differ from the type system's expectation
+                // due to numeric literal defaulting.
+                const elem_layout = if (list_layout.tag == .list)
+                    self.runtime_layout_store.getLayout(list_layout.data.list)
+                else
+                    Layout.zst(); // list_of_zst has zero-sized elements
 
                 var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
                 const total_len = accessor.len();
