@@ -88,7 +88,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, null);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env);
 
     return .{
         .module_env = module_env,
