@@ -209,4 +209,5 @@ pub const Tag = enum {
     diag_underscore_in_type_declaration,
     diagnostic_exposed_but_not_implemented,
     diag_redundant_exposed,
+    diag_if_expr_without_else,
 };

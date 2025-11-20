@@ -128,7 +128,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 58;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 35;
 /// Count of the statement nodes in the ModuleEnv
@@ -2755,6 +2755,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_if_else_not_canonicalized;
             region = r.region;
         },
+        .if_expr_without_else => |r| {
+            node.tag = .diag_if_expr_without_else;
+            region = r.region;
+        },
         .malformed_type_annotation => |r| {
             node.tag = .diag_malformed_type_annotation;
             region = r.region;
@@ -3095,6 +3099,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
