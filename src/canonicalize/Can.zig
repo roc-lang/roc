@@ -3128,7 +3128,6 @@ pub fn canonicalizeExpr(
 
             // Check if the function being applied is a tag
             const ast_fn = self.parse_ir.store.getExpr(e.@"fn");
-            std.debug.print("DEBUG APPLY: ast_fn type = {s}\n", .{@tagName(ast_fn)});
             if (ast_fn == .tag) {
                 // This is a tag application, not a function call
                 const tag_expr = ast_fn.tag;
@@ -4457,9 +4456,6 @@ fn canonicalizeExprOrMalformed(
 // Canonicalize a tag expr
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
-    const tag_name_text = self.env.getIdent(tag_name);
-    std.debug.print("DEBUG CANONICALIZE: Canonicalizing tag '{s}' with args={}\n", .{tag_name_text, mb_args != null});
-
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
     const free_vars_start = self.scratch_free_vars.top();

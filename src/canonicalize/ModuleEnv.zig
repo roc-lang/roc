@@ -1707,25 +1707,20 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
-            std.debug.panic(
-                "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
-                .{ cir_nodes, region_nodes },
-            );
+            @panic("Arrays out of sync: cir_nodes != region_nodes");
         }
     }
 }
 
 /// Assert that nodes, regions and types are all in sync
 inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
+    _ = desc;
     if (builtin.mode == .Debug) {
         const idx1_int = @intFromEnum(idx1);
         const idx2_int = @intFromEnum(idx2);
 
         if (idx1_int != idx2_int) {
-            std.debug.panic(
-                "{s} idxs out of sync: {} != {}\n",
-                .{ desc, idx1_int, idx2_int },
-            );
+            @panic("Idxs out of sync");
         }
     }
 }
