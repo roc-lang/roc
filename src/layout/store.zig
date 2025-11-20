@@ -947,11 +947,14 @@ pub const Store = struct {
                             const elem_var = type_args[0];
 
                             // Check if the element type is a known ZST
-                            // Note: We do NOT treat flex/rigid as ZST because they may be defaulted
-                            // to non-ZST types (e.g., flex numeric literals default to Dec which is 16 bytes)
+                            // Treat flex/rigid as ZST ONLY if they are unconstrained.
+                            // Constrained flex types (e.g., numeric literals with constraints) should default to Dec.
+                            // Unconstrained flex types (e.g., empty list []) should use list_of_zst.
                             const elem_resolved = self.types_store.resolveVar(elem_var);
                             const elem_content = elem_resolved.desc.content;
                             const is_elem_zst = switch (elem_content) {
+                                .flex => |flex| flex.constraints.count == 0,
+                                .rigid => |rigid| rigid.constraints.count == 0,
                                 .structure => |ft| switch (ft) {
                                     .empty_record, .empty_tag_union => true,
                                     else => false,
@@ -1459,15 +1462,12 @@ pub const Store = struct {
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
             const result = idxFromScalar(layout.data.scalar);
-            std.debug.print("[insertLayout] Scalar detected - returning sentinel idx={}\n", .{@intFromEnum(result)});
             return result;
         }
 
         // For non-scalar types, insert as normal
-        std.debug.print("[insertLayout] Non-scalar tag={s} - appending to array\n", .{@tagName(layout.tag)});
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
         const result: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
-        std.debug.print("[insertLayout] Appended - returning array idx={}\n", .{@intFromEnum(result)});
         return result;
     }
 };

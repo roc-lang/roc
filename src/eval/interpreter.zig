@@ -719,61 +719,7 @@ pub const Interpreter = struct {
                         else => return error.InvalidMethodReceiver,
                     };
 
-                    // Check if this is an intrinsic numeric operation
-                    const nominal_name = self.env.common.getIdentStore().getText(nominal_info.ident);
-                    const origin_name = self.env.common.getIdentStore().getText(nominal_info.origin);
-
-                    // Handle Dec arithmetic intrinsics directly (they don't have implementations in Builtin.roc)
-                    if (std.mem.eql(u8, origin_name, "Builtin") and std.mem.eql(u8, nominal_name, "Num.Dec")) {
-                        // Extract Dec values from lhs and rhs
-                        const lhs_dec: *const RocDec = @ptrCast(@alignCast(lhs.ptr.?));
-                        const rhs_dec: *const RocDec = @ptrCast(@alignCast(rhs.ptr.?));
-
-                        // Perform the addition
-                        const result_dec = RocDec.add(lhs_dec.*, rhs_dec.*, roc_ops);
-
-                        // Allocate space for the result using pushRaw (like literals do)
-                        const result_layout = lhs.layout;  // Dec has same layout
-                        var value = try self.pushRaw(result_layout, 0);
-                        value.is_initialized = false;
-                        const result_dec_ptr: *RocDec = @ptrCast(@alignCast(value.ptr.?));
-                        result_dec_ptr.* = result_dec;
-                        value.is_initialized = true;
-
-                        return value;
-                    }
-
-                    // Handle F64 arithmetic intrinsics directly
-                    if (std.mem.eql(u8, origin_name, "Builtin") and std.mem.eql(u8, nominal_name, "Num.F64")) {
-                        const lhs_f64 = lhs.asF64();
-                        const rhs_f64 = rhs.asF64();
-                        const result_f64 = lhs_f64 + rhs_f64;
-
-                        var value = try self.pushRaw(lhs.layout, 0);
-                        value.is_initialized = false;
-                        const result_ptr: *f64 = @ptrCast(@alignCast(value.ptr.?));
-                        result_ptr.* = result_f64;
-                        value.is_initialized = true;
-
-                        return value;
-                    }
-
-                    // Handle F32 arithmetic intrinsics directly
-                    if (std.mem.eql(u8, origin_name, "Builtin") and std.mem.eql(u8, nominal_name, "Num.F32")) {
-                        const lhs_f32 = lhs.asF32();
-                        const rhs_f32 = rhs.asF32();
-                        const result_f32 = lhs_f32 + rhs_f32;
-
-                        var value = try self.pushRaw(lhs.layout, 0);
-                        value.is_initialized = false;
-                        const result_ptr: *f32 = @ptrCast(@alignCast(value.ptr.?));
-                        result_ptr.* = result_f32;
-                        value.is_initialized = true;
-
-                        return value;
-                    }
-
-                    // For non-intrinsic methods, resolve and call as regular closures
+                    // All arithmetic uses method lookup - no intrinsics
                     // Get the pre-cached "plus" identifier from the ModuleEnv
                     const method_name = self.env.plus_ident;
 
@@ -4255,6 +4201,14 @@ pub const Interpreter = struct {
                 std.debug.assert(list_rt_content == .structure);
                 std.debug.assert(list_rt_content.structure == .nominal_type);
 
+                // Extract the element type variable from the List type
+                // Note: nominal.vars contains [backing_var, elem_var] for List types
+                // where backing_var is the ProvidedByCompiler tag union, and elem_var is the element type
+                const nominal = list_rt_content.structure.nominal_type;
+                const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
+                std.debug.assert(vars.len == 2); // List has backing var + elem var
+                const elem_rt_var = vars[1];
+
                 // Get element layout from the actual list layout, not from the type system.
                 // The list's runtime layout may differ from the type system's expectation
                 // due to numeric literal defaulting.
@@ -4543,6 +4497,15 @@ pub const Interpreter = struct {
             if (origin_env.common.findIdent(qualified_name)) |ident| {
                 break :blk ident;
             }
+
+            // Try with "Builtin." prefix for builtin module methods
+            // (Associated items in builtin module are stored with full "Builtin.Type.method" names)
+            var builtin_buf: [256]u8 = undefined;
+            const builtin_qualified = try std.fmt.bufPrint(&builtin_buf, "Builtin.{s}", .{qualified_name});
+            if (origin_env.common.findIdent(builtin_qualified)) |ident| {
+                break :blk ident;
+            }
+
             // Try unqualified name as fallback
             if (origin_env.common.findIdent(method_name_str)) |ident| {
                 break :blk ident;

@@ -1397,4 +1397,47 @@ test "interpreter: tuples and records" {
     try std.testing.expectEqualStrings("{ x: 1, y: 2 }", text_r);
 }
 
+test "interpreter: empty list [] has list_of_zst layout" {
+    // Test that [] (unconstrained, unbound) gets list_of_zst layout
+    const roc_src = "[]";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+
+    // Check that the layout is list_of_zst
+    try std.testing.expectEqual(layout.LayoutTag.list_of_zst, result.layout.tag);
+}
+
+test "interpreter: singleton list [1] has list of Dec layout" {
+    // Test that [1] (constrained by number literal) gets list of Dec layout
+    const roc_src = "[1]";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    defer result.decref(&interp2.runtime_layout_store, &ops);
+
+    // Check that the layout is a regular list (not list_of_zst)
+    try std.testing.expectEqual(layout.LayoutTag.list, result.layout.tag);
+
+    // Check that the element layout is Dec
+    const elem_layout_idx = result.layout.data.list;
+    try std.testing.expectEqual(layout.Idx.dec, elem_layout_idx);
+}
+
 // Boolean/if support intentionally omitted for now
