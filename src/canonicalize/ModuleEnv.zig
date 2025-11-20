@@ -1669,6 +1669,23 @@ pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
 
 /// Associates a node index with an exposed identifier.
 pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16) !void {
+    // Debug: verify the node is actually a def or statement before storing
+    // Only validate if the node exists (tests may use dummy indices)
+    if (node_idx < self.store.nodes.count()) {
+        const node_idx_enum: CIR.Node.Idx = @enumFromInt(node_idx);
+        const node = self.store.nodes.get(node_idx_enum);
+        const ident_name = self.getIdent(ident_idx);
+
+        if (node.tag != .def and node.tag != .statement_decl and node.tag != .statement_decl_gen and
+            node.tag != .statement_nominal_decl and node.tag != .statement_alias_decl) {
+            std.debug.print("WARNING: setExposedNodeIndexById('{s}', idx={}) - node.tag is {s} (expected def or statement)\n",
+                .{ ident_name, node_idx, @tagName(node.tag) });
+        } else {
+            std.debug.print("DEBUG: setExposedNodeIndexById('{s}', idx={}) - node.tag={s} ✓\n",
+                .{ ident_name, node_idx, @tagName(node.tag) });
+        }
+    }
+
     return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
 }
 

@@ -1755,28 +1755,31 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
-			(args
-				(p-assign (ident "num")))
-			(e-block
-				(s-let
-					(p-assign (ident "other"))
-					(e-num (value "1")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+		(e-closure
+			(captures
+				(capture (ident "other")))
+			(e-lambda
+				(args
+					(p-assign (ident "num")))
+				(e-block
+					(s-let
+						(p-assign (ident "other"))
+						(e-num (value "1")))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-lookup-local
+									(p-assign (ident "num")))
+								(e-block
+									(s-dbg
+										(e-runtime-error (tag "empty_tuple")))
+									(e-num (value "0")))))
+						(if-else
 							(e-block
 								(s-dbg
-									(e-runtime-error (tag "empty_tuple")))
-								(e-num (value "0")))))
-					(if-else
-						(e-block
-							(s-dbg
-								(e-num (value "123")))
-							(e-lookup-local
-								(p-assign (ident "other"))))))))
+									(e-num (value "123")))
+								(e-lookup-local
+									(p-assign (ident "other")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))

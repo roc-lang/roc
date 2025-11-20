@@ -82,27 +82,30 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "scopedTypeVarInternal"))
-		(e-lambda
-			(args
-				(p-assign (ident "a")))
-			(e-block
-				(s-let
-					(p-assign (ident "b"))
-					(e-lambda
-						(args
-							(p-assign (ident "c")))
-						(e-block
-							(s-let
-								(p-assign (ident "d"))
+		(e-closure
+			(captures
+				(capture (ident "b")))
+			(e-lambda
+				(args
+					(p-assign (ident "a")))
+				(e-block
+					(s-let
+						(p-assign (ident "b"))
+						(e-lambda
+							(args
+								(p-assign (ident "c")))
+							(e-block
+								(s-let
+									(p-assign (ident "d"))
+									(e-lookup-local
+										(p-assign (ident "c"))))
 								(e-lookup-local
-									(p-assign (ident "c"))))
-							(e-lookup-local
-								(p-assign (ident "d"))))))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "b")))
-					(e-lookup-local
-						(p-assign (ident "a"))))))
+									(p-assign (ident "d"))))))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "b")))
+						(e-lookup-local
+							(p-assign (ident "a")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "val"))
