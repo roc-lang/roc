@@ -3361,6 +3361,32 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, for_body_var, env);
             },
+            .s_while => |while_stmt| {
+                // Check the condition
+                // while $count < 10 {
+                //       ^^^^^^^^^^^
+                does_fx = try self.checkExpr(while_stmt.cond, env, .no_expectation) or does_fx;
+                const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
+                const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
+
+                // Check that condition is Bool
+                const bool_var = try self.freshBool(env, cond_region);
+                _ = try self.unify(bool_var, cond_var, env);
+
+                // Check the body
+                // while $count < 10 {
+                //     print!($count.toStr())  <<<<
+                //     $count = $count + 1
+                // }
+                does_fx = try self.checkExpr(while_stmt.body, env, .no_expectation) or does_fx;
+                const while_body_var: Var = ModuleEnv.varFrom(while_stmt.body);
+
+                // Check that the while body evaluates to {}
+                const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
+                _ = try self.unify(body_ret, while_body_var, env);
+
+                _ = try self.unify(stmt_var, while_body_var, env);
+            },
             .s_expr => |expr| {
                 does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
