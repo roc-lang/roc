@@ -604,6 +604,16 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
+    if (std.debug.runtime_safety) {
+        std.debug.print("[allocateWithRefcount] data_bytes={}, elem_align={}, refcounted={}, extra_bytes={}, total_length={}\n", .{
+            data_bytes,
+            element_alignment,
+            elements_refcounted,
+            extra_bytes,
+            length,
+        });
+    }
+
     var roc_alloc_args = RocAlloc{
         .alignment = alignment,
         .length = length,

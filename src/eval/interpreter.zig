@@ -1059,6 +1059,18 @@ pub const Interpreter = struct {
                 const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
                 const elements_refcounted = elem_layout.isRefcounted();
 
+                if (std.debug.runtime_safety) {
+                    std.debug.print("[LIST ALLOC] elem_layout={}, elem_size={}, elem_align={}, count={}\n", .{
+                        elem_layout,
+                        elem_size,
+                        elem_alignment,
+                        values.items.len,
+                    });
+                    if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .int) {
+                        std.debug.print("[LIST ALLOC] int precision={}\n", .{elem_layout.data.scalar.data.int});
+                    }
+                }
+
                 var runtime_list = RocList.allocateExact(
                     elem_alignment_u32,
                     values.items.len,
@@ -1298,12 +1310,11 @@ pub const Interpreter = struct {
                         return out;
                     }
                     return error.NotImplemented;
-                } else if (layout_val.tag == .record) {
-                    // Record { tag: Discriminant, payload: ZST }
+                } else if (layout_val.tag == .tuple) {
+                    // Tuple (payload, tag) where payload is ZST
                     var dest = try self.pushRaw(layout_val, 0);
-                    var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const tag_field = try acc.getFieldByIndex(tag_idx);
+                    var tuple_acc = try dest.asTuple(&self.runtime_layout_store);
+                    const tag_field = try tuple_acc.getElement(1); // tag is element 1
                     // write tag as int/byte
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
@@ -1364,14 +1375,13 @@ pub const Interpreter = struct {
                         return out;
                     }
                     return error.NotImplemented;
-                } else if (layout_val.tag == .record) {
-                    // Has payload: record { tag, payload }
+                } else if (layout_val.tag == .tuple) {
+                    // Has payload: tuple (payload, tag)
                     var dest = try self.pushRaw(layout_val, 0);
-                    var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
-                    // write tag discriminant
-                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                    var tuple_acc = try dest.asTuple(&self.runtime_layout_store);
+
+                    // Get tag field (element 1) and write discriminant
+                    const tag_field = try tuple_acc.getElement(1);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
@@ -1385,7 +1395,9 @@ pub const Interpreter = struct {
                     const arg_vars_range = tag_list.items[tag_index].args;
                     const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
                     if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
-                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
+
+                    // Get payload field (element 0)
+                    const payload_field = try tuple_acc.getElement(0);
 
                     if (payload_field.ptr) |payload_ptr| {
                         const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
@@ -2862,10 +2874,9 @@ pub const Interpreter = struct {
                 },
                 else => return error.TypeMismatch,
             },
-            .record => {
-                var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
-                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            .tuple => {
+                var tuple_acc = try value.asTuple(&self.runtime_layout_store);
+                const tag_field = try tuple_acc.getElement(1); // tag is element 1
                 const tag_value = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                 return try self.extractBoolTagIndex(tag_value, bool_var);
             },
@@ -3772,10 +3783,9 @@ pub const Interpreter = struct {
                 },
                 else => return error.TypeMismatch,
             },
-            .record => {
-                var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
-                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            .tuple => {
+                var tuple_acc = try value.asTuple(&self.runtime_layout_store);
+                const tag_field = try tuple_acc.getElement(1); // tag is element 1
                 var tag_index: usize = undefined;
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
@@ -3787,40 +3797,37 @@ pub const Interpreter = struct {
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
-                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
-                    payload_value = try acc.getFieldByIndex(payload_idx);
-                    if (payload_value) |field_value| {
-                        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                        defer tag_list.deinit();
-                        try self.appendUnionTags(union_rt_var, &tag_list);
-                        if (tag_index >= tag_list.items.len) return error.TypeMismatch;
-                        const tag_info = tag_list.items[tag_index];
-                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                // Get payload from element 0
+                const payload_field = try tuple_acc.getElement(0);
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(union_rt_var, &tag_list);
+                if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+                const tag_info = tag_list.items[tag_index];
+                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
 
-                        if (arg_vars.len == 0) {
-                            payload_value = null;
-                        } else if (arg_vars.len == 1) {
-                            const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
-                            payload_value = StackValue{
-                                .layout = arg_layout,
-                                .ptr = field_value.ptr,
-                                .is_initialized = field_value.is_initialized,
-                            };
-                        } else {
-                            var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
-                            defer self.allocator.free(elem_layouts);
-                            for (arg_vars, 0..) |arg_var, i| {
-                                elem_layouts[i] = try self.getRuntimeLayout(arg_var);
-                            }
-                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                            payload_value = StackValue{
-                                .layout = tuple_layout,
-                                .ptr = field_value.ptr,
-                                .is_initialized = field_value.is_initialized,
-                            };
-                        }
+                if (arg_vars.len == 0) {
+                    payload_value = null;
+                } else if (arg_vars.len == 1) {
+                    const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
+                    payload_value = StackValue{
+                        .layout = arg_layout,
+                        .ptr = payload_field.ptr,
+                        .is_initialized = payload_field.is_initialized,
+                    };
+                } else {
+                    var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
+                    defer self.allocator.free(elem_layouts);
+                    for (arg_vars, 0..) |arg_var, i| {
+                        elem_layouts[i] = try self.getRuntimeLayout(arg_var);
                     }
+                    const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                    const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                    payload_value = StackValue{
+                        .layout = tuple_layout,
+                        .ptr = payload_field.ptr,
+                        .is_initialized = payload_field.is_initialized,
+                    };
                 }
 
                 return .{ .index = tag_index, .payload = payload_value };
@@ -3852,10 +3859,9 @@ pub const Interpreter = struct {
                 },
                 else => return error.NotImplemented,
             },
-            .record => {
-                var acc = try out.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            .tuple => {
+                var tuple_acc = try out.asTuple(&self.runtime_layout_store);
+                const tag_field = try tuple_acc.getElement(1); // tag is element 1
                 var tag_slot = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                 switch (tag_slot.layout.tag) {
                     .scalar => switch (tag_slot.layout.data.scalar.tag) {
@@ -3874,12 +3880,11 @@ pub const Interpreter = struct {
                     else => return error.NotImplemented,
                 }
 
-                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
-                    const payload_field = try acc.getFieldByIndex(payload_idx);
-                    const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
-                    if (payload_size > 0 and payload_field.ptr != null) {
-                        @memset(@as([*]u8, @ptrCast(payload_field.ptr.?))[0..payload_size], 0);
-                    }
+                // Get payload from element 0
+                const payload_field = try tuple_acc.getElement(0);
+                const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_size > 0 and payload_field.ptr != null) {
+                    @memset(@as([*]u8, @ptrCast(payload_field.ptr.?))[0..payload_size], 0);
                 }
 
                 return out;

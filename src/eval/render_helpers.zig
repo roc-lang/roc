@@ -121,19 +121,17 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         return out.toOwnedSlice();
                     }
                 }
-            } else if (value.layout.tag == .record) {
-                var acc = try value.asRecord(ctx.layout_store);
-                if (acc.findFieldIndex(ctx.env, "tag")) |idx| {
-                    const tag_field = try acc.getFieldByIndex(idx);
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                        tag_index = @intCast(tmp_sv.asI128());
-                        have_tag = true;
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        tag_index = if (b.* != 0) 1 else 0;
-                        have_tag = true;
-                    }
+            } else if (value.layout.tag == .tuple) {
+                var tuple_acc = try value.asTuple(ctx.layout_store);
+                const tag_field = try tuple_acc.getElement(1); // tag is element 1
+                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                    tag_index = @intCast(tmp_sv.asI128());
+                    have_tag = true;
+                } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                    const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                    tag_index = if (b.* != 0) 1 else 0;
+                    have_tag = true;
                 }
                 if (have_tag and tag_index < tags.len) {
                     const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
@@ -141,12 +139,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
                     std.debug.print("[BUG] Appended tag name: {s}\n", .{tag_name});
-                    if (acc.findFieldIndex(ctx.env, "payload")) |pidx| {
-                        const payload = try acc.getFieldByIndex(pidx);
-                        const args_range = tags.items(.args)[tag_index];
-                        const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
-                        std.debug.print("[BUG] Tag {s}: arg_vars.len = {}\n", .{tag_name, arg_vars.len});
-                        if (arg_vars.len > 0) {
+                    // Get payload from element 0
+                    const payload = try tuple_acc.getElement(0);
+                    const args_range = tags.items(.args)[tag_index];
+                    const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
+                    std.debug.print("[BUG] Tag {s}: arg_vars.len = {}\n", .{tag_name, arg_vars.len});
+                    if (arg_vars.len > 0) {
                             std.debug.print("[BUG] Entering arg_vars > 0 block\n", .{});
                             try out.append('(');
                             if (arg_vars.len == 1) {
@@ -216,9 +214,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             try out.append(')');
                             std.debug.print("[BUG] Appended closing paren\n", .{});
                         }
-                    } else {
-                        std.debug.print("[BUG] No payload field found\n", .{});
-                    }
                     std.debug.print("[BUG] Returning: {s}\n", .{out.items});
                     const result = try out.toOwnedSlice();
                     std.debug.print("[BUG] toOwnedSlice returned: {s} (len={})\n", .{result, result.len});

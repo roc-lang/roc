@@ -1224,14 +1224,58 @@ pub const Store = struct {
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
 
-                        for (tags_slice.items(.args)) |tag_args| {
+                        // GPA CHECKPOINT: Before tag union layout loop
+                        if (std.debug.runtime_safety) {
+                            std.debug.print("[GPA CHECK] Before tag union layout loop\n", .{});
+                            const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
+                                std.debug.print("[GPA CHECK] FAILED before loop: {}\n", .{err});
+                                @panic("GPA corrupted before tag union layout loop!");
+                            };
+                            self.env.gpa.free(test_alloc);
+                            std.debug.print("[GPA CHECK] PASSED before loop\n", .{});
+                        }
+
+                        for (tags_slice.items(.args), 0..) |tag_args, tag_idx| {
+                            // GPA CHECKPOINT: Start of each iteration
+                            if (std.debug.runtime_safety) {
+                                std.debug.print("[GPA CHECK] Start of tag iteration {}\n", .{tag_idx});
+                                const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
+                                    std.debug.print("[GPA CHECK] FAILED at start of iteration {}: {}\n", .{tag_idx, err});
+                                    @panic("GPA corrupted at start of tag iteration!");
+                                };
+                                self.env.gpa.free(test_alloc);
+                            }
+
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
                                 // No payload arguments
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
+
+                                // GPA CHECKPOINT: Before addTypeVar
+                                if (std.debug.runtime_safety) {
+                                    std.debug.print("[GPA CHECK] Before addTypeVar (tag {})\n", .{tag_idx});
+                                    const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
+                                        std.debug.print("[GPA CHECK] FAILED before addTypeVar: {}\n", .{err});
+                                        @panic("GPA corrupted before addTypeVar!");
+                                    };
+                                    self.env.gpa.free(test_alloc);
+                                }
+
                                 const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
+
+                                // GPA CHECKPOINT: After addTypeVar
+                                if (std.debug.runtime_safety) {
+                                    std.debug.print("[GPA CHECK] After addTypeVar (tag {})\n", .{tag_idx});
+                                    const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
+                                        std.debug.print("[GPA CHECK] FAILED after addTypeVar: {}\n", .{err});
+                                        @panic("GPA corrupted by addTypeVar!");
+                                    };
+                                    self.env.gpa.free(test_alloc);
+                                    std.debug.print("[GPA CHECK] PASSED after addTypeVar\n", .{});
+                                }
+
                                 const layout_val = self.getLayout(arg_layout_idx);
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
@@ -1249,35 +1293,47 @@ pub const Store = struct {
                             }
                         }
 
-                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
-                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
+                        // GPA CHECKPOINT: After tag union layout loop
+                        if (std.debug.runtime_safety) {
+                            std.debug.print("[GPA CHECK] After tag union layout loop, before identifier insert\n", .{});
+                            const test_alloc = self.env.gpa.alloc(u8, 1) catch |err| {
+                                std.debug.print("[GPA CHECK] FAILED after loop: {}\n", .{err});
+                                @panic("GPA corrupted after tag union layout loop!");
+                            };
+                            self.env.gpa.free(test_alloc);
+                            std.debug.print("[GPA CHECK] PASSED after loop\n", .{});
+                        }
 
+                        // Use a tuple instead of a record to avoid needing field name identifiers
+                        // Tag unions are represented as (payload, tag) where:
+                        //   - payload is the largest payload layout (or empty record if no payloads)
+                        //   - tag is the discriminant
                         const payload_layout = max_payload_layout orelse blk: {
                             const empty_idx = try self.ensureEmptyRecordLayout();
                             break :blk self.getLayout(empty_idx);
                         };
 
-                        var field_layouts = [_]Layout{
+                        var element_layouts = [_]Layout{
                             payload_layout,
                             discriminant_layout,
                         };
 
-                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
+                        const tuple_idx = try self.putTuple(&element_layouts);
 
-                        const rec_idx = try self.putRecord(self.env, &field_layouts, &field_names);
+                        // Apply maximum payload alignment if needed
                         if (max_payload_alignment_any.toByteUnits() > 1) {
                             const desired_alignment = max_payload_alignment_any;
-                            var rec_layout = self.getLayout(rec_idx);
-                            const current_alignment = rec_layout.alignment(self.targetUsize());
+                            var tuple_layout = self.getLayout(tuple_idx);
+                            const current_alignment = tuple_layout.alignment(self.targetUsize());
                             if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
-                                std.debug.assert(rec_layout.tag == .record);
-                                const record_idx = rec_layout.data.record.idx;
-                                const new_layout = Layout.record(desired_alignment, record_idx);
-                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
+                                std.debug.assert(tuple_layout.tag == .tuple);
+                                const tuple_data_idx = tuple_layout.data.tuple.idx;
+                                const new_layout = Layout.tuple(desired_alignment, tuple_data_idx);
+                                self.layouts.set(@enumFromInt(@intFromEnum(tuple_idx)), new_layout);
                             }
                         }
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
-                        return rec_idx;
+                        try self.layouts_by_var.put(self.env.gpa, current.var_, tuple_idx);
+                        return tuple_idx;
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
