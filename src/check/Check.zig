@@ -720,10 +720,23 @@ fn mkFromNumLiteralConstraint(
         break :blk ident;
     };
 
-    // Create a function type var for from_num_literal
-    // We don't need precise type information here - the constraint checking phase
-    // will look up the actual from_num_literal implementation
-    const fn_var = try self.fresh(env, num_literal_info.region);
+    // Create a placeholder function type var for from_num_literal
+    // The actual from_num_literal function type will be looked up and unified
+    // during constraint checking, but we need a function type structure here
+    // so that unwrapFunc() doesn't fail
+    const arg_var = try self.fresh(env, num_literal_info.region);
+    const ret_var = try self.fresh(env, num_literal_info.region);
+
+    const func_content = types_mod.Content{
+        .structure = types_mod.FlatType{
+            .fn_unbound = types_mod.Func{
+                .args = try self.types.appendVars(&.{arg_var}),
+                .ret = ret_var,
+                .needs_instantiation = false,
+            },
+        },
+    };
+    const fn_var = try self.freshFromContent(func_content, env, num_literal_info.region);
 
     // Create the constraint with numeric literal info
     const constraint = types_mod.StaticDispatchConstraint{
@@ -3756,20 +3769,55 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
 // unary minus //
 
-fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, _: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check the operand expression
     const does_fx = try self.checkExpr(unary.expr, env, .no_expectation);
 
-    // For unary minus, unify the result with the operand
-    // The type will be inferred from usage context
+    const expr_var = ModuleEnv.varFrom(expr_idx);
     const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
-    const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
-    // Unify result with operand - they must be the same type
-    _ = try self.unify(result_var, operand_var, env);
+    // Desugar -a to a.negate()
+    // Get the negate identifier
+    const method_name = self.cir.negate_ident;
+
+    // Create the function type: operand_type -> ret_type
+    const args_range = try self.types.appendVars(&.{operand_var});
+
+    // The return type is unknown, so create a fresh variable
+    const ret_var = try self.fresh(env, expr_region);
+    try env.var_pool.addVarToRank(ret_var, env.rank());
+
+    // Create the constraint function type
+    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+        .needs_instantiation = false,
+    } } }, env, expr_region);
+    try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
+
+    // Create the static dispatch constraint
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = constraint_fn_var,
+        .origin = .desugared_binop,
+    };
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    // Create a constrained flex and unify it with the operand
+    const constrained_var = try self.freshFromContent(
+        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+        env,
+        expr_region,
+    );
+    try env.var_pool.addVarToRank(constrained_var, env.rank());
+
+    _ = try self.unify(constrained_var, operand_var, env);
+
+    // Set the expression to redirect to the return type
+    try self.types.setVarRedirect(expr_var, ret_var);
 
     return does_fx;
 }
@@ -4214,9 +4262,13 @@ fn checkNumLiteralConstraint(
         std.mem.startsWith(u8, type_name_bytes, "Num.");
 
     if (!is_builtin_num) {
-        // TODO: Phase 3b - User-defined types need compile-time evaluation
-        // For now, we'll just allow the conversion without validation
-        // This is safe because user-defined from_num_literal will be checked at runtime
+        // For non-builtin types, we can't do compile-time validation in Check.zig
+        // But we should check if the method exists at all
+        // The actual validation will happen during comptime evaluation
+
+        // For now, we rely on the general static dispatch machinery to check
+        // if the method exists - it will call reportConstraintError if not found
+        // So we just skip the builtin-specific validation here
         return;
     }
 
@@ -4292,9 +4344,12 @@ fn evalBuiltinFromNumLiteral(
     } else if (std.mem.eql(u8, type_name, "U64")) {
         return value >= 0 and value <= std.math.maxInt(u64);
     } else if (std.mem.eql(u8, type_name, "I128")) {
-        return true; // i128 can hold any value
+        return true; // i128 can hold any value (stored directly)
     } else if (std.mem.eql(u8, type_name, "U128")) {
-        return value >= 0;
+        // U128 can hold values 0 to 340282366920938463463374607431768211455
+        // Since value is i128, we check is_negative instead of value >= 0
+        // (large positive u128 values overflow i128 and appear negative)
+        return !num_lit_info.is_negative;
     } else if (std.mem.eql(u8, type_name, "F32") or
         std.mem.eql(u8, type_name, "F64") or
         std.mem.eql(u8, type_name, "Dec"))
@@ -4452,20 +4507,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
-                // Special handling for from_num_literal constraints
-                if (constraint.origin == .from_num_literal and constraint.num_literal != null) {
-                    // This is a numeric literal constraint - evaluate it at compile-time
-                    try self.checkNumLiteralConstraint(
-                        deferred_constraint.var_,
-                        constraint,
-                        constraint.num_literal.?,
-                        nominal_type,
-                        type_name_bytes,
-                        env,
-                    );
-                    continue;
-                }
-
                 // Extract the function and return type from the constraint
                 const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                 const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
@@ -4618,6 +4659,16 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (any_arg_failed or ret_result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
+                } else if (constraint.origin == .from_num_literal and constraint.num_literal != null) {
+                    // For from_num_literal constraints on builtin types, do compile-time validation
+                    try self.checkNumLiteralConstraint(
+                        deferred_constraint.var_,
+                        constraint,
+                        constraint.num_literal.?,
+                        nominal_type,
+                        type_name_bytes,
+                        env,
+                    );
                 }
             }
         } else {

@@ -41,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> a"))
+(expr (type "a -> a where [b.from_num_literal : b -> c]"))
 ~~~

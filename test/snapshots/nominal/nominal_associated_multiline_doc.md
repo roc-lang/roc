@@ -82,12 +82,12 @@ Foo := [A, B].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))))
 ~~~

@@ -8,9 +8,19 @@ type=expr
 [1, 2, "hello"]
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - list_type_err.md:1:5:1:6
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**list_type_err.md:1:5:1:6:**
+```roc
+[1, 2, "hello"]
+```
+    ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,

@@ -13,9 +13,31 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - tuple_type.md:5:8:5:9
+MISSING METHOD - tuple_type.md:5:11:5:12
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**tuple_type.md:5:8:5:9:**
+```roc
+    f((1, 2))
+```
+       ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**tuple_type.md:5:11:5:12:**
+```roc
+    f((1, 2))
+```
+          ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 OpenCurly,

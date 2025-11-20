@@ -222,7 +222,14 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => {},
+                .flex => |flex| {
+                    // Check static dispatch constraints to detect cycles through constraint functions
+                    // For example: a.plus : a, a -> a (where the function type refers back to 'a')
+                    const constraints = self.types_store.static_dispatch_constraints.sliceRange(flex.constraints);
+                    for (constraints) |constraint| {
+                        try self.occursSubVar(root, constraint.fn_var, ctx);
+                    }
+                },
                 .rigid => {},
                 .recursion_var => |rec_var| {
                     // Check the structure the recursion var points to

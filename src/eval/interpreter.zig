@@ -743,6 +743,36 @@ pub const Interpreter = struct {
                         return value;
                     }
 
+                    // Handle F64 arithmetic intrinsics directly
+                    if (std.mem.eql(u8, origin_name, "Builtin") and std.mem.eql(u8, nominal_name, "Num.F64")) {
+                        const lhs_f64 = lhs.asF64();
+                        const rhs_f64 = rhs.asF64();
+                        const result_f64 = lhs_f64 + rhs_f64;
+
+                        var value = try self.pushRaw(lhs.layout, 0);
+                        value.is_initialized = false;
+                        const result_ptr: *f64 = @ptrCast(@alignCast(value.ptr.?));
+                        result_ptr.* = result_f64;
+                        value.is_initialized = true;
+
+                        return value;
+                    }
+
+                    // Handle F32 arithmetic intrinsics directly
+                    if (std.mem.eql(u8, origin_name, "Builtin") and std.mem.eql(u8, nominal_name, "Num.F32")) {
+                        const lhs_f32 = lhs.asF32();
+                        const rhs_f32 = rhs.asF32();
+                        const result_f32 = lhs_f32 + rhs_f32;
+
+                        var value = try self.pushRaw(lhs.layout, 0);
+                        value.is_initialized = false;
+                        const result_ptr: *f32 = @ptrCast(@alignCast(value.ptr.?));
+                        result_ptr.* = result_f32;
+                        value.is_initialized = true;
+
+                        return value;
+                    }
+
                     // For non-intrinsic methods, resolve and call as regular closures
                     // Get the pre-cached "plus" identifier from the ModuleEnv
                     const method_name = self.env.plus_ident;
@@ -4117,9 +4147,23 @@ pub const Interpreter = struct {
             },
             .underscore => return true,
             .num_literal => |il| {
-                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .int)) return false;
+                if (value.layout.tag != .scalar) return false;
                 const lit = il.value.toI128();
-                return value.asI128() == lit;
+
+                // Handle both int and Dec (frac) layouts for numeric literals
+                return switch (value.layout.data.scalar.tag) {
+                    .int => value.asI128() == lit,
+                    .frac => blk: {
+                        // For Dec type, extract the value and compare
+                        if (value.layout.data.scalar.data.frac != .dec) break :blk false;
+                        const dec_value = value.asDec();
+                        // Dec stores values scaled by 10^18, so we need to compare scaled values
+                        // For integer literals, we scale the literal value
+                        const scaled_lit = lit * RocDec.one_point_zero_i128;
+                        break :blk dec_value.num == scaled_lit;
+                    },
+                    else => false,
+                };
             },
             .str_literal => |sl| {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;

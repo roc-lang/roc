@@ -19,9 +19,21 @@ type=expr
 ]
 ~~~
 # EXPECTED
-NIL
+TYPE DOES NOT HAVE METHODS - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
-NIL
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_num_literal` on a type that doesn't support methods:
+**tag_applications_simple.md:2:10:2:12:**
+```roc
+    Some(42),
+```
+         ^^
+
+This type doesn't support methods:
+    _[Ok([Just(_a)]_others)]_others2 where [[Ok([Just(b)]c)]d.from_num_literal : [Ok([Just(b)]c)]d]_
+
+
+
 # TOKENS
 ~~~zig
 OpenSquare,
@@ -136,5 +148,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List([Err(Str), Just(_a), Left(_b), None, Nothing, Ok(Str), Right(_c), Some([Ok([Just(_d)]_others)]_others2), Try([Ok([Some([True]_others3)]_others4)]_others5)]_others6)"))
+(expr (type "List([Err(Str), Just(_a), Left(_b), None, Nothing, Ok(Str), Right(_c), Some([Ok([Just(_d)]_others)]_others2), Try([Ok([Some([True]_others3)]_others4)]_others5)]_others6) where [_e.from_num_literal : _arg -> _ret, _f.from_num_literal : _arg2 -> _ret2, _g.from_num_literal : _arg3 -> _ret3, _h.from_num_literal : _arg4 -> _ret4]"))
 ~~~

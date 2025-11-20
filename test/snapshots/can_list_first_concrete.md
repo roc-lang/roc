@@ -8,9 +8,31 @@ type=expr
 [42, "world", 3.14]
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - can_list_first_concrete.md:1:2:1:4
+MISSING METHOD - can_list_first_concrete.md:1:15:1:19
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**can_list_first_concrete.md:1:2:1:4:**
+```roc
+[42, "world", 3.14]
+```
+ ^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**can_list_first_concrete.md:1:15:1:19:**
+```roc
+[42, "world", 3.14]
+```
+              ^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,Comma,Float,CloseSquare,

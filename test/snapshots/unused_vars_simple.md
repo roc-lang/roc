@@ -254,15 +254,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _ret"))
+		(patt (type "_arg -> _ret where [_e.from_num_literal : _arg2 -> _ret2]"))
 		(patt (type "e -> e"))
-		(patt (type "_arg -> _ret"))
-		(patt (type "e -> e"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> _ret where [_e.from_num_literal : _arg2 -> _ret2]"))
+		(patt (type "e -> e where [f.from_num_literal : f -> g]"))
+		(patt (type "_arg -> _ret where [_e.from_num_literal : _arg2 -> _ret2]")))
 	(expressions
-		(expr (type "_arg -> _ret"))
+		(expr (type "_arg -> _ret where [_e.from_num_literal : _arg2 -> _ret2]"))
 		(expr (type "e -> e"))
-		(expr (type "_arg -> _ret"))
-		(expr (type "e -> e"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> _ret where [_e.from_num_literal : _arg2 -> _ret2]"))
+		(expr (type "e -> e where [f.from_num_literal : f -> g]"))
+		(expr (type "_arg -> _ret where [_e.from_num_literal : _arg2 -> _ret2]"))))
 ~~~

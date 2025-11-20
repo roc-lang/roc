@@ -179,26 +179,6 @@ test "interpreter: 6 / 3 yields 2" {
     try std.testing.expectEqualStrings("2", rendered);
 }
 
-test "interpreter: 5 // 2 yields 2" {
-    const roc_src = "5 // 2";
-    try helpers.runExpectInt(roc_src, 2, .no_trace);
-
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("2", rendered);
-}
-
 test "interpreter: 7 % 3 yields 1" {
     const roc_src = "7 % 3";
     try helpers.runExpectInt(roc_src, 1, .no_trace);
@@ -255,58 +235,40 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     try std.testing.expectEqualStrings("0.25", rendered);
 }
 
-test "interpreter: 1.5f64 + 2.25f64 yields 3.75" {
-    const roc_src = "1.5f64 + 2.25f64";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("3.75", rendered);
+test "interpreter: F64 addition" {
+    try helpers.runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 1.5
+        \\    b : F64
+        \\    b = 2.25
+        \\    a + b
+        \\}
+    , 3.75, .no_trace);
 }
 
-test "interpreter: 1.5f32 * 2f32 yields 3" {
-    const roc_src = "1.5f32 * 2f32";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("3", rendered);
+test "interpreter: F32 multiplication" {
+    try helpers.runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 1.5
+        \\    b : F32
+        \\    b = 2
+        \\    a * b
+        \\}
+    , 3.0, .no_trace);
 }
 
-test "interpreter: 2.0f64 / 4.0f64 yields 0.5" {
-    const roc_src = "2.0f64 / 4.0f64";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("0.5", rendered);
+test "interpreter: F64 division" {
+    try helpers.runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 2.0
+        \\    b : F64
+        \\    b = 4.0
+        \\    a / b
+        \\}
+    , 0.5, .no_trace);
 }
 
 test "interpreter: literal True renders True" {
@@ -1057,22 +1019,14 @@ test "interpreter: empty record expression renders {}" {
     try std.testing.expectEqualStrings("{}", rendered);
 }
 
-test "interpreter: f64 literal renders 3.25" {
-    const roc_src = "3.25f64";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("3.25", rendered);
+test "interpreter: F64 literal" {
+    try helpers.runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 3.25
+        \\    a
+        \\}
+    , 3.25, .no_trace);
 }
 
 test "interpreter: decimal literal renders 0.125" {

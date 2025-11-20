@@ -9,6 +9,8 @@ type=expr
 ~~~
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:5:1:5
+MISSING METHOD - can_list_mismatch_then_nested_error.md:1:2:1:3
+MISSING METHOD - can_list_mismatch_then_nested_error.md:1:15:1:16
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:
@@ -28,6 +30,28 @@ All elements in a list must have compatible types.
 
 Note: You can wrap each element in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**can_list_mismatch_then_nested_error.md:1:2:1:3:**
+```roc
+[1, "hello", [3, "world"]]
+```
+ ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**can_list_mismatch_then_nested_error.md:1:15:1:16:**
+```roc
+[1, "hello", [3, "world"]]
+```
+              ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

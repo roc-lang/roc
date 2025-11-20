@@ -8,9 +8,21 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-NIL
+INVALID NUMERIC LITERAL - can_list_number_doesnt_fit.md:1:12:1:15
 # PROBLEMS
-NIL
+**INVALID NUMERIC LITERAL**
+The numeric literal **300** is out of range for its inferred type:
+**can_list_number_doesnt_fit.md:1:12:1:15:**
+```roc
+[1u8, 2u8, 300]
+```
+           ^^^
+
+Its inferred type is:
+    _Num.U8_
+
+Hint: Use a larger integer type or _Dec_ for arbitrary precision.
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,

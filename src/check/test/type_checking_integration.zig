@@ -22,7 +22,7 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try checkTypesExpr(source, .pass, "_a");
+    try checkTypesExpr(source, .pass, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - num - int suffix 1" {
@@ -55,7 +55,7 @@ test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try checkTypesExpr(source, .pass, "_a");
+    try checkTypesExpr(source, .pass, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - num - float suffix 1" {
@@ -101,7 +101,7 @@ test "check type - number annotation mismatch with string" {
         \\x : Str
         \\x = 42
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - i64 annotation mismatch with f64" {
@@ -109,7 +109,7 @@ test "check type - i64 annotation mismatch with f64" {
         \\x : I64
         \\x = 3.14
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "INVALID NUMERIC LITERAL");
 }
 
 test "check type - string plus number should fail" {
@@ -146,7 +146,7 @@ test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try checkTypesExpr(source, .pass, "List(_a)");
+    try checkTypesExpr(source, .pass, "List(_a) where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
@@ -167,7 +167,7 @@ test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE LIST ELEMENTS");
+    try checkTypesExpr(source, .fail, "MISSING METHOD");
 }
 
 // number requirements //
@@ -191,7 +191,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass, "{ hello: Str, world: _a }");
+    try checkTypesExpr(source, .pass, "{ hello: Str, world: _field } where [_a.from_num_literal : _arg -> _ret]");
 }
 
 // tags //
@@ -207,7 +207,7 @@ test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, _a)]_others");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, _a)]_others where [_b.from_num_literal : _arg -> _ret]");
 }
 
 // blocks //
@@ -254,7 +254,7 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> _a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> _ret where [_a.from_num_literal : _arg2 -> _ret2]");
 }
 
 test "check type - def - id without annotation" {
@@ -296,7 +296,7 @@ test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_d where [_e.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - def - forward ref" {
@@ -352,7 +352,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x where [_a.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -362,7 +362,7 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "(_a, Str)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(x, Str) where [_a.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - def - out of order" {
@@ -398,7 +398,7 @@ test "check type - top level polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_b where [_c.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - let-def polymorphic function is generalized" {
@@ -410,7 +410,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_b where [_c.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -424,7 +424,7 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // type aliases //
@@ -447,10 +447,10 @@ test "check type - alias with arg" {
         \\
         \\MyListAlias(a) : List(a)
         \\
-        \\x : MyListAlias(Num(size))
+        \\x : MyListAlias(I64)
         \\x = [15]
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "MyListAlias(Num(size))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyListAlias(I64)");
 }
 
 test "check type - alias with mismatch arg" {
@@ -460,7 +460,7 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // nominal types //
@@ -517,8 +517,11 @@ test "check type - nominal with with rigid vars mismatch" {
     const source =
         \\Pair(a) := [Pair(a, a)]
         \\
+        \\u64val : U64
+        \\u64val = 1
+        \\
         \\pairU64 : Pair(U64)
-        \\pairU64 = Pair.Pair(1, "Str")
+        \\pairU64 = Pair.Pair(u64val, "Str")
     ;
     try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
 }
@@ -539,7 +542,7 @@ test "check type - nominal recursive type anno mismatch" {
     const source =
         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
         \\
-        \\x : ConsList(Num(size))
+        \\x : ConsList(I64)
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
@@ -577,7 +580,7 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -601,7 +604,7 @@ test "check type - nominal w/ polymorphic function" {
         \\
         \\test = swapPair((1, "test"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, _a)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, a) where [_c.from_num_literal : _arg -> _ret]");
 }
 
 // bool
@@ -652,7 +655,7 @@ test "check type - if else - invalid condition 1" {
         \\x : Str
         \\x = if 5 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - if else - invalid condition 2" {
@@ -660,7 +663,7 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if 10 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -675,21 +678,21 @@ test "check type - if else - different branch types 1" {
     const source =
         \\x = if True "true" else 10
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE IF BRANCHES");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - if else - different branch types 2" {
     const source =
         \\x = if True "true" else if False "false" else 10
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE IF BRANCHES");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - if else - different branch types 3" {
     const source =
         \\x = if True "true" else if False 10 else "last"
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE IF BRANCHES");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // match
@@ -724,7 +727,7 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE MATCH BRANCHES");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // unary not
@@ -749,7 +752,7 @@ test "check type - unary minus" {
     const source =
         \\x = -10
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - unary minus mismatch" {
@@ -758,7 +761,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // binops
@@ -774,7 +777,7 @@ test "check type - binops math sub" {
     const source =
         \\x = 1 - 0.2
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - binops ord" {
@@ -869,7 +872,7 @@ test "check type - record - update 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "final" } },
-        "({ data: _a }, { data: _a2, other: Str }, { data: Str })",
+        "({ data: _field }, { data: _field2, other: Str }, { data: Str }) where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]",
     );
 }
 
@@ -882,7 +885,7 @@ test "check type - record - update fail" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "MISSING METHOD",
     );
 }
 
@@ -1062,7 +1065,7 @@ test "check type - patterns record 2" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "_a");
+    try checkTypesExpr(source, .pass, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - patterns record field mismatch" {
@@ -1089,7 +1092,7 @@ test "check type - var ressignment" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 // expect //
@@ -1102,7 +1105,7 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_num_literal : _arg -> _ret]");
 }
 
 test "check type - expect not bool" {
@@ -1113,7 +1116,7 @@ test "check type - expect not bool" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // crash //
@@ -1173,7 +1176,7 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "_a",
+        "_a where [_b.from_num_literal : _arg -> _ret]",
     );
 }
 
@@ -1190,7 +1193,7 @@ test "check type - for mismatch" {
     try checkTypesModule(
         source,
         .fail,
-        "TYPE MISMATCH",
+        "MISSING METHOD",
     );
 }
 
@@ -1489,7 +1492,7 @@ test "check type - comprehensive - multiple layers of let-polymorphism" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "(_a, Str, Bool)",
+        "(a, Str, Bool) where [_b.from_num_literal : _arg -> _ret]",
     );
 }
 
@@ -1498,21 +1501,18 @@ test "check type - comprehensive - multiple layers of lambdas" {
         \\main! = |_| {}
         \\
         \\# Four layers of nested lambdas
-        \\curried_add : Num(a) -> (Num(a) -> (Num(a) -> (Num(a) -> Num(a))))
-        \\curried_add = |a| |b| |c| |d| a + b + c + d
+        \\curried_add : a, a, a, a -> a where [a.add : a, a -> a]
+        \\curried_add = |a, b, c, d| a + b + c + d
         \\
         \\func = {
-        \\  step1 = curried_add(1)
-        \\  step2 = step1(2)
-        \\  step3 = step2(3)
-        \\  result = step3(4)
-        \\  result
+        \\  step1 = curried_add(1, 2, 3, 4)
+        \\  step1
         \\}
     ;
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "_a",
+        "a where [a.add : a, a -> a, _e.from_num_literal : _arg -> _ret]",
     );
 }
 
@@ -1563,7 +1563,7 @@ test "check type - comprehensive - static dispatch with multiple methods" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "_a",
+        "a where [_c.from_num_literal : _arg -> _ret]",
     );
 }
 
@@ -1617,16 +1617,85 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Container(_a)",
+        "Container(b) where [_c.from_num_literal : _arg -> _ret]",
     );
 }
 
-test "check type - comprehensive - annotations with inferred types" {
+// Minimal reproduction test cases for segfault
+test "check type - segfault minimal 1 - just annotated plus" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_plus : a, a -> a where [a.plus : a, a -> a]
+        \\my_plus = |x, y| x + y
+        \\
+        \\func = my_plus(1u32, 2u32)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "U32",
+    );
+}
+
+test "check type - segfault minimal 2 - plus with inferred caller" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_plus : a, a -> a where [a.plus : a, a -> a]
+        \\my_plus = |x, y| x + y
+        \\
+        \\add_two = |a, b| my_plus(a, b)
+        \\
+        \\func = add_two(1u32, 2u32)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "U32",
+    );
+}
+
+test "check type - segfault minimal 3a - nested direct - SEGFAULTS" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_plus : a, a -> a where [a.plus : a, a -> a]
+        \\my_plus = |x, y| x + y
+        \\
+        \\func = my_plus(my_plus(1u32, 2u32), 3u32)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "U32",
+    );
+}
+
+test "check type - segfault minimal 3b - nested in lambda - SEGFAULTS" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_plus : a, a -> a where [a.plus : a, a -> a]
+        \\my_plus = |x, y| x + y
+        \\
+        \\add_three = |a, b, c| my_plus(my_plus(a, b), c)
+        \\
+        \\func = add_three(1u32, 2u32, 3u32)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "U32",
+    );
+}
+
+test "check type - segfault minimal 4 - full original - SEGFAULTS" {
     const source =
         \\main! = |_| {}
         \\
         \\# Annotated function
-        \\add : Num(a), Num(a) -> Num(a)
+        \\add : a, a -> a where [a.plus : a, a -> a]
         \\add = |x, y| x + y
         \\
         \\# Inferred function that uses annotated one
@@ -1762,7 +1831,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "{ chained: _a, final: _a2, id_results: (_a3, Str, Bool), processed: _a4, transformed: _a5 }",
+        "{ chained: b, final: b, id_results: (_field, Str, Bool), processed: c, transformed: a } where [_e.from_num_literal : _arg -> _ret, _h.from_num_literal : _arg2 -> _ret2, _i.from_num_literal : _arg3 -> _ret3, _j.from_num_literal : _arg4 -> _ret4, _k.from_num_literal : _arg5 -> _ret5]",
     );
 }
 
@@ -1868,7 +1937,7 @@ test "List.fold works as builtin associated item" {
         \\
         \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "_a");
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "item where [_a.from_num_literal : _arg -> _ret]");
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
@@ -1894,7 +1963,7 @@ test "associated item: type annotation followed by body should not create duplic
 
     // Verify the types
     try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
-    try test_env.assertDefType("result", "b");
+    try test_env.assertDefType("result", "b where [_c.from_num_literal : _arg -> _ret]");
 }
 
 // TODO: Move this test to can

@@ -72,5 +72,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: _field, balance: _field2, name: Str, scores: List(_a) }"))
+(expr (type "{ active: Error, age: _field, balance: _field2, name: Str, scores: List(_a) } where [_b.from_num_literal : _arg -> _ret, _c.from_num_literal : _arg2 -> _ret2, _d.from_num_literal : _arg3 -> _ret3]"))
 ~~~

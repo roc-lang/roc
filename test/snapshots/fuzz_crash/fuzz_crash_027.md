@@ -2250,7 +2250,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> _ret"))
+		(patt (type "Bool -> _ret where [_d.from_num_literal : _arg -> _ret2]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2287,7 +2287,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> _ret"))
+		(expr (type "Bool -> _ret where [_d.from_num_literal : _arg -> _ret2]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

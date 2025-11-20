@@ -16,6 +16,7 @@ match ... {
 ~~~
 # EXPECTED
 INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
+MISSING METHOD - pattern_alternatives_mixed.md:2:10:2:11
 # PROBLEMS
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern first pattern in this third`match` differs from previous ones:
@@ -41,6 +42,17 @@ But all the previous patterns have this type:
 All patterns in an `match` must have compatible types.
 
 
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**pattern_alternatives_mixed.md:2:10:2:11:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	        ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

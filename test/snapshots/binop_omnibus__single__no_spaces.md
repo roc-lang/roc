@@ -9,6 +9,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
+MISSING METHOD - binop_omnibus__single__no_spaces.md:1:32:1:34
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -20,6 +21,17 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
     ^^^
 
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Bool**, which has no method with that name:
+**binop_omnibus__single__no_spaces.md:1:32:1:34:**
+```roc
+Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
+```
+                               ^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

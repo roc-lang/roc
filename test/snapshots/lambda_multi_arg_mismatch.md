@@ -28,6 +28,8 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:5
+MISSING METHOD - lambda_multi_arg_mismatch.md:9:5:9:7
+MISSING METHOD - lambda_multi_arg_mismatch.md:13:5:13:9
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
@@ -87,6 +89,28 @@ But the seventh argument has the type:
     _[True][ProvidedByCompiler]_
 
 `multi_arg_fn` needs these arguments to have compatible types.
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**lambda_multi_arg_mismatch.md:9:5:9:7:**
+```roc
+    42,        # x1: U64 (type 'a')
+```
+    ^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**lambda_multi_arg_mismatch.md:13:5:13:9:**
+```roc
+    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
+```
+    ^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -94,6 +94,8 @@ out_of_range_ident: Ident.Idx,
 builtin_module_ident: Ident.Idx,
 /// Interned identifier for "plus" - used for + operator desugaring
 plus_ident: Ident.Idx,
+/// Interned identifier for "negate" - used for unary - operator desugaring
+negate_ident: Ident.Idx,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -162,6 +164,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
     const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
+    const negate_ident = try common.insertIdent(gpa, Ident.for_text(Ident.NEGATE_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -185,6 +188,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
+        .negate_ident = negate_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1579,6 +1583,8 @@ pub const Serialized = struct {
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
     plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
+    negate_ident_reserved: u32, // Reserved space for negate_ident field (interned during deserialization)
+    deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1606,6 +1612,9 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
+        // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
+        try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
+
         // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
         // the space needs to be here, but the values will be set separately during deserialization (these are runtime-only).
         self.gpa = .{ 0, 0 };
@@ -1618,6 +1627,7 @@ pub const Serialized = struct {
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
         self.plus_ident_reserved = 0;
+        self.negate_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1662,6 +1672,8 @@ pub const Serialized = struct {
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
             .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 
         return env;

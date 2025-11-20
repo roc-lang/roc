@@ -2539,7 +2539,33 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+        // Self-referential constraints like `a.plus : a, a -> a` are valid and expected.
+        // To prevent infinite recursion when unifying them, we use variable marks to detect
+        // if we're already in the process of unifying these constraint function variables.
+        //
+        // This works together with the occurs check in occurs.zig which follows constraints
+        // to detect truly infinite types.
+        const a_desc = self.types_store.resolveVar(a_constraint.fn_var);
+        const b_desc = self.types_store.resolveVar(b_constraint.fn_var);
+
+        // Check if either variable is marked as "visited" (currently being unified)
+        if (a_desc.desc.mark == .visited or b_desc.desc.mark == .visited) {
+            // Already unifying these constraint functions - skip to prevent infinite recursion
+            return;
+        }
+
+        // Mark variables as being unified
+        self.types_store.setDescMark(a_desc.desc_idx, .visited);
+        self.types_store.setDescMark(b_desc.desc_idx, .visited);
+
+        // Unify the constraint function types
+        const result = self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+
+        // Unmark variables
+        self.types_store.setDescMark(a_desc.desc_idx, .none);
+        self.types_store.setDescMark(b_desc.desc_idx, .none);
+
+        try result;
     }
 
     const PartitionedStaticDispatchConstraints = struct {

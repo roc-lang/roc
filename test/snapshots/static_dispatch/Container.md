@@ -436,7 +436,7 @@ func = {
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
 		(patt (type "[Value(c), Empty]_others, c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "b")))
+		(patt (type "b where [_c.from_num_literal : _arg -> _ret]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -446,5 +446,5 @@ func = {
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
 		(expr (type "[Value(c), Empty]_others, c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "b"))))
+		(expr (type "b where [_c.from_num_literal : _arg -> _ret]"))))
 ~~~

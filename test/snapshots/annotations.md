@@ -30,7 +30,9 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
 TYPE MISMATCH - annotations.md:16:21:16:35
+MISSING METHOD - annotations.md:16:33:16:34
 TYPE MISMATCH - annotations.md:19:22:19:41
+MISSING METHOD - annotations.md:19:32:19:33
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
@@ -47,6 +49,17 @@ It has the type:
 But the type annotation says it should have the type:
     _Pair(Num.U8)_
 
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**annotations.md:16:33:16:34:**
+```roc
+failPairDiffTypes = mkPair("1", 2)
+```
+                                ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **annotations.md:19:22:19:41:**
@@ -60,6 +73,17 @@ It has the type:
 
 But the type annotation says it should have the type:
     _Pair(Num.U64)_
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**annotations.md:19:32:19:33:**
+```roc
+failPairDiffTypes2 = Pair.Pair(1, "str")
+```
+                               ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:

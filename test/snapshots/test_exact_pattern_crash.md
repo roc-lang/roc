@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __arg, _arg2, (e -> e), (h -> h) -> _ret_
+    __arg, _arg2, (e -> e), (h -> h) -> _ret where [i, j, (e -> e), (h -> h) -> k.from_num_literal : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_num_literal : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_num_literal : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_num_literal : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_num_literal : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_num_literal : i, j, (e -> e), (h -> h) -> k]_
 
 But I expected it to be:
     _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_

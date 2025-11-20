@@ -8,9 +8,19 @@ type=expr
 [[], [[], [1]], [[], ["hello"]]]
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - can_list_triple_nested_heterogeneous.md:1:12:1:13
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**can_list_triple_nested_heterogeneous.md:1:12:1:13:**
+```roc
+[[], [[], [1]], [[], ["hello"]]]
+```
+           ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,Int,CloseSquare,CloseSquare,Comma,OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,StringStart,StringPart,StringEnd,CloseSquare,CloseSquare,CloseSquare,

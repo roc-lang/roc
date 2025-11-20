@@ -22,6 +22,8 @@ pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
 pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
+/// Method name for negation - used by unary - operator desugaring
+pub const NEGATE_METHOD_NAME = "negate";
 
 /// The original text of the identifier.
 raw_text: []const u8,

@@ -85,5 +85,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(b)"))
+(expr (type "List(b) where [_c.from_num_literal : _arg -> _ret]"))
 ~~~

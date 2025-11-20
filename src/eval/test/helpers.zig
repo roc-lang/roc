@@ -405,6 +405,117 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 }
 
 /// Parse and canonicalize an expression.
+/// Rewrite deferred numeric literals to match their inferred types
+/// This is similar to what ComptimeEvaluator does but for test expressions
+fn rewriteDeferredNumericLiterals(env: *ModuleEnv, types_store: *types.Store) !void {
+    const literals = env.deferred_numeric_literals.items.items;
+
+    for (literals) |literal| {
+        // Resolve the type variable to get the concrete type
+        const resolved = types_store.resolveVar(literal.type_var);
+        const content = resolved.desc.content;
+
+        // Extract the nominal type if this is a structure
+        const nominal_type = switch (content) {
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nom| nom,
+                else => continue, // Not a nominal type
+            },
+            else => continue, // Not a structure
+        };
+
+        // Extract short type name (e.g., "I64" from "Num.I64")
+        const type_name_bytes = env.getIdent(nominal_type.ident.ident_idx);
+        const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
+            type_name_bytes[dot_idx + 1 ..]
+        else
+            type_name_bytes;
+
+        const num_lit_info = literal.constraint.num_literal orelse continue;
+
+        // Rewrite the expression
+        try rewriteNumericLiteralExpr(env, literal.expr_idx, short_type_name, num_lit_info);
+    }
+}
+
+/// Rewrite a single numeric literal expression to match its inferred type
+fn rewriteNumericLiteralExpr(
+    env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    type_name: []const u8,
+    num_lit_info: types.NumLiteralInfo,
+) !void {
+    const current_expr = env.store.getExpr(expr_idx);
+
+    // Extract the f64 value from the current expression
+    const f64_value: f64 = switch (current_expr) {
+        .e_dec => |dec| blk: {
+            // Dec is stored as i128 scaled by 10^18
+            const scaled = @as(f64, @floatFromInt(dec.value.num));
+            break :blk scaled / 1e18;
+        },
+        .e_dec_small => |small| blk: {
+            // Small dec has numerator and denominator_power_of_ten
+            const numerator = @as(f64, @floatFromInt(small.value.numerator));
+            const power: u8 = small.value.denominator_power_of_ten;
+            var divisor: f64 = 1.0;
+            var i: u8 = 0;
+            while (i < power) : (i += 1) {
+                divisor *= 10.0;
+            }
+            break :blk numerator / divisor;
+        },
+        else => return, // Not a dec literal - nothing to rewrite
+    };
+
+    // Determine the target expression type based on type_name
+    if (std.mem.eql(u8, type_name, "F32")) {
+        // Rewrite to e_frac_f32
+        const f32_value: f32 = @floatCast(f64_value);
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        env.store.nodes.set(node_idx, .{
+            .tag = .expr_frac_f32,
+            .data_1 = @bitCast(f32_value),
+            .data_2 = 1, // has_suffix = true
+            .data_3 = 0,
+        });
+    } else if (std.mem.eql(u8, type_name, "F64")) {
+        // Rewrite to e_frac_f64
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const f64_bits: u64 = @bitCast(f64_value);
+        const low: u32 = @truncate(f64_bits);
+        const high: u32 = @truncate(f64_bits >> 32);
+        env.store.nodes.set(node_idx, .{
+            .tag = .expr_frac_f64,
+            .data_1 = low,
+            .data_2 = high,
+            .data_3 = 1, // has_suffix = true
+        });
+    } else if (!num_lit_info.is_fractional) {
+        // Integer type - rewrite to e_num
+        const num_kind: CIR.NumKind = blk: {
+            if (std.mem.eql(u8, type_name, "I8")) break :blk .i8;
+            if (std.mem.eql(u8, type_name, "U8")) break :blk .u8;
+            if (std.mem.eql(u8, type_name, "I16")) break :blk .i16;
+            if (std.mem.eql(u8, type_name, "U16")) break :blk .u16;
+            if (std.mem.eql(u8, type_name, "I32")) break :blk .i32;
+            if (std.mem.eql(u8, type_name, "U32")) break :blk .u32;
+            if (std.mem.eql(u8, type_name, "I64")) break :blk .i64;
+            if (std.mem.eql(u8, type_name, "U64")) break :blk .u64;
+            if (std.mem.eql(u8, type_name, "I128")) break :blk .i128;
+            if (std.mem.eql(u8, type_name, "U128")) break :blk .u128;
+            break :blk .int_unbound;
+        };
+
+        const int_value = CIR.IntValue{
+            .bytes = @bitCast(num_lit_info.value),
+            .kind = .i128,
+        };
+        try env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+    }
+    // For Dec type, keep the original e_dec/e_dec_small expression
+}
+
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) TestParseError!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -552,6 +663,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);
 
+    // Rewrite deferred numeric literals to match their inferred types
+    try rewriteDeferredNumericLiterals(module_env, &module_env.types);
+
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
         .module_env = module_env,
@@ -635,8 +749,21 @@ test "interpreter reuse across multiple evaluations" {
             defer result.decref(layout_cache, ops);
 
             try std.testing.expect(result.layout.tag == .scalar);
-            try std.testing.expect(result.layout.data.scalar.tag == .int);
-            try std.testing.expectEqual(case.expected, result.asI128());
+
+            // With numeric literal constraints, integer literals may default to Dec instead of Int
+            // Accept either int or Dec (frac) layout
+            const actual_value: i128 = switch (result.layout.data.scalar.tag) {
+                .int => result.asI128(),
+                .frac => blk: {
+                    try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
+                    const dec_value = result.asDec();
+                    // Dec stores values scaled by 10^18, divide to get the integer part
+                    break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
+                },
+                else => unreachable,
+            };
+
+            try std.testing.expectEqual(case.expected, actual_value);
         }
 
         try std.testing.expectEqual(@as(usize, 0), interpreter.bindings.items.len);

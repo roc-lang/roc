@@ -79,14 +79,14 @@ Foo := [A, B, C].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a")))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))))
 ~~~

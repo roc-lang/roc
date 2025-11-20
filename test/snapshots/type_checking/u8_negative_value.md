@@ -9,9 +9,21 @@ x : U8
 x = -1
 ~~~
 # EXPECTED
-NIL
+INVALID NUMERIC LITERAL - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-NIL
+**INVALID NUMERIC LITERAL**
+The numeric literal **-1** is out of range for its inferred type:
+**u8_negative_value.md:2:5:2:7:**
+```roc
+x = -1
+```
+    ^^
+
+Its inferred type is:
+    _Num.U8_
+
+Hint: Use a larger integer type or _Dec_ for arbitrary precision.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

@@ -121,5 +121,5 @@ match result {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
 ~~~

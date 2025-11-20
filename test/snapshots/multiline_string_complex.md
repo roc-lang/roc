@@ -55,6 +55,7 @@ x = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -69,6 +70,17 @@ It has the type:
 
 But I expected it to be:
     _Bool_
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**multiline_string_complex.md:37:3:37:4:**
+```roc
+		0 - \\
+```
+		^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

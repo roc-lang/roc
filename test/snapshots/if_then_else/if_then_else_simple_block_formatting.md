@@ -11,6 +11,7 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
+TYPE DOES NOT HAVE METHODS - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -21,6 +22,19 @@ Is there an `import` or `exposing` missing up-top?
 if bool {
 ```
    ^^^^
+
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_num_literal` on a type that doesn't support methods:
+**if_then_else_simple_block_formatting.md:3:8:3:9:**
+```roc
+} else 2
+```
+       ^
+
+This type doesn't support methods:
+    _[A]_others_
+
 
 
 # TOKENS

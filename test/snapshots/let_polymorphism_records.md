@@ -49,8 +49,21 @@ main = |_| {
 }
 ~~~
 # EXPECTED
+MISSING METHOD - let_polymorphism_records.md:26:47:26:49
 UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
+TYPE DOES NOT HAVE METHODS - let_polymorphism_records.md:38:2:38:3
 # PROBLEMS
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**let_polymorphism_records.md:26:47:26:49:**
+```roc
+updated_mismatch = update_data(str_container, 99)
+```
+                                              ^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **let_polymorphism_records.md:38:2:38:17:**
@@ -61,6 +74,19 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     _{ ..a, data: b }, b -> { ..a, data: b }_
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_num_literal` on a type that doesn't support methods:
+**let_polymorphism_records.md:38:2:38:3:**
+```roc
+	1 + update_data
+```
+	^
+
+This type doesn't support methods:
+    _{ ..a, data: b }, b -> { ..a, data: b }_
+
+
 
 # TOKENS
 ~~~zig
@@ -384,41 +410,41 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
-		(patt (type "_a"))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]"))
 		(patt (type "Str"))
 		(patt (type "List(_a)"))
-		(patt (type "List(_a)"))
-		(patt (type "a -> { count: _field, data: a }"))
-		(patt (type "{ count: _field, data: _field2 }"))
-		(patt (type "{ count: _field, data: Str }"))
-		(patt (type "{ count: _field, data: List(_a) }"))
+		(patt (type "List(_a) where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "a -> { count: _field, data: a } where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "{ count: _field, data: _field2 } where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]"))
+		(patt (type "{ count: _field, data: Str } where [_a.from_num_literal : _arg -> _ret]"))
+		(patt (type "{ count: _field, data: List(_a) } where [_b.from_num_literal : _arg -> _ret]"))
 		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(patt (type "{ count: _field, data: _field2 }"))
-		(patt (type "{ count: _field, data: Str }"))
-		(patt (type "{ count: _field, data: Str }"))
+		(patt (type "{ count: _field, data: _field2 } where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]"))
+		(patt (type "{ count: _field, data: Str } where [_a.from_num_literal : _arg -> _ret]"))
+		(patt (type "{ count: _field, data: Str } where [_a.from_num_literal : _arg -> _ret]"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: _field }"))
+		(patt (type "{ value: _field } where [_a.from_num_literal : _arg -> _ret]"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(_a) }"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "{ value: List(_a) } where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "_arg -> _ret where [_a.from_num_literal : _arg2 -> _ret2]")))
 	(expressions
-		(expr (type "_a"))
-		(expr (type "_a"))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
 		(expr (type "Str"))
 		(expr (type "List(_a)"))
-		(expr (type "List(_a)"))
-		(expr (type "a -> { count: _field, data: a }"))
-		(expr (type "{ count: _field, data: _field2 }"))
-		(expr (type "{ count: _field, data: Str }"))
-		(expr (type "{ count: _field, data: List(_a) }"))
+		(expr (type "List(_a) where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "a -> { count: _field, data: a } where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "{ count: _field, data: _field2 } where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]"))
+		(expr (type "{ count: _field, data: Str } where [_a.from_num_literal : _arg -> _ret]"))
+		(expr (type "{ count: _field, data: List(_a) } where [_b.from_num_literal : _arg -> _ret]"))
 		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(expr (type "{ count: _field, data: _field2 }"))
-		(expr (type "{ count: _field, data: Str }"))
-		(expr (type "{ count: _field, data: Str }"))
+		(expr (type "{ count: _field, data: _field2 } where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]"))
+		(expr (type "{ count: _field, data: Str } where [_a.from_num_literal : _arg -> _ret]"))
+		(expr (type "{ count: _field, data: Str } where [_a.from_num_literal : _arg -> _ret]"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: _field }"))
+		(expr (type "{ value: _field } where [_a.from_num_literal : _arg -> _ret]"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(_a) }"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "{ value: List(_a) } where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "_arg -> _ret where [_a.from_num_literal : _arg2 -> _ret2]"))))
 ~~~

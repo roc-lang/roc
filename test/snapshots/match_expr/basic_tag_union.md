@@ -13,6 +13,7 @@ match color {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
+MISSING METHOD - basic_tag_union.md:3:10:3:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
@@ -24,6 +25,17 @@ match color {
 ```
       ^^^^^
 
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**basic_tag_union.md:3:10:3:11:**
+```roc
+	Blue => 2
+```
+	        ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

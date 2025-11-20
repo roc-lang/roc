@@ -13,9 +13,57 @@ match Answer {
 }
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - literal_patterns.md:2:15:2:16
+MISSING METHOD - literal_patterns.md:4:17:4:18
+TYPE DOES NOT HAVE METHODS - literal_patterns.md:5:5:5:7
+MISSING METHOD - literal_patterns.md:5:11:5:12
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**literal_patterns.md:2:15:2:16:**
+```roc
+    Answer => 1
+```
+              ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**literal_patterns.md:4:17:4:18:**
+```roc
+    Greeting => 3
+```
+                ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_num_literal` on a type that doesn't support methods:
+**literal_patterns.md:5:5:5:7:**
+```roc
+    10 => 4
+```
+    ^^
+
+This type doesn't support methods:
+    _[Answer, Zero, Greeting]_others_
+
+
+
+**MISSING METHOD**
+This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+**literal_patterns.md:5:11:5:12:**
+```roc
+    10 => 4
+```
+          ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 KwMatch,UpperIdent,OpenCurly,

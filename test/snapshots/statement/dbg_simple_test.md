@@ -62,7 +62,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]")))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))))
 ~~~
