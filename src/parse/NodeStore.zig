@@ -358,6 +358,13 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.rhs = @intFromEnum(f.body);
             node.region = f.region;
         },
+        .@"while" => |w| {
+            node.tag = .@"while";
+            node.main_token = @intFromEnum(w.cond);
+            node.data.lhs = @intFromEnum(w.cond);
+            node.data.rhs = @intFromEnum(w.body);
+            node.region = w.region;
+        },
         .@"return" => |r| {
             node.tag = .@"return";
             node.data.lhs = @intFromEnum(r.expr);
@@ -1186,6 +1193,13 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             return .{ .@"for" = .{
                 .patt = @enumFromInt(node.main_token),
                 .expr = @enumFromInt(node.data.lhs),
+                .body = @enumFromInt(node.data.rhs),
+                .region = node.region,
+            } };
+        },
+        .@"while" => {
+            return .{ .@"while" = .{
+                .cond = @enumFromInt(node.data.lhs),
                 .body = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };

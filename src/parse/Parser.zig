@@ -1088,6 +1088,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
 
             return statement_idx;
         },
+        .KwWhile => {
+            const start = self.pos;
+            self.advance();
+            const cond = try self.parseExpr();
+            const body = try self.parseExpr();
+            const statement_idx = try self.store.addStatement(.{ .@"while" = .{
+                .region = .{ .start = start, .end = self.pos },
+                .cond = cond,
+                .body = body,
+            } });
+
+            return statement_idx;
+        },
         .KwCrash => {
             const start = self.pos;
             self.advance();

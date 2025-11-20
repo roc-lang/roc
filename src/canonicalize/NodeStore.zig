@@ -132,7 +132,7 @@ pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 58;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 35;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -255,6 +255,10 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             .patt = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
             .body = @enumFromInt(node.data_3),
+        } },
+        .statement_while => return CIR.Statement{ .s_while = .{
+            .cond = @enumFromInt(node.data_1),
+            .body = @enumFromInt(node.data_2),
         } },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
@@ -1268,6 +1272,11 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_1 = @intFromEnum(s.patt);
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = @intFromEnum(s.body);
+        },
+        .s_while => |s| {
+            node.tag = .statement_while;
+            node.data_1 = @intFromEnum(s.cond);
+            node.data_2 = @intFromEnum(s.body);
         },
         .s_return => |s| {
             node.tag = .statement_return;

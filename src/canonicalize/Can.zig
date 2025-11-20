@@ -1526,6 +1526,15 @@ pub fn canonicalizeFile(
                     .region = region,
                 } });
             },
+            .@"while" => |while_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("while");
+                const region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
             .@"return" => |return_stmt| {
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("return");
@@ -7817,6 +7826,71 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 .s_for = .{
                     .patt = ptrn,
                     .expr = expr.idx,
+                    .body = body.idx,
+                },
+            }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .@"while" => |while_stmt| {
+            // Tmp state to capture free vars from both cond & body
+            var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+            defer captures.deinit(self.env.gpa);
+
+            // Canonicalize the condition expression
+            // while $count < 10 {
+            //       ^^^^^^^^^
+            const cond = blk: {
+                const cond_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(cond_free_vars_start);
+
+                const czerd_cond = try self.canonicalizeExprOrMalformed(while_stmt.cond);
+
+                // Copy free vars into captures
+                const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_cond.free_vars orelse DataSpan.empty());
+                for (free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk czerd_cond;
+            };
+
+            // Canonicalize the body
+            // while $count < 10 {
+            //     print!($count.toStr())  <<<<
+            //     $count = $count + 1
+            // }
+            const body = blk: {
+                const body_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                const body_expr = try self.canonicalizeExprOrMalformed(while_stmt.body);
+
+                // Copy free vars into captures
+                const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars orelse DataSpan.empty());
+                for (body_free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk body_expr;
+            };
+
+            // Get captures and copy to free_vars for parent
+            const free_vars_start = self.scratch_free_vars.top();
+            var captures_iter = captures.keyIterator();
+            while (captures_iter.next()) |capture| {
+                try self.scratch_free_vars.append(capture.*);
+            }
+            const free_vars = if (self.scratch_free_vars.top() > free_vars_start)
+                self.scratch_free_vars.spanFrom(free_vars_start)
+            else
+                null;
+
+            // Insert into store
+            const region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region);
+            const stmt_idx = try self.env.addStatement(Statement{
+                .s_while = .{
+                    .cond = cond.idx,
                     .body = body.idx,
                 },
             }, region);

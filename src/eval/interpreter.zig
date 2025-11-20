@@ -637,6 +637,32 @@ pub const Interpreter = struct {
                                 elem_value.decref(&self.runtime_layout_store, roc_ops);
                             }
                         },
+                        .s_while => |while_stmt| {
+                            // Loop until condition becomes false
+                            while (true) {
+                                // 1. EVALUATE CONDITION
+                                const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
+                                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                                const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
+
+                                // 2. CHECK IF CONDITION IS TRUE
+                                const cond_is_true = try self.boolValueIsTrue(cond_value, cond_rt_var);
+
+                                // 3. EXIT LOOP IF CONDITION IS FALSE
+                                if (!cond_is_true) {
+                                    break;
+                                }
+
+                                // 4. EVALUATE BODY
+                                const body_result = try self.evalExprMinimal(while_stmt.body, roc_ops, null);
+                                defer body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Body result is {} (empty record), so nothing to do with it
+                                // Loop continues to next iteration
+                            }
+
+                            // While loop completes and returns {} (implicitly)
+                        },
                         else => return error.NotImplemented,
                     }
                 }

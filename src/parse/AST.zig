@@ -861,6 +861,11 @@ pub const Statement = union(enum) {
         body: Expr.Idx,
         region: TokenizedRegion,
     },
+    @"while": struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
     @"return": struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
@@ -1090,6 +1095,20 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .@"while" => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // condition
+                try ast.store.getExpr(a.cond).pushToSExprTree(gpa, env, ast, tree);
+
+                // body
+                try ast.store.getExpr(a.body).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .@"return" => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -1144,6 +1163,7 @@ pub const Statement = union(enum) {
             .dbg => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
+            .@"while" => |s| s.region,
             .@"return" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,

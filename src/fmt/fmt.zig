@@ -619,6 +619,24 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(f.body);
             },
+            .@"while" => |w| {
+                try fmt.pushAll("while");
+                const cond_region = fmt.nodeRegion(@intFromEnum(w.cond));
+                if (multiline and try fmt.flushCommentsBefore(cond_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(w.cond);
+                if (multiline and try fmt.flushCommentsBefore(cond_region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(w.body);
+            },
             .crash => |c| {
                 try fmt.pushAll("crash");
                 const body_region = fmt.nodeRegion(@intFromEnum(c.expr));
