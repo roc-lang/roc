@@ -2225,9 +2225,6 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
     const node = store.nodes.get(nid);
 
-    if (node.tag != .def) {
-        std.debug.print("ERROR: getDef() called with idx={}, but node.tag={s} (expected .def)\n", .{ @intFromEnum(def_idx), @tagName(node.tag) });
-    }
     std.debug.assert(node.tag == .def);
 
     const extra_start = node.data_1;

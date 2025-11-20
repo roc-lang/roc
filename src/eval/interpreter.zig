@@ -2251,42 +2251,22 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
-                // target_node_idx is a raw node index - check what type it is
-                const node_idx: can.CIR.Node.Idx = @enumFromInt(lookup.target_node_idx);
-                const node = other_env.store.nodes.get(node_idx);
+                // The target_node_idx should always point to a def node
+                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                const target_def = other_env.store.getDef(target_def_idx);
 
-                std.debug.print("DEBUG e_lookup_external: target_node_idx={}, node.tag={s}\n", .{ lookup.target_node_idx, @tagName(node.tag) });
-
-                switch (node.tag) {
-                    .def => {
-                        // It's a def - evaluate the def's expression
-                        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                        const target_def = other_env.store.getDef(target_def_idx);
-
-                        // Save both env and bindings state
-                        const saved_env = self.env;
-                        const saved_bindings_len = self.bindings.items.len;
-                        self.env = @constCast(other_env);
-                        defer {
-                            self.env = saved_env;
-                            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-                        }
-
-                        // Evaluate the definition's expression in the other module's context
-                        const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
-                        return result;
-                    },
-                    .lambda_capture => {
-                        // This indicates a bug - lambda_capture nodes should never be exposed
-                        std.debug.print("ERROR: e_lookup_external incorrectly refers to lambda_capture node (idx={})\n", .{lookup.target_node_idx});
-                        std.debug.print("ERROR: This suggests the exposed node index was set incorrectly during canonicalization\n", .{});
-                        return error.NotImplemented;
-                    },
-                    else => {
-                        std.debug.print("ERROR: e_lookup_external refers to unsupported node type: {s} (idx={})\n", .{ @tagName(node.tag), lookup.target_node_idx });
-                        return error.NotImplemented;
-                    },
+                // Save both env and bindings state
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(other_env);
+                defer {
+                    self.env = saved_env;
+                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
+
+                // Evaluate the definition's expression in the other module's context
+                const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
+                return result;
             },
             .e_unary_minus => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
