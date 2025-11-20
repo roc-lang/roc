@@ -3255,18 +3255,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                         }
                     };
 
-                    // TODO: Roc's design is to only generalize lambdas and number literals
-                    // For now, disable generalization to fix tag union unification
-                    // When re-enabling: check if RHS is lambda/number, only then push rank + generalize
-
-                    // Enter a new rank (DISABLED for tag union fix)
-                    // try env.var_pool.pushRank();
-                    // defer env.var_pool.popRank();
-
+                    // Regular declarations don't use generalization.
+                    // Lambdas and number literals use s_decl_gen for let-polymorphism.
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
-
-                    // Generalize (DISABLED for tag union fix)
-                    // try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
