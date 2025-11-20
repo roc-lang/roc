@@ -941,6 +941,33 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             slot.* = 0;
             return;
         },
+        .tuple => {
+            if (self.ptr == null) return;
+            const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
+            if (tuple_data.fields.count == 0) return;
+
+            const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+            var elem_index: usize = 0;
+            while (elem_index < element_layouts.len) : (elem_index += 1) {
+                const elem_info = element_layouts.get(elem_index);
+                const elem_layout = layout_cache.getLayout(elem_info.layout);
+
+                const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
+                const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+
+                const elem_value = StackValue{
+                    .layout = elem_layout,
+                    .ptr = elem_ptr,
+                    .is_initialized = true,
+                };
+
+                elem_value.decref(layout_cache, ops);
+            }
+
+            return;
+        },
         else => {},
     }
 

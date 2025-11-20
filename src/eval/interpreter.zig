@@ -1495,11 +1495,10 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_match => |m| {
-                // Evaluate scrutinee once
+                // Evaluate scrutinee once and protect from stack corruption
+                // Use pushCopy to allocate a new stack location for the scrutinee header,
+                // preventing it from being corrupted by pattern match bindings
                 const scrutinee_temp = try self.evalExprMinimal(m.cond, roc_ops, null);
-
-                // Make a copy to protect from stack reuse during pattern matching
-                // pushCopy increments refcount, so we only decref the copy, not the temp
                 const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
                 defer scrutinee.decref(&self.runtime_layout_store, roc_ops);
 
