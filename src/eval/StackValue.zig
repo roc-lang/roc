@@ -427,23 +427,14 @@ pub const TupleAccessor = struct {
         // Find the sorted index corresponding to this original index
         const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
 
-        std.debug.print("[GET ELEMENT] original_index={}, sorted_index={}\n", .{ original_index, sorted_index });
-
         std.debug.assert(self.base_value.is_initialized);
         std.debug.assert(self.base_value.ptr != null);
 
         const element_layout_info = self.element_layouts.get(sorted_index);
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
 
-        std.debug.print("[GET ELEMENT] element_layout.tag={s}\n", .{@tagName(element_layout.tag)});
-        if (element_layout.tag == .scalar and element_layout.data.scalar.tag == .int) {
-            std.debug.print("[GET ELEMENT] element int precision={s}\n", .{@tagName(element_layout.data.scalar.data.int)});
-        }
-
         // Get the offset for this element within the tuple (using sorted index)
         const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(sorted_index));
-
-        std.debug.print("[GET ELEMENT] element_offset={}\n", .{element_offset});
 
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));

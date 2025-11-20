@@ -4456,7 +4456,6 @@ fn canonicalizeExprOrMalformed(
 // Canonicalize a tag expr
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
-
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
     const free_vars_start = self.scratch_free_vars.top();
@@ -7587,7 +7586,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             }, region);
                             try self.env.store.addScratchDef(def_idx);
 
-                            // Create the statement
+                            // Create the statement (annotation-only, no generalization)
                             const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                                 .pattern = pattern_idx,
                                 .expr = anno_only_expr,
@@ -7657,7 +7656,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         }, region);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Create the statement
+                        // Create the statement (annotation-only, no generalization)
                         const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                             .pattern = pattern_idx,
                             .expr = anno_only_expr,
@@ -7727,7 +7726,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 }, region);
                 try self.env.store.addScratchDef(def_idx);
 
-                // Create the statement
+                // Create the statement (annotation-only, no generalization)
                 const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                     .pattern = pattern_idx,
                     .expr = anno_only_expr,
@@ -7916,14 +7915,40 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
 
-    // Create a declaration statement
-    const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
-        .pattern = pattern_idx,
-        .expr = expr.idx,
-        .anno = mb_validated_anno,
-    } }, region);
+    // Determine if we should generalize based on RHS
+    const should_generalize = self.shouldGeneralizeBinding(expr.idx);
+
+    // Create a declaration statement (generalized or not)
+    const stmt_idx = if (should_generalize)
+        try self.env.addStatement(Statement{ .s_decl_gen = .{
+            .pattern = pattern_idx,
+            .expr = expr.idx,
+            .anno = mb_validated_anno,
+        } }, region)
+    else
+        try self.env.addStatement(Statement{ .s_decl = .{
+            .pattern = pattern_idx,
+            .expr = expr.idx,
+            .anno = mb_validated_anno,
+        } }, region);
 
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+}
+
+/// Determines whether a let binding should be generalized based on its RHS expression.
+/// According to Roc's value restriction, only lambdas and number literals should be generalized.
+fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
+    const expr = self.env.store.getExpr(expr_idx);
+    return switch (expr) {
+        // Lambdas should be generalized (both closures and pure lambdas)
+        .e_closure, .e_lambda => true,
+
+        // Number literals should be generalized
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
+
+        // Everything else should NOT be generalized
+        else => false,
+    };
 }
 
 // A canonicalized statement

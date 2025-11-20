@@ -469,6 +469,14 @@ pub const Interpreter = struct {
                                 try Placeholder.add(self, d.pattern, d.expr);
                             }
                         },
+                        .s_decl_gen => |d| {
+                            const patt = self.env.store.getPattern(d.pattern);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(d.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
+                                try Placeholder.add(self, d.pattern, d.expr);
+                            }
+                        },
                         .s_var => |v| {
                             const patt = self.env.store.getPattern(v.pattern_idx);
                             if (patt != .assign) continue;
@@ -486,6 +494,27 @@ pub const Interpreter = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |d| {
+                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
+                            }
+
+                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
+                                return error.TypeMismatch;
+                            }
+
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
+                        },
+                        .s_decl_gen => |d| {
                             const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                             const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
@@ -1028,19 +1057,21 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
 
-                // Get the first element's variables, which is representative of all the element vars
-                const elems = self.env.store.sliceExpr(list_expr.elems);
-                std.debug.assert(elems.len > 0);
-                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-
-                const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
-                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
-
                 var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
                 defer values.deinit();
 
-                for (elem_indices) |elem_idx| {
-                    const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
+                // Evaluate first element without expected type to get its concrete layout
+                const first_val = try self.evalExprMinimal(elem_indices[0], roc_ops, null);
+                const elem_layout = first_val.layout;
+                try values.append(first_val);
+
+                // Evaluate remaining elements using first element's type as expected type
+                // Get the runtime type variable for the first element
+                const first_elem_ct_var = can.ModuleEnv.varFrom(elem_indices[0]);
+                const first_elem_rt_var = try self.translateTypeVar(self.env, first_elem_ct_var);
+
+                for (elem_indices[1..]) |elem_idx| {
+                    const val = try self.evalExprMinimal(elem_idx, roc_ops, first_elem_rt_var);
                     try values.append(val);
                 }
 
@@ -1406,15 +1437,6 @@ pub const Interpreter = struct {
                         const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
                         defer arg_val.decref(&self.runtime_layout_store, roc_ops);
                         if (payload_field.ptr) |payload_ptr| {
-                            std.debug.print("[COPY DEBUG] arg_val.layout.tag={s}, payload_field.layout.tag={s}\n", .{ @tagName(arg_val.layout.tag), @tagName(payload_field.layout.tag) });
-                            if (arg_val.layout.tag == .scalar and arg_val.layout.data.scalar.tag == .int) {
-                                std.debug.print("[COPY DEBUG] arg_val int precision={s}\n", .{@tagName(arg_val.layout.data.scalar.data.int)});
-                            }
-                            if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .int) {
-                                std.debug.print("[COPY DEBUG] payload_field int precision={s}\n", .{@tagName(payload_field.layout.data.scalar.data.int)});
-                            }
-                            const ptr_addr = @intFromPtr(payload_ptr);
-                            std.debug.print("[COPY DEBUG] payload_ptr address=0x{x}, mod 16={}\n", .{ ptr_addr, ptr_addr % 16 });
                             try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
                         return dest;
@@ -2235,7 +2257,7 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
-                // The target_node_idx is a Def.Idx in the other module
+                // The target_node_idx should always point to a def node
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const target_def = other_env.store.getDef(target_def_idx);
 
@@ -2252,10 +2274,7 @@ pub const Interpreter = struct {
                 }
 
                 // Evaluate the definition's expression in the other module's context
-                // If this is being called as a function, pass through the instantiated type
-                // from the call site (via expected_rt_var) to avoid re-translating generic types
                 const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
-
                 return result;
             },
             .e_unary_minus => |unary| {
