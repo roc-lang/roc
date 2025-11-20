@@ -2061,3 +2061,11 @@ fn checkTypesExpr(
 
     return test_env.assertLastDefType(expected);
 }
+
+test "check type - List.first returns Try" {
+    const source =
+        \\x = [10, 20, 30, 40, 50]
+        \\first = List.first(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Num(_size), [ListWasEmpty])");
+}

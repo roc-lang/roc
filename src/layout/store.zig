@@ -537,7 +537,9 @@ pub const Store = struct {
             const resolved_ext = self.types_store.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
+                    .empty_tag_union => {
+                        break;
+                    },
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             num_tags += ext_tag_union.tags.len();

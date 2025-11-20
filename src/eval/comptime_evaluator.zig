@@ -33,8 +33,8 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
 
-    // Use C allocator for Roc's allocations to bypass GPA canary checks
-    const c_alloc = std.heap.c_allocator;
+    // Use page_allocator for Roc's allocations to isolate them from GPA
+    const c_alloc = std.heap.page_allocator;
 
     // Add padding in debug builds to detect buffer overflows
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
@@ -59,11 +59,6 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     if (std.debug.runtime_safety) {
         const padding_start = base_ptr + alloc_args.length;
         @memset(padding_start[0..debug_padding], 0xAA);
-
-        // Log allocations to help debug
-        if (alloc_args.length == 48) {
-            std.debug.print("[ALLOC 48 bytes] ptr=0x{x}\n", .{ptr_addr});
-        }
     }
 
     // Return the allocation start
@@ -121,8 +116,8 @@ fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) v
     // Remove from tracking map
     _ = evaluator.roc_allocations.remove(ptr_addr);
 
-    // Free the memory using c_allocator (including padding in debug builds)
-    const c_alloc = std.heap.c_allocator;
+    // Free the memory using page_allocator (including padding in debug builds)
+    const c_alloc = std.heap.page_allocator;
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
     const ptr: [*]u8 = @ptrFromInt(ptr_addr);
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
@@ -134,7 +129,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
 
     const old_ptr_addr = @intFromPtr(realloc_args.answer);
-    const c_alloc = std.heap.c_allocator;
+    const c_alloc = std.heap.page_allocator;
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
 
     // Look up the old allocation size
@@ -178,10 +173,9 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         }
     }
 
-    // Realloc using c_allocator (include padding in both old and new sizes)
-    const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
-    const old_slice = old_ptr[0 .. old_size + debug_padding];
-    const new_slice = c_alloc.realloc(old_slice, realloc_args.new_length + debug_padding) catch {
+    // Manually realloc using rawAlloc + copy + rawFree to preserve alignment
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+    const new_ptr = c_alloc.rawAlloc(realloc_args.new_length + debug_padding, align_enum, @returnAddress()) orelse {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -192,14 +186,22 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         return;
     };
 
+    // Copy old data to new location (NOT including padding - that's for canaries)
+    const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+    const copy_size = @min(old_size, realloc_args.new_length);
+    @memcpy(new_ptr[0..copy_size], old_ptr[0..copy_size]);
+
+    // Free old memory
+    const old_slice = old_ptr[0 .. old_size + debug_padding];
+    c_alloc.rawFree(old_slice, align_enum, @returnAddress());
+
     // Update tracking map with new pointer and size
     _ = evaluator.roc_allocations.remove(old_ptr_addr);
-    const new_ptr_addr = @intFromPtr(new_slice.ptr);
+    const new_ptr_addr = @intFromPtr(new_ptr);
     evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
 
     // Set canary in the new allocation's padding
     if (std.debug.runtime_safety) {
-        const new_ptr = new_slice.ptr;
         const padding_start = new_ptr + realloc_args.new_length;
         @memset(padding_start[0..debug_padding], 0xAA);
     }

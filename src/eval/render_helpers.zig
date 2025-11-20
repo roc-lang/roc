@@ -140,24 +140,33 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
+                    std.debug.print("[BUG] Appended tag name: {s}\n", .{tag_name});
                     if (acc.findFieldIndex(ctx.env, "payload")) |pidx| {
                         const payload = try acc.getFieldByIndex(pidx);
                         const args_range = tags.items(.args)[tag_index];
                         const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
+                        std.debug.print("[BUG] Tag {s}: arg_vars.len = {}\n", .{tag_name, arg_vars.len});
                         if (arg_vars.len > 0) {
+                            std.debug.print("[BUG] Entering arg_vars > 0 block\n", .{});
                             try out.append('(');
                             if (arg_vars.len == 1) {
+                                std.debug.print("[BUG] arg_vars.len == 1, rendering single arg\n", .{});
                                 const arg_var = arg_vars[0];
                                 const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
+                                std.debug.print("[BUG] addTypeVar succeeded, getting layout\n", .{});
                                 const arg_layout = ctx.layout_store.getLayout(layout_idx);
+                                std.debug.print("[BUG] Got arg_layout, creating payload_value\n", .{});
                                 const payload_value = StackValue{
                                     .layout = arg_layout,
                                     .ptr = payload.ptr,
                                     .is_initialized = payload.is_initialized,
                                 };
+                                std.debug.print("[BUG] About to recursively render payload\n", .{});
                                 const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
                                 defer gpa.free(rendered);
+                                std.debug.print("[BUG] Payload rendered as: {s}, appending\n", .{rendered});
                                 try out.appendSlice(rendered);
+                                std.debug.print("[BUG] Appended payload\n", .{});
                             } else {
                                 var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
                                 defer ctx.allocator.free(elem_layouts);
@@ -203,10 +212,17 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     }
                                 }
                             }
+                            std.debug.print("[BUG] About to append closing paren\n", .{});
                             try out.append(')');
+                            std.debug.print("[BUG] Appended closing paren\n", .{});
                         }
+                    } else {
+                        std.debug.print("[BUG] No payload field found\n", .{});
                     }
-                    return out.toOwnedSlice();
+                    std.debug.print("[BUG] Returning: {s}\n", .{out.items});
+                    const result = try out.toOwnedSlice();
+                    std.debug.print("[BUG] toOwnedSlice returned: {s} (len={})\n", .{result, result.len});
+                    return result;
                 }
             }
         },

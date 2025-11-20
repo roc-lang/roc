@@ -1871,9 +1871,17 @@ pub const Interpreter = struct {
                         const low_level = lambda_expr.e_low_level_lambda;
                         const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
 
-                        // Decref all args
-                        for (arg_values) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        // Decref all args UNLESS the operation takes ownership of them.
+                        // List.concat takes ownership of its arguments and manages their refcounts internally.
+                        const takes_ownership = switch (low_level.op) {
+                            .list_concat => true,
+                            else => false,
+                        };
+
+                        if (!takes_ownership) {
+                            for (arg_values) |arg| {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         }
 
                         return result;
@@ -2115,9 +2123,17 @@ pub const Interpreter = struct {
                     // Dispatch to actual low-level builtin implementation
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops);
 
-                    // Decref all args
-                    for (all_args) |arg| {
-                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    // Decref all args UNLESS the operation takes ownership of them.
+                    // List.concat takes ownership of its arguments and manages their refcounts internally.
+                    const takes_ownership = switch (low_level.op) {
+                        .list_concat => true,
+                        else => false,
+                    };
+
+                    if (!takes_ownership) {
+                        for (all_args) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
                     }
 
                     return result;
