@@ -307,20 +307,7 @@ pub const Generalizer = struct {
             },
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .str, .empty_record, .empty_tag_union => return Rank.top_level,
-                    .list_unbound => {
-                        // Unbounds are special-cased: An unbound represents a
-                        // flex var _at the same rank_ as the  unbound list. So,
-                        // if we actually had that, it would recurse and unwrap
-                        // to group_rank. So we just return that directly here.
-                        return group_rank;
-                    },
-                    .box => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
-                    },
-                    .list => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
-                    },
+                    .empty_record, .empty_tag_union => return Rank.top_level,
                     .tuple => |tuple| {
                         var next_rank = Rank.top_level;
                         for (self.store.sliceVars(tuple.elems)) |arg_var| {

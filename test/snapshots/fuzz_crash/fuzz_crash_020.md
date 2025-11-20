@@ -909,7 +909,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]_others_
+    _[Blue][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -1980,7 +1980,7 @@ expect {
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Error"))
 		(patt (type "[Rum]_others -> Error"))
-		(patt (type "[Blue]_others -> Error"))
+		(patt (type "[Blue][ProvidedByCompiler] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{  }"))
@@ -2017,7 +2017,7 @@ expect {
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Error"))
 		(expr (type "[Rum]_others -> Error"))
-		(expr (type "[Blue]_others -> Error"))
+		(expr (type "[Blue][ProvidedByCompiler] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{  }"))

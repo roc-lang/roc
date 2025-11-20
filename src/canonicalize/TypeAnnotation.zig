@@ -375,7 +375,6 @@ pub const TypeAnno = union(enum) {
 
     /// A builtin type
     pub const Builtin = enum {
-        str,
         list,
         box,
         num,
@@ -398,7 +397,6 @@ pub const TypeAnno = union(enum) {
         /// Convert a builtin type to it's name
         pub fn toBytes(self: @This()) []const u8 {
             switch (self) {
-                .str => return "Str",
                 .list => return "List",
                 .box => return "Box",
                 .num => return "Num",
@@ -422,7 +420,6 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Box")) return .box;
             if (std.mem.eql(u8, bytes, "Num")) return .num;

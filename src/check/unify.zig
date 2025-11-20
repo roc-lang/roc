@@ -253,7 +253,6 @@ pub fn unifyWithConf(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
-                            .list_unbound => true,
                             .record_unbound => true,
                             else => false,
                         },
@@ -281,7 +280,6 @@ pub fn unifyWithConf(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
-                            .list_unbound => true,
                             .record_unbound => true,
                             else => false,
                         },
@@ -854,57 +852,6 @@ const Unifier = struct {
         defer trace.end();
 
         switch (a_flat_type) {
-            .str => {
-                switch (b_flat_type) {
-                    .str => self.merge(vars, vars.b.desc.content),
-                    .nominal_type => |b_type| {
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
-                            // Invalid nominal type - treat as transparent
-                            self.merge(vars, vars.a.desc.content);
-                            return;
-                        }
-                        return error.TypeMismatch;
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .box => |a_var| {
-                switch (b_flat_type) {
-                    .box => |b_var| {
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .list => |a_var| {
-                switch (b_flat_type) {
-                    .list => |b_var| {
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .list_unbound => {
-                        // When unifying list with list_unbound, list wins
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .list_unbound => {
-                switch (b_flat_type) {
-                    .list => |_| {
-                        // When unifying list_unbound with list, list wins
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .list_unbound => {
-                        // Both are list_unbound - stay unbound
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
             .tuple => |a_tuple| {
                 switch (b_flat_type) {
                     .tuple => |b_tuple| {
@@ -1503,8 +1450,27 @@ const Unifier = struct {
             .mark = Mark.none,
         }) catch return error.AllocatorError;
 
+        // Create nominal List(U8) - List is from Builtin module
+        // If List ident is not found, something is wrong with the environment
+        // This should never happen in a properly initialized compiler!
+        const list_ident = self.module_env.common.findIdent("List") orelse unreachable;
+
+        // Use the cached builtin_module_ident which represents the "Builtin" module.
+        const origin_module = if (self.module_lookup.get(self.module_env.builtin_module_ident)) |_|
+            self.module_env.builtin_module_ident
+        else
+            // Builtin module not loaded (probably compiling Builtin itself), use current module
+            self.module_env.module_name_idx;
+
+        const list_content = self.types_store.mkNominal(
+            .{ .ident_idx = list_ident },
+            u8_var,
+            &[_]Var{u8_var},
+            origin_module,
+        ) catch return error.AllocatorError;
+
         const list_var = self.types_store.register(.{
-            .content = .{ .structure = .{ .list = u8_var } },
+            .content = list_content,
             .rank = Rank.generalized,
             .mark = Mark.none,
         }) catch return error.AllocatorError;
@@ -1527,14 +1493,14 @@ const Unifier = struct {
     }
 
     fn isBuiltinTryNominal(self: *Self, nominal: NominalType) bool {
-        if (nominal.origin_module != self.module_env.builtin_module_ident) {
-            return false;
-        }
-
-        if (nominal.ident.ident_idx == self.module_env.try_ident) {
+        // Check if this is the Try type from the Builtin module
+        if (nominal.origin_module == self.module_env.builtin_module_ident and
+            nominal.ident.ident_idx == self.module_env.try_ident)
+        {
             return true;
         }
 
+        // Also check for fully qualified Builtin.Try
         if (self.module_env.common.findIdent("Builtin.Try")) |builtin_try_ident| {
             return nominal.ident.ident_idx == builtin_try_ident;
         }

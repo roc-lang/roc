@@ -364,6 +364,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `Bool.true` does not exist.
 
+`Bool` is in scope, but it has no associated `true`.
+
+It's referenced here:
 **record_different_fields_reserved_error.md:6:10:6:19:**
 ```roc
     and: Bool.true,
@@ -407,6 +410,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `Bool.false` does not exist.
 
+`Bool` is in scope, but it has no associated `false`.
+
+It's referenced here:
 **record_different_fields_reserved_error.md:7:9:7:19:**
 ```roc
     or: Bool.false,
@@ -550,7 +556,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "nested_value_not_found")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -558,7 +564,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "nested_value_not_found")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

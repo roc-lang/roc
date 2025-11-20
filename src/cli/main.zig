@@ -117,6 +117,33 @@ var stderr_buffer: [4096]u8 = undefined;
 var stderr_writer: std.fs.File.Writer = undefined;
 var stderr_initialized = false;
 
+var windows_console_configured = false;
+var windows_console_previous_code_page: ?std.os.windows.UINT = null;
+
+fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
+    if (!is_windows) return;
+    if (windows_console_configured) return;
+    windows_console_configured = true;
+
+    // Ensure the legacy console interprets escape sequences and UTF-8 output.
+    const kernel32 = std.os.windows.kernel32;
+    const current_code_page = kernel32.GetConsoleOutputCP();
+    if (current_code_page != 0 and current_code_page != 65001) {
+        windows_console_previous_code_page = current_code_page;
+        _ = kernel32.SetConsoleOutputCP(65001);
+    }
+    _ = std.fs.File.stdout().getOrEnableAnsiEscapeSupport();
+    _ = std.fs.File.stderr().getOrEnableAnsiEscapeSupport();
+}
+
+fn restoreWindowsConsoleCodePage() void {
+    if (!is_windows) return;
+    if (windows_console_previous_code_page) |code_page| {
+        windows_console_previous_code_page = null;
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
+    }
+}
+
 fn stdoutWriter() *std.Io.Writer {
     if (is_windows or !stdout_initialized) {
         stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
@@ -379,6 +406,7 @@ pub fn main() !void {
             .ReleaseFast, .ReleaseSmall => .{ std.heap.c_allocator, false },
         };
     };
+    defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
         const mem_state = debug_allocator.deinit();
         std.debug.assert(mem_state == .ok);
@@ -401,6 +429,7 @@ pub fn main() !void {
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
         }
+        restoreWindowsConsoleCodePage();
         std.process.exit(1);
     };
 
@@ -412,6 +441,8 @@ pub fn main() !void {
 fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    ensureWindowsConsoleSupportsAnsiAndUtf8();
 
     const stdout = stdoutWriter();
     defer stdout.flush() catch {};
@@ -1372,6 +1403,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
+        .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
     };
 
@@ -2414,6 +2446,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .try_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .builtin_module = null,
     };
 
