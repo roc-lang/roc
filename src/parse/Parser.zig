@@ -2089,17 +2089,22 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             const condition = try self.parseExpr();
             const then = try self.parseExpr();
             if (self.peek() != .KwElse) {
-                // Point to the if keyword for missing else error
-                return try self.pushMalformed(AST.Expr.Idx, .no_else, start);
+                // Statement form: if without else
+                expr = try self.store.addExpr(.{ .if_without_else = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .condition = condition,
+                    .then = then,
+                } });
+            } else {
+                self.advance();
+                const else_idx = try self.parseExpr();
+                expr = try self.store.addExpr(.{ .if_then_else = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .condition = condition,
+                    .then = then,
+                    .@"else" = else_idx,
+                } });
             }
-            self.advance();
-            const else_idx = try self.parseExpr();
-            expr = try self.store.addExpr(.{ .if_then_else = .{
-                .region = .{ .start = start, .end = self.pos },
-                .condition = condition,
-                .then = then,
-                .@"else" = else_idx,
-            } });
         },
         .KwMatch => {
             self.advance();

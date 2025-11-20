@@ -687,6 +687,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(i.then));
             try store.extra_data.append(store.gpa, @intFromEnum(i.@"else"));
         },
+        .if_without_else => |i| {
+            node.tag = .if_without_else;
+            node.region = i.region;
+            node.data.lhs = @intFromEnum(i.condition);
+            node.data.rhs = @intFromEnum(i.then);
+        },
         .match => |m| {
             node.tag = .match;
             node.region = m.region;
@@ -1578,6 +1584,13 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .condition = @enumFromInt(node.data.lhs),
                 .then = @enumFromInt(then_ed),
                 .@"else" = @enumFromInt(else_ed),
+            } };
+        },
+        .if_without_else => {
+            return .{ .if_without_else = .{
+                .region = node.region,
+                .condition = @enumFromInt(node.data.lhs),
+                .then = @enumFromInt(node.data.rhs),
             } };
         },
         .match => {
