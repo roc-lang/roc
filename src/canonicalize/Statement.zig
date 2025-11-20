@@ -40,6 +40,18 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         anno: ?Annotation.Idx,
     },
+    /// A generalized declaration (for lambdas and number literals only).
+    /// These bindings use let-polymorphism and can be instantiated at different types.
+    ///
+    /// ```roc
+    /// id = \x -> x  # Generalized - can be used at multiple types
+    /// zero = 0      # Generalized - can be Int or Dec
+    /// ```
+    s_decl_gen: struct {
+        pattern: Pattern.Idx,
+        expr: Expr.Idx,
+        anno: ?Annotation.Idx,
+    },
     /// A rebindable declaration using the "var" keyword.
     ///
     /// Not valid at the top level of a module.
@@ -169,6 +181,18 @@ pub const Statement = union(enum) {
     pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .s_decl => |d| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-let");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getPattern(d.pattern).pushToSExprTree(env, tree, d.pattern);
+                try env.store.getExpr(d.expr).pushToSExprTree(env, tree, d.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_decl_gen => |d| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-let");
                 const region = env.store.getStatementRegion(stmt_idx);

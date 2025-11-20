@@ -25,6 +25,7 @@ pub const Idx = List.Idx;
 pub const Tag = enum {
     // Statements
     statement_decl,
+    statement_decl_gen,
     statement_var,
     statement_reassign,
     statement_crash,

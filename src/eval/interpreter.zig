@@ -469,6 +469,14 @@ pub const Interpreter = struct {
                                 try Placeholder.add(self, d.pattern, d.expr);
                             }
                         },
+                        .s_decl_gen => |d| {
+                            const patt = self.env.store.getPattern(d.pattern);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(d.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
+                                try Placeholder.add(self, d.pattern, d.expr);
+                            }
+                        },
                         .s_var => |v| {
                             const patt = self.env.store.getPattern(v.pattern_idx);
                             if (patt != .assign) continue;
@@ -486,6 +494,27 @@ pub const Interpreter = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |d| {
+                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
+                            }
+
+                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
+                                return error.TypeMismatch;
+                            }
+
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
+                        },
+                        .s_decl_gen => |d| {
                             const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                             const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
