@@ -22,6 +22,7 @@ pub const CommonEnv = @import("CommonEnv.zig");
 
 test {
     _ = @import("Ident.zig");
+    _ = @import("wasm_compat_test.zig");
 }
 
 /// Whether a function calls itself.
