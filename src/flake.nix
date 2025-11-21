@@ -19,11 +19,13 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        dependencies = (with pkgs; [
+        zig=pkgs.zig_0_15;
+
+        dependencies =  [
           zig
-          zls
-          git # for use in ci/zig_lints.sh
-        ]);
+          pkgs.zls
+          pkgs.git # for use in ci/zig_lints.sh
+        ];
 
         shellFunctions = ''
           buildcmd() {
@@ -34,7 +36,7 @@
           testcmd() {
             zig build snapshot && zig build test
           }
-          export -f testscmd
+          export -f testcmd
 
           fmtcmd() {
             zig build fmt
@@ -48,13 +50,37 @@
         '';
 
       in {
+        packages = {
+          default = self.packages.${system}.roc;
+          roc = pkgs.stdenv.mkDerivation {
+            name = "roc";
+            src = ../.;
+            nativeBuildInputs = [ zig.hook pkgs.pkg-config ];
+            zigBuildFlags = [ "-Doptimize=ReleaseFast" ];
+
+            # NIX_CFLAGS_COMPILE="";
+            # NIX_LDFLAGS="";
+          };
+        };
+
+        apps = {
+          default = self.apps.${system}.roc;
+          roc = {
+            type = "app";
+            program = "${self.packages.${system}.roc}/bin/roc";
+            meta = {
+              description = "Roc CLI";
+              mainProgram = "roc";
+            };
+          };
+        };
 
         devShell = pkgs.mkShell {
           buildInputs = dependencies;
 
           shellHook = ''
             ${shellFunctions}
-            
+
             echo "Some convenient commands:"
             echo "${shellFunctions}" | grep -E '^\s*[a-zA-Z_][a-zA-Z0-9_]*\(\)' | sed 's/().*//' | sed 's/^[[:space:]]*/  /' | while read func; do
               body=$(echo "${shellFunctions}" | sed -n "/''${func}()/,/^[[:space:]]*}/p" | sed '1d;$d' | tr '\n' ';' | sed 's/;$//' | sed 's/[[:space:]]*$//')
