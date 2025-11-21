@@ -184,8 +184,6 @@ pub const Interpreter = struct {
     bindings: std.array_list.Managed(Binding),
     // Track active closures during calls (for capture lookup)
     active_closures: std.array_list.Managed(StackValue),
-    bool_false_index: u8,
-    bool_true_index: u8,
     canonical_bool_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
@@ -276,8 +274,6 @@ pub const Interpreter = struct {
             .stack_memory = try stack.Stack.initCapacity(allocator, 8 * 1024 * 1024), // 8MB stack
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
-            .bool_false_index = 0,
-            .bool_true_index = 1,
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
@@ -800,8 +796,8 @@ pub const Interpreter = struct {
                     return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
                 } else if (binop.op == .@"or") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
+                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                    self.debugAssertIsBoolType(result_rt_var);
 
                     var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
                     defer lhs.decref(&self.runtime_layout_store, roc_ops);
@@ -819,8 +815,8 @@ pub const Interpreter = struct {
                     return try self.makeBoolValue(result_rt_var, rhs_truthy);
                 } else if (binop.op == .@"and") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
+                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                    self.debugAssertIsBoolType(result_rt_var);
 
                     var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
                     defer lhs.decref(&self.runtime_layout_store, roc_ops);
@@ -1276,17 +1272,12 @@ pub const Interpreter = struct {
                 }
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
-                    try self.prepareBoolIndices(rt_var);
                     return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
                 }
-                // If layout is scalar (bool/uint), write discriminant directly
+                // If layout is scalar (int), write discriminant directly
                 if (layout_val.tag == .scalar) {
                     var out = try self.pushRaw(layout_val, 0);
-                    if (layout_val.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                        p.* = @intCast(tag_index);
-                        return out;
-                    } else if (layout_val.data.scalar.tag == .int) {
+                    if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
                         out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
@@ -1299,14 +1290,11 @@ pub const Interpreter = struct {
                     var acc = try dest.asRecord(&self.runtime_layout_store);
                     const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
                     const tag_field = try acc.getFieldByIndex(tag_idx);
-                    // write tag as int/byte
+                    // write tag as int
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         tmp.setInt(@intCast(tag_index));
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        p.* = @intCast(tag_index);
                     } else return error.NotImplemented;
                     return dest;
                 }
@@ -1342,17 +1330,12 @@ pub const Interpreter = struct {
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
-                    try self.prepareBoolIndices(rt_var);
                     return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
                 }
                 if (layout_val.tag == .scalar) {
                     // No payload union
                     var out = try self.pushRaw(layout_val, 0);
-                    if (layout_val.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                        p.* = @intCast(tag_index);
-                        return out;
-                    } else if (layout_val.data.scalar.tag == .int) {
+                    if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
                         out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
@@ -1371,9 +1354,6 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         tmp.setInt(@intCast(tag_index));
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        p.* = @intCast(tag_index);
                     } else return error.NotImplemented;
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
@@ -2791,12 +2771,11 @@ pub const Interpreter = struct {
 
     /// Helper to create a simple boolean StackValue (for low-level builtins)
     fn makeSimpleBoolValue(self: *Interpreter, value: bool) !StackValue {
-        const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
-        const bool_value = try self.pushRaw(bool_layout, 0);
-        if (bool_value.ptr) |ptr| {
-            const bool_ptr: *bool = @ptrCast(@alignCast(ptr));
-            bool_ptr.* = value;
-        }
+        const bool_layout = Layout.int(.u8);
+        var bool_value = try self.pushRaw(bool_layout, 0);
+        bool_value.is_initialized = false;
+        bool_value.setInt(if (value) 1 else 0);
+        bool_value.is_initialized = true;
         return bool_value;
     }
 
@@ -2820,51 +2799,28 @@ pub const Interpreter = struct {
         roc_ops.crash(message);
     }
 
-    fn extractBoolTagIndex(self: *Interpreter, value: StackValue, bool_var: ?types.Var) !usize {
-        const raw_index: usize = switch (value.layout.tag) {
-            .scalar => switch (value.layout.data.scalar.tag) {
-                .bool => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const b: *const u8 = @ptrCast(@alignCast(ptr));
-                    return @intCast(b.*);
-                },
-                .int => {
-                    return @intCast(value.asI128());
-                },
-                else => return error.TypeMismatch,
-            },
-            .record => {
-                var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
-                const tag_field = try acc.getFieldByIndex(tag_field_idx);
-                const tag_value = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                return try self.extractBoolTagIndex(tag_value, bool_var);
-            },
-            else => return error.TypeMismatch,
-        };
+    fn extractBoolTagIndex(self: *Interpreter, value: StackValue) usize {
+        _ = self;
+        std.debug.assert(value.layout.tag == .scalar);
+        std.debug.assert(value.layout.data.scalar.tag == .int);
+        std.debug.assert(value.layout.data.scalar.data.int == .u8);
 
-        if (bool_var) |_var| {
-            try self.prepareBoolIndices(_var);
-            if (raw_index == self.bool_false_index or raw_index == self.bool_true_index) {
-                return raw_index;
-            }
-            return error.TypeMismatch;
-        }
+        const ptr = value.ptr orelse unreachable;
+        const b: *const u8 = @ptrCast(@alignCast(ptr));
+        const index: usize = @intCast(b.*);
 
-        return raw_index;
+        std.debug.assert(index == 0 or index == 1);
+        return index;
     }
 
     fn boolValueIsTrue(self: *Interpreter, value: StackValue, rt_var: types.Var) !bool {
-        // Check that the layout is compatible with Bool
-        if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
+        std.debug.assert(self.isBoolLayout(value.layout));
 
-        // Try to verify this is actually a Bool type
-        try self.prepareBoolIndices(rt_var);
-        if (!try self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
+        self.debugAssertIsBoolType(rt_var);
 
         // Bool values are ALWAYS stored with canonical indices: 0=False, 1=True
-        const idx = try self.extractBoolTagIndex(value, rt_var);
-        return idx == self.bool_true_index;
+        const idx = self.extractBoolTagIndex(value);
+        return idx == 1; // True index is always 1
     }
 
     const NumericKind = enum { int, dec, f32, f64 };
@@ -3141,7 +3097,8 @@ pub const Interpreter = struct {
     fn isBoolLayout(self: *Interpreter, layout_val: Layout) bool {
         _ = self;
         if (layout_val.tag != .scalar) return false;
-        return layout_val.data.scalar.tag == .bool or layout_val.data.scalar.tag == .int;
+        if (layout_val.data.scalar.tag != .int) return false;
+        return layout_val.data.scalar.data.int == .u8;
     }
 
     const NumericValue = union(enum) {
@@ -3272,20 +3229,15 @@ pub const Interpreter = struct {
         lhs: StackValue,
         lhs_var: types.Var,
         rhs: StackValue,
-        rhs_var: types.Var,
+        _: types.Var, // rhs_var unused
     ) StructuralEqError!bool {
-        // Handle scalar comparisons (bool, numbers, strings) directly.
+        // Handle scalar comparisons (numbers, strings) directly.
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
             const rhs_scalar = rhs.layout.data.scalar;
             if (lhs_scalar.tag != rhs_scalar.tag) return error.TypeMismatch;
 
             switch (lhs_scalar.tag) {
-                .bool => {
-                    const lhs_bool = try self.boolValueIsTrue(lhs, lhs_var);
-                    const rhs_bool = try self.boolValueIsTrue(rhs, rhs_var);
-                    return lhs_bool == rhs_bool;
-                },
                 .int, .frac => {
                     const order = try self.compareNumericScalars(lhs, rhs);
                     return order == .eq;
@@ -3598,10 +3550,6 @@ pub const Interpreter = struct {
         }
         // IMPORTANT: Bool values are ALWAYS stored with canonical indices: False=0, True=1
         // This is true regardless of the tag order in the type.
-        // The tag list indices (false_idx, true_idx) tell us which tag is which,
-        // but the actual runtime values always use canonical indices.
-        self.bool_false_index = 0; // False is always 0
-        self.bool_true_index = 1; // True is always 1
         return true;
     }
 
@@ -3647,19 +3595,13 @@ pub const Interpreter = struct {
         return backing_rt_var;
     }
 
-    fn prepareBoolIndices(self: *Interpreter, rt_var: types.Var) !void {
-        if (try self.runtimeVarIsBool(rt_var)) return;
-        const canonical = try self.getCanonicalBoolRuntimeVar();
-        _ = try self.runtimeVarIsBool(canonical);
-    }
-
-    fn ensureBoolRuntimeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var, runtime_var: types.Var) !types.Var {
-        if (try self.runtimeVarIsBool(runtime_var)) return runtime_var;
-
-        const canonical = try self.getCanonicalBoolRuntimeVar();
-        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
-        try self.translate_cache.put(key, canonical);
-        return canonical;
+    fn debugAssertIsBoolType(self: *Interpreter, runtime_var: types.Var) void {
+        if (@import("builtin").mode == .Debug) {
+            const is_bool = self.runtimeVarIsBool(runtime_var) catch false;
+            if (!is_bool) {
+                std.debug.panic("Expected Bool type but got something else", .{});
+            }
+        }
     }
 
     fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
@@ -3734,10 +3676,6 @@ pub const Interpreter = struct {
     fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
         switch (value.layout.tag) {
             .scalar => switch (value.layout.data.scalar.tag) {
-                .bool => {
-                    const idx = try self.extractBoolTagIndex(value, null);
-                    return .{ .index = idx, .payload = null };
-                },
                 .int => {
                     return .{ .index = @intCast(value.asI128()), .payload = null };
                 },
@@ -3751,10 +3689,6 @@ pub const Interpreter = struct {
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                     tag_index = @intCast(tmp.asI128());
-                } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                    const ptr = tag_field.ptr orelse return error.TypeMismatch;
-                    const b: *const u8 = @ptrCast(@alignCast(ptr));
-                    tag_index = b.*;
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
@@ -3803,18 +3737,13 @@ pub const Interpreter = struct {
     fn makeBoolValue(self: *Interpreter, target_rt_var: types.Var, truthy: bool) !StackValue {
         const layout_val = try self.getRuntimeLayout(target_rt_var);
         if (!self.isBoolLayout(layout_val)) return error.NotImplemented;
-        try self.prepareBoolIndices(target_rt_var);
-        const chosen_index: u8 = if (truthy) self.bool_true_index else self.bool_false_index;
+        self.debugAssertIsBoolType(target_rt_var);
+        // Bool values are always stored with canonical indices: False=0, True=1
+        const chosen_index: u8 = if (truthy) 1 else 0;
         var out = try self.pushRaw(layout_val, 0);
 
         switch (layout_val.tag) {
             .scalar => switch (layout_val.data.scalar.tag) {
-                .bool => {
-                    const ptr = out.ptr orelse return error.NotImplemented;
-                    const p: *u8 = @ptrCast(@alignCast(ptr));
-                    p.* = chosen_index;
-                    return out;
-                },
                 .int => {
                     out.is_initialized = false;
                     out.setInt(chosen_index);
@@ -3830,11 +3759,6 @@ pub const Interpreter = struct {
                 var tag_slot = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                 switch (tag_slot.layout.tag) {
                     .scalar => switch (tag_slot.layout.data.scalar.tag) {
-                        .bool => {
-                            const ptr = tag_slot.ptr orelse return error.NotImplemented;
-                            const p: *u8 = @ptrCast(@alignCast(ptr));
-                            p.* = chosen_index;
-                        },
                         .int => {
                             tag_slot.is_initialized = false;
                             tag_slot.setInt(chosen_index);
@@ -3858,7 +3782,6 @@ pub const Interpreter = struct {
             else => return error.NotImplemented,
         }
     }
-
 
     fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
         var out = try self.pushRaw(result_layout, 0);
@@ -4243,10 +4166,10 @@ pub const Interpreter = struct {
 
                 const expected_name = self.env.getIdent(tag_pat.name);
                 if (try self.runtimeVarIsBool(value_rt_var)) {
-                    const actual_name = if (tag_data.index == self.bool_true_index) "True" else "False";
+                    // Bool values are always stored with canonical indices: False=0, True=1
+                    const actual_name = if (tag_data.index == 1) "True" else "False";
                     if (!std.mem.eql(u8, expected_name, actual_name)) return false;
                 } else {
-                    try self.prepareBoolIndices(value_rt_var);
                     const actual_name = self.env.getIdent(tag_list.items[tag_data.index].name);
                     if (!std.mem.eql(u8, expected_name, actual_name)) return false;
                 }

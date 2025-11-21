@@ -132,8 +132,10 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
 
     const actual = switch (result.layout.tag) {
         .scalar => switch (result.layout.data.scalar.tag) {
-            .bool => result.asBool(),
-            .int => result.asI128() != 0,
+            .int => if (result.layout.data.scalar.data.int == .u8)
+                result.asBool()
+            else
+                result.asI128() != 0,
             else => return error.TestUnexpectedResult,
         },
         else => return error.TestUnexpectedResult,

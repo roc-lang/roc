@@ -253,8 +253,9 @@ pub fn setBool(self: *StackValue, value: u8) void {
     // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
 
-    // Assert this is a boolean
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    // Assert this is a boolean (u8 int)
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.data.scalar.data.int == .u8);
 
     // Assert this is uninitialised memory
     //
@@ -270,7 +271,8 @@ pub fn setBool(self: *StackValue, value: u8) void {
 pub fn asBool(self: StackValue) bool {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.data.scalar.data.int == .u8);
 
     // Read the boolean value as a byte
     const bool_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));

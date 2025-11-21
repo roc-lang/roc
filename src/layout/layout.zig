@@ -38,11 +38,10 @@ const layout_bit_size = 32;
 /// Scalar and Idx using branchless arithmetic instructions. Don't change them
 /// lightly, and make sure to re-run tests if you do!
 pub const ScalarTag = enum(u3) {
-    opaque_ptr = 0, // Maps to Idx 0
-    bool = 1, // Maps to Idx 1
-    str = 2, // Maps to Idx 2
-    int = 3, // Maps to Idx 3-12 (depending on precision)
-    frac = 4, // Maps to Idx 13-15 (depending on precision)
+    opaque_ptr = 0, // Maps to Idx 2
+    str = 1, // Maps to Idx 1
+    int = 2, // Maps to Idx 3-12 (depending on precision)
+    frac = 3, // Maps to Idx 13-15 (depending on precision)
 };
 
 /// The union portion of the Scalar packed tagged union.
@@ -52,13 +51,12 @@ pub const ScalarTag = enum(u3) {
 /// stores that extra information.
 pub const ScalarUnion = packed union {
     opaque_ptr: void,
-    bool: void,
     str: void,
     int: types.Int.Precision,
     frac: types.Frac.Precision,
 };
 
-/// A scalar value such as a bool, str, int, frac, or opaque pointer type.
+/// A scalar value such as a str, int, frac, or opaque pointer type.
 pub const Scalar = packed struct {
     // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
     // and Zig tagged unions don't support being packed.
@@ -305,7 +303,6 @@ pub const Layout = packed struct {
             .scalar => switch (self.data.scalar.tag) {
                 .int => self.data.scalar.data.int.alignment(),
                 .frac => self.data.scalar.data.frac.alignment(),
-                .bool => std.mem.Alignment.@"1",
                 .str, .opaque_ptr => target_usize.alignment(),
             },
             .box, .box_of_zst => target_usize.alignment(),
@@ -332,19 +329,14 @@ pub const Layout = packed struct {
         return Layout.frac(.dec);
     }
 
-    /// bool layout
+    /// Bool layout - just a u8 discriminant for [True, False]
     pub fn boolType() Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .bool = {} }, .tag = .bool } }, .tag = .scalar };
+        return Layout.int(.u8);
     }
 
     /// bool layout (alias for consistency)
     pub fn boolean() Layout {
         return boolType();
-    }
-
-    /// Check if this layout represents a boolean
-    pub fn isBoolean(self: Layout) bool {
-        return self.tag == .scalar and self.data.scalar.tag == .bool;
     }
 
     /// str layout
@@ -489,11 +481,11 @@ test "Layout scalar data access" {
     try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
     try testing.expectEqual(types.Frac.Precision.f64, frac_layout.data.scalar.data.frac);
 
-    // Test bool
+    // Test bool (now stored as u8)
     const bool_layout = Layout.boolType();
     try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.bool, bool_layout.data.scalar.tag);
-    try testing.expectEqual({}, bool_layout.data.scalar.data.bool);
+    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
+    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
 
     // Test str
     const str_layout = Layout.str();
@@ -557,7 +549,8 @@ test "Scalar memory optimization - comprehensive coverage" {
 
     const bool_layout = Layout.boolType();
     try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.bool, bool_layout.data.scalar.tag);
+    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
+    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
 
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);

@@ -91,10 +91,9 @@ pub const Store = struct {
     pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
         // opaque_ptr (tag 0) -> 2
-        // bool (tag 1) -> 0
-        // str (tag 2) -> 1
-        // int (tag 3) with precision p -> 3 + p
-        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
+        // str (tag 1) -> 1
+        // int (tag 2) with precision p -> 3 + p
+        // frac (tag 3) with precision p -> 13 + (p - 2) = 11 + p
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -104,13 +103,12 @@ pub const Store = struct {
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 3, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 3));
+        // is_numeric: 1 when tag >= 2, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 2));
 
         // Calculate the base index based on tag mappings
         const base_idx = switch (scalar.tag) {
             .opaque_ptr => @as(u7, 2),
-            .bool => @as(u7, 0),
             .str => @as(u7, 1),
             .int => @as(u7, 3),
             .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
@@ -512,7 +510,6 @@ pub const Store = struct {
             .scalar => switch (layout.data.scalar.tag) {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
-                .bool => 1, // bool is 1 byte
                 .str => 3 * target_usize.size(), // ptr, byte length, capacity
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },

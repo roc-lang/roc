@@ -48,7 +48,8 @@ test "addTypeVar - bool type" {
 
     const retrieved_layout = lt.layout_store.getLayout(bool_layout_idx);
     try testing.expect(retrieved_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.bool, retrieved_layout.data.scalar.tag);
+    try testing.expectEqual(layout.ScalarTag.int, retrieved_layout.data.scalar.tag);
+    try testing.expectEqual(types.Int.Precision.u8, retrieved_layout.data.scalar.data.int);
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
 }
 

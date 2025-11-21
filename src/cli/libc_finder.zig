@@ -350,13 +350,7 @@ test "libc detection integration test" {
 
     const allocator = std.testing.allocator;
 
-    const libc_info = findLibc(allocator) catch |err| switch (err) {
-        error.LibcNotFound => {
-            std.log.warn("Libc not found on this system - this may be expected in some environments", .{});
-            return error.SkipZigTest;
-        },
-        else => return err,
-    };
+    const libc_info = try findLibc(allocator);
     defer {
         var info = libc_info;
         info.deinit();

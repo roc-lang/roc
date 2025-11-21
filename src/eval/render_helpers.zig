@@ -32,7 +32,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
     var resolved = ctx.runtime_types.resolveVar(rt_var);
 
     // Check layout first for special rendering cases
-    // Str has .str layout, Bool has .bool layout
+    // Str has .str layout, Bool has .int .u8 layout
     if (value.layout.tag == .scalar) {
         const scalar = value.layout.data.scalar;
         if (scalar.tag == .str) {
@@ -51,8 +51,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
             try buf.append('"');
             return buf.toOwnedSlice();
-        } else if (scalar.tag == .bool) {
-            // Check if this is a nominal Bool type (not just any bool)
+        } else if (scalar.tag == .int and scalar.data.int == .u8) {
+            // Check if this is a nominal Bool type (u8 discriminant for [True, False])
             if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
                 const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
                 return if (b.* != 0)
@@ -87,11 +87,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             var tag_index: usize = 0;
             var have_tag = false;
             if (value.layout.tag == .scalar) {
-                if (value.layout.data.scalar.tag == .bool) {
-                    const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
-                    tag_index = if (b.* != 0) 1 else 0;
-                    have_tag = true;
-                } else if (value.layout.data.scalar.tag == .int) {
+                if (value.layout.data.scalar.tag == .int) {
                     tag_index = @intCast(value.asI128());
                     have_tag = true;
                 }
@@ -128,10 +124,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                         tag_index = @intCast(tmp_sv.asI128());
-                        have_tag = true;
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        tag_index = if (b.* != 0) 1 else 0;
                         have_tag = true;
                     }
                 }

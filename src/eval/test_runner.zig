@@ -186,7 +186,7 @@ pub const TestRunner = struct {
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
-        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
+        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int and result.layout.data.scalar.data.int == .u8) {
             const is_true = result.asBool();
             return if (is_true) Evaluation.passed else Evaluation.failed;
         }
