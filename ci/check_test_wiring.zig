@@ -6,15 +6,11 @@ const PathList = std.ArrayList([]u8);
 
 const max_file_bytes: usize = 16 * 1024 * 1024;
 
-const test_exclusions = [_][]const u8{
-    "src/cli",
-    "src/watch",
-    "src/snapshot_tool",
-};
-
 const test_file_exclusions = [_][]const u8{
     // TODO: This test got out of sync and is not straightforward to fix
     "src/eval/test/low_level_interp_test.zig",
+    // TODO Fixing in progress...
+    "src/cli/test_docs.zig",
 };
 
 const TermColor = struct {
@@ -45,6 +41,17 @@ pub fn main() !void {
     try walkTree(gpa, "src", &test_files, &mod_files);
     try stdout.print("Found {d} potential test files\n\n", .{test_files.items.len});
 
+    // Some tests are wired through build.zig rather than mod.zig files.
+    // For example, the CLI tests are driven via src/cli/main.zig and
+    // src/cli/test/roc_subcommands.zig test roots.
+    //
+    // To avoid false positives, we:
+    // - Treat src/cli/main.zig as an additional aggregator when scanning @import()
+    //   statements for wired test files.
+    if (fileExists("src/cli/main.zig")) {
+        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/main.zig"));
+    }
+
     if (test_files.items.len == 0) {
         try stdout.print("{s}[OK]{s} No test files found to check\n", .{ TermColor.green, TermColor.reset });
         try stdout.flush();
@@ -64,7 +71,15 @@ pub fn main() !void {
     for (mod_files.items) |mod_path| {
         try collectModImports(gpa, mod_path, &referenced);
     }
-    try stdout.print("Found {d} file references in mod.zig files\n\n", .{referenced.count()});
+    // Also treat test roots declared in build.zig (b.addTest root_source_file)
+    // as valid wiring for the corresponding files (e.g. src/cli/main.zig and
+    // src/cli/test/roc_subcommands.zig).
+    try markBuildTestRootsAsReferenced(gpa, &referenced);
+
+    try stdout.print(
+        "Found {d} file references in mod.zig files and build.zig test roots\n\n",
+        .{referenced.count()},
+    );
 
     try stdout.print("Step 3: Checking if all test files are properly wired...\n\n", .{});
     var unwired = PathList{};
@@ -155,11 +170,6 @@ fn handleFile(
         return;
     }
 
-    if (shouldSkipTestPath(path)) {
-        allocator.free(path);
-        return;
-    }
-
     if (shouldSkipTestFile(path)) {
         allocator.free(path);
         return;
@@ -173,23 +183,11 @@ fn handleFile(
     allocator.free(path);
 }
 
-fn shouldSkipTestPath(path: []const u8) bool {
-    for (test_exclusions) |prefix| {
-        if (hasDirPrefix(path, prefix)) return true;
-    }
-    return false;
-}
-
 fn shouldSkipTestFile(path: []const u8) bool {
     for (test_file_exclusions) |excluded| {
         if (std.mem.eql(u8, path, excluded)) return true;
     }
     return false;
-}
-
-fn hasDirPrefix(path: []const u8, prefix: []const u8) bool {
-    if (!std.mem.startsWith(u8, path, prefix)) return false;
-    return path.len == prefix.len or path[prefix.len] == '/';
 }
 
 fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
@@ -278,6 +276,56 @@ fn resolveImportPath(
 ) ![]u8 {
     const mod_dir = std.fs.path.dirname(mod_path) orelse ".";
     return std.fs.path.resolvePosix(allocator, &.{ mod_dir, import_path });
+}
+
+/// Mark files that are used as test roots in build.zig as "wired".
+///
+/// In addition to mod.zig imports, some tests are hooked up via explicit
+/// `b.addTest` calls in build.zig (for example the CLI tests). Any Zig
+/// file that is used as a `root_source_file = b.path("...")` in such a
+/// test configuration should not be reported as missing wiring.
+fn markBuildTestRootsAsReferenced(
+    allocator: Allocator,
+    referenced: *std.StringHashMap(void),
+) !void {
+    const build_path = "build.zig";
+    if (!fileExists(build_path)) return;
+
+    const source = try readSourceFile(allocator, build_path);
+    defer allocator.free(source);
+
+    const pattern = ".root_source_file = b.path(\"";
+    var search_index: usize = 0;
+
+    while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
+        const literal_start = match_pos + pattern.len;
+        var cursor = literal_start;
+
+        // Find end of the string literal.
+        while (cursor < source.len and source[cursor] != '"') : (cursor += 1) {}
+        if (cursor >= source.len) break;
+
+        const rel_path = source[literal_start..cursor];
+
+        // Only consider Zig source files under src/ as potential test roots.
+        if (!std.mem.endsWith(u8, rel_path, ".zig")) {
+            search_index = cursor + 1;
+            continue;
+        }
+        if (!std.mem.startsWith(u8, rel_path, "src/")) {
+            search_index = cursor + 1;
+            continue;
+        }
+
+        const key = try allocator.dupe(u8, rel_path);
+        if (referenced.contains(key)) {
+            allocator.free(key);
+        } else {
+            try referenced.put(key, {});
+        }
+
+        search_index = cursor + 1;
+    }
 }
 
 fn lessThanPath(_: void, lhs: []u8, rhs: []u8) bool {
