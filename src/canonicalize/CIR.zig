@@ -555,6 +555,45 @@ pub const NumKind = enum {
     dec,
 };
 
+/// Base-256 digit storage for NumLiteral values.
+/// Used to construct Roc NumLiteral values during compile-time evaluation.
+///
+/// NumLiteral in Roc stores:
+/// - is_negative: Bool (whether there was a minus sign)
+/// - digits_before_pt: List(U8) (base-256 digits before decimal point)
+/// - digits_after_pt: List(U8) (base-256 digits after decimal point)
+///
+/// Example: "356.517" becomes:
+/// - is_negative = false
+/// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
+/// - digits_after_pt = [2, 5] (because 517 = 2*256 + 5)
+pub const NumLiteralDigits = struct {
+    /// Index into the shared digit byte array in ModuleEnv
+    digits_start: u32,
+    /// Number of bytes for digits_before_pt
+    before_pt_len: u16,
+    /// Number of bytes for digits_after_pt
+    after_pt_len: u16,
+    /// Whether the literal had a minus sign
+    is_negative: bool,
+
+    /// Get the total length of stored digits
+    pub fn totalLen(self: NumLiteralDigits) u32 {
+        return @as(u32, self.before_pt_len) + @as(u32, self.after_pt_len);
+    }
+
+    /// Extract digits_before_pt from the shared byte array
+    pub fn getDigitsBeforePt(self: NumLiteralDigits, digit_bytes: []const u8) []const u8 {
+        return digit_bytes[self.digits_start..][0..self.before_pt_len];
+    }
+
+    /// Extract digits_after_pt from the shared byte array
+    pub fn getDigitsAfterPt(self: NumLiteralDigits, digit_bytes: []const u8) []const u8 {
+        const after_start = self.digits_start + self.before_pt_len;
+        return digit_bytes[after_start..][0..self.after_pt_len];
+    }
+};
+
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
 pub const RocDec = builtins.dec.RocDec;

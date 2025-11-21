@@ -112,11 +112,27 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
-		NumLiteral :: [Self(Bool)].{
+		NumLiteral :: [Self({ # TODO get rid of the "Self" wrapper once we have nominal records"
+		    # True iff there was a minus sign in front of the literal
+    		is_negative: Bool,
+            # Base-256 digits before and after the decimal point, with any underscores
+            # and leading/trailing zeros removed from the source code.
+            #
+            # Example: If I write "0356.5170" in the source file, that will be:
+            # - [1, 100] before the pt, because in base-256, 356 = (1 * 256^1) + (100 * 256^0)
+            # - [2, 5] after the pt, because in base-256, 517 = (2 * 256^1) + (5 * 256^0)
+            #
+            # This design compactly represents the digits without wasting any memory
+            # (because base-256 stores each digit using every single bit of the U8), and also
+            # allows arbitrary digit length so that userspace custom number types can work with
+            # arbitrarily long number literals as long as the number types can support them.
+            digits_before_pt: List(U8),
+            digits_after_pt: List(U8),
+		})].{
 			is_negative : NumLiteral -> Bool
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
-				Self(is_negative) => is_negative
+				Self({ is_negative: neg, digits_before_pt: _, digits_after_pt: _ }) => neg
 			}
 		}
 

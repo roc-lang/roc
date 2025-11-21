@@ -1701,11 +1701,13 @@ pub const Interpreter = struct {
                     }
                     break :blk null;
                 };
+                // Get call expression's return type for low-level builtins
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+
                 // Unify this call expression's return var with the function's constrained return var
                 // Only do this if we have a polymorphic call entry (concrete function type)
                 if (poly_entry) |entry| {
-                    const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
                     _ = try unify.unifyWithConf(
                         self.env,
                         self.runtime_types,
@@ -1756,7 +1758,7 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, call_ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -1996,8 +1998,11 @@ pub const Interpreter = struct {
                 if (lambda_expr == .e_low_level_lambda) {
                     const low_level = lambda_expr.e_low_level_lambda;
 
+                    // Get return type for low-level builtin
+                    const method_call_ret_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+
                     // Dispatch to actual low-level builtin implementation
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops);
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, method_call_ret_rt_var);
 
                     // Decref all args
                     for (all_args) |arg| {
@@ -2207,7 +2212,7 @@ pub const Interpreter = struct {
         return dest;
     }
 
-    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps) !StackValue {
+    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool
@@ -2676,12 +2681,429 @@ pub const Interpreter = struct {
             // Numeric parsing operations
             .num_from_int_digits => {
                 // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])
-                self.triggerCrash("num_from_int_digits not yet implemented", false, roc_ops);
+                std.debug.assert(args.len == 1); // expects 1 argument: List(U8)
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("num_from_int_digits requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get the result layout (Try tag union)
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Extract base-256 digits from List(U8)
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const list_len = roc_list.len();
+                const digits_ptr = roc_list.elements(u8);
+                const digits: []const u8 = if (digits_ptr) |ptr| ptr[0..list_len] else &[_]u8{};
+
+                // Convert base-256 digits to u128 (max intermediate precision)
+                var value: u128 = 0;
+                var overflow = false;
+                for (digits) |digit| {
+                    const new_value = @mulWithOverflow(value, 256);
+                    if (new_value[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    const add_result = @addWithOverflow(new_value[0], digit);
+                    if (add_result[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    value = add_result[0];
+                }
+
+                // Resolve the Try type to get Ok's payload type (the numeric type)
+                const resolved = self.resolveBaseVar(result_rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("num_from_int_digits: expected Try tag union result type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Find tag indices for Ok and Err
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(result_rt_var, &tag_list);
+
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+                var ok_payload_var: ?types.Var = null;
+
+                for (tag_list.items, 0..) |tag_info, i| {
+                    const tag_name = self.env.getIdent(tag_info.name);
+                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                        ok_index = i;
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                        if (arg_vars.len >= 1) {
+                            ok_payload_var = arg_vars[0];
+                        }
+                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                        err_index = i;
+                    }
+                }
+
+                // Determine target numeric type and check range
+                var in_range = !overflow;
+                if (in_range and ok_payload_var != null) {
+                    const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                    if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                        // Check if value fits in target integer type
+                        const int_type = num_layout.data.scalar.data.int;
+                        in_range = switch (int_type) {
+                            .u8 => value <= std.math.maxInt(u8),
+                            .i8 => value <= std.math.maxInt(i8),
+                            .u16 => value <= std.math.maxInt(u16),
+                            .i16 => value <= std.math.maxInt(i16),
+                            .u32 => value <= std.math.maxInt(u32),
+                            .i32 => value <= std.math.maxInt(i32),
+                            .u64 => value <= std.math.maxInt(u64),
+                            .i64 => value <= std.math.maxInt(i64),
+                            .u128, .i128 => true, // u128 fits, i128 needs sign check
+                        };
+                    }
+                }
+
+                // Construct the result tag union
+                if (result_layout.tag == .scalar) {
+                    // Simple tag with no payload (shouldn't happen for Try)
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                    try out.setInt(@intCast(tag_idx));
+                    out.is_initialized = true;
+                    return out;
+                } else if (result_layout.tag == .record) {
+                    // Record { tag, payload }
+                    var dest = try self.pushRaw(result_layout, 0);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+
+                    // Write tag discriminant
+                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        try tmp.setInt(@intCast(tag_idx));
+                    } else return error.NotImplemented;
+
+                    // Clear payload area
+                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    // Write payload
+                    if (in_range and ok_payload_var != null) {
+                        // Write the numeric value as Ok payload
+                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                                // Write integer value directly to payload
+                                const int_type = num_layout.data.scalar.data.int;
+                                switch (int_type) {
+                                    .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
+                                    .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                }
+                            }
+                        }
+                    }
+                    // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
+
+                    return dest;
+                }
+
+                self.triggerCrash("num_from_int_digits: unsupported result layout", false, roc_ops);
                 return error.Crash;
             },
             .num_from_dec_digits => {
                 // num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])
                 self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
+                return error.Crash;
+            },
+            .num_from_num_literal => {
+                // num.from_num_literal : NumLiteral -> Try(num, [InvalidNumLiteral(Str)])
+                // NumLiteral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
+                std.debug.assert(args.len == 1); // expects 1 argument: NumLiteral record
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("num_from_num_literal requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get the result layout (Try tag union)
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Extract fields from NumLiteral record
+                const num_literal_arg = args[0];
+                if (num_literal_arg.ptr == null) {
+                    self.triggerCrash("num_from_num_literal: null argument", false, roc_ops);
+                    return error.Crash;
+                }
+
+                var acc = num_literal_arg.asRecord(&self.runtime_layout_store) catch {
+                    self.triggerCrash("num_from_num_literal: argument is not a record", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get is_negative field
+                const is_neg_idx = acc.findFieldIndex(self.env, "is_negative") orelse {
+                    self.triggerCrash("num_from_num_literal: missing is_negative field", false, roc_ops);
+                    return error.Crash;
+                };
+                const is_neg_field = acc.getFieldByIndex(is_neg_idx) catch {
+                    self.triggerCrash("num_from_num_literal: failed to get is_negative field", false, roc_ops);
+                    return error.Crash;
+                };
+                const is_negative = getRuntimeU8(is_neg_field) != 0;
+
+                // Get digits_before_pt field (List(U8))
+                const before_idx = acc.findFieldIndex(self.env, "digits_before_pt") orelse {
+                    self.triggerCrash("num_from_num_literal: missing digits_before_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+                const before_field = acc.getFieldByIndex(before_idx) catch {
+                    self.triggerCrash("num_from_num_literal: failed to get digits_before_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get digits_after_pt field (List(U8))
+                const after_idx = acc.findFieldIndex(self.env, "digits_after_pt") orelse {
+                    self.triggerCrash("num_from_num_literal: missing digits_after_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+                const after_field = acc.getFieldByIndex(after_idx) catch {
+                    self.triggerCrash("num_from_num_literal: failed to get digits_after_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Extract list data from digits_before_pt
+                const before_list: *const builtins.list.RocList = @ptrCast(@alignCast(before_field.ptr.?));
+                const before_len = before_list.len();
+                const before_ptr = before_list.elements(u8);
+                const digits_before: []const u8 = if (before_ptr) |ptr| ptr[0..before_len] else &[_]u8{};
+
+                // Extract list data from digits_after_pt
+                const after_list: *const builtins.list.RocList = @ptrCast(@alignCast(after_field.ptr.?));
+                const after_len = after_list.len();
+                const after_ptr = after_list.elements(u8);
+                const digits_after: []const u8 = if (after_ptr) |ptr| ptr[0..after_len] else &[_]u8{};
+
+                // Convert base-256 digits to u128
+                var value: u128 = 0;
+                var overflow = false;
+                for (digits_before) |digit| {
+                    const new_value = @mulWithOverflow(value, 256);
+                    if (new_value[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    const add_result = @addWithOverflow(new_value[0], digit);
+                    if (add_result[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    value = add_result[0];
+                }
+
+                // Resolve the Try type to get Ok's payload type
+                const resolved = self.resolveBaseVar(result_rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("num_from_num_literal: expected Try tag union result type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Find tag indices for Ok and Err
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(result_rt_var, &tag_list);
+
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+                var ok_payload_var: ?types.Var = null;
+
+                for (tag_list.items, 0..) |tag_info, i| {
+                    const tag_name = self.env.getIdent(tag_info.name);
+                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                        ok_index = i;
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                        if (arg_vars.len >= 1) {
+                            ok_payload_var = arg_vars[0];
+                        }
+                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                        err_index = i;
+                    }
+                }
+
+                // Determine target numeric type and check range
+                var in_range = !overflow;
+
+                if (in_range and ok_payload_var != null) {
+                    const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                    if (num_layout.tag == .scalar) {
+                        if (num_layout.data.scalar.tag == .int) {
+                            // Integer type - check range and sign
+                            const int_type = num_layout.data.scalar.data.int;
+                            in_range = switch (int_type) {
+                                .u8 => !is_negative and value <= std.math.maxInt(u8),
+                                .i8 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i8)))) else value <= std.math.maxInt(i8),
+                                .u16 => !is_negative and value <= std.math.maxInt(u16),
+                                .i16 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i16)))) else value <= std.math.maxInt(i16),
+                                .u32 => !is_negative and value <= std.math.maxInt(u32),
+                                .i32 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i32)))) else value <= std.math.maxInt(i32),
+                                .u64 => !is_negative and value <= std.math.maxInt(u64),
+                                .i64 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i64)))) else value <= std.math.maxInt(i64),
+                                .u128 => !is_negative,
+                                .i128 => true, // i128 can hold any value we can represent
+                            };
+
+                            // Fractional part not allowed for integers
+                            if (digits_after.len > 0) {
+                                // Check if all digits after decimal are zero
+                                var all_zero = true;
+                                for (digits_after) |d| {
+                                    if (d != 0) {
+                                        all_zero = false;
+                                        break;
+                                    }
+                                }
+                                if (!all_zero) {
+                                    in_range = false;
+                                }
+                            }
+                        }
+                        // Float and Dec types - accept the value and convert during payload write
+                    }
+                }
+
+                // Construct the result tag union
+                if (result_layout.tag == .scalar) {
+                    // Simple tag with no payload
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                    try out.setInt(@intCast(tag_idx));
+                    out.is_initialized = true;
+                    return out;
+                } else if (result_layout.tag == .record) {
+                    // Record { tag, payload }
+                    var dest = try self.pushRaw(result_layout, 0);
+                    var result_acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = result_acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = result_acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+
+                    // Write tag discriminant
+                    const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        try tmp.setInt(@intCast(tag_idx));
+                    } else return error.NotImplemented;
+
+                    // Clear payload area
+                    const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    // Write payload for Ok case
+                    if (in_range and ok_payload_var != null) {
+                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                                const int_type = num_layout.data.scalar.data.int;
+                                if (is_negative) {
+                                    // Write negative value
+                                    const neg_value: i128 = -@as(i128, @intCast(value));
+                                    switch (int_type) {
+                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
+                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
+                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
+                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
+                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value,
+                                        else => {}, // Unsigned types already rejected above
+                                    }
+                                } else {
+                                    // Write positive value
+                                    switch (int_type) {
+                                        .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
+                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    }
+                                }
+                            } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
+                                // Floating-point and Dec types
+                                const frac_precision = num_layout.data.scalar.data.frac;
+                                const float_value: f64 = if (is_negative)
+                                    -@as(f64, @floatFromInt(value))
+                                else
+                                    @as(f64, @floatFromInt(value));
+
+                                // Handle fractional part for floats
+                                var final_value = float_value;
+                                if (digits_after.len > 0) {
+                                    var frac_value: f64 = 0;
+                                    var frac_mult: f64 = 1.0 / 256.0;
+                                    for (digits_after) |digit| {
+                                        frac_value += @as(f64, @floatFromInt(digit)) * frac_mult;
+                                        frac_mult /= 256.0;
+                                    }
+                                    if (is_negative) {
+                                        final_value -= frac_value;
+                                    } else {
+                                        final_value += frac_value;
+                                    }
+                                }
+
+                                switch (frac_precision) {
+                                    .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(final_value),
+                                    .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = final_value,
+                                    .dec => {
+                                        // Dec type - RocDec has i128 internal representation
+                                        const dec_value: i128 = if (is_negative)
+                                            -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
+                                        else
+                                            @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
+                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                    },
+                                }
+                            }
+                        }
+                    }
+                    // For Err case, payload is InvalidNumLiteral(Str) - leave as zeroed
+
+                    return dest;
+                }
+
+                self.triggerCrash("num_from_num_literal: unsupported result layout", false, roc_ops);
                 return error.Crash;
             },
         }
@@ -4101,7 +4523,8 @@ pub const Interpreter = struct {
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
             // Dispatch to actual low-level builtin implementation
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops);
+            // Binary ops don't need return type info (not num_from_int_digits etc)
+            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
         }
 
         // Bind parameters
@@ -4207,7 +4630,8 @@ pub const Interpreter = struct {
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
             // Dispatch to actual low-level builtin implementation
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops);
+            // Binary ops don't need return type info (not num_from_int_digits etc)
+            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
         }
 
         // Bind parameters

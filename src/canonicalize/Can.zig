@@ -3627,6 +3627,7 @@ pub fn canonicalizeExpr(
                     .{ .e_num = .{ .value = int_value, .kind = num_suffix } },
                     region,
                 );
+
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
