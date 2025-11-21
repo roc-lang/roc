@@ -218,6 +218,80 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+fn setupTestPlatforms(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
+) void {
+    // Create test platform host static library (str)
+    const test_platform_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_str_host",
+        "test/str/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Copy the test platform host library to the source directory
+    const copy_test_host = b.addUpdateSourceFiles();
+    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_host.step);
+
+    // Create test platform host static library (int) - native target
+    const test_platform_int_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_int_host",
+        "test/int/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Copy the int test platform host library to the source directory
+    const copy_test_int_host = b.addUpdateSourceFiles();
+    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_int_host.step);
+
+    // Cross-compile int platform host libraries for musl and glibc targets
+    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+    };
+
+    for (cross_compile_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Create cross-compiled int host library
+        const cross_int_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
+            "test/int/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy to target-specific directory
+        const copy_cross_int_host = b.addUpdateSourceFiles();
+        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_int_host.step);
+
+        // Generate glibc stubs for gnu targets
+        if (cross_target.query.abi == .gnu) {
+            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
+            if (glibc_stub) |stub| {
+                b.getInstallStep().dependOn(&stub.step);
+            }
+        }
+    }
+}
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -382,6 +456,9 @@ pub fn build(b: *std.Build) void {
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
+
+    // Setup test platform host libraries
+    setupTestPlatforms(b, target, optimize, roc_modules);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
     roc_modules.addAll(roc_exe);
@@ -873,73 +950,6 @@ fn addMainExe(
         }),
     });
     configureBackend(exe, target);
-
-    // Create test platform host static library (str)
-    const test_platform_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_str_host",
-        "test/str/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
-
-    // Copy the test platform host library to the source directory
-    const copy_test_host = b.addUpdateSourceFiles();
-    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_host.step);
-
-    // Create test platform host static library (int) - native target
-    const test_platform_int_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_int_host",
-        "test/int/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
-
-    // Copy the int test platform host library to the source directory
-    const copy_test_int_host = b.addUpdateSourceFiles();
-    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_int_host.step);
-
-    // Cross-compile int platform host libraries for musl and glibc targets
-    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
-        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
-        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
-    };
-
-    for (cross_compile_targets) |cross_target| {
-        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
-
-        // Create cross-compiled int host library
-        const cross_int_host_lib = createTestPlatformHostLib(
-            b,
-            b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
-            "test/int/platform/host.zig",
-            cross_resolved_target,
-            optimize,
-            roc_modules,
-        );
-
-        // Copy to target-specific directory
-        const copy_cross_int_host = b.addUpdateSourceFiles();
-        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
-        b.getInstallStep().dependOn(&copy_cross_int_host.step);
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
-            }
-        }
-    }
 
     // Create builtins static library at build time with minimal dependencies
     const builtins_obj = b.addObject(.{

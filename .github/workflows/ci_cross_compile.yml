@@ -44,7 +44,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build'
-          error_string_contains: 'EndOfStream'
+          error_string_contains: 'EndOfStream|503'
           retry_count: 3
 
       - name: Cross-compile int platform (Unix)
