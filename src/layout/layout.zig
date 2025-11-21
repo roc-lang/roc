@@ -175,6 +175,10 @@ pub const RecordData = struct {
     fields: collections.NonEmptyRange,
 
     pub fn getFields(self: RecordData) RecordField.SafeMultiList.Range {
+        // Handle empty records specially - NonEmptyRange.toRange() asserts count > 0
+        if (self.fields.count == 0) {
+            return RecordField.SafeMultiList.Range.empty();
+        }
         return self.fields.toRange(RecordField.SafeMultiList.Idx);
     }
 };

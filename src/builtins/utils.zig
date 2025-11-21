@@ -129,9 +129,40 @@ pub const TestEnv = struct {
     }
 
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        _ = env;
-        _ = roc_realloc;
-        @panic("Test realloc not implemented yet");
+        const self: *TestEnv = @ptrCast(@alignCast(env));
+
+        // Look up the old allocation
+        if (self.allocation_map.fetchRemove(roc_realloc.answer)) |entry| {
+            const old_bytes: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+            const old_slice = old_bytes[0..entry.value.size];
+
+            // Reallocate with the same alignment
+            const new_ptr = switch (entry.value.alignment) {
+                1 => self.allocator.realloc(old_slice, roc_realloc.new_length),
+                2 => self.allocator.realloc(@as([]align(2) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                4 => self.allocator.realloc(@as([]align(4) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                8 => self.allocator.realloc(@as([]align(8) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                else => @panic("Unsupported alignment in test reallocator"),
+            } catch {
+                @panic("Test reallocation failed");
+            };
+
+            const result: *anyopaque = @ptrCast(new_ptr.ptr);
+
+            // Update the allocation map with the new pointer and size
+            self.allocation_map.put(result, AllocationInfo{
+                .size = roc_realloc.new_length,
+                .alignment = entry.value.alignment,
+            }) catch {
+                self.allocator.free(new_ptr);
+                @panic("Failed to track test reallocation");
+            };
+
+            roc_realloc.answer = result;
+        } else {
+            @panic("Test realloc: pointer not found in allocation map");
+        }
     }
 
     fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -610,6 +641,7 @@ pub fn unsafeReallocate(
     new_length: usize,
     element_width: usize,
     elements_refcounted: bool,
+    roc_ops: *RocOps,
 ) [*]u8 {
     const ptr_width: usize = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
@@ -624,11 +656,13 @@ pub fn unsafeReallocate(
 
     const old_allocation = source_ptr - extra_bytes;
 
-    const roc_realloc_args = RocRealloc{
+    var roc_realloc_args = RocRealloc{
         .alignment = alignment,
         .new_length = new_width,
         .answer = old_allocation,
     };
+
+    roc_ops.roc_realloc(&roc_realloc_args, roc_ops.env);
 
     const new_source = @as([*]u8, @ptrCast(roc_realloc_args.answer)) + extra_bytes;
     return new_source;

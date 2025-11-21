@@ -306,12 +306,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // We need to modify the def's expr field to point to our new expression
-                    // CIR.Def.Idx and Node.Idx have the same underlying representation
+                    // We need to modify the def's expr field in extra_data
+                    // The expr is stored at extra_data[extra_start + 1] (see getDef/addDef)
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
-                    var def_node = env.store.nodes.get(def_node_idx);
-                    def_node.data_2 = @intFromEnum(expr_idx);
-                    env.store.nodes.set(def_node_idx, def_node);
+                    const def_node = env.store.nodes.get(def_node_idx);
+                    const extra_start = def_node.data_1;
+                    const expr_extra_idx: @TypeOf(env.store.extra_data).Idx = @enumFromInt(extra_start + 1);
+                    env.store.extra_data.set(expr_extra_idx, @intFromEnum(expr_idx));
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -567,7 +568,12 @@ fn compileModule(
             std.debug.print("  Tokenize error: {any}\n", .{diag});
         }
         for (parse_ast.parse_diagnostics.items) |diag| {
-            std.debug.print("  Parse error: {any}\n", .{diag});
+            const start = diag.region.start;
+            const end = diag.region.end;
+            const context_start = if (start > 50) start - 50 else 0;
+            const context_end = if (end + 50 < source.len) end + 50 else source.len;
+            std.debug.print("  Parse error at bytes {d}-{d}: {s}\n", .{start, end, @tagName(diag.tag)});
+            std.debug.print("    Context: {s}\n", .{source[context_start..context_end]});
         }
 
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});

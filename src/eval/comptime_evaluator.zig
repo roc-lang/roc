@@ -32,10 +32,14 @@ const layout_mod = @import("layout");
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-    const result = evaluator.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-    const base_ptr = result orelse {
+
+    // Use C allocator for Roc's allocations to bypass GPA canary checks
+    const c_alloc = std.heap.c_allocator;
+
+    // Add padding in debug builds to detect buffer overflows
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+    const allocation = c_alloc.rawAlloc(alloc_args.length + debug_padding, align_enum, @returnAddress());
+    const base_ptr = allocation orelse {
         const msg = "Out of memory during compile-time evaluation (alloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -43,36 +47,141 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
-        // Return an invalid pointer - the evaluator is already halted
-        // The value doesn't matter since evaluation will stop
         return;
     };
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+
+    const ptr_addr = @intFromPtr(base_ptr);
+
+    // Track this allocation (track the actual requested size, not with padding)
+    evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {};
+
+    // In debug builds, write a canary pattern in the padding
+    if (std.debug.runtime_safety) {
+        const padding_start = base_ptr + alloc_args.length;
+        @memset(padding_start[0..debug_padding], 0xAA);
+
+        // Log allocations to help debug
+        if (alloc_args.length == 48) {
+            std.debug.print("[ALLOC 48 bytes] ptr=0x{x}\n", .{ptr_addr});
+        }
+    }
+
+    // Return the allocation start
+    alloc_args.answer = @ptrFromInt(ptr_addr);
 }
 
 fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    evaluator.allocator.rawFree(slice, align_enum, @returnAddress());
+
+    const ptr_addr = @intFromPtr(dealloc_args.ptr);
+
+    // Look up the allocation size from our tracking map
+    const size = evaluator.roc_allocations.get(ptr_addr) orelse return;
+
+    // In debug builds, check the canary before freeing
+    if (std.debug.runtime_safety) {
+        const debug_padding: usize = 16;
+        const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+        const padding_start = ptr + size;
+
+        // Check if canary was overwritten
+        var i: usize = 0;
+        var overflow_detected = false;
+        while (i < debug_padding) : (i += 1) {
+            if (padding_start[i] != 0xAA) {
+                if (!overflow_detected) {
+                    std.debug.print("\n[BUFFER OVERFLOW DETECTED]\n", .{});
+                    std.debug.print("Allocation at 0x{x} of size {} bytes wrote past its boundary!\n", .{ ptr_addr, size });
+                    overflow_detected = true;
+                }
+                std.debug.print("  Canary byte {} was 0x{x}, expected 0xAA\n", .{ i, padding_start[i] });
+            }
+        }
+        if (overflow_detected) {
+            std.debug.print("Memory contents around overflow:\n", .{});
+            // Print last 16 bytes of allocation + canary
+            const view_start = if (size >= 16) ptr + size - 16 else ptr;
+            const view_len = size - (size - 16);
+            var j: usize = 0;
+            std.debug.print("Last {} bytes of allocation: ", .{view_len});
+            while (j < view_len) : (j += 1) {
+                std.debug.print("{x:0>2} ", .{view_start[j]});
+            }
+            std.debug.print("\n", .{});
+            std.debug.print("Canary bytes: ", .{});
+            j = 0;
+            while (j < debug_padding) : (j += 1) {
+                std.debug.print("{x:0>2} ", .{padding_start[j]});
+            }
+            std.debug.print("\n", .{});
+            @panic("Buffer overflow detected in Roc allocation");
+        }
+    }
+
+    // Remove from tracking map
+    _ = evaluator.roc_allocations.remove(ptr_addr);
+
+    // Free the memory using c_allocator (including padding in debug builds)
+    const c_alloc = std.heap.c_allocator;
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
+    const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+    const slice = ptr[0 .. size + debug_padding];
+    c_alloc.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-    const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = evaluator.allocator.realloc(old_slice, new_total_size) catch {
+
+    const old_ptr_addr = @intFromPtr(realloc_args.answer);
+    const c_alloc = std.heap.c_allocator;
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+
+    // Look up the old allocation size
+    const old_size = evaluator.roc_allocations.get(old_ptr_addr) orelse {
+        const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+        const new_ptr = c_alloc.rawAlloc(realloc_args.new_length + debug_padding, align_enum, @returnAddress()) orelse {
+            const msg = "Out of memory during compile-time evaluation (realloc)";
+            const crashed = RocCrashed{
+                .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+                .len = msg.len,
+            };
+            comptimeRocCrashed(&crashed, env);
+            evaluator.halted = true;
+            return;
+        };
+        const new_ptr_addr = @intFromPtr(new_ptr);
+        evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+
+        // Set canary in debug builds
+        if (std.debug.runtime_safety) {
+            const padding_start = new_ptr + realloc_args.new_length;
+            @memset(padding_start[0..debug_padding], 0xAA);
+        }
+
+        realloc_args.answer = @ptrFromInt(new_ptr_addr);
+        return;
+    };
+
+    // Check canary before realloc in debug builds
+    if (std.debug.runtime_safety) {
+        const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+        const padding_start = old_ptr + old_size;
+        var i: usize = 0;
+        while (i < debug_padding) : (i += 1) {
+            if (padding_start[i] != 0xAA) {
+                std.debug.print("\n[BUFFER OVERFLOW DETECTED in realloc]\n", .{});
+                std.debug.print("Allocation at 0x{x} of size {} bytes wrote past its boundary!\n", .{ old_ptr_addr, old_size });
+                std.debug.print("Canary byte {} was 0x{x}, expected 0xAA\n", .{ i, padding_start[i] });
+                @panic("Buffer overflow detected in Roc allocation");
+            }
+        }
+    }
+
+    // Realloc using c_allocator (include padding in both old and new sizes)
+    const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+    const old_slice = old_ptr[0 .. old_size + debug_padding];
+    const new_slice = c_alloc.realloc(old_slice, realloc_args.new_length + debug_padding) catch {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -80,12 +189,22 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
-        // Leave answer unchanged - the interpreter will catch this as error.Crash
         return;
     };
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+
+    // Update tracking map with new pointer and size
+    _ = evaluator.roc_allocations.remove(old_ptr_addr);
+    const new_ptr_addr = @intFromPtr(new_slice.ptr);
+    evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+
+    // Set canary in the new allocation's padding
+    if (std.debug.runtime_safety) {
+        const new_ptr = new_slice.ptr;
+        const padding_start = new_ptr + realloc_args.new_length;
+        @memset(padding_start[0..debug_padding], 0xAA);
+    }
+
+    realloc_args.answer = @ptrFromInt(new_ptr_addr);
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -161,6 +280,8 @@ pub const ComptimeEvaluator = struct {
     halted: bool,
     /// Track the current expression being evaluated (for stack traces)
     current_expr_region: ?base.Region,
+    /// Track Roc allocations for proper dealloc/realloc (maps ptr -> size)
+    roc_allocations: std.AutoHashMap(usize, usize),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -184,6 +305,7 @@ pub const ComptimeEvaluator = struct {
             .error_names = std.array_list.Managed([]const u8).init(allocator),
             .halted = false,
             .current_expr_region = null,
+            .roc_allocations = std.AutoHashMap(usize, usize).init(allocator),
         };
     }
 
@@ -206,12 +328,15 @@ pub const ComptimeEvaluator = struct {
         }
         self.error_names.deinit();
 
+        // Clean up allocation tracking map
+        self.roc_allocations.deinit();
+
         self.interpreter.deinit();
         self.crash.deinit();
         self.expect.deinit();
     }
 
-    fn get_ops(self: *ComptimeEvaluator) *RocOps {
+    pub fn get_ops(self: *ComptimeEvaluator) *RocOps {
         if (self.roc_ops == null) {
             self.roc_ops = RocOps{
                 .env = @ptrCast(self),

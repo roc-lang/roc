@@ -770,10 +770,13 @@ pub const Interpreter = struct {
 
                     // Switch to the closure's source module
                     const saved_env = self.env;
+                    const saved_layout_env = self.runtime_layout_store.env;
                     const saved_bindings_len = self.bindings.items.len;
                     self.env = @constCast(closure_header.source_env);
+                    self.runtime_layout_store.env = self.env;
                     defer {
                         self.env = saved_env;
+                        self.runtime_layout_store.env = saved_layout_env;
                         self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                     }
 
@@ -1179,7 +1182,7 @@ pub const Interpreter = struct {
                     const field_layout = val.layout;
                     try upsert(&union_names, &union_layouts, &union_indices, f.name, field_layout);
                 }
-                const record_layout_idx = try self.runtime_layout_store.putRecord(union_layouts.items, union_names.items);
+                const record_layout_idx = try self.runtime_layout_store.putRecord(self.env, union_layouts.items, union_names.items);
                 const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
 
                 const resolved_rt = self.runtime_types.resolveVar(rt_var);
@@ -1689,7 +1692,7 @@ pub const Interpreter = struct {
                     field_layouts[i] = try self.getRuntimeLayout(cap_rt_var);
                 }
 
-                const captures_layout_idx = try self.runtime_layout_store.putRecord(field_layouts, field_names);
+                const captures_layout_idx = try self.runtime_layout_store.putRecord(self.env, field_layouts, field_names);
                 const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
                 const closure_layout = Layout.closure(captures_layout_idx);
                 const value = try self.pushRaw(closure_layout, 0);
@@ -1871,10 +1874,13 @@ pub const Interpreter = struct {
 
                     // Switch to the closure's source module for correct expression evaluation
                     const saved_env = self.env;
+                    const saved_layout_env = self.runtime_layout_store.env;
                     const saved_bindings_len = self.bindings.items.len;
                     self.env = @constCast(header.source_env);
+                    self.runtime_layout_store.env = self.env;
                     defer {
                         self.env = saved_env;
+                        self.runtime_layout_store.env = saved_layout_env;
                         self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                     }
 
@@ -2104,10 +2110,13 @@ pub const Interpreter = struct {
 
                 // Switch to the closure's source module for correct expression evaluation
                 const saved_env = self.env;
+                const saved_layout_env = self.runtime_layout_store.env;
                 const saved_bindings_len = self.bindings.items.len;
                 self.env = @constCast(closure_header.source_env);
+                self.runtime_layout_store.env = self.env;
                 defer {
                     self.env = saved_env;
+                    self.runtime_layout_store.env = saved_layout_env;
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
@@ -2175,7 +2184,8 @@ pub const Interpreter = struct {
                             }
                             // e_low_level_lambda is always a closure, so no special check needed
                         }
-                        return try self.pushCopy(b.value, roc_ops);
+                        // Use pushIncref for variable lookups to increment refcount instead of cloning
+                        return self.pushIncref(b.value);
                     }
                 }
                 // If not found, try active closure captures by variable name
@@ -2195,7 +2205,8 @@ pub const Interpreter = struct {
                             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                             if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
                                 const field_val = try accessor.getFieldByIndex(fidx);
-                                return try self.pushCopy(field_val, roc_ops);
+                                // Closure capture lookup - use pushIncref like regular variable lookup
+                                return self.pushIncref(field_val);
                             }
                         }
                     }
@@ -2206,26 +2217,10 @@ pub const Interpreter = struct {
                 for (all_defs) |def_idx| {
                     const def = self.env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        const def_expr = self.env.store.getExpr(def.expr);
-                        if (def_expr == .e_anno_only) {
-                            // This is an anno-only def being accessed - evaluate it now
-                            // For functions, this creates a closure that crashes when called
-                            // For non-functions, this crashes immediately
-                            return try self.evalExprMinimal(def.expr, roc_ops, null);
-                        }
-
-                        // In debug builds, panic if this def should have been in bindings but wasn't
-                        if (builtin.mode == .Debug) {
-                            const pat = self.env.store.getPattern(lookup.pattern_idx);
-                            const var_name = switch (pat) {
-                                .assign => |a| self.env.getIdent(a.ident),
-                                else => "(non-assign pattern)",
-                            };
-                            std.debug.panic(
-                                "Bug in compiler: top-level definition '{s}' (pattern_idx={}) should have been added to bindings but wasn't found there",
-                                .{ var_name, lookup.pattern_idx },
-                            );
-                        }
+                        // Found the definition - evaluate it directly
+                        // This handles cross-function calls within the same module
+                        // (e.g., List.get calling List.len)
+                        return try self.evalExprMinimal(def.expr, roc_ops, null);
                     }
                 }
 
@@ -2243,10 +2238,13 @@ pub const Interpreter = struct {
 
                 // Save both env and bindings state
                 const saved_env = self.env;
+                const saved_layout_env = self.runtime_layout_store.env;
                 const saved_bindings_len = self.bindings.items.len;
                 self.env = @constCast(other_env);
+                self.runtime_layout_store.env = self.env;
                 defer {
                     self.env = saved_env;
+                    self.runtime_layout_store.env = saved_layout_env;
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
@@ -2360,6 +2358,23 @@ pub const Interpreter = struct {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
+    }
+
+    /// Create a new reference to a value by incrementing its refcount (for refcounted types)
+    /// or returning the value directly (for non-refcounted types like integers).
+    /// This is used for variable lookups where we want to alias the value, not copy it.
+    pub fn pushIncref(self: *Interpreter, src: StackValue) StackValue {
+        _ = self; // Interpreter not needed for incref, but kept for API consistency
+
+        // For refcounted types, increment the refcount and return the same value
+        if (src.layout.isRefcounted()) {
+            src.incref();
+            return src;
+        }
+
+        // For non-refcounted types (integers, booleans, etc.), just return the value
+        // These are typically small and copied by value anyway
+        return src;
     }
 
     fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps) !StackValue {
@@ -4102,8 +4117,10 @@ pub const Interpreter = struct {
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
-                const copied = try self.pushCopy(value, roc_ops);
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx });
+                // NOTE: We do NOT incref here! The value passed in already has the correct refcount.
+                // When this value came from a variable lookup, the lookup already incref'd it.
+                // The defer val.decref in the statement handler will balance things out.
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = value, .expr_idx = expr_idx });
                 return true;
             },
             .as => |as_pat| {
@@ -4470,10 +4487,13 @@ pub const Interpreter = struct {
 
         // Save current environment and bindings
         const saved_env = self.env;
+        const saved_layout_env = self.runtime_layout_store.env;
         const saved_bindings_len = self.bindings.items.len;
         self.env = @constCast(origin_env);
+        self.runtime_layout_store.env = self.env;
         defer {
             self.env = saved_env;
+            self.runtime_layout_store.env = saved_layout_env;
             // Restore bindings
             self.bindings.items.len = saved_bindings_len;
         }
