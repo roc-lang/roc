@@ -334,7 +334,6 @@ test "interpreter higher-order: return poly fn using captured +n" {
 
 // Recursion via block let-binding using a named recursive closure
 test "interpreter recursion: simple countdown" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ rec = (|n| if n == 0 { 0 } else { rec(n - 1) + 1 }) rec(2) }
     //     ;
@@ -354,7 +353,6 @@ test "interpreter recursion: simple countdown" {
 }
 
 test "interpreter if: else-if chain selects middle branch" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ n = 1 if n == 0 { "zero" } else if n == 1 { "one" } else { "other" } }
     //     ;
@@ -396,7 +394,6 @@ test "interpreter var and reassign" {
 }
 
 test "interpreter logical or is short-circuiting" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\if ((1 == 1) or { crash "nope" }) { "ok" } else { "bad" }
     //     ;
@@ -419,7 +416,6 @@ test "interpreter logical or is short-circuiting" {
 }
 
 test "interpreter logical and is short-circuiting" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\if ((1 == 0) and { crash "nope" }) { "bad" } else { "ok" }
     //     ;
@@ -442,7 +438,6 @@ test "interpreter logical and is short-circuiting" {
 }
 
 test "interpreter recursion: factorial 5 -> 120" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ fact = (|n| if n == 0 { 1 } else { n * fact(n - 1) }) fact(5) }
     //     ;
@@ -466,7 +461,6 @@ test "interpreter recursion: factorial 5 -> 120" {
 // support in Interpreter.translateTypeVar.
 
 test "interpreter recursion: fibonacci 5 -> 5" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ fib = (|n| if n == 0 { 0 } else if n == 1 { 1 } else { fib(n - 1) + fib(n - 2) }) fib(5) }
     //     ;

@@ -347,7 +347,6 @@ fn findFile(allocator: std.mem.Allocator, dir_path: []const u8, filename: []cons
 }
 
 test "libc detection integration test" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 

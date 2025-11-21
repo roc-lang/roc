@@ -69,7 +69,6 @@ test "polymorphic cons function" {
     // This test is skipped because these features are missing:
     //   - Spread operator `..` in list literals [fails at parse stage - syntax not recognized]
     // TODO: Enable when spread operator is implemented in the parser
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{
@@ -91,7 +90,6 @@ test "polymorphic map function" {
     //   - List equality comparison `xs == []` [may fail at type-check stage]
     // Note: List indexing `xs[0]` does parse and canonicalize but may have type issues
     // TODO: Enable when conditional expressions, recursion, and list operations are implemented
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{
@@ -186,7 +184,6 @@ test "polymorphic fold function" {
     // Even if parsing succeeded, the canonicalizer doesn't support recursive
     // let-bindings, and the type checker doesn't handle recursive polymorphic functions.
     // TODO: Enable when conditional expressions, recursion, and list/string operations are implemented
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{
@@ -241,7 +238,6 @@ test "shadowing of polymorphic values" {
     //   2. The block returning a value (the final `b` expression)
     //   3. Continuing to use the original polymorphic `id` after the block
     // TODO: Enable when nested block expressions with value returns are fully supported
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{

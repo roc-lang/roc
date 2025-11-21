@@ -62,7 +62,6 @@ test "Custom number type with negate: unary minus works" {
     // which is not yet implemented. The line `negate = |_| MyNum` doesn't work because
     // MyNum is a type, not a value, and the backing type [] has no constructable values.
     // TODO: Implement proper opaque type value construction or update test expectations.
-    if (true) return error.SkipZigTest;
 
     const source =
         \\  MyNum := [].{
@@ -114,7 +113,6 @@ test "Custom type with negate returning different type" {
     // before all top-level types are in scope, causing "UNDECLARED TYPE" error.
     // TODO: Implement two-pass type checking (collect types first, then check bodies)
     // or support forward references in associated item type signatures.
-    if (true) return error.SkipZigTest;
 
     const source =
         \\  Positive := [].{

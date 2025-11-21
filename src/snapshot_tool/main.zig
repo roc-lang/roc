@@ -3023,35 +3023,27 @@ fn searchDirectoryForBuiltin(
 }
 
 test "TODO: cross-module function calls - fibonacci" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - nested_ifs" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - repl_boolean_expressions" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - string_edge_cases" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - string_equality_basic" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - string_interpolation_comparison" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - string_multiline_comparison" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 /// An implementation of RocOps for snapshot testing.

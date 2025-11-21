@@ -175,7 +175,6 @@ test "check type - list  - diff elems 1" {
 // Skipped: Literal bounds checking is out of scope for poly removal phase
 // See POLY_REMOVAL_PLAN.md
 test "check type - num - cannot coerce 500 to u8" {
-    return error.SkipZigTest;
     // const source =
     //     \\[500, 200u8]
     // ;
@@ -284,7 +283,6 @@ test "check type - def - func with annotation 1" {
 // constraint syntax for flex vars
 // This needs to be fixed in the annotation parser, but is separate from the numeric literal work.
 test "check type - def - func with annotation 2" {
-    if (true) return error.SkipZigTest;
     const source =
         \\id : x -> _a
         \\id = |_| 15
@@ -322,7 +320,6 @@ test "check type - def - forward ref" {
 }
 
 test "check type - def - nested lambda with wrong annotation" {
-    if (true) return error.SkipZigTest;
 
     // Currently the below produces two errors instead of just one.
     // NOTE: Num(a) syntax is deprecated - this test may need updating when it's re-enabled
@@ -367,7 +364,6 @@ test "check type - def - polymorphic id 2" {
 
 test "check type - def - out of order" {
     // Currently errors out in czer
-    if (true) return error.SkipZigTest;
 
     const source =
         \\id_1 : x -> x
@@ -642,7 +638,6 @@ test "check type - if else" {
 }
 
 test "check type - if else - qualified bool" {
-    if (true) return error.SkipZigTest;
     const source =
         \\x : Str
         \\x = if Bool.True "true" else "false"
@@ -2016,7 +2011,6 @@ test "check type - equirecursive static dispatch - motivating example (current b
     // poly removal, and the .plus method is not implemented. With the new nominal type
     // approach, number literals are flex vars and the error behavior has changed.
     // Future work: Add back once .plus method is implemented on numeric types.
-    if (true) return error.SkipZigTest;
 
     // This is the motivating example for equirecursive unification!
     // Before RecursionVar was implemented, this would cause infinite loops during type checking

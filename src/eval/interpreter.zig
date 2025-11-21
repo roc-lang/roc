@@ -798,25 +798,6 @@ pub const Interpreter = struct {
                     const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
 
                     return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
-                } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
-                    // Comparison operators - evaluate both sides and compare
-                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
-
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-
-                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Compare the values
-                    const comparison_result = try self.compareValues(lhs, rhs, binop.op, roc_ops);
-                    return try self.makeBoolValue(result_rt_var, comparison_result);
                 } else if (binop.op == .@"or") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
                     var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
@@ -3878,63 +3859,6 @@ pub const Interpreter = struct {
         }
     }
 
-    fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op, roc_ops: *RocOps) !bool {
-        // Handle numeric comparisons using the new low-level dispatch system
-        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const lhs_scalar = lhs.layout.data.scalar;
-            const rhs_scalar = rhs.layout.data.scalar;
-
-            // Check if both operands are numeric types
-            const is_numeric = (lhs_scalar.tag == .int or lhs_scalar.tag == .frac) and
-                (rhs_scalar.tag == .int or rhs_scalar.tag == .frac);
-
-            if (is_numeric) {
-                // Map binary operator to low-level operation
-                const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
-                    .eq => .num_is_eq,
-                    .ne => .num_is_ne,
-                    .lt => .num_is_lt,
-                    .le => .num_is_lte,
-                    .gt => .num_is_gt,
-                    .ge => .num_is_gte,
-                    else => return error.NotImplemented,
-                };
-
-                // Call the low-level builtin with both arguments
-                var args = [_]StackValue{ lhs, rhs };
-                const result = try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
-
-                // Extract boolean result
-                if (result.ptr) |ptr| {
-                    const bool_ptr: *const bool = @ptrCast(@alignCast(ptr));
-                    return bool_ptr.*;
-                }
-                return error.TypeMismatch;
-            }
-
-            // Handle bool comparisons using low-level dispatch
-            if (lhs_scalar.tag == .bool and rhs_scalar.tag == .bool) {
-                const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
-                    .eq => .bool_is_eq,
-                    .ne => .bool_is_ne,
-                    else => return error.NotImplemented,
-                };
-
-                var args = [_]StackValue{ lhs, rhs };
-                const result = try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
-
-                // Extract boolean result
-                if (result.ptr) |ptr| {
-                    const bool_ptr: *const bool = @ptrCast(@alignCast(ptr));
-                    return bool_ptr.*;
-                }
-                return error.TypeMismatch;
-            }
-        }
-
-        // For now, only numeric and bool comparisons are supported
-        return error.NotImplemented;
-    }
 
     fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
         var out = try self.pushRaw(result_layout, 0);

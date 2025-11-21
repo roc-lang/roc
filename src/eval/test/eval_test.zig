@@ -82,18 +82,16 @@ test "eval unary not in conditional expressions" {
 }
 
 test "if-else" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
-    //     try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
-    //     try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
-    //     try runExpectInt("if (5 > 3) 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if (3 > 5) 100 else 200", 200, .no_trace);
+    try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
+    try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
+    try runExpectInt("if (5 > 3) 100 else 200", 100, .no_trace);
+    try runExpectInt("if (3 > 5) 100 else 200", 200, .no_trace);
 }
 
 test "nested if-else" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
-    //     try runExpectInt("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100, .no_trace);
-    //     try runExpectInt("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200, .no_trace);
-    //     try runExpectInt("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300, .no_trace);
+    try runExpectInt("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100, .no_trace);
+    try runExpectInt("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200, .no_trace);
+    try runExpectInt("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300, .no_trace);
 }
 
 test "eval single element record" {
@@ -130,19 +128,18 @@ test "arithmetic binops" {
 }
 
 test "comparison binops" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
-    //     try runExpectInt("if 1 < 2 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if 2 < 1 100 else 200", 200, .no_trace);
-    //     try runExpectInt("if 5 > 3 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if 3 > 5 100 else 200", 200, .no_trace);
-    //     try runExpectInt("if 10 <= 10 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if 10 <= 9 100 else 200", 200, .no_trace);
-    //     try runExpectInt("if 10 >= 10 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if 9 >= 10 100 else 200", 200, .no_trace);
-    //     try runExpectInt("if 5 == 5 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if 5 == 6 100 else 200", 200, .no_trace);
-    //     try runExpectInt("if 5 != 6 100 else 200", 100, .no_trace);
-    //     try runExpectInt("if 5 != 5 100 else 200", 200, .no_trace);
+    try runExpectInt("if 1 < 2 100 else 200", 100, .no_trace);
+    try runExpectInt("if 2 < 1 100 else 200", 200, .no_trace);
+    try runExpectInt("if 5 > 3 100 else 200", 100, .no_trace);
+    try runExpectInt("if 3 > 5 100 else 200", 200, .no_trace);
+    try runExpectInt("if 10 <= 10 100 else 200", 100, .no_trace);
+    try runExpectInt("if 10 <= 9 100 else 200", 200, .no_trace);
+    try runExpectInt("if 10 >= 10 100 else 200", 100, .no_trace);
+    try runExpectInt("if 9 >= 10 100 else 200", 200, .no_trace);
+    try runExpectInt("if 5 == 5 100 else 200", 100, .no_trace);
+    try runExpectInt("if 5 == 6 100 else 200", 200, .no_trace);
+    try runExpectInt("if 5 != 6 100 else 200", 100, .no_trace);
+    try runExpectInt("if 5 != 5 100 else 200", 200, .no_trace);
 }
 
 test "logical binops" {
@@ -251,30 +248,28 @@ test "operator associativity - edge cases" {
 }
 
 test "comparison operators - non-associative" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     // Comparison operators should be non-associative
     // These should work with parentheses
-    //     try runExpectBool("(5 > 3)", true, .no_trace); // true
-    //     try runExpectBool("(10 < 20)", true, .no_trace); // true
-    //     try runExpectBool("(5 >= 5)", true, .no_trace); // true
-    //     try runExpectBool("(10 <= 9)", false, .no_trace); // false
+    try runExpectBool("(5 > 3)", true, .no_trace); // true
+    try runExpectBool("(10 < 20)", true, .no_trace); // true
+    try runExpectBool("(5 >= 5)", true, .no_trace); // true
+    try runExpectBool("(10 <= 9)", false, .no_trace); // false
 
     // But chaining without parentheses should fail to parse
     // We can't test parse errors in eval tests, so we just verify the operators work
 }
 
 test "operator associativity - documentation" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     // This test documents the expected associativity behavior after fixes
 
     // LEFT ASSOCIATIVE (most arithmetic operators)
     // a op b op c = (a op b) op c
-    //     try runExpectInt("8 - 4 - 2", 2, .no_trace); // (8-4)-2 = 2, NOT 8-(4-2) = 6
-    //     try runExpectInt("16 // 4 // 2", 2, .no_trace); // (16//4)//2 = 2, NOT 16//(4//2) = 8
+    try runExpectInt("8 - 4 - 2", 2, .no_trace); // (8-4)-2 = 2, NOT 8-(4-2) = 6
+    try runExpectInt("16 // 4 // 2", 2, .no_trace); // (16//4)//2 = 2, NOT 16//(4//2) = 8
 
     // NON-ASSOCIATIVE (comparison operators)
     // Can't chain without parentheses
-    //     try runExpectBool("(5 > 3) and (3 > 1)", true, .no_trace); // Must use parentheses
+    try runExpectBool("(5 > 3) and (3 > 1)", true, .no_trace); // Must use parentheses
 
     // RIGHT ASSOCIATIVE (logical operators)
     // a op b op c = a op (b op c)
@@ -386,11 +381,10 @@ test "multi-parameter lambdas" {
 }
 
 test "lambdas with if-then bodies" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
-    //     try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
-    //     try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
-    //     try runExpectInt("(|x| if x == 0 1 else x)(0)", 1, .no_trace);
-    //     try runExpectInt("(|x| if x == 0 1 else x)(42)", 42, .no_trace);
+    try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
+    try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
+    try runExpectInt("(|x| if x == 0 1 else x)(0)", 1, .no_trace);
+    try runExpectInt("(|x| if x == 0 1 else x)(42)", 42, .no_trace);
 }
 
 test "lambdas with unary minus" {
@@ -404,7 +398,6 @@ test "lambdas with unary minus" {
 
 test "lambdas closures" {
     // Curried functions still have interpreter issues with TypeMismatch
-    return error.SkipZigTest;
     // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
     // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
     // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
@@ -432,7 +425,6 @@ test "lambdas with capture" {
 
 test "lambdas nested closures" {
     // Nested closures still have interpreter issues with TypeMismatch
-    return error.SkipZigTest;
     // try runExpectInt(
     //     \\(((|a| {
     //     \\    a_loc = a * 2
@@ -561,69 +553,66 @@ test "string refcount - basic literal" {
 }
 
 test "polymorphic identity function" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     // Test the identity function with different types
-    //     const code =
-    //         \\{
-    //         \\    identity = |val| val
-    //         \\    num = identity(5)
-    //         \\    str = identity("Hello")
-    //         \\    if (num > 0) str else ""
-    //         \\}
-    //     ;
-    //     try runExpectStr(code, "Hello", .no_trace);
+    const code =
+        \\{
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
+        \\    if (num > 0) str else ""
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
 }
 
 test "direct polymorphic function usage" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     // Test that polymorphic functions work correctly when used directly
     // This is valid in rank-1 Hindley-Milner type systems
-    //     const code =
-    //         \\{
-    //         \\    id = |x| x
-    //         \\
-    //         \\    # Direct calls to identity with different types
-    //         \\    num1 = id(10)
-    //         \\    str1 = id("Test")
-    //         \\    num2 = id(20)
-    //         \\
-    //         \\    # Verify all values are correct
-    //         \\    if (num1 == 10)
-    //         \\        if (num2 == 20)
-    //         \\            str1
-    //         \\        else
-    //         \\            "Failed2"
-    //         \\    else
-    //         \\        "Failed1"
-    //         \\}
-    //     ;
-    //     try runExpectStr(code, "Test", .no_trace);
+    const code =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Direct calls to identity with different types
+        \\    num1 = id(10)
+        \\    str1 = id("Test")
+        \\    num2 = id(20)
+        \\
+        \\    # Verify all values are correct
+        \\    if (num1 == 10)
+        \\        if (num2 == 20)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Test", .no_trace);
 }
 
 test "multiple polymorphic instantiations" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     // Test that let-bound polymorphic values can be instantiated multiple times
     // This tests valid rank-1 polymorphism patterns
-    //     const code =
-    //         \\{
-    //         \\    id = |x| x
-    //         \\
-    //         \\    # Test polymorphic identity with different types
-    //         \\    num1 = id(42)
-    //         \\    str1 = id("Hello")
-    //         \\    num2 = id(100)
-    //         \\
-    //         \\    # Verify all results
-    //         \\    if (num1 == 42)
-    //         \\        if (num2 == 100)
-    //         \\            str1
-    //         \\        else
-    //         \\            "Failed2"
-    //         \\    else
-    //         \\        "Failed1"
-    //         \\}
-    //     ;
-    //     try runExpectStr(code, "Hello", .no_trace);
+    const code =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Test polymorphic identity with different types
+        \\    num1 = id(42)
+        \\    str1 = id("Hello")
+        \\    num2 = id(100)
+        \\
+        \\    # Verify all results
+        \\    if (num1 == 42)
+        \\        if (num2 == 100)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
 }
 
 test "string refcount - large string literal" {

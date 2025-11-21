@@ -291,7 +291,6 @@ test "interpreter: literal True renders True" {
 }
 
 test "interpreter: True == False yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "True == False";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -311,7 +310,6 @@ test "interpreter: True == False yields False" {
 }
 
 test "interpreter: \"hi\" == \"hi\" yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "\"hi\" == \"hi\"";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -333,7 +331,6 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
 }
 
 test "interpreter: (1, 2) == (1, 2) yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "(1, 2) == (1, 2)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -353,7 +350,6 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
 }
 
 test "interpreter: (1, 2) == (2, 1) yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "(1, 2) == (2, 1)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -373,7 +369,6 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
 }
 
 test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{ x: 1, y: 2 } == { y: 2, x: 1 }";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -393,7 +388,6 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
 }
 
 test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{ x: 1, y: 2 } == { x: 1, y: 3 }";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -524,7 +518,6 @@ test "interpreter: record update expression can reference base" {
 // }
 
 test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "[1, 2, 3] == [1, 2, 3]";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -544,7 +537,6 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
 }
 
 test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "[1, 2, 3] == [1, 3, 2]";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -564,7 +556,6 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
 }
 
 test "interpreter: Ok(1) == Ok(1) yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "Ok(1) == Ok(1)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -584,7 +575,6 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
 }
 
 test "interpreter: Ok(1) == Err(1) yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "Ok(1) == Err(1)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -787,11 +777,9 @@ test "interpreter: match list pattern destructures" {
 }
 
 test "debug List.len expression" {
-    return error.SkipZigTest;
 }
 
 test "interpreter: List.len on literal" {
-    return error.SkipZigTest;
 }
 
 test "interpreter: match list rest binds slice" {
@@ -960,7 +948,6 @@ test "interpreter: crash statement triggers crash error and message" {
 }
 
 test "interpreter: expect expression succeeds" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{\n    expect 1 == 1\n    {}\n}";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -981,7 +968,6 @@ test "interpreter: expect expression succeeds" {
 }
 
 test "interpreter: expect expression failure crashes with message" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{\n    expect 1 == 0\n    {}\n}";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1048,7 +1034,6 @@ test "interpreter: decimal literal renders 0.125" {
 }
 
 test "interpreter: f64 equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3.25f64 == 3.25f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1068,7 +1053,6 @@ test "interpreter: f64 equality True" {
 }
 
 test "interpreter: decimal equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.125 == 0.125";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1088,7 +1072,6 @@ test "interpreter: decimal equality True" {
 }
 
 test "interpreter: int and f64 equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "1 == 1.0f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1118,7 +1101,6 @@ test "interpreter: int and f64 equality True" {
 }
 
 test "interpreter: int and decimal equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "1 == 1.0";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1148,7 +1130,6 @@ test "interpreter: int and decimal equality True" {
 }
 
 test "interpreter: int less-than yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3 < 4";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1168,7 +1149,6 @@ test "interpreter: int less-than yields True" {
 }
 
 test "interpreter: int greater-than yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "5 > 8";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1207,7 +1187,6 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
 }
 
 test "interpreter: f64 greater-than yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3.5f64 > 1.25f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1227,7 +1206,6 @@ test "interpreter: f64 greater-than yields True" {
 }
 
 test "interpreter: decimal less-than-or-equal yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.5 <= 0.5";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1247,7 +1225,6 @@ test "interpreter: decimal less-than-or-equal yields True" {
 }
 
 test "interpreter: int and f64 less-than yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "1 < 2.0f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1267,7 +1244,6 @@ test "interpreter: int and f64 less-than yields True" {
 }
 
 test "interpreter: int and decimal greater-than yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3 > 5.5";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1287,7 +1263,6 @@ test "interpreter: int and decimal greater-than yields False" {
 }
 
 test "interpreter: bool inequality yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "True != False";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1307,7 +1282,6 @@ test "interpreter: bool inequality yields True" {
 }
 
 test "interpreter: decimal inequality yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.5 != 0.5";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1327,7 +1301,6 @@ test "interpreter: decimal inequality yields False" {
 }
 
 test "interpreter: f64 equality False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3.25f64 == 4.0f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1347,7 +1320,6 @@ test "interpreter: f64 equality False" {
 }
 
 test "interpreter: decimal equality False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.125 == 0.25";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);

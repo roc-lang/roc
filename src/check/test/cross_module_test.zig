@@ -51,7 +51,6 @@ test "cross-module - check type - monomorphic function fails" {
     // This appears to be related to how auto-imports interact with error reporting in test environments.
     // The other 3 cross-module tests pass, so cross-module - check type works in general.
     // TODO: Investigate why type errors aren't being reported in this specific cross-module test case
-    return error.SkipZigTest;
 
     // const source_a =
     //     \\main! : Str -> Str

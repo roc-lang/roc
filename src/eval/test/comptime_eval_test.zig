@@ -827,7 +827,6 @@ test "comptime eval - constant folding with recursive function" {
     // TODO: This test is currently skipped due to a segfault when constant folding
     // modifies CIR nodes in-place during recursive function evaluation.
     // The issue needs to be revisited later.
-    return error.SkipZigTest;
 }
 
 test "comptime eval - constant folding with helper functions" {

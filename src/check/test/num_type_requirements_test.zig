@@ -41,7 +41,6 @@ test "U8: 256 does not fit" {
     // This test is skipped because literal requirements checking (bits needed, sign needed)
     // is out of scope for the poly removal work. See POLY_REMOVAL_PLAN.md Phase 1.
     // Future work: Add back literal validation with better error messages
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{
@@ -61,7 +60,6 @@ test "U8: negative does not fit" {
     // This test is skipped because literal requirements checking (bits needed, sign needed)
     // is out of scope for the poly removal work. See POLY_REMOVAL_PLAN.md Phase 1.
     // Future work: Add back literal validation with better error messages
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{
@@ -96,7 +94,6 @@ test "I8: -129 does not fit" {
     // This test is skipped because literal requirements checking (bits needed, sign needed)
     // is out of scope for the poly removal work. See POLY_REMOVAL_PLAN.md Phase 1.
     // Future work: Add back literal validation with better error messages
-    if (true) return error.SkipZigTest;
 
     const source =
         \\{
