@@ -19,11 +19,13 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        dependencies = (with pkgs; [
+        zig=pkgs.zig_0_15;
+
+        dependencies =  [
           zig
-          zls
-          git # for use in ci/zig_lints.sh
-        ]);
+          pkgs.zls
+          pkgs.git # for use in ci/zig_lints.sh
+        ];
 
         shellFunctions = ''
           buildcmd() {
@@ -54,7 +56,7 @@
 
           shellHook = ''
             ${shellFunctions}
-            
+
             echo "Some convenient commands:"
             echo "${shellFunctions}" | grep -E '^\s*[a-zA-Z_][a-zA-Z0-9_]*\(\)' | sed 's/().*//' | sed 's/^[[:space:]]*/  /' | while read func; do
               body=$(echo "${shellFunctions}" | sed -n "/''${func}()/,/^[[:space:]]*}/p" | sed '1d;$d' | tr '\n' ';' | sed 's/;$//' | sed 's/[[:space:]]*$//')
