@@ -104,12 +104,15 @@ test "check type - number annotation mismatch with string" {
     try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
-test "check type - i64 annotation mismatch with f64" {
+test "check type - i64 annotation with fractional literal passes type checking" {
+    // Note: Validation of numeric literals (e.g., fractional to integer) happens
+    // during comptime evaluation, not type checking. This test verifies that
+    // type checking passes - the actual validation error is caught by comptime eval.
     const source =
         \\x : I64
         \\x = 3.14
     ;
-    try checkTypesModule(source, .fail, "INVALID NUMERIC LITERAL");
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
 
 test "check type - string plus number should fail" {

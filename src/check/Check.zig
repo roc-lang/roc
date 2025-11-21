@@ -4234,8 +4234,7 @@ fn handleRecursiveConstraint(
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-/// Check a from_num_literal constraint by evaluating it at compile-time for built-in types
-/// This validates that the numeric literal can be converted to the target type
+/// Check a from_num_literal constraint - actual validation happens during comptime evaluation
 fn checkNumLiteralConstraint(
     self: *Self,
     type_var: Var,
@@ -4245,115 +4244,18 @@ fn checkNumLiteralConstraint(
     type_name_bytes: []const u8,
     env: *Env,
 ) !void {
-    // Extract the short type name (e.g., "I64" from "Num.I64")
-    const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
-        type_name_bytes[dot_idx + 1 ..]
-    else
-        type_name_bytes;
-
-    // Check if this is a built-in numeric type from Num module
-    const is_builtin_num = nominal_type.origin_module == self.cir.builtin_module_ident and
-        std.mem.startsWith(u8, type_name_bytes, "Num.");
-
-    if (!is_builtin_num) {
-        // For non-builtin types, we can't do compile-time validation in Check.zig
-        // But we should check if the method exists at all
-        // The actual validation will happen during comptime evaluation
-
-        // For now, we rely on the general static dispatch machinery to check
-        // if the method exists - it will call reportConstraintError if not found
-        // So we just skip the builtin-specific validation here
-        return;
-    }
-
-    // Evaluate the conversion for built-in types
-    const conversion_ok = try self.evalBuiltinFromNumLiteral(short_type_name, num_lit_info);
-
-    if (!conversion_ok) {
-        // Report invalid numeric literal error
-        const snapshot = try self.snapshots.deepCopyVar(self.types, type_var);
-        const invalid_literal_problem = problem.Problem{
-            .invalid_numeric_literal = .{
-                .literal_var = type_var,
-                .expected_type = snapshot,
-                .is_fractional = num_lit_info.is_fractional,
-                .region = num_lit_info.region,
-            },
-        };
-        _ = try self.problems.appendProblem(self.gpa, invalid_literal_problem);
-
-        // Mark the constraint function as error
-        try self.markConstraintFunctionAsError(constraint, env);
-    }
-}
-
-/// Evaluate a built-in from_num_literal conversion at compile-time
-/// Returns true if the conversion is valid, false otherwise
-fn evalBuiltinFromNumLiteral(
-    self: *Self,
-    type_name: []const u8,
-    num_lit_info: types_mod.NumLiteralInfo,
-) !bool {
+    // Mark parameters as intentionally unused - validation happens in comptime evaluation
     _ = self;
+    _ = type_var;
+    _ = constraint;
+    _ = num_lit_info;
+    _ = nominal_type;
+    _ = type_name_bytes;
+    _ = env;
 
-    // Fractional literals cannot be converted to integer types
-    if (num_lit_info.is_fractional) {
-        // Check if this is an integer type
-        const is_int_type = std.mem.eql(u8, type_name, "I8") or
-            std.mem.eql(u8, type_name, "U8") or
-            std.mem.eql(u8, type_name, "I16") or
-            std.mem.eql(u8, type_name, "U16") or
-            std.mem.eql(u8, type_name, "I32") or
-            std.mem.eql(u8, type_name, "U32") or
-            std.mem.eql(u8, type_name, "I64") or
-            std.mem.eql(u8, type_name, "U64") or
-            std.mem.eql(u8, type_name, "I128") or
-            std.mem.eql(u8, type_name, "U128");
-
-        if (is_int_type) {
-            return false; // Cannot convert fractional to integer
-        }
-
-        // F32, F64, and Dec can hold fractional values
-        return true;
-    }
-
-    // Integer literal - check range for each type
-    const value = num_lit_info.value;
-
-    if (std.mem.eql(u8, type_name, "I8")) {
-        return value >= std.math.minInt(i8) and value <= std.math.maxInt(i8);
-    } else if (std.mem.eql(u8, type_name, "U8")) {
-        return value >= 0 and value <= std.math.maxInt(u8);
-    } else if (std.mem.eql(u8, type_name, "I16")) {
-        return value >= std.math.minInt(i16) and value <= std.math.maxInt(i16);
-    } else if (std.mem.eql(u8, type_name, "U16")) {
-        return value >= 0 and value <= std.math.maxInt(u16);
-    } else if (std.mem.eql(u8, type_name, "I32")) {
-        return value >= std.math.minInt(i32) and value <= std.math.maxInt(i32);
-    } else if (std.mem.eql(u8, type_name, "U32")) {
-        return value >= 0 and value <= std.math.maxInt(u32);
-    } else if (std.mem.eql(u8, type_name, "I64")) {
-        return value >= std.math.minInt(i64) and value <= std.math.maxInt(i64);
-    } else if (std.mem.eql(u8, type_name, "U64")) {
-        return value >= 0 and value <= std.math.maxInt(u64);
-    } else if (std.mem.eql(u8, type_name, "I128")) {
-        return true; // i128 can hold any value (stored directly)
-    } else if (std.mem.eql(u8, type_name, "U128")) {
-        // U128 can hold values 0 to 340282366920938463463374607431768211455
-        // Since value is i128, we check is_negative instead of value >= 0
-        // (large positive u128 values overflow i128 and appear negative)
-        return !num_lit_info.is_negative;
-    } else if (std.mem.eql(u8, type_name, "F32") or
-        std.mem.eql(u8, type_name, "F64") or
-        std.mem.eql(u8, type_name, "Dec"))
-    {
-        // Floating point and Dec types can hold any integer literal
-        return true;
-    }
-
-    // Unknown type - be permissive for now
-    return true;
+    // All numeric literal validation now happens during comptime evaluation
+    // in ComptimeEvaluator.validateDeferredNumericLiterals()
+    // This function exists only to satisfy the constraint checking interface
 }
 
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {

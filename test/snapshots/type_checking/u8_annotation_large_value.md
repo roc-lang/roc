@@ -9,21 +9,9 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
-INVALID NUMERIC LITERAL - u8_annotation_large_value.md:2:5:2:8
+NIL
 # PROBLEMS
-**INVALID NUMERIC LITERAL**
-The numeric literal **500** is out of range for its inferred type:
-**u8_annotation_large_value.md:2:5:2:8:**
-```roc
-x = 500
-```
-    ^^^
-
-Its inferred type is:
-    _Num.U8_
-
-Hint: Use a larger integer type or _Dec_ for arbitrary precision.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

@@ -608,127 +608,26 @@ pub const ComptimeEvaluator = struct {
                 continue;
             };
 
-            // Step 3: Validate the literal
+            // Step 3: Validate the literal by invoking from_num_literal
+            // All types (builtin and user-defined) use the same unified path
+            const is_valid = try self.invokeFromNumLiteral(
+                origin_env,
+                def_idx,
+                num_lit_info,
+                literal.region,
+            );
+
+            if (!is_valid) {
+                // Error already reported by invokeFromNumLiteral
+                continue;
+            }
+
+            // Validation passed - rewrite the expression for builtin types
             if (is_builtin) {
-                // For built-in types, use simplified range checking
-                // This matches what Check.zig does in evalBuiltinFromNumLiteral
-                const is_valid = try self.validateBuiltinFromNumLiteral(short_type_name, num_lit_info);
-
-                if (!is_valid) {
-                    // Report validation error
-                    const error_msg = if (num_lit_info.is_fractional)
-                        try std.fmt.allocPrint(
-                            self.allocator,
-                            "Cannot convert fractional literal to integer type {s}",
-                            .{short_type_name},
-                        )
-                    else
-                        try std.fmt.allocPrint(
-                            self.allocator,
-                            "Number literal {d} does not fit in type {s}",
-                            .{ num_lit_info.value, short_type_name },
-                        );
-
-                    try self.error_names.append(error_msg);
-                    const problem = Problem{
-                        .comptime_eval_error = .{
-                            .error_name = error_msg,
-                            .region = literal.region,
-                        },
-                    };
-                    _ = try self.problems.appendProblem(self.allocator, problem);
-                } else {
-                    // Validation passed - rewrite the expression to the target type
-                    try self.rewriteNumericLiteralExpr(literal.expr_idx, short_type_name, num_lit_info);
-                }
-            } else {
-                // For user-defined types, invoke the actual from_num_literal function
-                const is_valid = try self.invokeFromNumLiteral(
-                    origin_env,
-                    def_idx,
-                    num_lit_info,
-                    literal.region,
-                );
-
-                if (!is_valid) {
-                    // Error already reported by invokeFromNumLiteral
-                    continue;
-                }
-
-                // Validation passed - for user-defined types, keep the original expression
-                // The type's from_num_literal will handle the conversion at runtime
+                try self.rewriteNumericLiteralExpr(literal.expr_idx, short_type_name, num_lit_info);
             }
+            // For user-defined types, keep the original expression
         }
-    }
-
-    /// Validate a built-in numeric literal conversion
-    /// Returns true if the conversion is valid, false otherwise
-    /// This is a simplified version that does range checking without invoking the interpreter
-    fn validateBuiltinFromNumLiteral(
-        self: *ComptimeEvaluator,
-        type_name: []const u8,
-        num_lit_info: types_mod.NumLiteralInfo,
-    ) !bool {
-        _ = self;
-
-        // Fractional literals cannot be converted to integer types
-        if (num_lit_info.is_fractional) {
-            // Check if this is an integer type
-            const is_int_type = std.mem.eql(u8, type_name, "I8") or
-                std.mem.eql(u8, type_name, "U8") or
-                std.mem.eql(u8, type_name, "I16") or
-                std.mem.eql(u8, type_name, "U16") or
-                std.mem.eql(u8, type_name, "I32") or
-                std.mem.eql(u8, type_name, "U32") or
-                std.mem.eql(u8, type_name, "I64") or
-                std.mem.eql(u8, type_name, "U64") or
-                std.mem.eql(u8, type_name, "I128") or
-                std.mem.eql(u8, type_name, "U128");
-
-            if (is_int_type) {
-                return false; // Cannot convert fractional to integer
-            }
-
-            // F32, F64, and Dec can hold fractional values
-            return true;
-        }
-
-        // Integer literal - check range for each type
-        const value = num_lit_info.value;
-
-        if (std.mem.eql(u8, type_name, "I8")) {
-            return value >= std.math.minInt(i8) and value <= std.math.maxInt(i8);
-        } else if (std.mem.eql(u8, type_name, "U8")) {
-            return value >= 0 and value <= std.math.maxInt(u8);
-        } else if (std.mem.eql(u8, type_name, "I16")) {
-            return value >= std.math.minInt(i16) and value <= std.math.maxInt(i16);
-        } else if (std.mem.eql(u8, type_name, "U16")) {
-            return value >= 0 and value <= std.math.maxInt(u16);
-        } else if (std.mem.eql(u8, type_name, "I32")) {
-            return value >= std.math.minInt(i32) and value <= std.math.maxInt(i32);
-        } else if (std.mem.eql(u8, type_name, "U32")) {
-            return value >= 0 and value <= std.math.maxInt(u32);
-        } else if (std.mem.eql(u8, type_name, "I64")) {
-            return value >= std.math.minInt(i64) and value <= std.math.maxInt(i64);
-        } else if (std.mem.eql(u8, type_name, "U64")) {
-            return value >= 0 and value <= std.math.maxInt(u64);
-        } else if (std.mem.eql(u8, type_name, "I128")) {
-            return true; // i128 can hold any value that fits in i128
-        } else if (std.mem.eql(u8, type_name, "U128")) {
-            // NOTE: This is imperfect - we can't represent U128 values > i128::MAX
-            // because NumLiteralInfo.value is i128. This matches the limitation
-            // in Check.zig which also can't validate large U128 values.
-            return value >= 0;
-        } else if (std.mem.eql(u8, type_name, "F32") or
-            std.mem.eql(u8, type_name, "F64") or
-            std.mem.eql(u8, type_name, "Dec"))
-        {
-            // Floating point and Dec types can hold any integer literal
-            return true;
-        }
-
-        // Unknown type - be permissive for now
-        return true;
     }
 
     /// Rewrite a numeric literal expression to match the inferred type
@@ -1056,6 +955,7 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Check a Try result value - returns true if Ok, false if Err
+    /// For Err case, extracts the InvalidNumLiteral(Str) message if present
     fn checkTryResult(
         self: *ComptimeEvaluator,
         result: eval_mod.StackValue,
@@ -1066,6 +966,23 @@ pub const ComptimeEvaluator = struct {
             if (result.layout.data.scalar.tag == .int) {
                 const tag_value = result.asI128();
                 // "Err" < "Ok" alphabetically, so Err = 0, Ok = 1
+                if (tag_value == 0) {
+                    // Err with no payload - generic error
+                    const error_msg = try std.fmt.allocPrint(
+                        self.allocator,
+                        "Numeric literal validation failed",
+                        .{},
+                    );
+                    try self.error_names.append(error_msg);
+                    const problem = Problem{
+                        .comptime_eval_error = .{
+                            .error_name = error_msg,
+                            .region = region,
+                        },
+                    };
+                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    return false;
+                }
                 return tag_value == 1;
             }
             return true; // Unknown format, optimistically allow
@@ -1077,12 +994,8 @@ pub const ComptimeEvaluator = struct {
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 const tag_value = tag_field.asI128();
                 if (tag_value == 0) {
-                    // This is an Err - validation failed
-                    const error_msg = try std.fmt.allocPrint(
-                        self.allocator,
-                        "Numeric literal validation failed",
-                        .{},
-                    );
+                    // This is an Err - try to extract InvalidNumLiteral(Str) message
+                    const error_msg = try self.extractInvalidNumLiteralMessage(accessor, region);
                     try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
@@ -1099,6 +1012,74 @@ pub const ComptimeEvaluator = struct {
         }
 
         return true; // Unknown format, optimistically allow
+    }
+
+    /// Extract the error message from an Err(InvalidNumLiteral(Str)) payload
+    fn extractInvalidNumLiteralMessage(
+        self: *ComptimeEvaluator,
+        try_accessor: eval_mod.StackValue.RecordAccessor,
+        region: base.Region,
+    ) ![]const u8 {
+        _ = region;
+
+        // Get the payload field from the Try record
+        const payload_idx = try_accessor.findFieldIndex(self.env, "payload") orelse {
+            return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+        };
+        const payload_field = try_accessor.getFieldByIndex(payload_idx) catch {
+            return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+        };
+
+        // The payload for Err is the error type: [InvalidNumLiteral(Str), ...]
+        // This is itself a tag union which may be a record { tag, payload } or just a scalar
+        if (payload_field.layout.tag == .record) {
+            // Tag union with payload - look for InvalidNumLiteral tag
+            var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
+                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+            };
+
+            // Check if this is a tag union with tag and payload fields
+            const err_tag_idx = err_accessor.findFieldIndex(self.env, "tag") orelse {
+                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+            };
+            const err_tag_field = err_accessor.getFieldByIndex(err_tag_idx) catch {
+                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+            };
+
+            // Get tag value to verify it's InvalidNumLiteral
+            // Note: We don't need to check the tag name because we're looking for ANY Str payload
+            // that represents the error message (InvalidNumLiteral is the only tag with Str payload)
+            _ = err_tag_field;
+
+            // Get the inner payload which should be the Str
+            const err_payload_idx = err_accessor.findFieldIndex(self.env, "payload") orelse {
+                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+            };
+            const err_payload = err_accessor.getFieldByIndex(err_payload_idx) catch {
+                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+            };
+
+            // Extract the Str from the payload
+            return try self.extractStrFromValue(err_payload);
+        } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
+            // Direct Str payload
+            return try self.extractStrFromValue(payload_field);
+        }
+
+        return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+    }
+
+    /// Extract a Str value from a StackValue
+    fn extractStrFromValue(self: *ComptimeEvaluator, value: eval_mod.StackValue) ![]const u8 {
+        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
+            if (value.ptr) |ptr| {
+                const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(ptr));
+                const str_bytes = roc_str.asSlice();
+                // Copy the string to our allocator so we own it
+                return try self.allocator.dupe(u8, str_bytes);
+            }
+        }
+        return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
     }
 
     /// Evaluates all top-level declarations in the module

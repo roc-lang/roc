@@ -16,7 +16,6 @@ wrong_type_function = |x| x * 3.14
 # EXPECTED
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
-INVALID NUMERIC LITERAL - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has the type **Str**, which has no **plus** method:
@@ -28,19 +27,6 @@ string_function = |x| x + 42
 
 
 **Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
-**INVALID NUMERIC LITERAL**
-The fractional literal **3.14** cannot be converted to an integer type:
-**lambda_annotation_mismatch_error.md:7:31:7:35:**
-```roc
-wrong_type_function = |x| x * 3.14
-```
-                              ^^^^
-
-Its inferred type is:
-    _Num.I64_
-
-Hint: Use a decimal type like _Dec_ or _F64_ instead.
 
 # TOKENS
 ~~~zig
