@@ -6,10 +6,6 @@ const PathList = std.ArrayList([]u8);
 
 const max_file_bytes: usize = 16 * 1024 * 1024;
 
-const test_exclusions = [_][]const u8{
-    "src/snapshot_tool",
-};
-
 const test_file_exclusions = [_][]const u8{
     // TODO: This test got out of sync and is not straightforward to fix
     "src/eval/test/low_level_interp_test.zig",
@@ -174,11 +170,6 @@ fn handleFile(
         return;
     }
 
-    if (shouldSkipTestPath(path)) {
-        allocator.free(path);
-        return;
-    }
-
     if (shouldSkipTestFile(path)) {
         allocator.free(path);
         return;
@@ -192,23 +183,11 @@ fn handleFile(
     allocator.free(path);
 }
 
-fn shouldSkipTestPath(path: []const u8) bool {
-    for (test_exclusions) |prefix| {
-        if (hasDirPrefix(path, prefix)) return true;
-    }
-    return false;
-}
-
 fn shouldSkipTestFile(path: []const u8) bool {
     for (test_file_exclusions) |excluded| {
         if (std.mem.eql(u8, path, excluded)) return true;
     }
     return false;
-}
-
-fn hasDirPrefix(path: []const u8, prefix: []const u8) bool {
-    if (!std.mem.startsWith(u8, path, prefix)) return false;
-    return path.len == prefix.len or path[prefix.len] == '/';
 }
 
 fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
