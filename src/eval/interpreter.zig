@@ -550,7 +550,7 @@ pub const Interpreter = struct {
                         .s_expect => |expect_stmt| {
                             const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
                             const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
-                            const is_true = self.boolValueEquals(true, cond_val, bool_rt_var);
+                            const is_true = boolValueEquals(true, cond_val);
                             if (!is_true) {
                                 try self.handleExpectFailure(expect_stmt.body, roc_ops);
                                 return error.Crash;
@@ -730,43 +730,26 @@ pub const Interpreter = struct {
                         return try self.dispatchBinaryOpMethod(self.env.is_ne_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .@"or" => {
-                        const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                        const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                        self.debugAssertIsBoolType(result_rt_var);
-
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
                         defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                        const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                        const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                        if (self.boolValueEquals(true, lhs, lhs_rt_var)) {
+                        if (boolValueEquals(true, lhs)) {
                             return try self.makeBoolValue(true);
                         }
 
                         var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
                         defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                        const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                        const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                        return try self.makeBoolValue(self.boolValueEquals(true, rhs, rhs_rt_var));
+                        return try self.makeBoolValue(boolValueEquals(true, rhs));
                     },
                     .@"and" => {
-                        const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                        const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                        self.debugAssertIsBoolType(result_rt_var);
-
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
                         defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                        const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                        const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                        if (self.boolValueEquals(false, lhs, lhs_rt_var)) {
+                        if (boolValueEquals(false, lhs)) {
                             return try self.makeBoolValue(false);
                         }
 
                         var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
                         defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                        const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                        const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-
-                        return try self.makeBoolValue(self.boolValueEquals(true, rhs, rhs_rt_var));
+                        return try self.makeBoolValue(boolValueEquals(true, rhs));
                     },
                 }
             },
@@ -777,9 +760,7 @@ pub const Interpreter = struct {
                 while (i < branches.len) : (i += 1) {
                     const br = self.env.store.getIfBranch(branches[i]);
                     const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
-                    const cond_ct_var = can.ModuleEnv.varFrom(br.cond);
-                    const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
-                    if (self.boolValueEquals(true, cond_val, cond_rt_var)) {
+                    if (boolValueEquals(true, cond_val)) {
                         return try self.evalExprMinimal(br.body, roc_ops, null);
                     }
                 }
@@ -1388,7 +1369,7 @@ pub const Interpreter = struct {
                             const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
                             const guard_val = try self.evalExprMinimal(guard_idx, roc_ops, guard_rt_var);
                             defer guard_val.decref(&self.runtime_layout_store, roc_ops);
-                            guard_pass = self.boolValueEquals(true, guard_val, guard_rt_var);
+                            guard_pass = boolValueEquals(true, guard_val);
                         }
 
                         if (!guard_pass) {
@@ -1412,7 +1393,7 @@ pub const Interpreter = struct {
             .e_expect => |expect_expr| {
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
                 const cond_val = try self.evalExprMinimal(expect_expr.body, roc_ops, bool_rt_var);
-                const succeeded = self.boolValueEquals(true, cond_val, bool_rt_var);
+                const succeeded = boolValueEquals(true, cond_val);
                 if (succeeded) {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     const rt_var = try self.translateTypeVar(self.env, ct_var);
@@ -2679,6 +2660,7 @@ pub const Interpreter = struct {
     fn makeBoolValue(self: *Interpreter, value: bool) !StackValue {
         const bool_layout = Layout.int(.u8);
         var bool_value = try self.pushRaw(bool_layout, 0);
+        bool_value.is_initialized = false;
         bool_value.setInt(@intFromBool(value));
         bool_value.is_initialized = true;
         return bool_value;
@@ -2715,49 +2697,7 @@ pub const Interpreter = struct {
         return b.*;
     }
 
-    fn debugAssertIsBoolType(self: *Interpreter, rt_var: types.Var) void {
-        if (@import("builtin").mode != .Debug) return;
-
-        // Resolve through aliases
-        const resolved = self.resolveBaseVar(rt_var);
-
-        // Get the Bool module identifier
-        const bool_module_ident = self.builtins.bool_env.module_name_idx;
-
-        // Get the Bool type statement and extract its identifier idx
-        const bool_stmt = self.builtins.bool_env.store.getStatement(self.builtins.bool_stmt);
-        const bool_ident_idx = switch (bool_stmt) {
-            .s_nominal_decl => |nom_decl| blk: {
-                const header = self.builtins.bool_env.store.getTypeHeader(nom_decl.header);
-                break :blk header.name;
-            },
-            else => std.debug.panic("Bool statement is not a nominal_decl", .{}),
-        };
-
-        // Check that this is a nominal type with the right module and ident
-        if (resolved.desc.content != .structure) {
-            std.debug.panic("Expected Bool nominal type but got non-structure type", .{});
-        }
-
-        if (resolved.desc.content.structure != .nominal_type) {
-            std.debug.panic("Expected Bool nominal type but got different structure", .{});
-        }
-
-        const nt = resolved.desc.content.structure.nominal_type;
-
-        // Check origin module matches Bool module
-        if (nt.origin_module != bool_module_ident) {
-            std.debug.panic("Expected Bool type from Bool module", .{});
-        }
-
-        // Check type identifier matches Bool identifier
-        if (nt.ident.ident_idx != bool_ident_idx) {
-            std.debug.panic("Expected Bool type identifier", .{});
-        }
-    }
-
-    fn boolValueEquals(self: *Interpreter, equals: bool, value: StackValue, rt_var: types.Var) bool {
-        self.debugAssertIsBoolType(rt_var);
+    fn boolValueEquals(equals: bool, value: StackValue) bool {
         debugAssertIsBoolLayout(value.layout);
         return getRuntimeU8(value) == @intFromBool(equals);
     }
@@ -3880,15 +3820,24 @@ pub const Interpreter = struct {
                 const tag_data = try self.extractTagValue(value, value_rt_var);
                 if (tag_data.index >= tag_list.items.len) return false;
 
-                if (true) {
-                    @panic("TODO: this logic is all wrong. We we should NOT be comparing name strings here, we should just be comparing runtime tag discriminant integers!");
-                }
+                // Find the expected tag's index in the tag list by matching the name
                 const expected_name = self.env.getIdent(tag_pat.name);
-                const actual_name = self.env.getIdent(tag_list.items[tag_data.index].name);
-                if (!std.mem.eql(u8, expected_name, actual_name)) return false;
+                var expected_index: ?usize = null;
+                for (tag_list.items, 0..) |tag_info, i| {
+                    if (std.mem.eql(u8, self.env.getIdent(tag_info.name), expected_name)) {
+                        expected_index = i;
+                        break;
+                    }
+                }
+
+                // If the pattern's tag doesn't exist in the union, the match fails
+                if (expected_index == null) return false;
+
+                // Compare runtime tag discriminant with expected tag discriminant
+                if (tag_data.index != expected_index.?) return false;
 
                 const arg_patterns = self.env.store.slicePatterns(tag_pat.args);
-                const arg_vars_range = tag_list.items[tag_data.index].args;
+                const arg_vars_range = tag_list.items[expected_index.?].args;
                 const arg_vars = self.runtime_types.sliceVars(arg_vars_range);
                 if (arg_patterns.len != arg_vars.len) return false;
 
