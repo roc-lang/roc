@@ -223,6 +223,7 @@ fn setupTestPlatforms(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
+    test_platforms_step: *Step,
 ) void {
     // Create test platform host static library (str)
     const test_platform_host_lib = createTestPlatformHostLib(
@@ -239,6 +240,7 @@ fn setupTestPlatforms(
     const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
+    test_platforms_step.dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = createTestPlatformHostLib(
@@ -255,6 +257,7 @@ fn setupTestPlatforms(
     const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
+    test_platforms_step.dependOn(&copy_test_int_host.step);
 
     // Cross-compile int platform host libraries for musl and glibc targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
@@ -281,12 +284,14 @@ fn setupTestPlatforms(
         const copy_cross_int_host = b.addUpdateSourceFiles();
         copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
         b.getInstallStep().dependOn(&copy_cross_int_host.step);
+        test_platforms_step.dependOn(&copy_cross_int_host.step);
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
             const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
             if (glibc_stub) |stub| {
                 b.getInstallStep().dependOn(&stub.step);
+                test_platforms_step.dependOn(&stub.step);
             }
         }
     }
@@ -305,6 +310,7 @@ pub fn build(b: *std.Build) void {
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
+    const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
 
     // general configuration
     const target = blk: {
@@ -458,7 +464,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules);
+    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
     roc_modules.addAll(roc_exe);
@@ -484,6 +490,10 @@ pub fn build(b: *std.Build) void {
             run_roc_subcommands_test.addArgs(run_args);
         }
         run_roc_subcommands_test.step.dependOn(&install.step);
+
+        // test-cli needs the test platforms to be built and copied first
+        run_roc_subcommands_test.step.dependOn(test_platforms_step);
+
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
     }
 
