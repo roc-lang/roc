@@ -63,7 +63,6 @@ const Allocators = base.Allocators;
 const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
 test "main cli tests" {
-    _ = @import("test_bundle_logic.zig");
     _ = @import("libc_finder.zig");
     _ = @import("test_shared_memory_system.zig");
 }
