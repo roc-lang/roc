@@ -39,7 +39,7 @@ Builtin :: [].{
 		}
 	}
 
-	Bool := [True, False].{
+	Bool := [False, True].{
 		not : Bool -> Bool
 		not = |bool| match bool {
 			Bool.True => Bool.False
