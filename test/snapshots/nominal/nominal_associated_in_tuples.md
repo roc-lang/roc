@@ -21,6 +21,7 @@ boxed = Container(X)
 # EXPECTED
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
+EXPECTED NOMINAL TYPE - nominal_associated_in_tuples.md:12:9:12:21
 TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
 **UNDECLARED TYPE VARIABLE**
@@ -48,6 +49,19 @@ Container : a -> [Container(a)]
 ```
                             ^
 
+
+**EXPECTED NOMINAL TYPE**
+You are using the type _Container_ like a nominal type, but it is an alias.
+
+This type is referenced here:
+**nominal_associated_in_tuples.md:12:9:12:21:**
+```roc
+boxed = Container(X)
+```
+        ^^^^^^^^^^^^
+
+
+**Hint:** You can declare this type with `:=` to make it nominal.
 
 **TOO MANY ARGS**
 The type _Container_ expects  argument, but got  instead.
@@ -156,9 +170,7 @@ boxed = Container(X)
 				(ty-lookup (name "Foo.Baz") (local)))))
 	(d-let
 		(p-assign (ident "boxed"))
-		(e-tag (name "Container")
-			(args
-				(e-tag (name "X"))))
+		(e-runtime-error (tag "type_alias_but_needed_nominal"))
 		(annotation
 			(ty-apply (name "Container") (local)
 				(ty-lookup (name "Foo.Bar") (local)))))

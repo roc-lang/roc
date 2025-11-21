@@ -27,7 +27,7 @@ test "U8: 255 fits" {
         \\{
         \\  x : U8
         \\  x = 50
-        \\  
+        \\
         \\  x + 255
         \\}
     ;
@@ -38,10 +38,6 @@ test "U8: 255 fits" {
 }
 
 test "U8: 256 does not fit" {
-    // This test is skipped because literal requirements checking (bits needed, sign needed)
-    // is out of scope for the poly removal work. See POLY_REMOVAL_PLAN.md Phase 1.
-    // Future work: Add back literal validation with better error messages
-
     const source =
         \\{
         \\  x : U8
@@ -57,10 +53,6 @@ test "U8: 256 does not fit" {
 }
 
 test "U8: negative does not fit" {
-    // This test is skipped because literal requirements checking (bits needed, sign needed)
-    // is out of scope for the poly removal work. See POLY_REMOVAL_PLAN.md Phase 1.
-    // Future work: Add back literal validation with better error messages
-
     const source =
         \\{
         \\  x : U8
@@ -80,7 +72,7 @@ test "I8: -128 fits" {
         \\{
         \\  x : I8
         \\  x = 1
-        \\  
+        \\
         \\  x + -128
         \\}
     ;
@@ -91,10 +83,6 @@ test "I8: -128 fits" {
 }
 
 test "I8: -129 does not fit" {
-    // This test is skipped because literal requirements checking (bits needed, sign needed)
-    // is out of scope for the poly removal work. See POLY_REMOVAL_PLAN.md Phase 1.
-    // Future work: Add back literal validation with better error messages
-
     const source =
         \\{
         \\  x : I8
@@ -114,7 +102,7 @@ test "F32: fits" {
         \\{
         \\  x : F32
         \\  x = 1
-        \\  
+        \\
         \\  x + 10.1
         \\}
     ;

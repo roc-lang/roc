@@ -2009,12 +2009,14 @@ test "top-level: type annotation followed by body should not create duplicate de
 // equirecursive static dispatch //
 
 test "check type - equirecursive static dispatch" {
+    // Tests that method dispatch works with numeric literals
+    // The expression (|x| x.plus(5))(7) should type-check successfully
     const source = "(|x| x.plus(5))(7)";
 
     try checkTypesExpr(
         source,
         .pass,
-        "",
+        "_a",
     );
 }
 

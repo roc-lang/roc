@@ -7,8 +7,8 @@ const TestEnv = @import("./TestEnv.zig");
 test "Custom number type with from_num_literal: integer literal unifies" {
     const source =
         \\  MyNum := [].{
-        \\    from_num_literal : I128 -> Try(MyNum, [OutOfRange])
-        \\    from_num_literal = |_| Err(OutOfRange)
+        \\    from_num_literal : I128 -> Try(MyNum, [InvalidNumLiteral(Str)])
+        \\    from_num_literal = |_| Err(InvalidNumLiteral("not supported"))
         \\  }
         \\
         \\  x : MyNum
@@ -59,18 +59,13 @@ test "Custom number type without from_num_literal: integer literal does not unif
 }
 
 test "Custom number type with negate: unary minus works" {
-    // Skipped: This test requires opaque type constructor syntax within associated items
-    // which is not yet implemented. The line `negate = |_| MyNum` doesn't work because
-    // MyNum is a type, not a value, and the backing type [] has no constructable values.
-    // TODO: Implement proper opaque type value construction or update test expectations.
-
     const source =
-        \\  MyNum := [].{
+        \\  MyNum := [Blah].{
         \\    from_num_literal : I128 -> Try(MyNum, [OutOfRange])
         \\    from_num_literal = |_| Err(OutOfRange)
         \\
         \\    negate : MyNum -> MyNum
-        \\    negate = |_| MyNum
+        \\    negate = |_| Blah
         \\  }
         \\
         \\  x : MyNum
@@ -83,7 +78,8 @@ test "Custom number type with negate: unary minus works" {
     var test_env = try TestEnv.init("MyNum", source);
     defer test_env.deinit();
 
-    // Should type-check successfully - MyNum has negate so unary minus works
+    // Should type-check successfully - MyNum has negate so unary minus works,
+    // and Blah is a valid tag in the backing type [Blah]
     try test_env.assertNoErrors();
 }
 
@@ -137,7 +133,8 @@ test "Custom type with negate returning different type" {
     defer test_env.deinit();
 
     // Currently fails with UNDECLARED TYPE because forward references aren't supported yet
-    // Just verify there are errors (the specific error checking would require assertOneCanError which doesn't exist yet)
-    const has_errors = test_env.can_result.problems.problems.items.len > 0;
-    try testing.expect(has_errors);
+    // Just verify there are canonicalization errors
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+    try testing.expect(diagnostics.len > 0);
 }
