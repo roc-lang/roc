@@ -218,12 +218,18 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+const TestPlatformSteps = struct {
+    copy_steps: std.ArrayList(*Step.UpdateSourceFiles),
+};
+
 fn setupTestPlatforms(
     b: *std.Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
-) void {
+) TestPlatformSteps {
+    var copy_steps = std.ArrayList(*Step.UpdateSourceFiles).empty;
+    errdefer copy_steps.deinit(b.allocator);
     // Create test platform host static library (str)
     const test_platform_host_lib = createTestPlatformHostLib(
         b,
@@ -239,6 +245,7 @@ fn setupTestPlatforms(
     const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
+    copy_steps.append(b.allocator, copy_test_host) catch @panic("OOM");
 
     // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = createTestPlatformHostLib(
@@ -255,6 +262,7 @@ fn setupTestPlatforms(
     const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
+    copy_steps.append(b.allocator, copy_test_int_host) catch @panic("OOM");
 
     // Cross-compile int platform host libraries for musl and glibc targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
@@ -281,15 +289,19 @@ fn setupTestPlatforms(
         const copy_cross_int_host = b.addUpdateSourceFiles();
         copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
         b.getInstallStep().dependOn(&copy_cross_int_host.step);
+        copy_steps.append(b.allocator, copy_cross_int_host) catch @panic("OOM");
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
             const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
             if (glibc_stub) |stub| {
                 b.getInstallStep().dependOn(&stub.step);
+                copy_steps.append(b.allocator, stub) catch @panic("OOM");
             }
         }
     }
+
+    return .{ .copy_steps = copy_steps };
 }
 
 pub fn build(b: *std.Build) void {
@@ -458,7 +470,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules);
+    const test_platform_steps = setupTestPlatforms(b, target, optimize, roc_modules);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
     roc_modules.addAll(roc_exe);
@@ -484,6 +496,12 @@ pub fn build(b: *std.Build) void {
             run_roc_subcommands_test.addArgs(run_args);
         }
         run_roc_subcommands_test.step.dependOn(&install.step);
+
+        // test-cli needs the test platforms to be built and copied first
+        for (test_platform_steps.copy_steps.items) |copy_step| {
+            run_roc_subcommands_test.step.dependOn(&copy_step.step);
+        }
+
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
     }
 
