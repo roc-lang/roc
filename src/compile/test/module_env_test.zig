@@ -108,7 +108,18 @@ test "ModuleEnv.Serialized roundtrip" {
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent("minus") orelse unreachable,
+        .times_ident = common.findIdent("times") orelse unreachable,
+        .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
         .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+        .not_ident = common.findIdent("not") orelse unreachable,
+        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
     };
 
@@ -117,8 +128,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 7 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, negate
-    try testing.expectEqual(@as(u32, 10), original.common.idents.interner.entry_count);
+    // ModuleEnv.init() also interns 18 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
+    try testing.expectEqual(@as(u32, 21), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 

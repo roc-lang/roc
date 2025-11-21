@@ -94,8 +94,30 @@ out_of_range_ident: Ident.Idx,
 builtin_module_ident: Ident.Idx,
 /// Interned identifier for "plus" - used for + operator desugaring
 plus_ident: Ident.Idx,
+/// Interned identifier for "minus" - used for - operator desugaring
+minus_ident: Ident.Idx,
+/// Interned identifier for "times" - used for * operator desugaring
+times_ident: Ident.Idx,
+/// Interned identifier for "div_by" - used for / operator desugaring
+div_by_ident: Ident.Idx,
+/// Interned identifier for "rem_by" - used for % operator desugaring
+rem_by_ident: Ident.Idx,
 /// Interned identifier for "negate" - used for unary - operator desugaring
 negate_ident: Ident.Idx,
+/// Interned identifier for "not" - used for ! operator desugaring
+not_ident: Ident.Idx,
+/// Interned identifier for "is_lt" - used for < operator desugaring
+is_lt_ident: Ident.Idx,
+/// Interned identifier for "is_lte" - used for <= operator desugaring
+is_lte_ident: Ident.Idx,
+/// Interned identifier for "is_gt" - used for > operator desugaring
+is_gt_ident: Ident.Idx,
+/// Interned identifier for "is_gte" - used for >= operator desugaring
+is_gte_ident: Ident.Idx,
+/// Interned identifier for "is_eq" - used for == operator desugaring
+is_eq_ident: Ident.Idx,
+/// Interned identifier for "is_ne" - used for != operator desugaring
+is_ne_ident: Ident.Idx,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -164,7 +186,18 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
     const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
+    const minus_ident = try common.insertIdent(gpa, Ident.for_text("minus"));
+    const times_ident = try common.insertIdent(gpa, Ident.for_text("times"));
+    const div_by_ident = try common.insertIdent(gpa, Ident.for_text("div_by"));
+    const rem_by_ident = try common.insertIdent(gpa, Ident.for_text("rem_by"));
     const negate_ident = try common.insertIdent(gpa, Ident.for_text(Ident.NEGATE_METHOD_NAME));
+    const not_ident = try common.insertIdent(gpa, Ident.for_text("not"));
+    const is_lt_ident = try common.insertIdent(gpa, Ident.for_text("is_lt"));
+    const is_lte_ident = try common.insertIdent(gpa, Ident.for_text("is_lte"));
+    const is_gt_ident = try common.insertIdent(gpa, Ident.for_text("is_gt"));
+    const is_gte_ident = try common.insertIdent(gpa, Ident.for_text("is_gte"));
+    const is_eq_ident = try common.insertIdent(gpa, Ident.for_text("is_eq"));
+    const is_ne_ident = try common.insertIdent(gpa, Ident.for_text("is_ne"));
 
     return Self{
         .gpa = gpa,
@@ -188,7 +221,18 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
+        .minus_ident = minus_ident,
+        .times_ident = times_ident,
+        .div_by_ident = div_by_ident,
+        .rem_by_ident = rem_by_ident,
         .negate_ident = negate_ident,
+        .not_ident = not_ident,
+        .is_lt_ident = is_lt_ident,
+        .is_lte_ident = is_lte_ident,
+        .is_gt_ident = is_gt_ident,
+        .is_gte_ident = is_gte_ident,
+        .is_eq_ident = is_eq_ident,
+        .is_ne_ident = is_ne_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1583,7 +1627,18 @@ pub const Serialized = struct {
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
     plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
+    minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
+    times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
+    div_by_ident_reserved: u32, // Reserved space for div_by_ident field (interned during deserialization)
+    rem_by_ident_reserved: u32, // Reserved space for rem_by_ident field (interned during deserialization)
     negate_ident_reserved: u32, // Reserved space for negate_ident field (interned during deserialization)
+    not_ident_reserved: u32, // Reserved space for not_ident field (interned during deserialization)
+    is_lt_ident_reserved: u32, // Reserved space for is_lt_ident field (interned during deserialization)
+    is_lte_ident_reserved: u32, // Reserved space for is_lte_ident field (interned during deserialization)
+    is_gt_ident_reserved: u32, // Reserved space for is_gt_ident field (interned during deserialization)
+    is_gte_ident_reserved: u32, // Reserved space for is_gte_ident field (interned during deserialization)
+    is_eq_ident_reserved: u32, // Reserved space for is_eq_ident field (interned during deserialization)
+    is_ne_ident_reserved: u32, // Reserved space for is_ne_ident field (interned during deserialization)
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1627,7 +1682,18 @@ pub const Serialized = struct {
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
         self.plus_ident_reserved = 0;
+        self.minus_ident_reserved = 0;
+        self.times_ident_reserved = 0;
+        self.div_by_ident_reserved = 0;
+        self.rem_by_ident_reserved = 0;
         self.negate_ident_reserved = 0;
+        self.not_ident_reserved = 0;
+        self.is_lt_ident_reserved = 0;
+        self.is_lte_ident_reserved = 0;
+        self.is_gt_ident_reserved = 0;
+        self.is_gte_ident_reserved = 0;
+        self.is_eq_ident_reserved = 0;
+        self.is_ne_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1672,7 +1738,18 @@ pub const Serialized = struct {
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
             .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .minus_ident = common.findIdent("minus") orelse unreachable,
+            .times_ident = common.findIdent("times") orelse unreachable,
+            .div_by_ident = common.findIdent("div_by") orelse unreachable,
+            .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
             .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+            .not_ident = common.findIdent("not") orelse unreachable,
+            .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+            .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+            .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+            .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+            .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+            .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 

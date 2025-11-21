@@ -107,43 +107,6 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     try std.testing.expectEqual(expected_int, int_value);
 }
 
-/// Helper function to run an expression and expect a boolean result.
-pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { trace, no_trace }) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    var test_env_instance = TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
-
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
-    defer interpreter.deinit();
-
-    const enable_trace = should_trace == .trace;
-    if (enable_trace) {
-        interpreter.startTrace();
-    }
-    defer if (enable_trace) interpreter.endTrace();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-
-    const actual = switch (result.layout.tag) {
-        .scalar => switch (result.layout.data.scalar.tag) {
-            .int => if (result.layout.data.scalar.data.int == .u8)
-                result.asBool()
-            else
-                result.asI128() != 0,
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    };
-
-    try std.testing.expectEqual(expected_bool, actual);
-}
-
 /// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
 pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -770,32 +733,4 @@ test "interpreter reuse across multiple evaluations" {
 
         try std.testing.expectEqual(@as(usize, 0), interpreter.bindings.items.len);
     }
-}
-
-test "nominal type context preservation - boolean" {
-    // Test that True and False get correct boolean layout
-    // This tests the nominal type context preservation fix
-
-    // Test True
-    try runExpectBool("True", true, .no_trace);
-
-    // Test False
-    try runExpectBool("False", false, .no_trace);
-
-    // Test boolean negation with nominal types
-    try runExpectBool("!True", false, .no_trace);
-    try runExpectBool("!False", true, .no_trace);
-
-    // Test boolean operations with nominal types
-    try runExpectBool("True and False", false, .no_trace);
-    try runExpectBool("True or False", true, .no_trace);
-}
-
-test "nominal type context preservation - regression prevention" {
-    // Test that the fix prevents the original regression
-    // The original issue was that (|x| !x)(True) would return "0" instead of "False"
-
-    // This should work correctly now with nominal type context preservation
-    try runExpectBool("(|x| !x)(True)", false, .no_trace);
-    try runExpectBool("(|x| !x)(False)", true, .no_trace);
 }

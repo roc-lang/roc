@@ -4134,12 +4134,18 @@ pub fn canonicalizeExpr(
                 .OpGreaterThanOrEq => .ge,
                 .OpEquals => .eq,
                 .OpNotEquals => .ne,
-                .OpCaret => .pow,
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
-                .OpPizza => .pipe_forward,
-                .OpDoubleQuestion => .null_coalesce,
+                // OpCaret (^), OpPizza (|>), OpDoubleQuestion (?) are not supported
+                .OpCaret, .OpPizza, .OpDoubleQuestion => {
+                    const feature = try self.env.insertString("unsupported operator");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                },
                 else => {
                     // Unknown operator
                     const feature = try self.env.insertString("binop");

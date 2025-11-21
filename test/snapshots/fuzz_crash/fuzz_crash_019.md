@@ -176,6 +176,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
 NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_019.md:76:2:76:3
@@ -731,6 +732,11 @@ Is there an `import` or `exposing` missing up-top?
 ```
 	^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
@@ -1878,9 +1884,7 @@ expect {
 					(s-expr
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-num (value "5")))
 							(e-binop (op "or")
 								(e-binop (op "and")

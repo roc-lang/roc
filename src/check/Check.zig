@@ -3953,7 +3953,7 @@ fn checkBinopExpr(
                 try self.types.setVarRedirect(expr_var, lhs_var);
             }
         },
-        .sub, .mul, .div, .rem, .pow, .div_trunc => {
+        .sub, .mul, .div, .rem, .div_trunc => {
             // For now, we'll constrain both operands to be numbers
             // In the future, this will use static dispatch based on the lhs type
 
@@ -4044,12 +4044,6 @@ fn checkBinopExpr(
             // Set root expr. If unifications succeeded this will the the
             // num, otherwise the propagate error
             _ = try self.unify(expr_var, lhs_var, env);
-        },
-        .pipe_forward => {
-            // TODO
-        },
-        .null_coalesce => {
-            // TODO
         },
     }
 
