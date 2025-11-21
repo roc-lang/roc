@@ -138,8 +138,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 10 identifiers as original: hello, world, TestModule + 7 well-known identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 10), env.common.idents.interner.entry_count);
+    // Should have same 21 identifiers as original: hello, world, TestModule + 18 well-known identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 21), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

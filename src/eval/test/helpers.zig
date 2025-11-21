@@ -107,6 +107,44 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     try std.testing.expectEqual(expected_int, int_value);
 }
 
+/// Helper function to run an expression and expect a boolean result.
+pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+
+    // For boolean results, read the underlying byte value
+    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+        // Boolean represented as integer (discriminant)
+        const int_val = result.asI128();
+        const bool_val = int_val != 0;
+        try std.testing.expectEqual(expected_bool, bool_val);
+    } else {
+        // Try reading as raw byte (for boolean tag values)
+        std.debug.assert(result.ptr != null);
+        const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
+        const bool_val = bool_ptr.* != 0;
+        try std.testing.expectEqual(expected_bool, bool_val);
+    }
+}
+
 /// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
 pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);

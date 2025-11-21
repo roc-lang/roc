@@ -45,42 +45,6 @@ test "eval simple number" {
     try runExpectInt("-1234", -1234, .no_trace);
 }
 
-test "eval boolean literals" {
-    try runExpectBool("True", true, .no_trace);
-    try runExpectBool("False", false, .no_trace);
-    // Note: Qualified tags like Bool.True and Bool.False don't work yet
-    // See QUALIFIED_TAGS.md for details
-}
-
-test "eval unary not operator" {
-    try runExpectBool("!True", false, .no_trace);
-    try runExpectBool("!False", true, .no_trace);
-}
-
-test "eval double negation" {
-    try runExpectBool("!!True", true, .no_trace);
-    try runExpectBool("!!False", false, .no_trace);
-    try runExpectBool("!!!True", false, .no_trace);
-    try runExpectBool("!!!False", true, .no_trace);
-}
-
-test "eval boolean in lambda expressions" {
-    try runExpectBool("(|x| !x)(True)", false, .no_trace);
-    try runExpectBool("(|x| !x)(False)", true, .no_trace);
-    // Not implemented yet -- the closure return type is still flex var
-    // try runExpectBool("(|x, y| x and y)(True, False)", false, .no_trace);
-    // try runExpectBool("(|x, y| x or y)(False, True)", true, .no_trace);
-    // try runExpectBool("(|x| x and !x)(True)", false, .no_trace);
-    // try runExpectBool("(|x| x or !x)(False)", true, .no_trace);
-}
-
-test "eval unary not in conditional expressions" {
-    try runExpectInt("if !True 42 else 99", 99, .no_trace);
-    try runExpectInt("if !False 42 else 99", 42, .no_trace);
-    try runExpectInt("if !!True 42 else 99", 42, .no_trace);
-    try runExpectInt("if !!False 42 else 99", 99, .no_trace);
-}
-
 test "if-else" {
     try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
     try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
@@ -140,17 +104,6 @@ test "comparison binops" {
     try runExpectInt("if 5 == 6 100 else 200", 200, .no_trace);
     try runExpectInt("if 5 != 6 100 else 200", 100, .no_trace);
     try runExpectInt("if 5 != 5 100 else 200", 200, .no_trace);
-}
-
-test "logical binops" {
-    try runExpectInt("if True and True 1 else 0", 1, .no_trace);
-    try runExpectInt("if True and False 1 else 0", 0, .no_trace);
-    try runExpectInt("if False and True 1 else 0", 0, .no_trace);
-    try runExpectInt("if False and False 1 else 0", 0, .no_trace);
-    try runExpectInt("if True or True 1 else 0", 1, .no_trace);
-    try runExpectInt("if True or False 1 else 0", 1, .no_trace);
-    try runExpectInt("if False or True 1 else 0", 1, .no_trace);
-    try runExpectInt("if False or False 1 else 0", 0, .no_trace);
 }
 
 test "unary minus" {

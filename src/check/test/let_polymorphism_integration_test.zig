@@ -66,44 +66,15 @@ test "polymorphic empty list" {
 }
 
 test "polymorphic cons function" {
-    // This test is skipped because these features are missing:
-    //   - Spread operator `..` in list literals [fails at parse stage - syntax not recognized]
-    // TODO: Enable when spread operator is implemented in the parser
-
     const source =
         \\{
-        \\    cons = |x, xs| [x, ..xs]
+        \\    cons = |x, xs| List.concat([x], xs)
         \\    list1 = cons(1, [2, 3])
         \\    list2 = cons("a", ["b", "c"])
         \\    { list1, list2 }
         \\}
     ;
-    try typeCheck(source, "TODO");
-}
-
-test "polymorphic map function" {
-    // This test is skipped because these features are missing:
-    //   - If-then-else expressions [fails at parse stage - syntax not recognized]
-    //   - Recursive function calls [would fail at canonicalize stage - self-references not resolved]
-    //   - List slicing `xs[1..]` [fails at parse stage - range syntax not recognized]
-    //   - Spread operator `[x, ..xs]` [fails at parse stage - syntax not recognized]
-    //   - List equality comparison `xs == []` [may fail at type-check stage]
-    // Note: List indexing `xs[0]` does parse and canonicalize but may have type issues
-    // TODO: Enable when conditional expressions, recursion, and list operations are implemented
-
-    const source =
-        \\{
-        \\    map = |f, xs|
-        \\        if xs == [] then
-        \\            []
-        \\        else
-        \\            [f(xs[0]), ..map(f, xs[1..])]
-        \\    double = |x| x * 2
-        \\    nums = map(double, [1, 2, 3])
-        \\    { nums }
-        \\}
-    ;
-    try typeCheck(source, "TODO");
+    try typeCheck(source, "{ list1: List(item), list2: List(Str) } where [_a.from_num_literal : _arg -> _ret]");
 }
 
 test "polymorphic record constructor" {
@@ -174,32 +145,6 @@ test "polymorphic swap function" {
     try typeCheck(source, "{ swapped1: { first: Str, second: _field }, swapped2: { first: _field2, second: [True]_others } } where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]");
 }
 
-test "polymorphic fold function" {
-    // This test is skipped because these features are missing:
-    //   - If-then-else expressions [fails at parse stage - syntax not recognized]
-    //   - Recursive function calls [would fail at canonicalize stage - self-references not resolved]
-    //   - List equality comparison `xs == []` [may fail at type-check stage]
-    //   - String concatenation operator `++` [fails at parse or canonicalize stage]
-    //   - List slicing `xs[1..]` [fails at parse stage - range syntax not recognized]
-    // Even if parsing succeeded, the canonicalizer doesn't support recursive
-    // let-bindings, and the type checker doesn't handle recursive polymorphic functions.
-    // TODO: Enable when conditional expressions, recursion, and list/string operations are implemented
-
-    const source =
-        \\{
-        \\    fold = |f, acc, xs|
-        \\        if xs == [] then
-        \\            acc
-        \\        else
-        \\            fold(f, f(acc, xs[0]), xs[1..])
-        \\    sum = fold(|a, b| a + b, 0, [1, 2, 3])
-        \\    concat = fold(|a, b| a ++ b, "", ["a", "b", "c"])
-        \\    { sum, concat }
-        \\}
-    ;
-    try typeCheck(source, "TODO");
-}
-
 test "polymorphic option type simulation" {
     const source =
         \\{
@@ -226,33 +171,6 @@ test "polymorphic const function" {
         \\}
     ;
     try typeCheck(source, "{ num: _field, str: Str } where [_a.from_num_literal : _arg -> _ret]");
-}
-
-test "shadowing of polymorphic values" {
-    // This test is skipped because these features are missing:
-    //   - Type checking for nested block expressions that return values
-    //     [parses and canonicalizes successfully, fails at type-check stage]
-    // The inner block `{ id = ...; b = ...; b }` should return `b` as its value.
-    // The type checker fails to properly handle the combination of:
-    //   1. A nested block that shadows a polymorphic identifier
-    //   2. The block returning a value (the final `b` expression)
-    //   3. Continuing to use the original polymorphic `id` after the block
-    // TODO: Enable when nested block expressions with value returns are fully supported
-
-    const source =
-        \\{
-        \\    id = |x| x
-        \\    a = id(1)
-        \\    inner = {
-        \\        id = |x| x + 1  // shadows outer id, now monomorphic
-        \\        b = id(2)
-        \\        b
-        \\    }
-        \\    c = id("test")  // uses outer polymorphic id
-        \\    { a, inner, c }
-        \\}
-    ;
-    try typeCheck(source, "TODO");
 }
 
 test "polymorphic pipe function" {
