@@ -776,11 +776,9 @@ test "interpreter: match list pattern destructures" {
     try std.testing.expectEqualStrings("6", rendered);
 }
 
-test "debug List.len expression" {
-}
+test "debug List.len expression" {}
 
-test "interpreter: List.len on literal" {
-}
+test "interpreter: List.len on literal" {}
 
 test "interpreter: match list rest binds slice" {
     const roc_src = "match [1, 2, 3] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }";

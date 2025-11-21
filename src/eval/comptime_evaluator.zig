@@ -158,6 +158,8 @@ pub const ComptimeEvaluator = struct {
     expect_messages: std.array_list.Managed([]const u8),
     /// Track error names we've allocated so we can free them
     error_names: std.array_list.Managed([]const u8),
+    /// Track expressions that failed numeric literal validation (to skip evaluation)
+    failed_literal_exprs: std.AutoHashMap(CIR.Expr.Idx, void),
     /// Flag to indicate if evaluation has been halted due to a crash
     halted: bool,
     /// Track the current expression being evaluated (for stack traces)
@@ -184,6 +186,7 @@ pub const ComptimeEvaluator = struct {
             .crash_messages = std.array_list.Managed([]const u8).init(allocator),
             .expect_messages = std.array_list.Managed([]const u8).init(allocator),
             .error_names = std.array_list.Managed([]const u8).init(allocator),
+            .failed_literal_exprs = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator),
             .halted = false,
             .current_expr_region = null,
         };
@@ -207,6 +210,7 @@ pub const ComptimeEvaluator = struct {
             self.allocator.free(name);
         }
         self.error_names.deinit();
+        self.failed_literal_exprs.deinit();
 
         self.interpreter.deinit();
         self.crash.deinit();
@@ -548,18 +552,20 @@ pub const ComptimeEvaluator = struct {
             const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
             const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
 
-            // Extract short type name (e.g., "I64" from "Num.I64")
+            // Extract just the type name (e.g., "I64" from "Num.I64") for error messages
             const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
                 type_name_bytes[dot_idx + 1 ..]
             else
                 type_name_bytes;
 
-            // Build qualified name: Builtin.TypeName.from_num_literal
+            // Build qualified name: Builtin.Num.TypeName.from_num_literal
+            // Note: type_name_bytes may be "Num.I64" or just "I64" depending on context
+            // We need to use the full type_name_bytes to preserve module nesting
             var qualified_name_buf: [256]u8 = undefined;
             const qualified_name = try std.fmt.bufPrint(
                 &qualified_name_buf,
                 "{s}.{s}.{s}",
-                .{ origin_env.module_name, short_type_name, method_name_bytes },
+                .{ origin_env.module_name, type_name_bytes, method_name_bytes },
             );
 
             // Look up the identifier in the origin module
@@ -615,10 +621,13 @@ pub const ComptimeEvaluator = struct {
                 def_idx,
                 num_lit_info,
                 literal.region,
+                literal.type_var,
             );
 
             if (!is_valid) {
                 // Error already reported by invokeFromNumLiteral
+                // Mark this expression as failed so we skip evaluating it
+                try self.failed_literal_exprs.put(literal.expr_idx, {});
                 continue;
             }
 
@@ -704,8 +713,8 @@ pub const ComptimeEvaluator = struct {
             };
 
             const int_value = CIR.IntValue{
-                .bytes = @bitCast(num_lit_info.value),
-                .kind = .i128,
+                .bytes = num_lit_info.bytes,
+                .kind = if (num_lit_info.is_u128) .u128 else .i128,
             };
             try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
         }
@@ -720,42 +729,16 @@ pub const ComptimeEvaluator = struct {
         def_idx: CIR.Def.Idx,
         num_lit_info: types_mod.NumLiteralInfo,
         region: base.Region,
+        target_ct_type_var: types_mod.Var, // The compile-time type variable the literal is being converted to
     ) !bool {
         const roc_ops = self.get_ops();
-
-        // Build NumLiteral record: { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
-
-        // Convert the numeric value to base-256 digits
-        var base256_buf: [16]u8 = undefined;
-        const abs_value: u128 = if (num_lit_info.value < 0)
-            @intCast(-num_lit_info.value)
-        else
-            @intCast(num_lit_info.value);
-        const digits_before = toBase256(abs_value, &base256_buf);
-
-        // Build is_negative Bool
-        const is_neg_value = try self.interpreter.pushRaw(layout_mod.Layout.int(.u8), 0);
-        if (is_neg_value.ptr) |ptr| {
-            @as(*u8, @ptrCast(@alignCast(ptr))).* = @intFromBool(num_lit_info.value < 0);
-        }
-
-        // Build digits_before_pt List(U8)
-        const before_list = try self.buildU8List(digits_before, roc_ops);
-        defer before_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Build digits_after_pt List(U8) - empty for non-fractional, compute for fractional
-        const empty_digits: []const u8 = &[_]u8{};
-        const after_list = try self.buildU8List(empty_digits, roc_ops);
-        defer after_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Build the NumLiteral record
-        const num_literal_record = try self.buildNumLiteralRecord(is_neg_value, before_list, after_list, roc_ops);
-        defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Look up the from_num_literal function
         const target_def = origin_env.store.getDef(def_idx);
 
-        // Save current environment
+        // Save current environment and switch to origin_env BEFORE building the record
+        // This is critical because the record's field names (ident indices) must come from
+        // the same ident store that will be used when the interpreter reads them
         const saved_env = self.interpreter.env;
         const saved_bindings_len = self.interpreter.bindings.items.len;
         self.interpreter.env = @constCast(origin_env);
@@ -763,6 +746,72 @@ pub const ComptimeEvaluator = struct {
             self.interpreter.env = saved_env;
             self.interpreter.bindings.items.len = saved_bindings_len;
         }
+
+        // Build NumLiteral record: { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
+        // Must be built AFTER switching to origin_env so ident indices are from the correct store
+
+        // Convert the numeric value to base-256 digits
+        // Use @abs to safely handle minimum i128 value without overflow
+        var base256_buf_before: [16]u8 = undefined;
+        var base256_buf_after: [16]u8 = undefined;
+
+        var digits_before: []const u8 = undefined;
+        var digits_after: []const u8 = undefined;
+
+        if (num_lit_info.is_fractional) {
+            // For fractional literals, value is scaled by 10^18 (Dec representation)
+            // Extract integer and fractional parts
+            const scale: u128 = 1_000_000_000_000_000_000; // 10^18
+            const abs_value: u128 = if (num_lit_info.is_u128) num_lit_info.toU128() else @abs(num_lit_info.toI128());
+            const integer_part = abs_value / scale;
+            const fractional_part = abs_value % scale;
+
+            digits_before = toBase256(integer_part, &base256_buf_before);
+
+            // Convert fractional part to base-256
+            // The fractional part is already in decimal scaled form (0 to 10^18-1)
+            // We need to convert it to base-256 fractional representation
+            if (fractional_part > 0) {
+                // Convert decimal fractional to binary fractional
+                // frac = fractional_part / 10^18
+                // We multiply by 256 repeatedly to get base-256 digits
+                var frac_num: u128 = fractional_part;
+                var frac_digits: usize = 0;
+                const max_frac_digits = 8; // Enough precision for most cases
+                while (frac_num > 0 and frac_digits < max_frac_digits) {
+                    frac_num *= 256;
+                    base256_buf_after[frac_digits] = @truncate(frac_num / scale);
+                    frac_num = frac_num % scale;
+                    frac_digits += 1;
+                }
+                digits_after = base256_buf_after[0..frac_digits];
+            } else {
+                digits_after = &[_]u8{};
+            }
+        } else {
+            // Integer literal - no fractional part
+            const abs_value: u128 = if (num_lit_info.is_u128) num_lit_info.toU128() else @abs(num_lit_info.toI128());
+            digits_before = toBase256(abs_value, &base256_buf_before);
+            digits_after = &[_]u8{};
+        }
+
+        // Build is_negative Bool
+        const is_neg_value = try self.interpreter.pushRaw(layout_mod.Layout.int(.u8), 0);
+        if (is_neg_value.ptr) |ptr| {
+            @as(*u8, @ptrCast(@alignCast(ptr))).* = @intFromBool(num_lit_info.is_negative);
+        }
+
+        // Build digits_before_pt List(U8)
+        const before_list = try self.buildU8List(digits_before, roc_ops);
+        defer before_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
+
+        // Build digits_after_pt List(U8)
+        const after_list = try self.buildU8List(digits_after, roc_ops);
+        defer after_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
+
+        // Build the NumLiteral record
+        const num_literal_record = try self.buildNumLiteralRecord(is_neg_value, before_list, after_list, roc_ops);
+        defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Evaluate the from_num_literal function to get a closure
         const func_value = self.interpreter.evalMinimal(target_def.expr, roc_ops) catch |err| {
@@ -822,35 +871,90 @@ pub const ComptimeEvaluator = struct {
             return false;
         }
 
-        // Bind the NumLiteral argument
-        try self.interpreter.bindings.append(.{
-            .pattern_idx = params[0],
-            .value = num_literal_record,
-            .expr_idx = @enumFromInt(0),
-        });
-        defer _ = self.interpreter.bindings.pop();
+        // Check if this is a low-level lambda (builtin type) or a user-defined function
+        const lambda_expr = origin_env.store.getExpr(closure_header.lambda_expr_idx);
 
-        // Provide closure context
-        try self.interpreter.active_closures.append(func_value);
-        defer _ = self.interpreter.active_closures.pop();
+        var result: eval_mod.StackValue = undefined;
+        if (lambda_expr == .e_low_level_lambda) {
+            // Builtin type: dispatch directly to low-level implementation
+            const low_level = lambda_expr.e_low_level_lambda;
 
-        // Call the function body
-        const result = self.interpreter.evalMinimal(closure_header.body_idx, roc_ops) catch |err| {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
-                "from_num_literal evaluation failed: {s}",
-                .{@errorName(err)},
-            );
-            try self.error_names.append(error_msg);
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
+            // Get return type for low-level builtin
+            // We need to translate the type variable for the result type
+            const ct_var = can.ModuleEnv.varFrom(def_idx);
+            const rt_var = try self.interpreter.translateTypeVar(@constCast(origin_env), ct_var);
+
+            // Get the return type from the function type
+            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+            const return_rt_var = blk: {
+                if (resolved.desc.content == .structure) {
+                    const struct_content = resolved.desc.content.structure;
+                    if (struct_content == .fn_pure or struct_content == .fn_effectful or struct_content == .fn_unbound) {
+                        const func = switch (struct_content) {
+                            .fn_pure => |f| f,
+                            .fn_effectful => |f| f,
+                            .fn_unbound => |f| f,
+                            else => unreachable,
+                        };
+                        break :blk func.ret;
+                    }
+                }
+                break :blk rt_var;
             };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        };
+
+            // Translate the target type variable (e.g., U8) to runtime
+            // This tells the interpreter what type the literal is being converted to
+            const target_rt_var = try self.interpreter.translateTypeVar(self.env, target_ct_type_var);
+
+            // Call the low-level builtin with our NumLiteral argument and target type
+            var args = [_]eval_mod.StackValue{num_literal_record};
+            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
+                const error_msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "from_num_literal builtin failed: {s}",
+                    .{@errorName(err)},
+                );
+                try self.error_names.append(error_msg);
+                const problem = Problem{
+                    .comptime_eval_error = .{
+                        .error_name = error_msg,
+                        .region = region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+                return false;
+            };
+        } else {
+            // User-defined type: bind argument and evaluate body
+            try self.interpreter.bindings.append(.{
+                .pattern_idx = params[0],
+                .value = num_literal_record,
+                .expr_idx = @enumFromInt(0),
+            });
+            defer _ = self.interpreter.bindings.pop();
+
+            // Provide closure context
+            try self.interpreter.active_closures.append(func_value);
+            defer _ = self.interpreter.active_closures.pop();
+
+            // Call the function body
+            result = self.interpreter.evalMinimal(closure_header.body_idx, roc_ops) catch |err| {
+                const error_msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "from_num_literal evaluation failed: {s}",
+                    .{@errorName(err)},
+                );
+                try self.error_names.append(error_msg);
+                const problem = Problem{
+                    .comptime_eval_error = .{
+                        .error_name = error_msg,
+                        .region = region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+                return false;
+            };
+        }
         defer result.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Check the Try result
@@ -911,6 +1015,8 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Build a NumLiteral record from its components
+    /// Uses self.env for layout store operations (since layout store was initialized with user's env)
+    /// but uses self.interpreter.env for field index lookups during value setting
     fn buildNumLiteralRecord(
         self: *ComptimeEvaluator,
         is_negative: eval_mod.StackValue,
@@ -918,12 +1024,14 @@ pub const ComptimeEvaluator = struct {
         digits_after_pt: eval_mod.StackValue,
         roc_ops: *RocOps,
     ) !eval_mod.StackValue {
+        // Use self.env (user's env) for layout store operations since that's what the layout store was initialized with
+        // Insert field names if they don't exist (they should already exist from builtins)
         const is_negative_ident = self.env.common.findIdent("is_negative") orelse
-            return error.OutOfMemory;
+            try self.env.common.insertIdent(self.allocator, base.Ident.for_text("is_negative"));
         const digits_before_pt_ident = self.env.common.findIdent("digits_before_pt") orelse
-            return error.OutOfMemory;
+            try self.env.common.insertIdent(self.allocator, base.Ident.for_text("digits_before_pt"));
         const digits_after_pt_ident = self.env.common.findIdent("digits_after_pt") orelse
-            return error.OutOfMemory;
+            try self.env.common.insertIdent(self.allocator, base.Ident.for_text("digits_after_pt"));
 
         const field_layouts = [_]layout_mod.Layout{
             is_negative.layout,
@@ -942,6 +1050,7 @@ pub const ComptimeEvaluator = struct {
         var dest = try self.interpreter.pushRaw(record_layout, 0);
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
+        // Use self.env for field lookups since the record was built with self.env's idents
         const is_neg_idx = accessor.findFieldIndex(self.env, "is_negative") orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
 
@@ -961,6 +1070,26 @@ pub const ComptimeEvaluator = struct {
         result: eval_mod.StackValue,
         region: base.Region,
     ) !bool {
+        // First check if the interpreter stored an error message directly
+        // (happens when payload area is too small for RocStr)
+        if (self.interpreter.last_error_message) |msg| {
+            // Copy the message to our allocator
+            const error_msg = try self.allocator.dupe(u8, msg);
+            // Free the original message from the interpreter's allocator
+            self.interpreter.allocator.free(msg);
+            try self.error_names.append(error_msg);
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            // Clear the message for next call
+            self.interpreter.last_error_message = null;
+            return false;
+        }
+
         // Try is a tag union [Ok(val), Err(err)]
         if (result.layout.tag == .scalar) {
             if (result.layout.data.scalar.tag == .int) {
@@ -988,7 +1117,9 @@ pub const ComptimeEvaluator = struct {
             return true; // Unknown format, optimistically allow
         } else if (result.layout.tag == .record) {
             var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
-            const tag_idx = accessor.findFieldIndex(self.env, "tag") orelse return true;
+            // Use layout store's env for field lookups since records use that env's idents
+            const layout_env = self.interpreter.runtime_layout_store.env;
+            const tag_idx = accessor.findFieldIndex(layout_env, "tag") orelse return true;
             const tag_field = accessor.getFieldByIndex(tag_idx) catch return true;
 
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
@@ -1023,11 +1154,14 @@ pub const ComptimeEvaluator = struct {
         _ = region;
 
         // Get the payload field from the Try record
-        const payload_idx = try_accessor.findFieldIndex(self.env, "payload") orelse {
-            return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+        // Use layout store's env for field lookups
+        const layout_env = self.interpreter.runtime_layout_store.env;
+        const payload_idx = try_accessor.findFieldIndex(layout_env, "payload") orelse {
+            // This should never happen - Try type must have a payload field
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned malformed Try value (missing payload field)", .{});
         };
         const payload_field = try_accessor.getFieldByIndex(payload_idx) catch {
-            return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned malformed Try value (could not access payload)", .{});
         };
 
         // The payload for Err is the error type: [InvalidNumLiteral(Str), ...]
@@ -1035,38 +1169,35 @@ pub const ComptimeEvaluator = struct {
         if (payload_field.layout.tag == .record) {
             // Tag union with payload - look for InvalidNumLiteral tag
             var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
-                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+                return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error payload is not a valid record", .{});
             };
 
-            // Check if this is a tag union with tag and payload fields
-            const err_tag_idx = err_accessor.findFieldIndex(self.env, "tag") orelse {
-                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
-            };
-            const err_tag_field = err_accessor.getFieldByIndex(err_tag_idx) catch {
-                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
-            };
+            // Check if this has a payload field (for the Str)
+            // Single-tag unions might not have a "tag" field, so we look for payload first
+            if (err_accessor.findFieldIndex(layout_env, "payload")) |err_payload_idx| {
+                const err_payload = err_accessor.getFieldByIndex(err_payload_idx) catch {
+                    return try std.fmt.allocPrint(self.allocator, "Internal error: could not access InvalidNumLiteral payload", .{});
+                };
+                return try self.extractStrFromValue(err_payload);
+            }
 
-            // Get tag value to verify it's InvalidNumLiteral
-            // Note: We don't need to check the tag name because we're looking for ANY Str payload
-            // that represents the error message (InvalidNumLiteral is the only tag with Str payload)
-            _ = err_tag_field;
+            // If no payload field, try to find a Str field directly (might be named differently)
+            // Iterate through fields looking for a Str
+            var field_idx: usize = 0;
+            while (true) : (field_idx += 1) {
+                const field = err_accessor.getFieldByIndex(field_idx) catch break;
+                if (field.layout.tag == .scalar and field.layout.data.scalar.tag == .str) {
+                    return try self.extractStrFromValue(field);
+                }
+            }
 
-            // Get the inner payload which should be the Str
-            const err_payload_idx = err_accessor.findFieldIndex(self.env, "payload") orelse {
-                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
-            };
-            const err_payload = err_accessor.getFieldByIndex(err_payload_idx) catch {
-                return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
-            };
-
-            // Extract the Str from the payload
-            return try self.extractStrFromValue(err_payload);
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error has no string message in InvalidNumLiteral", .{});
         } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
-            // Direct Str payload
+            // Direct Str payload (single-tag union optimized to just the payload)
             return try self.extractStrFromValue(payload_field);
         }
 
-        return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+        return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned unexpected error type (expected InvalidNumLiteral with Str payload)", .{});
     }
 
     /// Extract a Str value from a StackValue
@@ -1075,11 +1206,18 @@ pub const ComptimeEvaluator = struct {
             if (value.ptr) |ptr| {
                 const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(ptr));
                 const str_bytes = roc_str.asSlice();
-                // Copy the string to our allocator so we own it
-                return try self.allocator.dupe(u8, str_bytes);
+                if (str_bytes.len > 0) {
+                    // Copy the string to our allocator so we own it
+                    return try self.allocator.dupe(u8, str_bytes);
+                }
+                return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned empty error message", .{});
             }
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error string has null pointer", .{});
         }
-        return try std.fmt.allocPrint(self.allocator, "Numeric literal validation failed", .{});
+        if (value.layout.tag == .scalar) {
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.data.scalar.tag)});
+        }
+        return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error payload is not a string (layout tag: {s})", .{@tagName(value.layout.tag)});
     }
 
     /// Evaluates all top-level declarations in the module
@@ -1096,6 +1234,14 @@ pub const ComptimeEvaluator = struct {
         // Evaluate SCCs in topological order (dependencies before dependents)
         for (eval_order.sccs) |scc| {
             for (scc.defs) |def_idx| {
+                // Skip declarations whose expression failed numeric literal validation
+                const def = self.env.store.getDef(def_idx);
+                if (self.failed_literal_exprs.contains(def.expr)) {
+                    // Skip evaluation but count it as evaluated (error already reported)
+                    evaluated += 1;
+                    continue;
+                }
+
                 evaluated += 1;
 
                 const eval_result = self.evalDecl(def_idx) catch |err| {
@@ -1108,11 +1254,11 @@ pub const ComptimeEvaluator = struct {
                         // Declaration evaluated successfully
                         // If we got a value, add it to bindings so later defs can reference it
                         if (maybe_value) |value| {
-                            const def = self.env.store.getDef(def_idx);
+                            const def_info = self.env.store.getDef(def_idx);
                             try self.interpreter.bindings.append(.{
-                                .pattern_idx = def.pattern,
+                                .pattern_idx = def_info.pattern,
                                 .value = value,
-                                .expr_idx = def.expr,
+                                .expr_idx = def_info.expr,
                             });
                         }
                     },

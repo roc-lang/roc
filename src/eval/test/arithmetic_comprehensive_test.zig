@@ -43,7 +43,6 @@ const runExpectDec = helpers.runExpectDec;
 // ============================================================================
 
 test "U8: plus" {
-    std.debug.print("\n\n=== STARTING U8: plus test ===\n", .{});
     try runExpectInt(
         \\{
         \\    a : U8

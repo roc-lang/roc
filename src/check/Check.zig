@@ -2174,11 +2174,9 @@ fn checkPatternHelp(
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
                     // Create NumLiteralInfo for constraint checking
-                    const num_literal_info = types_mod.NumLiteralInfo{
-                        .value = num.value.toI128(),
-                        .is_negative = num.value.kind == .i128 and num.value.toI128() < 0,
-                        .is_fractional = false, // Integer literals are never fractional
-                        .region = pattern_region,
+                    const num_literal_info = switch (num.value.kind) {
+                        .u128 => types_mod.NumLiteralInfo.fromU128(@bitCast(num.value.bytes), false, pattern_region),
+                        .i128 => types_mod.NumLiteralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, pattern_region),
                     };
 
                     // Create from_num_literal constraint
@@ -2224,12 +2222,12 @@ fn checkPatternHelp(
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unannotated decimal literal - create flex var with from_num_literal constraint
-                const num_literal_info = types_mod.NumLiteralInfo{
-                    .value = dec.value.num, // RocDec has .num field which is i128 scaled by 10^18
-                    .is_negative = dec.value.num < 0,
-                    .is_fractional = true, // Decimal literals are always fractional
-                    .region = pattern_region,
-                };
+                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                    dec.value.num, // RocDec has .num field which is i128 scaled by 10^18
+                    dec.value.num < 0,
+                    true, // Decimal literals are always fractional
+                    pattern_region,
+                );
 
                 const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
                 const flex_content = types_mod.Content{
@@ -2251,12 +2249,12 @@ fn checkPatternHelp(
                 // SmallDecValue stores a numerator (i16) and power of ten
                 // We need to convert this to an i128 scaled by 10^18 for consistency
                 const scaled_value = @as(i128, dec.value.numerator) * std.math.pow(i128, 10, 18 - dec.value.denominator_power_of_ten);
-                const num_literal_info = types_mod.NumLiteralInfo{
-                    .value = scaled_value,
-                    .is_negative = dec.value.numerator < 0,
-                    .is_fractional = true,
-                    .region = pattern_region,
-                };
+                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                    scaled_value,
+                    dec.value.numerator < 0,
+                    true,
+                    pattern_region,
+                );
 
                 const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
                 const flex_content = types_mod.Content{
@@ -2341,11 +2339,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
                     // For unannotated literals, create a flex var with from_num_literal constraint
-                    const num_literal_info = types_mod.NumLiteralInfo{
-                        .value = num.value.toI128(),
-                        .is_negative = num.value.kind == .i128 and num.value.toI128() < 0,
-                        .is_fractional = false, // Integer literals are never fractional
-                        .region = expr_region,
+                    const num_literal_info = switch (num.value.kind) {
+                        .u128 => types_mod.NumLiteralInfo.fromU128(@bitCast(num.value.bytes), false, expr_region),
+                        .i128 => types_mod.NumLiteralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, expr_region),
                     };
 
                     // Create from_num_literal constraint
@@ -2390,12 +2386,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
-                const num_literal_info = types_mod.NumLiteralInfo{
-                    .value = @as(i128, @as(u32, @bitCast(frac.value))),
-                    .is_negative = frac.value < 0,
-                    .is_fractional = true,
-                    .region = expr_region,
-                };
+                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                    @as(i128, @as(u32, @bitCast(frac.value))),
+                    frac.value < 0,
+                    true,
+                    expr_region,
+                );
                 const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
@@ -2419,12 +2415,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
-                const num_literal_info = types_mod.NumLiteralInfo{
-                    .value = @as(i128, @as(u64, @bitCast(frac.value))),
-                    .is_negative = frac.value < 0,
-                    .is_fractional = true,
-                    .region = expr_region,
-                };
+                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                    @as(i128, @as(u64, @bitCast(frac.value))),
+                    frac.value < 0,
+                    true,
+                    expr_region,
+                );
                 const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
@@ -2448,12 +2444,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unsuffixed Dec literal - create constrained flex var
-                const num_literal_info = types_mod.NumLiteralInfo{
-                    .value = frac.value.num,
-                    .is_negative = frac.value.num < 0,
-                    .is_fractional = true,
-                    .region = expr_region,
-                };
+                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                    frac.value.num,
+                    frac.value.num < 0,
+                    true,
+                    expr_region,
+                );
                 const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
@@ -2479,12 +2475,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Unsuffixed small Dec literal - create constrained flex var
                 // Scale the value to i128 representation
                 const scaled_value = @as(i128, frac.value.numerator) * std.math.pow(i128, 10, 18 - frac.value.denominator_power_of_ten);
-                const num_literal_info = types_mod.NumLiteralInfo{
-                    .value = scaled_value,
-                    .is_negative = scaled_value < 0,
-                    .is_fractional = true,
-                    .region = expr_region,
-                };
+                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                    scaled_value,
+                    scaled_value < 0,
+                    true,
+                    expr_region,
+                );
                 const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{

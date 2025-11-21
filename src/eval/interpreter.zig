@@ -193,6 +193,10 @@ pub const Interpreter = struct {
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
+    /// Target type for num_from_num_literal (set by callLowLevelBuiltinWithTargetType)
+    num_literal_target_type: ?types.Var,
+    /// Last error message from num_from_num_literal when payload area is too small
+    last_error_message: ?[]const u8,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
@@ -280,6 +284,8 @@ pub const Interpreter = struct {
             .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
+            .num_literal_target_type = null,
+            .last_error_message = null,
         };
 
         // Get the "Builtin.Str" identifier from the runtime module's identifier store
@@ -649,15 +655,26 @@ pub const Interpreter = struct {
                 value.is_initialized = false;
                 switch (layout_val.tag) {
                     .scalar => switch (layout_val.data.scalar.tag) {
-                        .int => try value.setInt(num_lit.value.toI128()),
+                        .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
                         .frac => switch (layout_val.data.scalar.data.frac) {
                             .f32 => {
                                 const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = @floatFromInt(num_lit.value.toI128());
+                                // For u128 values, convert from the raw bytes
+                                if (num_lit.value.kind == .u128) {
+                                    const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                                    ptr.* = @floatFromInt(u128_val);
+                                } else {
+                                    ptr.* = @floatFromInt(num_lit.value.toI128());
+                                }
                             },
                             .f64 => {
                                 const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = @floatFromInt(num_lit.value.toI128());
+                                if (num_lit.value.kind == .u128) {
+                                    const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                                    ptr.* = @floatFromInt(u128_val);
+                                } else {
+                                    ptr.* = @floatFromInt(num_lit.value.toI128());
+                                }
                             },
                             .dec => {
                                 const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
@@ -2212,7 +2229,18 @@ pub const Interpreter = struct {
         return dest;
     }
 
-    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+    /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_num_literal
+    pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
+        // For num_from_num_literal, we need to pass the target type through a different mechanism
+        // since the standard handler extracts it from the return type which has a generic parameter.
+        // Store the target type temporarily so the handler can use it.
+        const saved_target = self.num_literal_target_type;
+        self.num_literal_target_type = target_type_var;
+        defer self.num_literal_target_type = saved_target;
+        return self.callLowLevelBuiltin(op, args, roc_ops, return_rt_var);
+    }
+
+    pub fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool
@@ -2863,7 +2891,9 @@ pub const Interpreter = struct {
                 };
 
                 // Get is_negative field
-                const is_neg_idx = acc.findFieldIndex(self.env, "is_negative") orelse {
+                // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
+                const layout_env = self.runtime_layout_store.env;
+                const is_neg_idx = acc.findFieldIndex(layout_env, "is_negative") orelse {
                     self.triggerCrash("num_from_num_literal: missing is_negative field", false, roc_ops);
                     return error.Crash;
                 };
@@ -2874,7 +2904,7 @@ pub const Interpreter = struct {
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
-                const before_idx = acc.findFieldIndex(self.env, "digits_before_pt") orelse {
+                const before_idx = acc.findFieldIndex(layout_env, "digits_before_pt") orelse {
                     self.triggerCrash("num_from_num_literal: missing digits_before_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -2884,7 +2914,7 @@ pub const Interpreter = struct {
                 };
 
                 // Get digits_after_pt field (List(U8))
-                const after_idx = acc.findFieldIndex(self.env, "digits_after_pt") orelse {
+                const after_idx = acc.findFieldIndex(layout_env, "digits_after_pt") orelse {
                     self.triggerCrash("num_from_num_literal: missing digits_after_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -2937,6 +2967,7 @@ pub const Interpreter = struct {
                 var ok_index: ?usize = null;
                 var err_index: ?usize = null;
                 var ok_payload_var: ?types.Var = null;
+                var err_payload_var: ?types.Var = null;
 
                 for (tag_list.items, 0..) |tag_info, i| {
                     const tag_name = self.env.getIdent(tag_info.name);
@@ -2948,47 +2979,142 @@ pub const Interpreter = struct {
                         }
                     } else if (std.mem.eql(u8, tag_name, "Err")) {
                         err_index = i;
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                        if (arg_vars.len >= 1) {
+                            err_payload_var = arg_vars[0];
+                        }
                     }
                 }
 
                 // Determine target numeric type and check range
                 var in_range = !overflow;
+                var rejection_reason: enum { none, overflow, negative_unsigned, fractional_integer, out_of_range } = .none;
+                if (overflow) rejection_reason = .overflow;
 
-                if (in_range and ok_payload_var != null) {
-                    const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                // Track target type info for error messages
+                var type_name: []const u8 = "number";
+                var min_value_str: []const u8 = "";
+                var max_value_str: []const u8 = "";
+
+                // Use the explicit target type if provided, otherwise fall back to ok_payload_var
+                const target_type_var = self.num_literal_target_type orelse ok_payload_var;
+
+                if (in_range and target_type_var != null) {
+                    // Use the target type var directly - getRuntimeLayout handles nominal types properly
+                    // (Don't use resolveBaseVar here as it strips away nominal type info needed for layout)
+                    const num_layout = try self.getRuntimeLayout(target_type_var.?);
                     if (num_layout.tag == .scalar) {
                         if (num_layout.data.scalar.tag == .int) {
                             // Integer type - check range and sign
                             const int_type = num_layout.data.scalar.data.int;
-                            in_range = switch (int_type) {
-                                .u8 => !is_negative and value <= std.math.maxInt(u8),
-                                .i8 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i8)))) else value <= std.math.maxInt(i8),
-                                .u16 => !is_negative and value <= std.math.maxInt(u16),
-                                .i16 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i16)))) else value <= std.math.maxInt(i16),
-                                .u32 => !is_negative and value <= std.math.maxInt(u32),
-                                .i32 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i32)))) else value <= std.math.maxInt(i32),
-                                .u64 => !is_negative and value <= std.math.maxInt(u64),
-                                .i64 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i64)))) else value <= std.math.maxInt(i64),
-                                .u128 => !is_negative,
-                                .i128 => true, // i128 can hold any value we can represent
-                            };
+
+                            // Set type info for error messages
+                            switch (int_type) {
+                                .u8 => {
+                                    type_name = "U8";
+                                    min_value_str = "0";
+                                    max_value_str = "255";
+                                },
+                                .i8 => {
+                                    type_name = "I8";
+                                    min_value_str = "-128";
+                                    max_value_str = "127";
+                                },
+                                .u16 => {
+                                    type_name = "U16";
+                                    min_value_str = "0";
+                                    max_value_str = "65535";
+                                },
+                                .i16 => {
+                                    type_name = "I16";
+                                    min_value_str = "-32768";
+                                    max_value_str = "32767";
+                                },
+                                .u32 => {
+                                    type_name = "U32";
+                                    min_value_str = "0";
+                                    max_value_str = "4294967295";
+                                },
+                                .i32 => {
+                                    type_name = "I32";
+                                    min_value_str = "-2147483648";
+                                    max_value_str = "2147483647";
+                                },
+                                .u64 => {
+                                    type_name = "U64";
+                                    min_value_str = "0";
+                                    max_value_str = "18446744073709551615";
+                                },
+                                .i64 => {
+                                    type_name = "I64";
+                                    min_value_str = "-9223372036854775808";
+                                    max_value_str = "9223372036854775807";
+                                },
+                                .u128 => {
+                                    type_name = "U128";
+                                    min_value_str = "0";
+                                    max_value_str = "340282366920938463463374607431768211455";
+                                },
+                                .i128 => {
+                                    type_name = "I128";
+                                    min_value_str = "-170141183460469231731687303715884105728";
+                                    max_value_str = "170141183460469231731687303715884105727";
+                                },
+                            }
+
+                            // Check sign for unsigned types
+                            if (is_negative) {
+                                switch (int_type) {
+                                    .u8, .u16, .u32, .u64, .u128 => {
+                                        in_range = false;
+                                        rejection_reason = .negative_unsigned;
+                                    },
+                                    else => {},
+                                }
+                            }
+
+                            // Check value range
+                            if (in_range) {
+                                const value_in_range = switch (int_type) {
+                                    .u8 => value <= std.math.maxInt(u8),
+                                    .i8 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i8)))) else value <= std.math.maxInt(i8),
+                                    .u16 => value <= std.math.maxInt(u16),
+                                    .i16 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i16)))) else value <= std.math.maxInt(i16),
+                                    .u32 => value <= std.math.maxInt(u32),
+                                    .i32 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i32)))) else value <= std.math.maxInt(i32),
+                                    .u64 => value <= std.math.maxInt(u64),
+                                    .i64 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i64)))) else value <= std.math.maxInt(i64),
+                                    .u128 => true,
+                                    .i128 => true,
+                                };
+                                if (!value_in_range) {
+                                    in_range = false;
+                                    rejection_reason = .out_of_range;
+                                }
+                            }
 
                             // Fractional part not allowed for integers
-                            if (digits_after.len > 0) {
-                                // Check if all digits after decimal are zero
-                                var all_zero = true;
+                            if (in_range and digits_after.len > 0) {
+                                var has_fractional = false;
                                 for (digits_after) |d| {
                                     if (d != 0) {
-                                        all_zero = false;
+                                        has_fractional = true;
                                         break;
                                     }
                                 }
-                                if (!all_zero) {
+                                if (has_fractional) {
                                     in_range = false;
+                                    rejection_reason = .fractional_integer;
                                 }
                             }
+                        } else if (num_layout.data.scalar.tag == .frac) {
+                            const frac_type = num_layout.data.scalar.data.frac;
+                            switch (frac_type) {
+                                .f32 => type_name = "F32",
+                                .f64 => type_name = "F64",
+                                .dec => type_name = "Dec",
+                            }
                         }
-                        // Float and Dec types - accept the value and convert during payload write
                     }
                 }
 
@@ -3005,8 +3131,9 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = result_acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = result_acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    // Use layout_env for field lookups since record fields use layout store's env idents
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse return error.NotImplemented;
 
                     // Write tag discriminant
                     const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
@@ -3097,8 +3224,121 @@ pub const Interpreter = struct {
                                 }
                             }
                         }
+                    } else if (!in_range and err_payload_var != null) {
+                        // For Err case, construct InvalidNumLiteral(Str) with descriptive message
+                        // Format the number that was rejected
+                        var num_str_buf: [128]u8 = undefined;
+                        const num_str = blk: {
+                            var writer = std.io.fixedBufferStream(&num_str_buf);
+                            if (is_negative) writer.writer().writeAll("-") catch {};
+                            // Format integer part
+                            writer.writer().print("{d}", .{value}) catch {};
+                            // Format fractional part if present
+                            if (digits_after.len > 0) {
+                                var has_nonzero = false;
+                                for (digits_after) |d| {
+                                    if (d != 0) {
+                                        has_nonzero = true;
+                                        break;
+                                    }
+                                }
+                                if (has_nonzero) {
+                                    writer.writer().writeAll(".") catch {};
+                                    // Convert base-256 fractional digits to decimal
+                                    var frac: f64 = 0;
+                                    var mult: f64 = 1.0 / 256.0;
+                                    for (digits_after) |digit| {
+                                        frac += @as(f64, @floatFromInt(digit)) * mult;
+                                        mult /= 256.0;
+                                    }
+                                    // Print fractional part (removing leading "0.")
+                                    var frac_buf: [32]u8 = undefined;
+                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
+                                        writer.writer().writeAll(frac_str[2..]) catch {};
+                                    }
+                                }
+                            }
+                            break :blk num_str_buf[0..writer.pos];
+                        };
+
+                        // Create descriptive error message
+                        const error_msg = switch (rejection_reason) {
+                            .negative_unsigned => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .fractional_integer => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .out_of_range, .overflow => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                                .{ num_str, type_name, type_name, min_value_str, max_value_str },
+                            ) catch null,
+                            .none => null,
+                        };
+
+                        if (error_msg) |msg| {
+                            // Get the Err payload layout (which is [InvalidNumLiteral(Str)])
+                            const err_payload_layout = try self.getRuntimeLayout(err_payload_var.?);
+                            const payload_field_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+
+                            // Check if payload area has enough space for RocStr (24 bytes on 64-bit)
+                            // The layout computation may be wrong for error types, so check against actual RocStr size
+                            const roc_str_size = @sizeOf(RocStr);
+                            if (payload_field_size >= roc_str_size and payload_field.ptr != null) {
+                                defer self.allocator.free(msg);
+                                const outer_payload_ptr = payload_field.ptr.?;
+                                // Create the RocStr for the error message
+                                const roc_str = RocStr.fromSlice(msg, roc_ops);
+
+                                if (err_payload_layout.tag == .record) {
+                                    // InvalidNumLiteral tag union is a record { tag, payload }
+                                    // Set is_initialized to true since we're about to write to this memory
+                                    var err_inner = StackValue{
+                                        .ptr = outer_payload_ptr,
+                                        .layout = err_payload_layout,
+                                        .is_initialized = true,
+                                    };
+                                    var err_acc = try err_inner.asRecord(&self.runtime_layout_store);
+
+                                    // Set the tag to InvalidNumLiteral (index 0, assuming it's the first/only tag)
+                                    // Use layout store's env for field lookup to match comptime_evaluator
+                                    if (err_acc.findFieldIndex(layout_env, "tag")) |inner_tag_idx| {
+                                        const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx);
+                                        if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
+                                            var tmp = inner_tag_field;
+                                            tmp.is_initialized = false;
+                                            try tmp.setInt(0); // InvalidNumLiteral tag index
+                                        }
+                                    }
+
+                                    // Set the payload to the Str
+                                    if (err_acc.findFieldIndex(layout_env, "payload")) |inner_payload_idx| {
+                                        const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx);
+                                        if (inner_payload_field.ptr) |str_ptr| {
+                                            const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
+                                            str_dest.* = roc_str;
+                                        }
+                                    }
+                                } else if (err_payload_layout.tag == .scalar and err_payload_layout.data.scalar.tag == .str) {
+                                    // Direct Str payload (single-tag union optimized away)
+                                    const str_dest: *RocStr = @ptrCast(@alignCast(outer_payload_ptr));
+                                    str_dest.* = roc_str;
+                                }
+                            } else {
+                                // Payload area is too small for RocStr - store the error message in the interpreter
+                                // for retrieval by the caller. This happens when layout optimization doesn't
+                                // allocate enough space for the Err payload.
+                                // Note: Do NOT free msg here - it will be used and freed by the caller
+                                self.last_error_message = msg;
+                            }
+                        }
                     }
-                    // For Err case, payload is InvalidNumLiteral(Str) - leave as zeroed
 
                     return dest;
                 }

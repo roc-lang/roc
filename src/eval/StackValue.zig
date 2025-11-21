@@ -250,6 +250,56 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
     }
 }
 
+/// Initialise the StackValue integer value from raw bytes
+/// This variant handles u128 values that don't fit in i128
+pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{IntegerOverflow}!void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is an integer
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+
+    // Assert this is uninitialised memory
+    std.debug.assert(!self.is_initialized);
+
+    const precision = self.layout.data.scalar.data.int;
+
+    // For u128 values, use bitcast directly; for i128 values, use the signed path
+    if (is_u128) {
+        const u128_value: u128 = @bitCast(bytes);
+        switch (precision) {
+            .u8 => {
+                const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u8, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u16 => {
+                const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u16, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u32 => {
+                const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u32, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u64 => {
+                const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u64, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u128 => {
+                const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = u128_value;
+            },
+            .i8, .i16, .i32, .i64, .i128 => {
+                // Can't assign u128 to signed types - always overflow
+                return error.IntegerOverflow;
+            },
+        }
+    } else {
+        const i128_value: i128 = @bitCast(bytes);
+        try self.setInt(i128_value);
+        return;
+    }
+}
+
 /// Initialise the StackValue boolean value
 pub fn setBool(self: *StackValue, value: u8) void {
     // Assert this is pointing to a valid memory location

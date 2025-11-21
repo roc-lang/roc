@@ -310,7 +310,6 @@ pub const RocList = extern struct {
             .capacity_or_alloc_ptr = length,
         };
 
-
         return result;
     }
 

@@ -511,8 +511,8 @@ fn rewriteNumericLiteralExpr(
         };
 
         const int_value = CIR.IntValue{
-            .bytes = @bitCast(num_lit_info.value),
-            .kind = .i128,
+            .bytes = num_lit_info.bytes,
+            .kind = if (num_lit_info.is_u128) .u128 else .i128,
         };
         try env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
     }

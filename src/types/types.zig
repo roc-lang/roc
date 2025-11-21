@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(96, @sizeOf(StaticDispatchConstraint)); // Increased due to recursion_info + num_literal fields
+    try std.testing.expectEqual(72, @sizeOf(StaticDispatchConstraint)); // Includes recursion_info + num_literal fields
 }
 
 /// A type variable
@@ -787,9 +787,12 @@ pub const TwoTags = struct {
 /// Stores the parsed numeric value and metadata needed to validate conversion
 /// to a specific numeric type at compile-time.
 pub const NumLiteralInfo = struct {
-    /// The parsed numeric value as i128
+    /// The parsed numeric value stored as raw bytes
     /// For fractional literals, this is scaled by 10^18 (Dec representation)
-    value: i128,
+    bytes: [16]u8,
+
+    /// Whether the original literal was stored as u128 (for large unsigned values)
+    is_u128: bool,
 
     /// Whether the literal was negative
     is_negative: bool,
@@ -799,6 +802,38 @@ pub const NumLiteralInfo = struct {
 
     /// Source region for error reporting
     region: base.Region,
+
+    /// Get the value as i128 (may overflow for large u128 values)
+    pub fn toI128(self: NumLiteralInfo) i128 {
+        return @bitCast(self.bytes);
+    }
+
+    /// Get the value as u128
+    pub fn toU128(self: NumLiteralInfo) u128 {
+        return @bitCast(self.bytes);
+    }
+
+    /// Create from an i128 value
+    pub fn fromI128(val: i128, is_negative: bool, is_fractional: bool, region: base.Region) NumLiteralInfo {
+        return .{
+            .bytes = @bitCast(val),
+            .is_u128 = false,
+            .is_negative = is_negative,
+            .is_fractional = is_fractional,
+            .region = region,
+        };
+    }
+
+    /// Create from a u128 value
+    pub fn fromU128(val: u128, is_fractional: bool, region: base.Region) NumLiteralInfo {
+        return .{
+            .bytes = @bitCast(val),
+            .is_u128 = true,
+            .is_negative = false, // u128 values are never negative
+            .is_fractional = is_fractional,
+            .region = region,
+        };
+    }
 };
 
 /// Information about a recursive static dispatch constraint

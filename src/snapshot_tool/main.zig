@@ -3022,29 +3022,21 @@ fn searchDirectoryForBuiltin(
     }
 }
 
-test "TODO: cross-module function calls - fibonacci" {
-}
+test "TODO: cross-module function calls - fibonacci" {}
 
-test "TODO: cross-module function calls - nested_ifs" {
-}
+test "TODO: cross-module function calls - nested_ifs" {}
 
-test "TODO: cross-module function calls - repl_boolean_expressions" {
-}
+test "TODO: cross-module function calls - repl_boolean_expressions" {}
 
-test "TODO: cross-module function calls - string_edge_cases" {
-}
+test "TODO: cross-module function calls - string_edge_cases" {}
 
-test "TODO: cross-module function calls - string_equality_basic" {
-}
+test "TODO: cross-module function calls - string_equality_basic" {}
 
-test "TODO: cross-module function calls - string_interpolation_comparison" {
-}
+test "TODO: cross-module function calls - string_interpolation_comparison" {}
 
-test "TODO: cross-module function calls - string_multiline_comparison" {
-}
+test "TODO: cross-module function calls - string_multiline_comparison" {}
 
-test "TODO: cross-module function calls - string_ordering_unsupported" {
-}
+test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
