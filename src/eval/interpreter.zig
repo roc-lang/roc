@@ -79,6 +79,7 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
+        IntegerOverflow,
         InvalidMethodReceiver,
         InvalidNumExt,
         InvalidTagExt,
@@ -648,7 +649,7 @@ pub const Interpreter = struct {
                 value.is_initialized = false;
                 switch (layout_val.tag) {
                     .scalar => switch (layout_val.data.scalar.tag) {
-                        .int => value.setInt(num_lit.value.toI128()),
+                        .int => try value.setInt(num_lit.value.toI128()),
                         .frac => switch (layout_val.data.scalar.data.frac) {
                             .f32 => {
                                 const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
@@ -1191,7 +1192,7 @@ pub const Interpreter = struct {
                     var out = try self.pushRaw(layout_val, 0);
                     if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
-                        out.setInt(@intCast(tag_index));
+                        try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
                         return out;
                     }
@@ -1206,7 +1207,7 @@ pub const Interpreter = struct {
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
-                        tmp.setInt(@intCast(tag_index));
+                        try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
                     return dest;
                 }
@@ -1247,7 +1248,7 @@ pub const Interpreter = struct {
                     var out = try self.pushRaw(layout_val, 0);
                     if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
-                        out.setInt(@intCast(tag_index));
+                        try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
                         return out;
                     }
@@ -1263,7 +1264,7 @@ pub const Interpreter = struct {
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
-                        tmp.setInt(@intCast(tag_index));
+                        try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
@@ -2235,7 +2236,7 @@ pub const Interpreter = struct {
                 const result_layout = layout.Layout.int(.u64);
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
-                out.setInt(@intCast(len_u64));
+                try out.setInt(@intCast(len_u64));
                 out.is_initialized = true;
                 return out;
             },
@@ -2517,7 +2518,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (num_val) {
-                    .int => |i| out.setInt(-i),
+                    .int => |i| try out.setInt(-i),
                     .f32 => |f| out.setF32(-f),
                     .f64 => |f| out.setF64(-f),
                     .dec => |d| out.setDec(RocDec{ .num = -d.num }),
@@ -2535,7 +2536,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| out.setInt(l + rhs.int),
+                    .int => |l| try out.setInt(l + rhs.int),
                     .f32 => |l| out.setF32(l + rhs.f32),
                     .f64 => |l| out.setF64(l + rhs.f64),
                     .dec => |l| out.setDec(RocDec{ .num = l.num + rhs.dec.num }),
@@ -2553,7 +2554,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| out.setInt(l - rhs.int),
+                    .int => |l| try out.setInt(l - rhs.int),
                     .f32 => |l| out.setF32(l - rhs.f32),
                     .f64 => |l| out.setF64(l - rhs.f64),
                     .dec => |l| out.setDec(RocDec{ .num = l.num - rhs.dec.num }),
@@ -2571,7 +2572,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| out.setInt(l * rhs.int),
+                    .int => |l| try out.setInt(l * rhs.int),
                     .f32 => |l| out.setF32(l * rhs.f32),
                     .f64 => |l| out.setF64(l * rhs.f64),
                     .dec => |l| out.setDec(RocDec{ .num = @divTrunc(l.num * rhs.dec.num, RocDec.one_point_zero_i128) }),
@@ -2591,7 +2592,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| {
                         if (rhs.int == 0) return error.DivisionByZero;
-                        out.setInt(@divTrunc(l, rhs.int));
+                        try out.setInt(@divTrunc(l, rhs.int));
                     },
                     .f32 => |l| {
                         if (rhs.f32 == 0) return error.DivisionByZero;
@@ -2622,7 +2623,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| {
                         if (rhs.int == 0) return error.DivisionByZero;
-                        out.setInt(@divTrunc(l, rhs.int));
+                        try out.setInt(@divTrunc(l, rhs.int));
                     },
                     .f32 => |l| {
                         if (rhs.f32 == 0) return error.DivisionByZero;
@@ -2653,7 +2654,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| {
                         if (rhs.int == 0) return error.DivisionByZero;
-                        out.setInt(@rem(l, rhs.int));
+                        try out.setInt(@rem(l, rhs.int));
                     },
                     .f32 => |l| {
                         if (rhs.f32 == 0) return error.DivisionByZero;
@@ -2691,7 +2692,7 @@ pub const Interpreter = struct {
         const bool_layout = Layout.int(.u8);
         var bool_value = try self.pushRaw(bool_layout, 0);
         bool_value.is_initialized = false;
-        bool_value.setInt(@intFromBool(value));
+        try bool_value.setInt(@intFromBool(value));
         bool_value.is_initialized = true;
         return bool_value;
     }

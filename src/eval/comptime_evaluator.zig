@@ -539,15 +539,60 @@ pub const ComptimeEvaluator = struct {
                 continue;
             };
 
-            // Build the qualified method name: ModuleName.TypeName.from_num_literal
             const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
-            const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
 
             // Extract short type name (e.g., "I64" from "Num.I64")
             const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
                 type_name_bytes[dot_idx + 1 ..]
             else
                 type_name_bytes;
+
+            // Get the NumLiteralInfo for validation
+            const num_lit_info = literal.constraint.num_literal orelse {
+                // No NumLiteralInfo means this isn't a from_num_literal constraint
+                continue;
+            };
+
+            // Check if this is a builtin numeric type that we can validate directly
+            const is_builtin_numeric = isBuiltinNumericType(short_type_name);
+
+            if (is_builtin_numeric) {
+                // Builtin numeric types are validated directly without from_num_literal lookup
+                // This handles U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+                const is_valid = try self.validateBuiltinFromNumLiteral(short_type_name, num_lit_info);
+
+                if (!is_valid) {
+                    // Report validation error
+                    const error_msg = if (num_lit_info.is_fractional)
+                        try std.fmt.allocPrint(
+                            self.allocator,
+                            "Cannot convert fractional literal to integer type {s}",
+                            .{short_type_name},
+                        )
+                    else
+                        try std.fmt.allocPrint(
+                            self.allocator,
+                            "Number literal {d} does not fit in type {s}",
+                            .{ num_lit_info.value, short_type_name },
+                        );
+
+                    try self.error_names.append(error_msg);
+                    const problem = Problem{
+                        .comptime_eval_error = .{
+                            .error_name = error_msg,
+                            .region = literal.region,
+                        },
+                    };
+                    _ = try self.problems.appendProblem(self.allocator, problem);
+                } else {
+                    // Validation passed - rewrite the expression to the target type
+                    try self.rewriteNumericLiteralExpr(literal.expr_idx, short_type_name, num_lit_info);
+                }
+                continue;
+            }
+
+            // For user-defined types, look up the from_num_literal method
+            const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
 
             // Build qualified name: Builtin.TypeName.from_num_literal
             var qualified_name_buf: [256]u8 = undefined;
@@ -597,14 +642,6 @@ pub const ComptimeEvaluator = struct {
 
             const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_origin)));
             _ = def_idx; // TODO: Will be used for full interpreter invocation
-
-            // Step 3: Validate the literal (simplified version for built-in types)
-            // For now, we do simple range checking instead of full interpreter invocation
-            // This matches what Check.zig does in evalBuiltinFromNumLiteral
-            const num_lit_info = literal.constraint.num_literal orelse {
-                // No NumLiteralInfo means this isn't a from_num_literal constraint
-                continue;
-            };
 
             // Validate the conversion
             const is_valid = try self.validateBuiltinFromNumLiteral(short_type_name, num_lit_info);

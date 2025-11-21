@@ -976,3 +976,85 @@ test "comptime eval - multiple associated items with dependencies" {
 
     return error.TestExpectedDefNotFound;
 }
+
+// Numeric literal validation tests (validated during comptime eval)
+
+test "comptime eval - U8: 256 does not fit" {
+    const src =
+        \\x : U8
+        \\x = 50
+        \\
+        \\y : U8
+        \\y = 256
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs but report errors for the literal that doesn't fit
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Debug: print all problems
+    std.debug.print("\n=== Problems ({d}) ===\n", .{result.problems.len()});
+    for (result.problems.problems.items, 0..) |prob, i| {
+        std.debug.print("Problem {d}: {s}\n", .{ i, @tagName(prob) });
+        if (prob == .comptime_eval_error) {
+            std.debug.print("  error_name: {s}\n", .{prob.comptime_eval_error.error_name});
+        }
+    }
+    std.debug.print("===================\n", .{});
+
+    // Should have exactly 1 problem reported (256 doesn't fit in U8)
+    // This is reported by validateDeferredNumericLiterals in comptime_evaluator.zig
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+
+    // Verify it's a comptime_eval_error with the expected message
+    const problem = result.problems.problems.items[0];
+    try testing.expect(problem == .comptime_eval_error);
+    try testing.expect(std.mem.containsAtLeast(u8, problem.comptime_eval_error.error_name, 1, "256"));
+    try testing.expect(std.mem.containsAtLeast(u8, problem.comptime_eval_error.error_name, 1, "U8"));
+}
+
+test "comptime eval - U8: negative does not fit" {
+    const src =
+        \\x : U8
+        \\x = 50
+        \\
+        \\y : U8
+        \\y = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs but report errors for the negative literal
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem reported (-1 doesn't fit in U8)
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - I8: -129 does not fit" {
+    const src =
+        \\x : I8
+        \\x = 1
+        \\
+        \\y : I8
+        \\y = -129
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs but report errors for the literal that doesn't fit
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem reported (-129 doesn't fit in I8)
+    try testing.expect(result.problems.len() >= 1);
+}
