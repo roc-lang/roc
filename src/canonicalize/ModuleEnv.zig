@@ -100,6 +100,8 @@ minus_ident: Ident.Idx,
 times_ident: Ident.Idx,
 /// Interned identifier for "div_by" - used for / operator desugaring
 div_by_ident: Ident.Idx,
+/// Interned identifier for "div_trunc_by" - used for // operator desugaring
+div_trunc_by_ident: Ident.Idx,
 /// Interned identifier for "rem_by" - used for % operator desugaring
 rem_by_ident: Ident.Idx,
 /// Interned identifier for "negate" - used for unary - operator desugaring
@@ -189,6 +191,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const minus_ident = try common.insertIdent(gpa, Ident.for_text("minus"));
     const times_ident = try common.insertIdent(gpa, Ident.for_text("times"));
     const div_by_ident = try common.insertIdent(gpa, Ident.for_text("div_by"));
+    const div_trunc_by_ident = try common.insertIdent(gpa, Ident.for_text("div_trunc_by"));
     const rem_by_ident = try common.insertIdent(gpa, Ident.for_text("rem_by"));
     const negate_ident = try common.insertIdent(gpa, Ident.for_text(Ident.NEGATE_METHOD_NAME));
     const not_ident = try common.insertIdent(gpa, Ident.for_text("not"));
@@ -224,6 +227,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .minus_ident = minus_ident,
         .times_ident = times_ident,
         .div_by_ident = div_by_ident,
+        .div_trunc_by_ident = div_trunc_by_ident,
         .rem_by_ident = rem_by_ident,
         .negate_ident = negate_ident,
         .not_ident = not_ident,
@@ -1630,6 +1634,7 @@ pub const Serialized = struct {
     minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
     times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
     div_by_ident_reserved: u32, // Reserved space for div_by_ident field (interned during deserialization)
+    div_trunc_by_ident_reserved: u32, // Reserved space for div_trunc_by_ident field (interned during deserialization)
     rem_by_ident_reserved: u32, // Reserved space for rem_by_ident field (interned during deserialization)
     negate_ident_reserved: u32, // Reserved space for negate_ident field (interned during deserialization)
     not_ident_reserved: u32, // Reserved space for not_ident field (interned during deserialization)
@@ -1685,6 +1690,7 @@ pub const Serialized = struct {
         self.minus_ident_reserved = 0;
         self.times_ident_reserved = 0;
         self.div_by_ident_reserved = 0;
+        self.div_trunc_by_ident_reserved = 0;
         self.rem_by_ident_reserved = 0;
         self.negate_ident_reserved = 0;
         self.not_ident_reserved = 0;
@@ -1741,6 +1747,7 @@ pub const Serialized = struct {
             .minus_ident = common.findIdent("minus") orelse unreachable,
             .times_ident = common.findIdent("times") orelse unreachable,
             .div_by_ident = common.findIdent("div_by") orelse unreachable,
+            .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
             .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
             .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
             .not_ident = common.findIdent("not") orelse unreachable,

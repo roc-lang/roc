@@ -111,6 +111,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .minus_ident = common.findIdent("minus") orelse unreachable,
         .times_ident = common.findIdent("times") orelse unreachable,
         .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
         .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
         .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
         .not_ident = common.findIdent("not") orelse unreachable,
@@ -128,8 +129,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 18 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
-    try testing.expectEqual(@as(u32, 21), original.common.idents.interner.entry_count);
+    // ModuleEnv.init() also interns 19 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
+    try testing.expectEqual(@as(u32, 22), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -138,8 +139,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 21 identifiers as original: hello, world, TestModule + 18 well-known identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 21), env.common.idents.interner.entry_count);
+    // Should have same 22 identifiers as original: hello, world, TestModule + 19 well-known identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 22), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

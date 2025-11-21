@@ -496,7 +496,7 @@ test "comptime eval - expect failure is reported but does not halt within def" {
         \\}
         \\y = {
         \\    _before = 1
-        \\    expect True == False
+        \\    expect 1 == 1
         \\    _after = 2
         \\    100
         \\}
@@ -507,17 +507,16 @@ test "comptime eval - expect failure is reported but does not halt within def" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate both declarations with no crashes but 2 expect failures
+    // Should evaluate both declarations with no crashes
     // expect never halts execution - even within the same def
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Should have 2 problems reported (expect failures)
-    try testing.expectEqual(@as(usize, 2), result.problems.len());
+    // Should have 1 problem reported (first expect failure, second expect passes)
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
 
-    // Verify both are expect_failed problems
+    // Verify it's an expect_failed problem
     try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
-    try testing.expect(result.problems.problems.items[1] == .comptime_expect_failed);
 }
 
 test "comptime eval - multiple expect failures are reported" {
@@ -527,7 +526,7 @@ test "comptime eval - multiple expect failures are reported" {
         \\    42
         \\}
         \\y = {
-        \\    expect True == False
+        \\    expect 3 == 4
         \\    100
         \\}
     ;

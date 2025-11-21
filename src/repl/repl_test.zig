@@ -97,6 +97,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .minus_ident = common.findIdent("minus") orelse unreachable,
         .times_ident = common.findIdent("times") orelse unreachable,
         .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
         .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
         .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
         .not_ident = common.findIdent("not") orelse unreachable,

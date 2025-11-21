@@ -137,7 +137,6 @@ fn findViaFilesystem(allocator: std.mem.Allocator) !LibcInfo {
     const arch_temp = try getArchitecture(allocator);
     defer allocator.free(arch_temp);
     const arch = try allocator.dupe(u8, arch_temp);
-    errdefer allocator.free(arch);
 
     const search_paths = try getSearchPaths(allocator, arch);
     defer {
@@ -347,6 +346,8 @@ fn findFile(allocator: std.mem.Allocator, dir_path: []const u8, filename: []cons
 }
 
 test "libc detection integration test" {
+    // Skip on macOS and Windows bc they always have libc available (and require dynamically linking it)
+    if (builtin.os.tag == .macos or builtin.os.tag == .windows) return;
 
     const allocator = std.testing.allocator;
 

@@ -245,6 +245,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             try low_level_map.put(ident, .num_div_by);
         }
 
+        // div_trunc_by
+        const div_trunc_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_trunc_by", .{num_type});
+        if (env.common.findIdent(div_trunc_by)) |ident| {
+            try low_level_map.put(ident, .num_div_trunc_by);
+        }
+
         // rem_by
         const rem_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem_by", .{num_type});
         if (env.common.findIdent(rem_by)) |ident| {

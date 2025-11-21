@@ -132,6 +132,7 @@ Builtin :: [].{
 			minus : U8, U8 -> U8
 			times : U8, U8 -> U8
 			div_by : U8, U8 -> U8
+			div_trunc_by : U8, U8 -> U8
 			rem_by : U8, U8 -> U8
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
@@ -153,6 +154,7 @@ Builtin :: [].{
 			minus : I8, I8 -> I8
 			times : I8, I8 -> I8
 			div_by : I8, I8 -> I8
+			div_trunc_by : I8, I8 -> I8
 			rem_by : I8, I8 -> I8
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
@@ -171,6 +173,7 @@ Builtin :: [].{
 			minus : U16, U16 -> U16
 			times : U16, U16 -> U16
 			div_by : U16, U16 -> U16
+			div_trunc_by : U16, U16 -> U16
 			rem_by : U16, U16 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
@@ -192,6 +195,7 @@ Builtin :: [].{
 			minus : I16, I16 -> I16
 			times : I16, I16 -> I16
 			div_by : I16, I16 -> I16
+			div_trunc_by : I16, I16 -> I16
 			rem_by : I16, I16 -> I16
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
@@ -210,6 +214,7 @@ Builtin :: [].{
 			minus : U32, U32 -> U32
 			times : U32, U32 -> U32
 			div_by : U32, U32 -> U32
+			div_trunc_by : U32, U32 -> U32
 			rem_by : U32, U32 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
@@ -231,6 +236,7 @@ Builtin :: [].{
 			minus : I32, I32 -> I32
 			times : I32, I32 -> I32
 			div_by : I32, I32 -> I32
+			div_trunc_by : I32, I32 -> I32
 			rem_by : I32, I32 -> I32
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
@@ -249,6 +255,7 @@ Builtin :: [].{
 			minus : U64, U64 -> U64
 			times : U64, U64 -> U64
 			div_by : U64, U64 -> U64
+			div_trunc_by : U64, U64 -> U64
 			rem_by : U64, U64 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
@@ -270,6 +277,7 @@ Builtin :: [].{
 			minus : I64, I64 -> I64
 			times : I64, I64 -> I64
 			div_by : I64, I64 -> I64
+			div_trunc_by : I64, I64 -> I64
 			rem_by : I64, I64 -> I64
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
@@ -288,6 +296,7 @@ Builtin :: [].{
 			minus : U128, U128 -> U128
 			times : U128, U128 -> U128
 			div_by : U128, U128 -> U128
+			div_trunc_by : U128, U128 -> U128
 			rem_by : U128, U128 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
@@ -309,6 +318,7 @@ Builtin :: [].{
 			minus : I128, I128 -> I128
 			times : I128, I128 -> I128
 			div_by : I128, I128 -> I128
+			div_trunc_by : I128, I128 -> I128
 			rem_by : I128, I128 -> I128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
@@ -331,6 +341,7 @@ Builtin :: [].{
 			minus : Dec, Dec -> Dec
 			times : Dec, Dec -> Dec
 			div_by : Dec, Dec -> Dec
+			div_trunc_by : Dec, Dec -> Dec
 			rem_by : Dec, Dec -> Dec
 
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
@@ -352,6 +363,7 @@ Builtin :: [].{
 			minus : F32, F32 -> F32
 			times : F32, F32 -> F32
 			div_by : F32, F32 -> F32
+			div_trunc_by : F32, F32 -> F32
 			rem_by : F32, F32 -> F32
 
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
@@ -373,6 +385,7 @@ Builtin :: [].{
 			minus : F64, F64 -> F64
 			times : F64, F64 -> F64
 			div_by : F64, F64 -> F64
+			div_trunc_by : F64, F64 -> F64
 			rem_by : F64, F64 -> F64
 
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])

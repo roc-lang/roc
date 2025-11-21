@@ -671,62 +671,61 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_unary_minus => |unary_minus| {
-                // Desugar `-a` to `a.negate()` using static method dispatch
+                // Desugar `-a` to `a.negate()`
                 return try self.dispatchUnaryOpMethod(self.env.negate_ident, unary_minus.expr, roc_ops);
             },
             .e_unary_not => |unary_not| {
-                // Desugar `!a` to `a.not()` using static method dispatch
+                // Desugar `!a` to `a.not()`
                 return try self.dispatchUnaryOpMethod(self.env.not_ident, unary_not.expr, roc_ops);
             },
             .e_binop => |binop| {
                 switch (binop.op) {
                     .add => {
-                        // Desugar `a + b` to `a.plus(b)` using static method dispatch
+                        // Desugar `a + b` to `a.plus(b)`
                         return try self.dispatchBinaryOpMethod(self.env.plus_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .sub => {
-                        // Desugar `a - b` to `a.minus(b)` using static method dispatch
+                        // Desugar `a - b` to `a.minus(b)`
                         return try self.dispatchBinaryOpMethod(self.env.minus_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .mul => {
-                        // Desugar `a * b` to `a.times(b)` using static method dispatch
+                        // Desugar `a * b` to `a.times(b)`
                         return try self.dispatchBinaryOpMethod(self.env.times_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .div => {
-                        // Desugar `a / b` to `a.div_by(b)` using static method dispatch
+                        // Desugar `a / b` to `a.div_by(b)`
                         return try self.dispatchBinaryOpMethod(self.env.div_by_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .div_trunc => {
-                        // Floor division is not yet implemented in the Builtin module
-                        // TODO: Add div_trunc method to numeric types in Builtin.roc
-                        return error.NotImplemented;
+                        // Desugar `a // b` to `a.div_trunc_by(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.div_trunc_by_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .rem => {
-                        // Desugar `a % b` to `a.rem_by(b)` using static method dispatch
+                        // Desugar `a % b` to `a.rem_by(b)`
                         return try self.dispatchBinaryOpMethod(self.env.rem_by_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .lt => {
-                        // Desugar `a < b` to `a.is_lt(b)` using static method dispatch
+                        // Desugar `a < b` to `a.is_lt(b)`
                         return try self.dispatchBinaryOpMethod(self.env.is_lt_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .le => {
-                        // Desugar `a <= b` to `a.is_lte(b)` using static method dispatch
+                        // Desugar `a <= b` to `a.is_lte(b)`
                         return try self.dispatchBinaryOpMethod(self.env.is_lte_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .gt => {
-                        // Desugar `a > b` to `a.is_gt(b)` using static method dispatch
+                        // Desugar `a > b` to `a.is_gt(b)`
                         return try self.dispatchBinaryOpMethod(self.env.is_gt_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ge => {
-                        // Desugar `a >= b` to `a.is_gte(b)` using static method dispatch
+                        // Desugar `a >= b` to `a.is_gte(b)`
                         return try self.dispatchBinaryOpMethod(self.env.is_gte_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .eq => {
-                        // Desugar `a == b` to `a.is_eq(b)` using static method dispatch
+                        // Desugar `a == b` to `a.is_eq(b)`
                         return try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ne => {
-                        // Desugar `a != b` to `a.is_ne(b)` using static method dispatch
+                        // Desugar `a != b` to `a.is_ne(b)`
                         return try self.dispatchBinaryOpMethod(self.env.is_ne_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .@"or" => {
@@ -2611,6 +2610,37 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .num_div_trunc_by => {
+                std.debug.assert(args.len == 2); // low-level .num_div_trunc_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| {
+                        if (rhs.int == 0) return error.DivisionByZero;
+                        out.setInt(@divTrunc(l, rhs.int));
+                    },
+                    .f32 => |l| {
+                        if (rhs.f32 == 0) return error.DivisionByZero;
+                        out.setF32(@trunc(l / rhs.f32));
+                    },
+                    .f64 => |l| {
+                        if (rhs.f64 == 0) return error.DivisionByZero;
+                        out.setF64(@trunc(l / rhs.f64));
+                    },
+                    .dec => |l| {
+                        if (rhs.dec.num == 0) return error.DivisionByZero;
+                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
+                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
             .num_rem_by => {
                 std.debug.assert(args.len == 2); // low-level .num_rem_by expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
@@ -4095,7 +4125,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    /// Dispatch a unary operator to a method call using static method dispatch.
+    /// Dispatch a unary operator to a method call.
     /// For example, `!a` desugars to `a.not()` and `-a` desugars to `a.negate()`.
     fn dispatchUnaryOpMethod(
         self: *Interpreter,

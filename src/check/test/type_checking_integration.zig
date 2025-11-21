@@ -287,7 +287,9 @@ test "check type - def - func with annotation 2" {
         \\id : x -> _a
         \\id = |_| 15
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "x -> _a");
+    // The type annotation says _a is unconstrained, but the implementation returns
+    // a numeric literal which requires from_num_literal method. This is a type error.
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 test "check type - def - nested lambda" {
@@ -1840,7 +1842,7 @@ test "check type - scoped type variables - pass" {
         \\pass = |x| {
         \\  inner : a -> a
         \\  inner = |y| y
-        \\  
+        \\
         \\  inner(x)
         \\}
     ;
@@ -2006,38 +2008,19 @@ test "top-level: type annotation followed by body should not create duplicate de
 
 // equirecursive static dispatch //
 
-test "check type - equirecursive static dispatch - motivating example (current behavior)" {
-    // This test is skipped because numeric types no longer have special structure after
-    // poly removal, and the .plus method is not implemented. With the new nominal type
-    // approach, number literals are flex vars and the error behavior has changed.
-    // Future work: Add back once .plus method is implemented on numeric types.
-
-    // This is the motivating example for equirecursive unification!
-    // Before RecursionVar was implemented, this would cause infinite loops during type checking
-    // because x.plus returns a numeric type that also needs .plus constraints, creating
-    // an infinite chain: ret.plus : ret, _ -> ret2, ret2.plus : ret2, _ -> ret3, ...
-    //
-    // With RecursionVar, we detect the recursive constraint and create a circular type
-    // that unifies equirecursively (structurally equal up to recursion point).
-    //
-    // NOTE: The .plus method is not yet implemented on numeric types, so this currently
-    // fails with TYPE DOES NOT HAVE METHODS. Once .plus is implemented, this test should
-    // pass and return a numeric type with preserved constraints.
+test "check type - equirecursive static dispatch" {
     const source = "(|x| x.plus(5))(7)";
 
-    // Current behavior: fails because Num types don't have methods yet
-    // Future behavior (once .plus is implemented): should pass with type like
-    // "ret where [ret.plus : ret, _ -> ret, ret.from_int_digits : ...]"
     try checkTypesExpr(
         source,
-        .fail,
-        "TYPE DOES NOT HAVE METHODS",
+        .pass,
+        "",
     );
 }
 
-test "check type - equirecursive static dispatch - annotated motivating example" {
-    // This tests the exact pattern from the motivating example (|x| x.plus(b))(a)
-    // but with explicit type annotations instead of relying on numeric types.
+test "check type - equirecursive static dispatch with type annotation" {
+    // This tests the exact pattern from the example (|x| x.plus(b))(a)
+    // but with explicit type annotations.
     // This demonstrates that the RecursionVar infrastructure works correctly
     // with the same constraint structure as the motivating example.
     const source =
@@ -2049,7 +2032,6 @@ test "check type - equirecursive static dispatch - annotated motivating example"
         \\fn = |a, b| (|x| x.plus(b))(a)
     ;
 
-    // The key test: this should complete without infinite loops!
     // The annotated type should match the inferred type
     try checkTypesModule(
         source,

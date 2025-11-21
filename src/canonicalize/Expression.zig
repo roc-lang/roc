@@ -419,6 +419,7 @@ pub const Expr = union(enum) {
         num_minus, // All numeric types
         num_times, // All numeric types
         num_div_by, // All numeric types
+        num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
 
         // Numeric parsing operations
