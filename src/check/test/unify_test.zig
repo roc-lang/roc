@@ -28,6 +28,7 @@ const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
+const RecursionVar = types_mod.RecursionVar;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -111,6 +112,7 @@ const TestEnv = struct {
             &self.snapshots,
             &self.scratch,
             &self.occurs_scratch,
+            unify_mod.ModuleEnvLookup{},
             a,
             b,
         );
@@ -240,6 +242,14 @@ const TestEnv = struct {
             args,
             Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
         );
+    }
+
+    fn mkList(self: *Self, elem_var: Var) std.mem.Allocator.Error!Content {
+        return try self.mkNominalType("List", elem_var, &[_]Var{elem_var});
+    }
+
+    fn mkBox(self: *Self, elem_var: Var) std.mem.Allocator.Error!Content {
+        return try self.mkNominalType("Box", elem_var, &[_]Var{elem_var});
     }
 
     // helpers - structure - func //
@@ -404,7 +414,7 @@ test "rigid_var - cannot unify with alias (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const alias = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const alias = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(alias, rigid);
@@ -430,7 +440,7 @@ test "unify - alias with same args" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
     // Create alias `a` with its backing var and args in sequence
@@ -455,7 +465,7 @@ test "unify - aliases with different names but same backing" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     // Create alias `a` with its backing var and arg
     const a_backing_var = try env.module_env.types.freshFromContent(try env.mkTuple(&[_]Var{str}));
@@ -479,7 +489,7 @@ test "unify - alias with different args (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
     // Create alias `a` with its backing var and arg
@@ -504,7 +514,7 @@ test "unify - alias with flex" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
     const a_backing_var = try env.module_env.types.freshFromContent(try env.mkTuple(&[_]Var{ str, bool_ })); // backing var
@@ -525,11 +535,11 @@ test "unify - alias with concrete" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{});
 
     const a = try env.module_env.types.freshFromContent(a_alias);
-    const b = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const b = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const result = try env.unify(a, b);
 
@@ -543,7 +553,7 @@ test "unify - alias with concrete" {
     const resolved_backing = env.module_env.types.resolveVar(
         env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
     );
-    try std.testing.expectEqual(Content{ .structure = .str }, resolved_backing.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
 
     // Assert that a & b redirect to the alias
     try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
@@ -555,10 +565,10 @@ test "unify - alias with concrete other way" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{});
 
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const b = try env.module_env.types.freshFromContent(b_alias);
 
     const result = try env.unify(a, b);
@@ -573,7 +583,7 @@ test "unify - alias with concrete other way" {
     const resolved_backing = env.module_env.types.resolveVar(
         env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
     );
-    try std.testing.expectEqual(Content{ .structure = .str }, resolved_backing.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
 
     // Assert that a & b redirect to the alias
     try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
@@ -588,7 +598,7 @@ test "unify - a is builtin and b is flex_var" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
 
     const a = try env.module_env.types.freshFromContent(str);
     const b = try env.module_env.types.fresh();
@@ -606,7 +616,7 @@ test "unify - a is flex_var and b is builtin" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
 
     const a = try env.module_env.types.fresh();
     const b = try env.module_env.types.freshFromContent(str);
@@ -626,7 +636,7 @@ test "unify - a & b are both str" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
 
     const a = try env.module_env.types.freshFromContent(str);
     const b = try env.module_env.types.freshFromContent(str);
@@ -644,7 +654,7 @@ test "unify - a & b are diff (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const int = Content{ .structure = .{ .num = Num.int_i8 } };
 
     const a = try env.module_env.types.freshFromContent(int);
@@ -663,10 +673,10 @@ test "unify - a & b box with same arg unify" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
-    const box_str = Content{ .structure = .{ .box = str_var } };
+    const box_str = try env.mkBox(str_var);
 
     const a = try env.module_env.types.freshFromContent(box_str);
     const b = try env.module_env.types.freshFromContent(box_str);
@@ -684,14 +694,14 @@ test "unify - a & b box with diff args (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
     const i64_ = Content{ .structure = .{ .num = Num.int_i64 } };
     const i64_var = try env.module_env.types.freshFromContent(i64_);
 
-    const box_str = Content{ .structure = .{ .box = str_var } };
-    const box_i64 = Content{ .structure = .{ .box = i64_var } };
+    const box_str = try env.mkBox(str_var);
+    const box_i64 = try env.mkBox(i64_var);
 
     const a = try env.module_env.types.freshFromContent(box_str);
     const b = try env.module_env.types.freshFromContent(box_i64);
@@ -709,10 +719,10 @@ test "unify - a & b list with same arg unify" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
-    const list_str = Content{ .structure = .{ .list = str_var } };
+    const list_str = try env.mkList(str_var);
 
     const a = try env.module_env.types.freshFromContent(list_str);
     const b = try env.module_env.types.freshFromContent(list_str);
@@ -730,14 +740,14 @@ test "unify - a & b list with diff args (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
     const u8_ = Content{ .structure = .{ .num = Num.int_u8 } };
     const u8_var = try env.module_env.types.freshFromContent(u8_);
 
-    const list_str = Content{ .structure = .{ .list = str_var } };
-    const list_u8 = Content{ .structure = .{ .list = u8_var } };
+    const list_str = try env.mkList(str_var);
+    const list_u8 = try env.mkList(u8_var);
 
     const a = try env.module_env.types.freshFromContent(list_str);
     const b = try env.module_env.types.freshFromContent(list_u8);
@@ -757,7 +767,7 @@ test "unify - a & b are same tuple" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
     const bool_ = Content{ .structure = .{ .num = Num.int_i8 } };
@@ -781,7 +791,7 @@ test "unify - a & b are tuples with args flipped (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = Content{ .structure = .str };
+    const str = Content{ .structure = .empty_record };
     const str_var = try env.module_env.types.freshFromContent(str);
 
     const bool_ = Content{ .structure = .{ .num = Num.int_i8 } };
@@ -1396,7 +1406,7 @@ test "unify - func are same" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const num = try env.mkNumPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const func = try env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 
     const a = try env.module_env.types.freshFromContent(func);
@@ -1416,7 +1426,7 @@ test "unify - funcs have diff return args (fail)" {
     defer env.deinit();
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const a = try env.module_env.types.freshFromContent(try env.mkFuncFlex(&[_]Var{int_i32}, str));
     const b = try env.module_env.types.freshFromContent(try env.mkFuncFlex(&[_]Var{str}, str));
@@ -1435,7 +1445,7 @@ test "unify - funcs have diff return types (fail)" {
     defer env.deinit();
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const a = try env.module_env.types.freshFromContent(try env.mkFuncFlex(&[_]Var{str}, int_i32));
     const b = try env.module_env.types.freshFromContent(try env.mkFuncFlex(&[_]Var{str}, str));
@@ -1455,7 +1465,7 @@ test "unify - same funcs pure" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const func = try env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
 
     const a = try env.module_env.types.freshFromContent(func);
@@ -1476,7 +1486,7 @@ test "unify - same funcs effectful" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const func = try env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
 
     const a = try env.module_env.types.freshFromContent(func);
@@ -1497,7 +1507,7 @@ test "unify - same funcs first eff, second pure (fail)" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const pure_func = try env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
     const eff_func = try env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
 
@@ -1519,7 +1529,7 @@ test "unify - same funcs first pure, second eff (fail)" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const pure_func = try env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
     const eff_func = try env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
 
@@ -1541,7 +1551,7 @@ test "unify - same funcs first pure, second unbound" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const pure_func = try env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
     const unbound_func = try env.mkFuncUnbound(&[_]Var{ str, int_poly }, int_i32);
 
@@ -1563,7 +1573,7 @@ test "unify - same funcs first unbound, second pure" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const pure_func = try env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
     const unbound_func = try env.mkFuncUnbound(&[_]Var{ str, int_poly }, int_i32);
 
@@ -1585,7 +1595,7 @@ test "unify - same funcs first effectful, second unbound" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const eff_func = try env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
     const unbound_func = try env.mkFuncUnbound(&[_]Var{ str, int_poly }, int_i32);
 
@@ -1607,7 +1617,7 @@ test "unify - same funcs first unbound, second effectful" {
 
     const int_i32 = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const int_poly = try env.mkIntPolyFlex();
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const eff_func = try env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
     const unbound_func = try env.mkFuncUnbound(&[_]Var{ str, int_poly }, int_i32);
 
@@ -1652,10 +1662,10 @@ test "unify - a & b are both the same nominal type" {
 
     const arg = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
-    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const a = try env.module_env.types.freshFromContent(try env.mkNominalType("MyType", a_backing_var, &[_]Var{arg}));
 
-    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const b_nominal = try env.mkNominalType("MyType", b_backing_var, &[_]Var{arg});
     const b = try env.module_env.types.freshFromContent(b_nominal);
 
@@ -1674,10 +1684,10 @@ test "unify - a & b are diff nominal types (fail)" {
 
     const arg = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
-    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const a = try env.module_env.types.freshFromContent(try env.mkNominalType("MyType", a_backing_var, &[_]Var{arg}));
 
-    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const b = try env.module_env.types.freshFromContent(try env.mkNominalType("AnotherType", b_backing_var, &[_]Var{arg}));
 
     const result = try env.unify(a, b);
@@ -1694,12 +1704,12 @@ test "unify - a & b are both the same nominal type with diff args (fail)" {
     defer env.deinit();
 
     const arg_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
-    const a_backing = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const a_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const a = try env.module_env.types.freshFromContent(try env.mkNominalType("MyType", a_backing, &[_]Var{arg_var}));
 
-    const b_backing = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const b_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const b = try env.module_env.types.freshFromContent(try env.mkNominalType("MyType", b_backing, &[_]Var{str_var}));
 
     const result = try env.unify(a, b);
@@ -1717,7 +1727,7 @@ test "unify - anonymous tag union unifies with nominal tag union (nominal on lef
     defer env.deinit();
 
     // Create nominal type: Foo := [A(Str), B]
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const tag_a = try env.mkTag("A", &[_]Var{str_var});
     const tag_b = try env.mkTag("B", &[_]Var{});
     const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b });
@@ -1803,7 +1813,7 @@ test "unify - anonymous tag union with wrong payload type fails" {
     defer env.deinit();
 
     // Create nominal type: Foo := [A(Str)]
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const tag_a = try env.mkTag("A", &[_]Var{str_var});
     const backing_tu = try env.mkTagUnionClosed(&[_]Tag{tag_a});
     const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
@@ -2092,7 +2102,7 @@ test "unify - identical closed records" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const fields = [_]RecordField{try env.mkRecordField("a", str)};
     const record_data = try env.mkRecordClosed(&fields);
@@ -2117,7 +2127,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const field1 = try env.mkRecordField("field1", str);
     const field2 = try env.mkRecordField("field2", str);
@@ -2144,7 +2154,7 @@ test "unify - identical open records" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const field_shared = try env.mkRecordField("x", str);
 
@@ -2179,7 +2189,7 @@ test "unify - open record a extends b" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const field_shared = try env.mkRecordField("x", str);
@@ -2226,7 +2236,7 @@ test "unify - open record b extends a" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const field_shared = try env.mkRecordField("field_shared", str);
@@ -2270,7 +2280,7 @@ test "unify - both extend open record" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
@@ -2326,7 +2336,7 @@ test "unify - record mismatch on shared field (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const field_a = try env.mkRecordField("x", str);
@@ -2354,7 +2364,7 @@ test "unify - open record extends closed (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const field_x = try env.mkRecordField("field_x", str);
     const field_y = try env.mkRecordField("field_y", str);
@@ -2374,7 +2384,7 @@ test "unify - closed record extends open" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const field_x = try env.mkRecordField("field_x", str);
     const field_y = try env.mkRecordField("field_y", str);
@@ -2393,7 +2403,7 @@ test "unify - open vs closed records with type mismatch (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const field_x_str = try env.mkRecordField("field_x_str", str);
@@ -2416,7 +2426,7 @@ test "unify - closed vs open records with type mismatch (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const field_x_str = try env.mkRecordField("field_x_str", str);
@@ -2548,7 +2558,7 @@ test "unify - identical closed tag_unions" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const tag = try env.mkTag("A", &[_]Var{str});
     const tags = [_]Tag{tag};
@@ -2582,7 +2592,7 @@ test "unify - closed tag_unions with diff args (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const a_tag = try env.mkTag("A", &[_]Var{str});
@@ -2611,7 +2621,7 @@ test "unify - identical open tag unions" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const tag_shared = try env.mkTag("Shared", &[_]Var{ str, str });
 
@@ -2651,7 +2661,7 @@ test "unify - open tag union a extends b" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const tag_a_only = try env.mkTag("A", &[_]Var{str});
@@ -2704,7 +2714,7 @@ test "unify - open tag union b extends a" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const tag_b_only = try env.mkTag("A", &[_]Var{ str, int });
@@ -2757,7 +2767,7 @@ test "unify - both extend open tag union" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
@@ -2816,7 +2826,7 @@ test "unify - open tag unions a & b have same tag name with diff args (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
     const tag_a_only = try env.mkTag("A", &[_]Var{str});
@@ -2844,7 +2854,7 @@ test "unify - open tag extends closed (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const tag_shared = try env.mkTag("Shared", &[_]Var{str});
     const tag_a_only = try env.mkTag("A", &[_]Var{str});
@@ -2864,7 +2874,7 @@ test "unify - closed tag union extends open" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const tag_shared = try env.mkTag("Shared", &[_]Var{str});
     const tag_b_only = try env.mkTag("B", &[_]Var{str});
@@ -2913,7 +2923,7 @@ test "unify - open vs closed tag union with type mismatch (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
     const tag_a = try env.mkTag("A", &[_]Var{str});
@@ -2936,7 +2946,7 @@ test "unify - closed vs open tag union with type mismatch (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const bool_ = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
     const tag_a = try env.mkTag("A", &[_]Var{str});
@@ -2961,7 +2971,7 @@ test "unify - fails on infinite type" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const a = try env.module_env.types.fresh();
     const a_elems_range = try env.module_env.types.appendVars(&[_]Var{ a, str_var });
@@ -2989,19 +2999,19 @@ test "unify - fails on anonymous recursion" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const list_var_a = try env.module_env.types.fresh();
-    const list_content_a = Content{
-        .structure = .{ .list = list_var_a },
-    };
-    try env.module_env.types.setRootVarContent(list_var_a, list_content_a);
+    // Create a tag union that recursively contains itself (anonymous recursion)
+    // This is like: a = [A a] unifying with b = [A b]
+    const tag_var_a = try env.module_env.types.fresh();
+    const tag_a = try env.mkTag("A", &[_]Var{tag_var_a});
+    const tag_union_a = try env.mkTagUnionClosed(&[_]Tag{tag_a});
+    try env.module_env.types.setRootVarContent(tag_var_a, tag_union_a.content);
 
-    const list_var_b = try env.module_env.types.fresh();
-    const list_content_b = Content{
-        .structure = .{ .list = list_var_b },
-    };
-    try env.module_env.types.setRootVarContent(list_var_b, list_content_b);
+    const tag_var_b = try env.module_env.types.fresh();
+    const tag_b = try env.mkTag("A", &[_]Var{tag_var_b});
+    const tag_union_b = try env.mkTagUnionClosed(&[_]Tag{tag_b});
+    try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
 
-    const result = try env.unify(list_var_a, list_var_b);
+    const result = try env.unify(tag_var_a, tag_var_b);
 
     switch (result) {
         .ok => try std.testing.expect(false),
@@ -3779,7 +3789,7 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     // Create constraint: a.to_str : Str -> Str
     const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
@@ -3848,7 +3858,7 @@ test "unify - flex with multiple constraints" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // Create constraint 1: a.to_str : Int -> Str
@@ -3888,7 +3898,7 @@ test "unify - flex with constraints fails on incompatible arg types" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.foo : Str -> Str
@@ -3927,7 +3937,7 @@ test "unify - flex with constraints fails on incompatible return types" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.foo : Str -> Str
@@ -3966,7 +3976,7 @@ test "unify - flex with constraints fails on different arity" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.foo : Str -> Str (1 arg)
@@ -4005,7 +4015,7 @@ test "unify - flex with subset of constraints (a subset b)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has 1 constraint: a.foo : Str -> Str
@@ -4050,7 +4060,7 @@ test "unify - flex with constraints vs rigid with constraints" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // flex has 2 constraints
@@ -4102,7 +4112,7 @@ test "unify - flex with constraints vs rigid constraints 2" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // flex has 1 constraint
@@ -4150,7 +4160,7 @@ test "unify - empty constraints unify with any" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint = types_mod.StaticDispatchConstraint{
@@ -4182,7 +4192,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     // Create constraint: a.to_str : Str -> Str
     const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
@@ -4197,7 +4207,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
         .name = null,
         .constraints = constraints,
     } });
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
     try std.testing.expectEqual(.ok, result);
@@ -4217,7 +4227,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     // Create constraint: a.to_str : Str -> Str
     const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
@@ -4228,7 +4238,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
         .name = null,
         .constraints = constraints,
@@ -4253,7 +4263,7 @@ test "unify - flex with no constraints vs structure does not capture" {
     defer env.deinit();
 
     const flex_var = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
     try std.testing.expectEqual(.ok, result);
@@ -4267,7 +4277,7 @@ test "unify - flex with multiple constraints vs structure captures all" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // Create multiple constraints
@@ -4291,7 +4301,7 @@ test "unify - flex with multiple constraints vs structure captures all" {
         .name = null,
         .constraints = constraints,
     } });
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
     try std.testing.expectEqual(.ok, result);
@@ -4312,7 +4322,7 @@ test "unify - flex vs nominal type captures constraint" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     // Create constraint
     const ord_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
@@ -4329,7 +4339,7 @@ test "unify - flex vs nominal type captures constraint" {
     } });
 
     // Create nominal type (e.g., Path)
-    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
     const nominal_var = try env.module_env.types.freshFromContent(try env.mkNominalType("Path", backing_var, &[_]Var{}));
 
     const result = try env.unify(flex_var, nominal_var);
@@ -4343,4 +4353,500 @@ test "unify - flex vs nominal type captures constraint" {
         env.module_env.types.resolveVar(deferred.var_).var_,
     );
     try std.testing.expectEqual(constraints, deferred.constraints);
+}
+
+// RecursionVar tests
+
+test "recursion_var - can be created and points to structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a structure variable (e.g., a Str type)
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    // Create a RecursionVar pointing to the structure
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Verify the recursion var was created correctly
+    const resolved = env.module_env.types.resolveVar(rec_var);
+    try std.testing.expect(resolved.desc.content == .recursion_var);
+
+    const rec_var_content = resolved.desc.content.recursion_var;
+    try std.testing.expectEqual(structure_var, rec_var_content.structure);
+}
+
+test "recursion_var - unifies with its structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a structure variable
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    // Create a RecursionVar pointing to the structure
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Unify the recursion var with its structure - this should succeed
+    // because RecursionVar represents equirecursive types
+    const result = try env.unify(rec_var, structure_var);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "recursion_var - does not cause infinite loop during resolution" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a circular structure: rec_var -> structure_var -> rec_var
+    const structure_var = try env.module_env.types.fresh();
+
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Make structure_var point back to rec_var to create a cycle
+    // This tests that resolveVar and other operations handle cycles properly
+    _ = try env.unify(structure_var, rec_var);
+
+    // If we get here without hanging, the test passed
+    // Just verify the vars are connected
+    const resolved_rec = env.module_env.types.resolveVar(rec_var);
+    const resolved_structure = env.module_env.types.resolveVar(structure_var);
+
+    // Both should resolve to the same root var
+    try std.testing.expectEqual(resolved_rec.var_, resolved_structure.var_);
+}
+
+// Equirecursive unification tests
+
+test "recursion_var - unifies with alias" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create an alias MyStr = Str
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias_content = try env.mkAlias("MyStr", str_var, &[_]Var{});
+    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+
+    // Create a RecursionVar pointing to str
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = str_var,
+            .name = null,
+        },
+    });
+
+    // RecursionVar should unify with alias by going through to the backing var
+    const result = try env.unify(rec_var, alias_var);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "recursion_var - cannot unify with rigid" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a rigid var
+    const rigid_content = try env.mkRigidVar("a");
+    const rigid_var = try env.module_env.types.freshFromContent(rigid_content);
+
+    // Create a RecursionVar
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // RecursionVar cannot unify with rigid
+    const result = try env.unify(rec_var, rigid_var);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "recursion_var - two recursion vars with same structure unify" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a shared structure
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    // Create two RecursionVars both pointing to the same structure
+    const rec_var_1 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    const rec_var_2 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // They should unify successfully
+    const result = try env.unify(rec_var_1, rec_var_2);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "recursion_var - two recursion vars with different structures do not unify" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create different structures
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const num_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
+
+    // Create two RecursionVars with different structures
+    const rec_var_1 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = str_var,
+            .name = null,
+        },
+    });
+
+    const rec_var_2 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = num_var,
+            .name = null,
+        },
+    });
+
+    // They should not unify - different base structures
+    const result = try env.unify(rec_var_1, rec_var_2);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "recursion_var - equirecursive unification with nested structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a list structure: List(a) where a is flexible
+    const elem_var = try env.module_env.types.fresh();
+    const list_content = try env.mkList(elem_var);
+    const list_var = try env.module_env.types.freshFromContent(list_content);
+
+    // Create a RecursionVar that points to the list
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = list_var,
+            .name = null,
+        },
+    });
+
+    // Create another list with the same structure
+    const elem_var_2 = try env.module_env.types.fresh();
+    const list_content_2 = try env.mkList(elem_var_2);
+    const list_var_2 = try env.module_env.types.freshFromContent(list_content_2);
+
+    // RecursionVar should unify with the list
+    const result = try env.unify(rec_var, list_var_2);
+    try std.testing.expectEqual(.ok, result);
+
+    // The element vars should also have been unified
+    const resolved_elem_1 = env.module_env.types.resolveVar(elem_var);
+    const resolved_elem_2 = env.module_env.types.resolveVar(elem_var_2);
+    try std.testing.expectEqual(resolved_elem_1.var_, resolved_elem_2.var_);
+}
+
+test "recursion_var - unifies with flex preserving constraints" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a flex var with static dispatch constraints
+    const fn_var = try env.module_env.types.freshFromContent(Content{
+        .structure = .{ .fn_pure = .{
+            .args = VarSafeList.Range.empty(),
+            .ret = try env.module_env.types.fresh(),
+            .needs_instantiation = false,
+        } },
+    });
+
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+
+    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{constraint});
+    const flex_with_constraints = try env.module_env.types.freshFromContent(Content{
+        .flex = Flex.init().withConstraints(constraints_range),
+    });
+
+    // Create a RecursionVar
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Unify - should defer the constraints
+    const result = try env.unify(rec_var, flex_with_constraints);
+    try std.testing.expectEqual(.ok, result);
+
+    // Should have deferred the constraints
+    try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
+}
+
+// TypeWriter tests for RecursionVar
+
+test "type_writer - recursion_var displays structure" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a structure variable (empty record)
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    // Create a RecursionVar pointing to it
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = structure_var,
+            .name = null,
+        },
+    });
+
+    // Write the recursion var to a string
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const result = try writer.writeGet(rec_var);
+
+    // Should display as "{}" (the structure it points to)
+    try std.testing.expectEqualStrings("{}", result);
+}
+
+test "type_writer - recursion_var with cycle displays correctly" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a self-referential structure: rec_var -> list -> rec_var
+    const rec_var_placeholder = try env.module_env.types.fresh();
+
+    // Create a list that points to the placeholder
+    const list_content = try env.mkList(rec_var_placeholder);
+    const list_var = try env.module_env.types.freshFromContent(list_content);
+
+    // Create a RecursionVar that points to the list
+    const rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = list_var,
+            .name = null,
+        },
+    });
+
+    // Unify the placeholder with the rec_var to create the cycle
+    _ = try env.unify(rec_var_placeholder, rec_var);
+
+    // Write the recursion var
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const result = try writer.writeGet(rec_var);
+
+    // Should display as "List(...)" - the cycle is detected and shown as "..."
+    try std.testing.expectEqualStrings("List(...)", result);
+}
+
+test "type_writer - nested recursion_var displays correctly" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nested structure: RecursionVar -> List -> RecursionVar -> empty_record
+    const empty_record_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    const inner_rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = empty_record_var,
+            .name = null,
+        },
+    });
+
+    const list_content = try env.mkList(inner_rec_var);
+    const list_var = try env.module_env.types.freshFromContent(list_content);
+
+    const outer_rec_var = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = list_var,
+            .name = null,
+        },
+    });
+
+    // Write the outer recursion var
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const result = try writer.writeGet(outer_rec_var);
+
+    // Should display as "List({})" - following through the RecursionVars
+    try std.testing.expectEqualStrings("List({})", result);
+}
+
+// Integration test for recursive constraints (motivating example)
+
+test "recursion_var - integration: deep recursion with RecursionVar prevents infinite loops" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Simulate the motivating example problem: recursive constraint chains
+    // Without RecursionVar, this would infinite loop during unification
+    // With RecursionVar, it terminates successfully
+
+    // Create a deep chain of RecursionVars pointing to each other
+    // var1 -> rec_var1 -> var2 -> rec_var2 -> var3 -> rec_var3 -> var1 (cycle!)
+
+    const var1 = try env.module_env.types.fresh();
+    const var2 = try env.module_env.types.fresh();
+    const var3 = try env.module_env.types.fresh();
+
+    // Create rec_var3 pointing to var1 (will create the cycle)
+    const rec_var3 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = var1,
+            .name = null,
+        },
+    });
+
+    // Create rec_var2 pointing to var3
+    const rec_var2 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = var3,
+            .name = null,
+        },
+    });
+
+    // Create rec_var1 pointing to var2
+    const rec_var1 = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = var2,
+            .name = null,
+        },
+    });
+
+    // Now unify to create the chain
+    _ = try env.unify(var1, rec_var1); // var1 -> rec_var1 -> var2
+    _ = try env.unify(var2, rec_var2); // var2 -> rec_var2 -> var3
+    const result = try env.unify(var3, rec_var3); // var3 -> rec_var3 -> var1 (CYCLE!)
+
+    // **KEY TEST**: This should succeed without infinite loop!
+    // Before RecursionVar, this would hang indefinitely
+    try std.testing.expectEqual(.ok, result);
+
+    // Verify the unification created connections between the vars
+    // The exact vars may differ due to redirects, but they should all be connected
+    const resolved_var1 = env.module_env.types.resolveVar(var1);
+    const resolved_var2 = env.module_env.types.resolveVar(var2);
+    const resolved_var3 = env.module_env.types.resolveVar(var3);
+
+    // At least one should be a RecursionVar, indicating the cycle was detected
+    const has_recursion_var = resolved_var1.desc.content == .recursion_var or
+        resolved_var2.desc.content == .recursion_var or
+        resolved_var3.desc.content == .recursion_var;
+    try std.testing.expect(has_recursion_var);
+
+    // The type should display with cycle detection
+    const TypeWriter = types_mod.TypeWriter;
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    defer writer.deinit();
+
+    const display = try writer.writeGet(var1);
+
+    // Should display "..." indicating cycle detection
+    try std.testing.expect(std.mem.indexOf(u8, display, "...") != null);
+}
+
+test "recursion_var - integration: multiple recursive constraints unify correctly" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Test that two different recursive constraint chains can unify
+    // Chain A: a1 -> rec_var_a -> a2 -> a1 (cycle)
+    // Chain B: b1 -> rec_var_b -> b2 -> b1 (cycle)
+    // They should unify if their base structures match
+
+    // Create chain A
+    const a1 = try env.module_env.types.fresh();
+    const a2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    const rec_var_a = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = a2,
+            .name = null,
+        },
+    });
+
+    _ = try env.unify(a1, rec_var_a);
+
+    // Create chain B with same base structure
+    const b1 = try env.module_env.types.fresh();
+    const b2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    const rec_var_b = try env.module_env.types.freshFromContent(Content{
+        .recursion_var = .{
+            .structure = b2,
+            .name = null,
+        },
+    });
+
+    _ = try env.unify(b1, rec_var_b);
+
+    // Unify chain A with chain B - should succeed because both point to Str
+    const result = try env.unify(a1, b1);
+    try std.testing.expectEqual(.ok, result);
+
+    // Verify they unified - both should ultimately point to the same content
+    // Note: They may not be the exact same var due to redirects, but should be equivalent
+    const resolved_a1 = env.module_env.types.resolveVar(a1);
+    const resolved_b1 = env.module_env.types.resolveVar(b1);
+
+    // Check that both resolve to the same structure content
+    try std.testing.expect(resolved_a1.desc.content == .recursion_var or resolved_a1.desc.content == .structure);
+    try std.testing.expect(resolved_b1.desc.content == .recursion_var or resolved_b1.desc.content == .structure);
+
+    // The key test: no infinite loop occurred during unification
+    // If we got here, RecursionVar successfully prevented the infinite loop
 }

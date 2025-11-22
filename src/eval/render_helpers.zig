@@ -31,20 +31,34 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
 
-    // Check if this is Bool before unwrapping (special case for bool display)
-    if (resolved.desc.content == .structure) {
-        if (resolved.desc.content.structure == .nominal_type) {
-            const nominal = resolved.desc.content.structure.nominal_type;
-            const type_name = ctx.env.getIdent(nominal.ident.ident_idx);
-            if (std.mem.eql(u8, type_name, "Bool")) {
-                // Bool is represented as a scalar bool (0 or 1) - render as True/False
-                if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .bool) {
-                    const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
-                    return if (b.* != 0)
-                        try gpa.dupe(u8, "True")
-                    else
-                        try gpa.dupe(u8, "False");
+    // Check layout first for special rendering cases
+    // Str has .str layout, Bool has .bool layout
+    if (value.layout.tag == .scalar) {
+        const scalar = value.layout.data.scalar;
+        if (scalar.tag == .str) {
+            // Render strings with quotes
+            const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
+            const s = rs.asSlice();
+            var buf = std.array_list.AlignedManaged(u8, null).init(gpa);
+            errdefer buf.deinit();
+            try buf.append('"');
+            for (s) |ch| {
+                switch (ch) {
+                    '\\' => try buf.appendSlice("\\\\"),
+                    '"' => try buf.appendSlice("\\\""),
+                    else => try buf.append(ch),
                 }
+            }
+            try buf.append('"');
+            return buf.toOwnedSlice();
+        } else if (scalar.tag == .bool) {
+            // Check if this is a nominal Bool type (not just any bool)
+            if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
+                return if (b.* != 0)
+                    try gpa.dupe(u8, "True")
+                else
+                    try gpa.dupe(u8, "False");
             }
         }
     }

@@ -25,6 +25,7 @@ pub const LayoutTag = enum(u4) {
     record,
     tuple,
     closure,
+    zst, // Zero-sized type (empty records, empty tuples, phantom types, etc.)
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -133,6 +134,7 @@ pub const LayoutUnion = packed union {
     record: RecordLayout,
     tuple: TupleLayout,
     closure: ClosureLayout,
+    zst: void,
 };
 
 /// Record field layout
@@ -276,13 +278,14 @@ test "Size of SizeAlign type" {
 /// that aspect of the build target, because pointers in layouts are different
 /// sizes on 32-bit and 64-bit targets. No other target information is needed.
 ///
-/// When a Roc type gets converted to a Layout, all zero-sized types
-/// (e.g. empty records, empty tag unions, single-tag unions) get
-/// dropped, because zero-sized values don't exist at runtime.
-/// (Exception: we do allow things like List({}) and Box({}) because
-/// the stack-allocated List and Box can be used at runtime even if
-/// their elements cannot be accessed. For correctness, we need a
-/// special runtime representation for those scenarios.)
+/// When a Roc type gets converted to a Layout, zero-sized types (ZSTs)
+/// like empty records, empty tag unions, and phantom type parameters are
+/// represented with a first-class ZST layout (`.zst` tag). ZST fields in
+/// records and tuples are kept (not dropped) since they're a normal part
+/// of the type structure, they just happen to have size 0.
+/// (Exception: List({}) and Box({}) get special layouts `.list_of_zst` and
+/// `.box_of_zst` because the stack-allocated container can be used at runtime
+/// even if individual elements cannot be accessed.)
 ///
 /// Once a type has been converted to a Layout, there is no longer any
 /// distinction between nominal and structural types, there's just memory.
@@ -310,6 +313,7 @@ pub const Layout = packed struct {
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
             .closure => target_usize.alignment(),
+            .zst => std.mem.Alignment.@"1",
         };
     }
 
@@ -321,6 +325,11 @@ pub const Layout = packed struct {
     /// frac layout with the given precision
     pub fn frac(precision: types.Num.Frac.Precision) Layout {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .frac = precision }, .tag = .frac } }, .tag = .scalar };
+    }
+
+    /// Default number layout (Dec) for unresolved polymorphic number types
+    pub fn default_num() Layout {
+        return Layout.frac(.dec);
     }
 
     /// bool layout
@@ -383,6 +392,11 @@ pub const Layout = packed struct {
             .data = .{ .closure = .{ .captures_layout_idx = captures_layout_idx } },
             .tag = .closure,
         };
+    }
+
+    /// Zero-sized type layout (empty records, empty tuples, phantom types, etc.)
+    pub fn zst() Layout {
+        return Layout{ .data = .{ .zst = {} }, .tag = .zst };
     }
 
     /// Check if a layout represents a heap-allocated type that needs refcounting

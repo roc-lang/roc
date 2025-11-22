@@ -380,6 +380,10 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                     _ = try self.buf.writer().write(")");
                 }
             },
+            .recursion_var => |rec_var| {
+                // Write the recursion var by writing the structure it points to
+                try self.writeVar(rec_var.structure, root_var);
+            },
             .err => {
                 _ = try self.buf.writer().write("Error");
             },
@@ -418,24 +422,6 @@ fn writeAlias(self: *TypeWriter, alias: Alias, root_var: Var) std.mem.Allocator.
 /// Convert a flat type to a type string
 fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.Allocator.Error!void {
     switch (flat_type) {
-        .str => {
-            _ = try self.buf.writer().write("Str");
-        },
-        .box => |sub_var| {
-            _ = try self.buf.writer().write("Box(");
-            try self.writeVar(sub_var, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .list => |sub_var| {
-            _ = try self.buf.writer().write("List(");
-            try self.writeVarWithContext(sub_var, .ListContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .list_unbound => {
-            _ = try self.buf.writer().write("List(_");
-            try self.generateContextualName(.ListContent);
-            _ = try self.buf.writer().write(")");
-        },
         .tuple => |tuple| {
             try self.writeTuple(tuple, root_var);
         },
@@ -727,6 +713,9 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         .alias => {
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
         },
+        .recursion_var => {
+            try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+        },
     }
 }
 
@@ -965,16 +954,18 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
         },
+        .recursion_var => |rec_var| {
+            // Count the structure the recursion var points to
+            try self.countVar(search_var, rec_var.structure, count);
+        },
         .err => {},
     }
 }
 
 fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) std.mem.Allocator.Error!void {
     switch (flat_type) {
-        .str, .empty_record, .empty_tag_union => {},
-        .box => |sub_var| try self.countVar(search_var, sub_var, count),
-        .list => |sub_var| try self.countVar(search_var, sub_var, count),
-        .list_unbound, .num => {},
+        .empty_record, .empty_tag_union => {},
+        .num => {},
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem| {

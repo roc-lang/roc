@@ -8,10 +8,10 @@ type=file
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Type alias with type parameters that expands to a tag union
-MyResult(ok, err) : [Good(ok), Bad(err)]
+MyTry(ok, err) : [Good(ok), Bad(err)]
 
 # Using the type alias
-process : MyResult(Str, I32) -> Str
+process : MyTry(Str, I32) -> Str
 process = |_result| "processed"
 
 # Another type alias with a single parameter
@@ -60,7 +60,7 @@ EndOfFile,
 					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
 		(s-type-decl
-			(header (name "MyResult")
+			(header (name "MyTry")
 				(args
 					(ty-var (raw "ok"))
 					(ty-var (raw "err"))))
@@ -75,7 +75,7 @@ EndOfFile,
 		(s-type-anno (name "process")
 			(ty-fn
 				(ty-apply
-					(ty (name "MyResult"))
+					(ty (name "MyTry"))
 					(ty (name "Str"))
 					(ty (name "I32")))
 				(ty (name "Str"))))
@@ -144,7 +144,7 @@ NO CHANGE
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "MyResult") (local)
+				(ty-apply (name "MyTry") (local)
 					(ty-lookup (name "Str") (builtin))
 					(ty-lookup (name "I32") (builtin)))
 				(ty-lookup (name "Str") (builtin)))))
@@ -178,7 +178,7 @@ NO CHANGE
 				(p-underscore))
 			(e-empty_record)))
 	(s-alias-decl
-		(ty-header (name "MyResult")
+		(ty-header (name "MyTry")
 			(ty-args
 				(ty-rigid-var (name "ok"))
 				(ty-rigid-var (name "err"))))
@@ -200,13 +200,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyResult(Str, Num(Int(Signed32))) -> Str"))
+		(patt (type "MyTry(Str, Num(Int(Signed32))) -> Str"))
 		(patt (type "Option(Str) -> Str"))
 		(patt (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(patt (type "_arg -> {}")))
 	(type_decls
-		(alias (type "MyResult(ok, err)")
-			(ty-header (name "MyResult")
+		(alias (type "MyTry(ok, err)")
+			(ty-header (name "MyTry")
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))))
@@ -215,7 +215,7 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "MyResult(Str, Num(Int(Signed32))) -> Str"))
+		(expr (type "MyTry(Str, Num(Int(Signed32))) -> Str"))
 		(expr (type "Option(Str) -> Str"))
 		(expr (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(expr (type "_arg -> {}"))))

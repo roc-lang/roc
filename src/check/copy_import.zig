@@ -81,6 +81,11 @@ fn copyContent(
         .rigid => |rigid| Content{ .rigid = try copyRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
         .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
+        .recursion_var => |rec_var| blk: {
+            // Copy the recursion var by copying the structure it points to
+            const copied_structure = try copyVar(source_store, dest_store, rec_var.structure, var_mapping, source_idents, dest_idents, allocator);
+            break :blk Content{ .recursion_var = .{ .structure = copied_structure, .name = rec_var.name } };
+        },
         .err => Content.err,
     };
 }
@@ -196,10 +201,6 @@ fn copyFlatType(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
-        .str => FlatType.str,
-        .box => |box_var| FlatType{ .box = try copyVar(source_store, dest_store, box_var, var_mapping, source_idents, dest_idents, allocator) },
-        .list => |list_var| FlatType{ .list = try copyVar(source_store, dest_store, list_var, var_mapping, source_idents, dest_idents, allocator) },
-        .list_unbound => FlatType.list_unbound,
         .tuple => |tuple| FlatType{ .tuple = try copyTuple(source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
         .num => |num| FlatType{ .num = try copyNum(source_store, dest_store, num, var_mapping, source_idents, dest_idents, allocator) },
         .nominal_type => |nominal| FlatType{ .nominal_type = try copyNominalType(source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },

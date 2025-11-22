@@ -6,7 +6,7 @@ type=expr
 # SOURCE
 ~~~roc
 {
-    launchTheNukes : {} => Result Bool LaunchNukeErr
+    launchTheNukes : {} => Try Bool LaunchNukeErr
     launchTheNukes = |{}| ...
 
     launchTheNukes({})
@@ -14,8 +14,8 @@ type=expr
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - ann_effectful_fn.md:3:5:3:19
-UNUSED VALUE - ann_effectful_fn.md:2:35:2:39
-UNUSED VALUE - ann_effectful_fn.md:2:40:2:53
+UNUSED VALUE - ann_effectful_fn.md:2:32:2:36
+UNUSED VALUE - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `launchTheNukes` is being redeclared in this scope.
@@ -28,31 +28,31 @@ The redeclaration is here:
     ^^^^^^^^^^^^^^
 
 But `launchTheNukes` was already defined here:
-**ann_effectful_fn.md:2:5:2:34:**
+**ann_effectful_fn.md:2:5:2:31:**
 ```roc
-    launchTheNukes : {} => Result Bool LaunchNukeErr
+    launchTheNukes : {} => Try Bool LaunchNukeErr
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**ann_effectful_fn.md:2:35:2:39:**
+**ann_effectful_fn.md:2:32:2:36:**
 ```roc
-    launchTheNukes : {} => Result Bool LaunchNukeErr
+    launchTheNukes : {} => Try Bool LaunchNukeErr
 ```
-                                  ^^^^
+                               ^^^^
 
 It has the type:
     _[Bool]_others_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**ann_effectful_fn.md:2:40:2:53:**
+**ann_effectful_fn.md:2:37:2:50:**
 ```roc
-    launchTheNukes : {} => Result Bool LaunchNukeErr
+    launchTheNukes : {} => Try Bool LaunchNukeErr
 ```
-                                       ^^^^^^^^^^^^^
+                                    ^^^^^^^^^^^^^
 
 It has the type:
     _[LaunchNukeErr]_others_
@@ -73,7 +73,7 @@ EndOfFile,
 		(s-type-anno (name "launchTheNukes")
 			(ty-fn
 				(ty-record)
-				(ty (name "Result"))))
+				(ty (name "Try"))))
 		(e-tag (raw "Bool"))
 		(e-tag (raw "LaunchNukeErr"))
 		(s-decl
@@ -89,7 +89,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
-	launchTheNukes : {} => Result
+	launchTheNukes : {} => Try
 	Bool
 	LaunchNukeErr
 	launchTheNukes = |{}| ...

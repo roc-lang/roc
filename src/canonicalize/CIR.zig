@@ -131,7 +131,7 @@ pub const Def = struct {
     }
 };
 
-/// Represents a type header (e.g., 'Maybe a' or 'Result err ok') in type annotations
+/// Represents a type header (e.g., 'Maybe a' or 'Try err ok') in type annotations
 pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { start: u32, len: u32 };

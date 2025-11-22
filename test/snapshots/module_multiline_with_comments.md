@@ -63,7 +63,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **module_multiline_with_comments.md:3:11:3:12:**

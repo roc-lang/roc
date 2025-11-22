@@ -118,6 +118,11 @@ pub const Store = struct {
             .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, flat_type) },
+            .recursion_var => |rec_var| blk: {
+                // Snapshot the recursion var by snapshotting the structure it points to
+                const structure_snapshot = try self.deepCopyVar(store, rec_var.structure);
+                break :blk SnapshotContent{ .recursion_var = .{ .structure = structure_snapshot, .name = rec_var.name } };
+            },
             .err => SnapshotContent.err,
         };
 
@@ -141,18 +146,6 @@ pub const Store = struct {
 
     fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) std.mem.Allocator.Error!SnapshotFlatType {
         return switch (flat_type) {
-            .str => SnapshotFlatType.str,
-            .box => |box_var| {
-                const deep_content = try self.deepCopyVar(store, box_var);
-                return SnapshotFlatType{ .box = deep_content };
-            },
-            .list => |list_var| {
-                const deep_content = try self.deepCopyVar(store, list_var);
-                return SnapshotFlatType{ .list = deep_content };
-            },
-            .list_unbound => {
-                return SnapshotFlatType.list_unbound;
-            },
             .tuple => |tuple| SnapshotFlatType{ .tuple = try self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = try self.deepCopyNum(store, num) },
             .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = try self.deepCopyNominalType(store, nominal_type) },
@@ -458,8 +451,16 @@ pub const SnapshotContent = union(enum) {
     rigid: SnapshotRigid,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
+    recursion_var: SnapshotRecursionVar,
     recursive,
     err,
+};
+
+/// Snapshot representation of a recursion variable.
+/// See types.RecursionVar for full documentation on recursion variables.
+pub const SnapshotRecursionVar = struct {
+    structure: SnapshotContentIdx,
+    name: ?base.Ident.Idx,
 };
 
 /// TODO
@@ -484,7 +485,6 @@ pub const SnapshotAlias = struct {
 
 /// TODO
 pub const SnapshotFlatType = union(enum) {
-    str,
     box: SnapshotContentIdx, // Index into SnapshotStore.contents
     list: SnapshotContentIdx,
     list_unbound,
@@ -884,6 +884,11 @@ pub const SnapshotWriter = struct {
                     _ = try self.buf.writer().write(")");
                 }
             },
+            .recursion_var => |rec_var| {
+                // Write the recursion var by writing the structure it points to
+                const structure_content = self.snapshots.getContent(rec_var.structure);
+                try self.writeContent(structure_content, context, rec_var.structure, root_idx);
+            },
             .recursive => {
                 _ = try self.buf.writer().write("RecursiveType");
             },
@@ -912,9 +917,6 @@ pub const SnapshotWriter = struct {
     /// Convert a flat type to a type string
     fn writeFlatType(self: *Self, flat_type: SnapshotFlatType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (flat_type) {
-            .str => {
-                _ = try self.buf.writer().write("Str");
-            },
             .box => |sub_var| {
                 _ = try self.buf.writer().write("Box(");
                 try self.writeWithContext(sub_var, .General, root_idx);
@@ -1435,13 +1437,17 @@ pub const SnapshotWriter = struct {
             .structure => |flat_type| {
                 try self.countInFlatType(search_flex_var, flat_type, count);
             },
+            .recursion_var => |rec_var| {
+                // Count the structure the recursion var points to
+                try self.countContent(search_flex_var, rec_var.structure, count);
+            },
             .recursive, .err => {},
         }
     }
 
     fn countInFlatType(self: *Self, search_flex_var: Var, flat_type: SnapshotFlatType, count: *usize) std.mem.Allocator.Error!void {
         switch (flat_type) {
-            .str, .empty_record, .empty_tag_union => {},
+            .empty_record, .empty_tag_union => {},
             .box => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list_unbound, .num => {},

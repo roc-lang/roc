@@ -461,7 +461,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addAnnotated("Result(a, Str)", .dimmed);
+            try report.document.addAnnotated("Try(a, Str)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
@@ -861,6 +861,11 @@ pub const Statement = union(enum) {
         body: Expr.Idx,
         region: TokenizedRegion,
     },
+    @"while": struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
     @"return": struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
@@ -1090,6 +1095,20 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .@"while" => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // condition
+                try ast.store.getExpr(a.cond).pushToSExprTree(gpa, env, ast, tree);
+
+                // body
+                try ast.store.getExpr(a.body).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .@"return" => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -1144,6 +1163,7 @@ pub const Statement = union(enum) {
             .dbg => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
+            .@"while" => |s| s.region,
             .@"return" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
@@ -2336,6 +2356,11 @@ pub const Expr = union(enum) {
         @"else": Expr.Idx,
         region: TokenizedRegion,
     },
+    if_without_else: struct {
+        condition: Expr.Idx,
+        then: Expr.Idx,
+        region: TokenizedRegion,
+    },
     match: struct {
         expr: Expr.Idx,
         branches: MatchBranch.Span,
@@ -2401,6 +2426,7 @@ pub const Expr = union(enum) {
             .suffix_single_question => |e| e.region,
             .apply => |e| e.region,
             .if_then_else => |e| e.region,
+            .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
             .block => |e| e.region,
@@ -2600,6 +2626,17 @@ pub const Expr = union(enum) {
                 try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
                 try ast.store.getExpr(stmt.then).pushToSExprTree(gpa, env, ast, tree);
                 try ast.store.getExpr(stmt.@"else").pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .if_without_else => |stmt| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-if-without-else");
+                try ast.appendRegionInfoToSexprTree(env, tree, stmt.region);
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
+                try ast.store.getExpr(stmt.then).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },

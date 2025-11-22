@@ -713,7 +713,7 @@ test "interpreter: match record destructures fields" {
     try std.testing.expectEqualStrings("3", rendered);
 }
 
-test "interpreter: render Result.Ok literal" {
+test "interpreter: render Try.Ok literal" {
     const roc_src = "match True { True => Ok(42), False => Err(\"boom\") }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -732,7 +732,7 @@ test "interpreter: render Result.Ok literal" {
     try std.testing.expectEqualStrings("Ok(42)", rendered);
 }
 
-test "interpreter: render Result.Err string" {
+test "interpreter: render Try.Err string" {
     const roc_src = "match True { True => Err(\"boom\"), False => Ok(42) }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -751,7 +751,7 @@ test "interpreter: render Result.Err string" {
     try std.testing.expectEqualStrings("Err(\"boom\")", rendered);
 }
 
-test "interpreter: render Result.Ok tuple payload" {
+test "interpreter: render Try.Ok tuple payload" {
     const roc_src = "match True { True => Ok((1, 2)), False => Err(\"boom\") }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);

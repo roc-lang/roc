@@ -311,9 +311,10 @@ test "Repl - minimal interpreter integration" {
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
 
-    // Get Bool and Result statement indices from the builtin module
+    // Get Bool, Try, and Str statement indices from the builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
     const try_stmt_in_builtin_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
@@ -321,6 +322,7 @@ test "Repl - minimal interpreter integration" {
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 

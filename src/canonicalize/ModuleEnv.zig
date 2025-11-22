@@ -768,6 +768,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(").");
             break :blk report;
         },
+        .if_then_not_canonicalized => |_| blk: {
+            var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
+            try report.document.addReflowingText("The branch in this ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" expression could not be processed.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The branch must contain a valid expression. Check for syntax errors or missing values.");
+            break :blk report;
+        },
         .if_else_not_canonicalized => |_| blk: {
             var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
             try report.document.addReflowingText("The ");
@@ -781,12 +791,33 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
             try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Note: Every ");
+            break :blk report;
+        },
+        .if_expr_without_else => |_| blk: {
+            var report = Report.init(allocator, "IF EXPRESSION WITHOUT ELSE", .runtime_error);
+            try report.document.addReflowingText("This ");
             try report.document.addKeyword("if");
-            try report.document.addReflowingText(" expression in Roc must have an ");
+            try report.document.addReflowingText(" has no ");
             try report.document.addKeyword("else");
-            try report.document.addReflowingText(" branch, and both branches must have the same type.");
+            try report.document.addReflowingText(" branch, but it's being used as an expression (assigned to a variable, passed to a function, etc.).");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("You can only use ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" without ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" when it's a statement. When ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" is used as an expression that evaluates to a value, ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" is required because otherwise there wouldn't always be a value available.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Either add an ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch, or use this ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" as a standalone statement.");
             break :blk report;
         },
         .pattern_not_canonicalized => |_| blk: {
@@ -1690,7 +1721,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
     _ = self; // Not needed for this simplified implementation
 
-    // For auto-imported builtin types (Bool, Result, etc.), the statement index
+    // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
     // indexed by their statement index, not by their position in arrays.
     const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));

@@ -14,22 +14,37 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:27:3:29
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:23:3:24
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:23:3:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:3:27:3:29:**
+**lambda_annotation_mismatch_error.md:3:23:3:24:**
 ```roc
 string_function = |x| x + 42
 ```
-                          ^^
+                      ^
 
 It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
     _Str_
+
+But I expected it to be:
+    _Num(Frac(Float64))_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:3:23:3:29:**
+```roc
+string_function = |x| x + 42
+```
+                      ^^^^^^
+
+It has the type:
+    _Str_
+
+But I expected it to be:
+    _Num(Frac(Float64))_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

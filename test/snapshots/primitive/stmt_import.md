@@ -60,7 +60,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **stmt_import.md:1:27:1:28:**

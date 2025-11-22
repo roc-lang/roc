@@ -8,7 +8,7 @@ type=file
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Test complex nested type applications in function signatures
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 processComplex = |result|
     match result {
         Ok(maybeList) => []
@@ -16,55 +16,33 @@ processComplex = |result|
     }
 
 # Test multiple levels of nesting
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
 deepNested = |_| {
 	crash "not implemented"
 }
 
 # Test type alias with complex nesting
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_app_complex_nested.md:18:33:18:38
-UNDECLARED TYPE - type_app_complex_nested.md:18:54:18:59
-UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
-UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
+UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
+UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
+UNDECLARED TYPE - type_app_complex_nested.md:4:27:4:32
+UNDECLARED TYPE - type_app_complex_nested.md:4:48:4:53
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-TOO MANY ARGS - type_app_complex_nested.md:18:44:18:63
-TOO MANY ARGS - type_app_complex_nested.md:4:41:4:61
+TOO MANY ARGS - type_app_complex_nested.md:18:41:18:60
+TOO MANY ARGS - type_app_complex_nested.md:4:38:4:58
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
-**type_app_complex_nested.md:18:33:18:38:**
+**type_app_complex_nested.md:18:30:18:35:**
 ```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:54:18:59:**
-```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                                     ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:4:30:4:35:**
-```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                              ^^^^^
 
@@ -73,11 +51,33 @@ processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 The type _Error_ is not declared in this scope.
 
 This type is referenced here:
-**type_app_complex_nested.md:4:51:4:56:**
+**type_app_complex_nested.md:18:51:18:56:**
 ```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                                                   ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:27:4:32:**
+```roc
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                          ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:48:4:53:**
+```roc
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                               ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -98,28 +98,28 @@ The type _Maybe_ is not declared in this scope.
 This type is referenced here:
 **type_app_complex_nested.md:12:14:12:19:**
 ```roc
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
 
 
 **TOO MANY ARGS**
 The type _Dict_ expects  argument, but got  instead.
-**type_app_complex_nested.md:18:44:18:63:**
+**type_app_complex_nested.md:18:41:18:60:**
 ```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 ```
-                                           ^^^^^^^^^^^^^^^^^^^
+                                        ^^^^^^^^^^^^^^^^^^^
 
 
 
 **TOO MANY ARGS**
 The type _Dict_ expects  argument, but got  instead.
-**type_app_complex_nested.md:4:41:4:61:**
+**type_app_complex_nested.md:4:38:4:58:**
 ```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
-                                        ^^^^^^^^^^^^^^^^^^^^
+                                     ^^^^^^^^^^^^^^^^^^^^
 
 
 
@@ -158,7 +158,7 @@ EndOfFile,
 		(s-type-anno (name "processComplex")
 			(ty-fn
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-apply
 						(ty (name "List"))
 						(ty-apply
@@ -194,7 +194,7 @@ EndOfFile,
 				(ty-apply
 					(ty (name "Maybe"))
 					(ty-apply
-						(ty (name "Result"))
+						(ty (name "Try"))
 						(ty-apply
 							(ty (name "List"))
 							(ty-apply
@@ -219,7 +219,7 @@ EndOfFile,
 					(ty-var (raw "a"))
 					(ty-var (raw "b"))))
 			(ty-apply
-				(ty (name "Result"))
+				(ty (name "Try"))
 				(ty-apply
 					(ty (name "List"))
 					(ty-apply
@@ -251,7 +251,7 @@ EndOfFile,
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Test complex nested type applications in function signatures
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 processComplex = |result|
 	match result {
 		Ok(maybeList) => []
@@ -259,13 +259,13 @@ processComplex = |result|
 	}
 
 # Test multiple levels of nesting
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
 deepNested = |_| {
 	crash "not implemented"
 }
 
 # Test type alias with complex nesting
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
@@ -297,7 +297,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 								(e-empty_list)))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
 					(ty-apply (name "Dict") (builtin)
@@ -340,7 +340,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (builtin)
+		(ty-apply (name "Try") (builtin)
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
 			(ty-apply (name "Dict") (builtin)
@@ -351,9 +351,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try(List(Error), Error) -> List(_elem)"))
+		(patt (type "Try(List(Error), Error) -> List(_c)"))
 		(patt (type "Error -> _ret"))
-		(patt (type "_arg -> List(_elem)")))
+		(patt (type "_arg -> List(_c)")))
 	(type_decls
 		(alias (type "ComplexType(a, b)")
 			(ty-header (name "ComplexType")
@@ -361,7 +361,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Try(List(Error), Error) -> List(_elem)"))
+		(expr (type "Try(List(Error), Error) -> List(_c)"))
 		(expr (type "Error -> _ret"))
-		(expr (type "_arg -> List(_elem)"))))
+		(expr (type "_arg -> List(_c)"))))
 ~~~

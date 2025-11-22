@@ -116,6 +116,13 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
+        .s_while = .{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
         .s_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
         },
@@ -509,6 +516,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .if_else_not_canonicalized = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .if_expr_without_else = .{
             .region = rand_region(),
         },
     });

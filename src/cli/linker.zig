@@ -191,16 +191,10 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
                     // for cross-compilation. Only detect locally for native builds
                     if (config.extra_args.len == 0) {
                         // Native build - try to detect dynamic linker
-                        if (libc_finder.findLibc(allocs.arena)) |libc_info| {
+                        if (libc_finder.findLibc(allocs)) |libc_info| {
                             // We need to copy the path since args holds references
-                            const dynamic_linker = try allocs.arena.dupe(u8, libc_info.dynamic_linker);
-
-                            // Clean up libc_info after copying what we need
-                            var info = libc_info;
-                            info.deinit();
-
                             try args.append("-dynamic-linker");
-                            try args.append(dynamic_linker);
+                            try args.append(libc_info.dynamic_linker);
                         } else |err| {
                             // Fallback to hardcoded path based on architecture
                             std.log.warn("Failed to detect libc: {}, using fallback", .{err});

@@ -64,6 +64,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
     };
 
@@ -139,6 +140,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
     };
 

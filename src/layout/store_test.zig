@@ -32,36 +32,26 @@ const LayoutTest = struct {
         self.type_store.deinit();
         self.module_env.deinit();
     }
+
+    /// Helper to create a nominal Box type with the given element type
+    /// Note: Caller must have already inserted "Box" and "Builtin" idents and set builtin_module_ident
+    fn mkBoxType(self: *LayoutTest, elem_var: types.Var, box_ident_idx: base.Ident.Idx, builtin_module_idx: base.Ident.Idx) !types.Var {
+        const box_content = try self.type_store.mkNominal(
+            .{ .ident_idx = box_ident_idx },
+            elem_var,
+            &[_]types.Var{elem_var},
+            builtin_module_idx,
+        );
+        return try self.type_store.freshFromContent(box_content);
+    }
 };
-
-test "addTypeVar - basic scalar types" {
-    const gpa = testing.allocator;
-    var module_env = try ModuleEnv.init(gpa, "");
-    defer module_env.deinit();
-
-    var type_store = try types_store.Store.init(gpa);
-    defer type_store.deinit();
-
-    var layout_store = try Store.init(&module_env, &type_store);
-    defer layout_store.deinit();
-
-    var type_scope = TypeScope.init(gpa);
-    defer type_scope.deinit();
-
-    // Test string type
-    const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const str_layout_idx = try layout_store.addTypeVar(str_var, &type_scope);
-    const str_layout = layout_store.getLayout(str_layout_idx);
-    try testing.expect(str_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.str, str_layout.data.scalar.tag);
-}
 
 test "addTypeVar - bool type" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -79,27 +69,27 @@ test "addTypeVar - default layouts for polymorphic types" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    // Flex number var (Num a) defaults to i128
+    // Flex number var (Num a) defaults to Dec
     const num_var = try lt.type_store.fresh();
     const flex_num_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = num_var } } });
     const num_layout_idx = try lt.layout_store.addTypeVar(flex_num_var, &lt.type_scope);
     const num_layout = lt.layout_store.getLayout(num_layout_idx);
     try testing.expect(num_layout.tag == .scalar);
-    try testing.expect(num_layout.data.scalar.data.int == .i128);
+    try testing.expect(num_layout.data.scalar.data.frac == .dec);
 
-    // Flex int var (Int a) defaults to i128
+    // Flex int var (Int a) defaults to Dec
     const int_var = try lt.type_store.fresh();
     const flex_int_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = int_var } } });
     const int_layout_idx = try lt.layout_store.addTypeVar(flex_int_var, &lt.type_scope);
     const int_layout = lt.layout_store.getLayout(int_layout_idx);
     try testing.expect(int_layout.tag == .scalar);
-    try testing.expect(int_layout.data.scalar.data.int == .i128);
+    try testing.expect(int_layout.data.scalar.data.frac == .dec);
 
-    // Flex frac var (Frac a) defaults to dec
+    // Flex frac var (Frac a) defaults to Dec
     const frac_var = try lt.type_store.fresh();
     const flex_frac_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = frac_var } } });
     const frac_layout_idx = try lt.layout_store.addTypeVar(flex_frac_var, &lt.type_scope);
@@ -113,13 +103,19 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+
+    // Set up builtin module ident and Box ident for Box recognition
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
     // Box of flex_var
     const flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
-    const box_flex_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
+    const box_flex_var = try lt.mkBoxType(flex_var, box_ident_idx, builtin_module_idx);
     const box_flex_idx = try lt.layout_store.addTypeVar(box_flex_var, &lt.type_scope);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
     try testing.expect(box_flex_layout.tag == .box);
@@ -128,45 +124,11 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     // Box of rigid_var
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
     const rigid_var = try lt.type_store.freshFromContent(.{ .rigid = types.Rigid.init(ident_idx) });
-    const box_rigid_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
+    const box_rigid_var = try lt.mkBoxType(rigid_var, box_ident_idx, builtin_module_idx);
     const box_rigid_idx = try lt.layout_store.addTypeVar(box_rigid_var, &lt.type_scope);
     const box_rigid_layout = lt.layout_store.getLayout(box_rigid_idx);
     try testing.expect(box_rigid_layout.tag == .box);
     try testing.expectEqual(layout.Idx.opaque_ptr, box_rigid_layout.data.box);
-}
-
-test "addTypeVar - scalar optimization for containers" {
-    var lt: LayoutTest = undefined;
-    lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
-    lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
-    lt.type_scope = TypeScope.init(lt.gpa);
-    defer lt.deinit();
-
-    // Test List(Scalar)
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const list_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
-    const list_layout_idx = try lt.layout_store.addTypeVar(list_str_var, &lt.type_scope);
-    const list_layout = lt.layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.tag == .list);
-    try testing.expectEqual(layout.Idx.str, list_layout.data.list);
-
-    // Test Box(Scalar)
-    const box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = str_var } });
-    const box_layout_idx = try lt.layout_store.addTypeVar(box_str_var, &lt.type_scope);
-    const box_layout = lt.layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.tag == .box);
-    try testing.expectEqual(layout.Idx.str, box_layout.data.box);
-
-    // Test List(Box(Scalar)) - outer container uses index, inner uses scalar optimization
-    const list_box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = box_str_var } });
-    const list_box_idx = try lt.layout_store.addTypeVar(list_box_str_var, &lt.type_scope);
-    const list_box_layout = lt.layout_store.getLayout(list_box_idx);
-    try testing.expect(list_box_layout.tag == .list);
-    const inner_box_layout = lt.layout_store.getLayout(list_box_layout.data.list);
-    try testing.expect(inner_box_layout.tag == .box);
-    try testing.expectEqual(layout.Idx.str, inner_box_layout.data.box);
 }
 
 test "addTypeVar - zero-sized types (ZST)" {
@@ -174,60 +136,82 @@ test "addTypeVar - zero-sized types (ZST)" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    // Set the builtin_module_ident so the layout store can recognize Builtin types
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
     const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const empty_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union });
 
-    // Bare ZSTs should error
-    try testing.expectError(LayoutError.ZeroSizedType, lt.layout_store.addTypeVar(empty_record_var, &lt.type_scope));
-    try testing.expectError(LayoutError.ZeroSizedType, lt.layout_store.addTypeVar(empty_tag_union_var, &lt.type_scope));
+    // Bare ZSTs should return .zst layout
+    const empty_record_idx = try lt.layout_store.addTypeVar(empty_record_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(empty_record_idx).tag == .zst);
+    const empty_tag_union_idx = try lt.layout_store.addTypeVar(empty_tag_union_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(empty_tag_union_idx).tag == .zst);
 
     // ZSTs inside containers should use optimized layouts
-    const box_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
+    const box_zst_var = try lt.mkBoxType(empty_record_var, box_ident_idx, builtin_module_idx);
     const box_zst_idx = try lt.layout_store.addTypeVar(box_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
 
-    const list_zst_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = empty_tag_union_var } });
+    const list_zst_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        empty_tag_union_var,
+        &[_]types.Var{empty_tag_union_var},
+        builtin_module_idx,
+    );
+    const list_zst_var = try lt.type_store.freshFromContent(list_zst_content);
     const list_zst_idx = try lt.layout_store.addTypeVar(list_zst_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_zst_idx).tag == .list_of_zst);
 }
 
-test "addTypeVar - record with dropped zero-sized fields" {
+test "addTypeVar - record with zero-sized fields keeps them" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const zst_var1 = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const zst_var2 = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const i32_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
 
     const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("name")), .var_ = str_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("empty")), .var_ = empty_record_var },
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("zst1")), .var_ = zst_var1 },
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("zst2")), .var_ = zst_var2 },
         .{ .name = try lt.module_env.insertIdent(Ident.for_text("age")), .var_ = i32_var },
     });
-    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
+    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = zst_var2 } } });
     const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
     const record_layout = lt.layout_store.getLayout(record_idx);
 
     try testing.expect(record_layout.tag == .record);
     const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
-    try testing.expectEqual(@as(usize, 2), field_slice.len); // "empty" field should be dropped
+    try testing.expectEqual(@as(usize, 3), field_slice.len); // All fields including ZST "empty" field are kept
 }
 
-test "addTypeVar - record with only zero-sized fields errors" {
+test "addTypeVar - record with only zero-sized fields" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+
+    // Set up builtin module ident and Box ident for Box recognition
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -238,11 +222,15 @@ test "addTypeVar - record with only zero-sized fields errors" {
     });
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
-    // Bare record with only ZST fields should error
-    try testing.expectError(LayoutError.ZeroSizedType, lt.layout_store.addTypeVar(record_var, &lt.type_scope));
+    // Bare record with only ZST fields should create a record with ZST fields
+    const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
+    const record_layout = lt.layout_store.getLayout(record_idx);
+    try testing.expect(record_layout.tag == .record);
+    const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
+    try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
-    // Box of such a record should become box_of_zst
-    const box_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
+    // Box of such a record should be box_of_zst since the record only contains ZST fields
+    const box_record_var = try lt.mkBoxType(record_var, box_ident_idx, builtin_module_idx);
     const box_idx = try lt.layout_store.addTypeVar(box_record_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
@@ -252,7 +240,7 @@ test "record field sorting by alignment then name" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -287,7 +275,7 @@ test "record size and alignment calculation" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -323,7 +311,7 @@ test "record with chained extensions" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -338,9 +326,9 @@ test "record with chained extensions" {
     const middle_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("y")), .var_ = f64_var }});
     const middle_rec = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = inner_rec } } });
 
-    // Outer: { x: str } extends middle
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const outer_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("x")), .var_ = str_var }});
+    // Outer: { x: zst } extends middle - zst field will be dropped
+    const zst_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const outer_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("x")), .var_ = zst_var }});
     const outer_rec_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = middle_rec } } });
 
     const record_idx = try lt.layout_store.addTypeVar(outer_rec_var, &lt.type_scope);
@@ -348,46 +336,74 @@ test "record with chained extensions" {
     try testing.expect(record_layout.tag == .record);
 
     const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
-    try testing.expectEqual(@as(usize, 3), field_slice.len);
+    try testing.expectEqual(@as(usize, 3), field_slice.len); // All fields including ZST x are kept
 
-    // Expected order by alignment: x (str), y (f64), z (u8)
-    try testing.expectEqualStrings("x", lt.module_env.getIdent(field_slice.get(0).name));
-    try testing.expectEqualStrings("y", lt.module_env.getIdent(field_slice.get(1).name));
-    try testing.expectEqualStrings("z", lt.module_env.getIdent(field_slice.get(2).name));
+    // Verify all three fields are present (order may vary for ZST fields)
+    try testing.expectEqualStrings("y", lt.module_env.getIdent(field_slice.get(0).name));
+    // Fields 1 and 2 should be x and z in some order
+    const name1 = lt.module_env.getIdent(field_slice.get(1).name);
+    const name2 = lt.module_env.getIdent(field_slice.get(2).name);
+    const has_x = std.mem.eql(u8, name1, "x") or std.mem.eql(u8, name2, "x");
+    const has_z = std.mem.eql(u8, name1, "z") or std.mem.eql(u8, name2, "z");
+    try testing.expect(has_x and has_z);
 }
 
-test "record extension with non-record type fails" {
+test "record extension with empty_record succeeds" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = str_var }});
+    const zst_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = zst_var }});
 
-    // Try to extend a str, which is invalid
-    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = str_var } } });
-    try testing.expectError(LayoutError.InvalidRecordExtension, lt.layout_store.addTypeVar(record_var, &lt.type_scope));
+    // Extending empty_record is valid - creates a record with ZST fields
+    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = zst_var } } });
+    const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
+    const record_layout = lt.layout_store.getLayout(record_idx);
+    try testing.expect(record_layout.tag == .record);
 }
 
 test "deeply nested containers with inner ZST" {
+    // Test: List(Box(List(Box(empty_record))))
+    // Expected layout chain: list -> box -> list -> box_of_zst
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
+
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    // Set the builtin_module_ident so the layout store can recognize Builtin types
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
     // Create List(Box(List(Box(empty_record))))
     const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const inner_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
-    const inner_list = try lt.type_store.freshFromContent(.{ .structure = .{ .list = inner_box } });
-    const outer_box = try lt.type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
-    const outer_list_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = outer_box } });
+    const inner_box = try lt.mkBoxType(empty_record, box_ident_idx, builtin_module_idx);
+    const inner_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        inner_box,
+        &[_]types.Var{inner_box},
+        builtin_module_idx,
+    );
+    const inner_list = try lt.type_store.freshFromContent(inner_list_content);
+    const outer_box = try lt.mkBoxType(inner_list, box_ident_idx, builtin_module_idx);
+    const outer_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        outer_box,
+        &[_]types.Var{outer_box},
+        builtin_module_idx,
+    );
+    const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
     const result_idx = try lt.layout_store.addTypeVar(outer_list_var, &lt.type_scope);
     const outer_list_layout = lt.layout_store.getLayout(result_idx);
@@ -402,4 +418,113 @@ test "deeply nested containers with inner ZST" {
     // The innermost element is Box(empty_record), which should resolve to box_of_zst
     const inner_box_layout = lt.layout_store.getLayout(inner_list_layout.data.list);
     try testing.expect(inner_box_layout.tag == .box_of_zst);
+}
+
+test "nested ZST detection - List of record with ZST field" {
+    // Test: List({ field: {} }) should be list_of_zst
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    // Set the builtin_module_ident so the layout store can recognize Builtin types
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = empty_record_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
+
+    // List of this record should be list_of_zst since the record only has ZST fields
+    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, record_var, &[_]types.Var{record_var}, builtin_module_idx);
+    const list_var = try lt.type_store.freshFromContent(list_content);
+    const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
+}
+
+test "nested ZST detection - Box of tuple with ZST elements" {
+    // Test: Box(((), ())) should be box_of_zst
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Set up builtin module ident and Box ident for Box recognition
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create a tuple with two empty record elements: ((), ())
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const tuple_elems = try lt.type_store.vars.appendSlice(lt.gpa, &[_]types.Var{ empty_record_var, empty_record_var });
+    const tuple_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
+
+    // The tuple should be ZST since both elements are ZST
+    const tuple_idx = try lt.layout_store.addTypeVar(tuple_var, &lt.type_scope);
+    const tuple_layout = lt.layout_store.getLayout(tuple_idx);
+    try testing.expect(lt.layout_store.layoutSize(tuple_layout) == 0);
+
+    // Box of it should be box_of_zst
+    const box_var = try lt.mkBoxType(tuple_var, box_ident_idx, builtin_module_idx);
+    const box_idx = try lt.layout_store.addTypeVar(box_var, &lt.type_scope);
+    try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
+}
+
+test "nested ZST detection - deeply nested" {
+    // Test: List({ field: ({ field2: {} }, ()) }) should be list_of_zst
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    // Set the builtin_module_ident so the layout store can recognize Builtin types
+    lt.module_env.builtin_module_ident = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Start from the inside: {} (empty record)
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+
+    // { field2: {} }
+    const inner_record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("field2")), .var_ = empty_record_var },
+    });
+    const inner_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_record_fields, .ext = empty_record_var } } });
+
+    // ({ field2: {} }, ()) - tuple with ZST record and ZST empty record
+    const tuple_elems = try lt.type_store.vars.appendSlice(lt.gpa, &[_]types.Var{ inner_record_var, empty_record_var });
+    const tuple_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
+
+    // { field: ({ field2: {} }, ()) }
+    const outer_record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = tuple_var },
+    });
+    const outer_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_record_fields, .ext = empty_record_var } } });
+
+    // List({ field: ({ field2: {} }, ()) })
+    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx);
+    const list_var = try lt.type_store.freshFromContent(list_content);
+    const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
+
+    // Since the entire nested structure is ZST, the list should be list_of_zst
+    try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }

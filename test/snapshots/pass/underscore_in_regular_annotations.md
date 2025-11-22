@@ -20,7 +20,7 @@ get_data : { field: _, other: U32 } -> U32
 get_data = |record| record.other
 
 # Pattern matching with underscore type annotation
-handle_result : Result(_, Str) -> Str
+handle_result : Try(_, Str) -> Str
 handle_result = |result|
     match result {
         Ok(_) => "success",
@@ -156,7 +156,7 @@ EndOfFile,
 		(s-type-anno (name "handle_result")
 			(ty-fn
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(_)
 					(ty (name "Str")))
 				(ty (name "Str"))))
@@ -226,7 +226,7 @@ get_data : { field : _, other : U32 } -> U32
 get_data = |record| record.other
 
 # Pattern matching with underscore type annotation
-handle_result : Result(_, Str) -> Str
+handle_result : Try(_, Str) -> Str
 handle_result = |result|
 	match result {
 		Ok(_) => "success"
@@ -326,7 +326,7 @@ transform = |_, b| b
 										(p-assign (ident "msg"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-underscore)
 					(ty-lookup (name "Str") (builtin)))
 				(ty-lookup (name "Str") (builtin)))))
@@ -362,7 +362,7 @@ transform = |_, b| b
 	(defs
 		(patt (type "c -> c"))
 		(patt (type "a -> a"))
-		(patt (type "List(_elem) -> Str"))
+		(patt (type "List(_c) -> Str"))
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
 		(patt (type "Try(_c, Str) -> Str"))
 		(patt (type "(a -> b), List(a) -> List(b)"))
@@ -370,7 +370,7 @@ transform = |_, b| b
 	(expressions
 		(expr (type "c -> c"))
 		(expr (type "a -> a"))
-		(expr (type "List(_elem) -> Str"))
+		(expr (type "List(_c) -> Str"))
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
 		(expr (type "Try(_c, Str) -> Str"))
 		(expr (type "(a -> b), List(a) -> List(b)"))

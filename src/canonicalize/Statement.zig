@@ -109,6 +109,20 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         body: Expr.Idx,
     },
+    /// A block of code that will run repeatedly while a condition is true.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// while $count < 10 {
+    ///     print!($count.toStr())
+    ///     $count = $count + 1
+    /// }
+    /// ```
+    s_while: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
@@ -147,7 +161,7 @@ pub const Statement = union(enum) {
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
     /// ```roc
-    /// print! : Str => Result({}, [IOErr])
+    /// print! : Str => Try({}, [IOErr])
     /// ```
     ///
     /// Typically an annotation will be stored on the `Def` and will not be
@@ -255,6 +269,18 @@ pub const Statement = union(enum) {
 
                 try env.store.getPattern(s.patt).pushToSExprTree(env, tree, s.patt);
                 try env.store.getExpr(s.expr).pushToSExprTree(env, tree, s.expr);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_while => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
                 try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
 
                 try tree.endNode(begin, attrs);

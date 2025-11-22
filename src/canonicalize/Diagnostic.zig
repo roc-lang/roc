@@ -76,6 +76,9 @@ pub const Diagnostic = union(enum) {
     if_else_not_canonicalized: struct {
         region: Region,
     },
+    if_expr_without_else: struct {
+        region: Region,
+    },
     malformed_type_annotation: struct {
         region: Region,
     },
@@ -1446,11 +1449,11 @@ pub const Diagnostic = union(enum) {
         const owned_module = try report.addOwnedString(module_name);
         const owned_type = try report.addOwnedString(type_name);
 
-        // Check if trying to access a type with the same name as the module (e.g., Result.Result)
+        // Check if trying to access a type with the same name as the module (e.g., Try.Try)
         const is_same_name = std.mem.eql(u8, module_name, type_name);
 
         if (is_same_name) {
-            // Special message for Result.Result, Color.Color, etc.
+            // Special message for Try.Try, Color.Color, etc.
             const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
             defer allocator.free(qualified_name);
             const owned_qualified = try report.addOwnedString(qualified_name);

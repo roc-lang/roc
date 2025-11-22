@@ -45,9 +45,6 @@ PARSE ERROR - let_polymorphism_lists.md:14:32:14:45
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
-DOES NOT EXIST - let_polymorphism_lists.md:25:12:25:20
-DOES NOT EXIST - let_polymorphism_lists.md:26:12:26:20
-DOES NOT EXIST - let_polymorphism_lists.md:27:12:27:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+** is not expected in an expression.
@@ -147,45 +144,6 @@ all_float_list = float_list ++ my_empty_list
                  ^^^^^^^^^^^^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
-
-**DOES NOT EXIST**
-`List.len` does not exist.
-
-`List` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**let_polymorphism_lists.md:25:12:25:20:**
-```roc
-    len1 = List.len(all_int_list)
-```
-           ^^^^^^^^
-
-
-**DOES NOT EXIST**
-`List.len` does not exist.
-
-`List` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**let_polymorphism_lists.md:26:12:26:20:**
-```roc
-    len2 = List.len(all_str_list)
-```
-           ^^^^^^^^
-
-
-**DOES NOT EXIST**
-`List.len` does not exist.
-
-`List` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**let_polymorphism_lists.md:27:12:27:20:**
-```roc
-    len3 = List.len(all_float_list)
-```
-           ^^^^^^^^
-
 
 # TOKENS
 ~~~zig
@@ -413,19 +371,22 @@ main = |_| {
 					(s-let
 						(p-assign (ident "len1"))
 						(e-call
-							(e-runtime-error (tag "nested_value_not_found"))
+							(e-lookup-external
+								(builtin))
 							(e-lookup-local
 								(p-assign (ident "all_int_list")))))
 					(s-let
 						(p-assign (ident "len2"))
 						(e-call
-							(e-runtime-error (tag "nested_value_not_found"))
+							(e-lookup-external
+								(builtin))
 							(e-lookup-local
 								(p-assign (ident "all_str_list")))))
 					(s-let
 						(p-assign (ident "len3"))
 						(e-call
-							(e-runtime-error (tag "nested_value_not_found"))
+							(e-lookup-external
+								(builtin))
 							(e-lookup-local
 								(p-assign (ident "all_float_list")))))
 					(e-binop (op "add")
@@ -441,27 +402,27 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(_elem)"))
+		(patt (type "List(_a)"))
 		(patt (type "List(Num(_size))"))
 		(patt (type "List(Str)"))
 		(patt (type "List(Num(Frac(_size)))"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "_arg -> List(_elem)"))
-		(patt (type "List(_elem)"))
-		(patt (type "List(_elem)"))
+		(patt (type "_arg -> List(_a)"))
+		(patt (type "List(_a)"))
+		(patt (type "List(_a)"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "List(_elem)"))
+		(expr (type "List(_a)"))
 		(expr (type "List(Num(_size))"))
 		(expr (type "List(Str)"))
 		(expr (type "List(Num(Frac(_size)))"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "_arg -> List(_elem)"))
-		(expr (type "List(_elem)"))
-		(expr (type "List(_elem)"))
+		(expr (type "_arg -> List(_a)"))
+		(expr (type "List(_a)"))
+		(expr (type "List(_a)"))
 		(expr (type "_arg -> Error"))))
 ~~~

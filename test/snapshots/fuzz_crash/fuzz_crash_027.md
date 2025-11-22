@@ -103,7 +103,7 @@ ist
 expect # Commeneyword
 	blah == 1 # Commnt
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah Ie
 	world = "World"
 	var number = 123
@@ -259,7 +259,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **fuzz_crash_027.md:40:5:40:6:**
@@ -649,7 +649,7 @@ The type _String_ is not declared in this scope.
 This type is referenced here:
 **fuzz_crash_027.md:99:14:99:20:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
 
@@ -905,7 +905,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue]_others_
+    _[Red, Blue][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -935,7 +935,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red, Blue]_others, _arg -> Error_
+    _[Red, Blue][ProvidedByCompiler], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1370,7 +1370,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "String")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-record)
 					(_))))
 		(s-decl
@@ -1669,7 +1669,7 @@ match_time = |
 expect # Commeneyword
 	blah == 1 # Commnt
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah Ie
 	world = "World"
 	var number = 123
@@ -2137,7 +2137,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let
@@ -2252,7 +2252,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Error -> Num(Int(Unsigned64))"))
-		(patt (type "[Red, Blue]_others, _arg -> Error"))
+		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2289,7 +2289,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Error -> Num(Int(Unsigned64))"))
-		(expr (type "[Red, Blue]_others, _arg -> Error"))
+		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

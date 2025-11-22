@@ -63,7 +63,6 @@ const Allocators = base.Allocators;
 const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
 test "main cli tests" {
-    _ = @import("test_bundle_logic.zig");
     _ = @import("libc_finder.zig");
     _ = @import("test_shared_memory_system.zig");
 }
@@ -116,6 +115,33 @@ var stdout_initialized = false;
 var stderr_buffer: [4096]u8 = undefined;
 var stderr_writer: std.fs.File.Writer = undefined;
 var stderr_initialized = false;
+
+var windows_console_configured = false;
+var windows_console_previous_code_page: ?std.os.windows.UINT = null;
+
+fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
+    if (!is_windows) return;
+    if (windows_console_configured) return;
+    windows_console_configured = true;
+
+    // Ensure the legacy console interprets escape sequences and UTF-8 output.
+    const kernel32 = std.os.windows.kernel32;
+    const current_code_page = kernel32.GetConsoleOutputCP();
+    if (current_code_page != 0 and current_code_page != 65001) {
+        windows_console_previous_code_page = current_code_page;
+        _ = kernel32.SetConsoleOutputCP(65001);
+    }
+    _ = std.fs.File.stdout().getOrEnableAnsiEscapeSupport();
+    _ = std.fs.File.stderr().getOrEnableAnsiEscapeSupport();
+}
+
+fn restoreWindowsConsoleCodePage() void {
+    if (!is_windows) return;
+    if (windows_console_previous_code_page) |code_page| {
+        windows_console_previous_code_page = null;
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
+    }
+}
 
 fn stdoutWriter() *std.Io.Writer {
     if (is_windows or !stdout_initialized) {
@@ -379,6 +405,7 @@ pub fn main() !void {
             .ReleaseFast, .ReleaseSmall => .{ std.heap.c_allocator, false },
         };
     };
+    defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
         const mem_state = debug_allocator.deinit();
         std.debug.assert(mem_state == .ok);
@@ -401,6 +428,7 @@ pub fn main() !void {
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
         }
+        restoreWindowsConsoleCodePage();
         std.process.exit(1);
     };
 
@@ -412,6 +440,8 @@ pub fn main() !void {
 fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    ensureWindowsConsoleSupportsAnsiAndUtf8();
 
     const stdout = stdoutWriter();
     defer stdout.flush() catch {};
@@ -1178,7 +1208,7 @@ fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8,
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
-    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
+    // Load builtin modules (Bool, Try, Str) for canonicalization and type checking
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
     defer builtin_modules.deinit();
 
@@ -1205,6 +1235,7 @@ fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8,
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
+        .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
     };
 
@@ -1212,7 +1243,7 @@ fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8,
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs_map.deinit();
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs_map,
@@ -1546,6 +1577,7 @@ fn compileModuleToSharedMemory(
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_modules.builtin_indices.bool_type,
             .try_stmt = builtin_modules.builtin_indices.try_type,
+            .str_stmt = builtin_modules.builtin_indices.str_type,
             .builtin_module = builtin_modules.builtin_module.env,
         };
 
@@ -1602,6 +1634,7 @@ fn compileAppModuleToSharedMemory(
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
+        .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
     };
 
@@ -2710,6 +2743,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .try_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .builtin_module = null,
     };
 

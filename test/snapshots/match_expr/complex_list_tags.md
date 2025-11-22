@@ -19,7 +19,6 @@ UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
 DOES NOT EXIST - complex_list_tags.md:3:42:3:51
 DOES NOT EXIST - complex_list_tags.md:3:59:3:68
 DOES NOT EXIST - complex_list_tags.md:4:59:4:68
-DOES NOT EXIST - complex_list_tags.md:4:69:4:77
 DOES NOT EXIST - complex_list_tags.md:5:62:5:71
 DOES NOT EXIST - complex_list_tags.md:5:79:5:88
 DOES NOT EXIST - complex_list_tags.md:5:101:5:110
@@ -69,19 +68,6 @@ match events {
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
 ```
                                                           ^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`List.len` does not exist.
-
-`List` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**complex_list_tags.md:4:69:4:77:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
-```
-                                                                    ^^^^^^^^
 
 
 **DOES NOT EXIST**
@@ -345,7 +331,8 @@ match events {
 						(e-call
 							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-call
-								(e-runtime-error (tag "nested_value_not_found"))
+								(e-lookup-external
+									(builtin))
 								(e-lookup-local
 									(p-assign (ident "rest")))))
 						(e-literal (string " more events")))))

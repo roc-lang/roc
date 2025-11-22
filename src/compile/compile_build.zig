@@ -370,7 +370,7 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
 
-    // Builtin modules (Bool, Result, Str) shared across all packages (heap-allocated to prevent moves)
+    // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
 
     // Owned resolver ctx pointers for cleanup (typed)

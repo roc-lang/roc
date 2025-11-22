@@ -113,6 +113,8 @@ module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 builtin_module: LoadedModule,
 // Whether this TestEnv owns the builtin_module and should deinit it
 owns_builtin_module: bool,
+/// Heap-allocated source buffer owned by this TestEnv (if any)
+owned_source: ?[]u8 = null,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -122,7 +124,7 @@ const TestEnv = @This();
 /// Accepts another module that should already be can'd and type checked, and will
 /// add that module as an import to this module.
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
-/// type variables from auto-imported types (Bool, Result, Str) are shared across modules.
+/// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
@@ -143,7 +145,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
     // Reuse the Builtin module from the imported module
-    // This ensures type variables for auto-imported types (Bool, Result, Str) are shared
+    // This ensures type variables for auto-imported types (Bool, Try, Str) are shared
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const builtin_env = other_test_env.builtin_module.env;
 
@@ -180,7 +182,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .statement_idx = statement_idx,
     });
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs,
@@ -203,9 +205,10 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     try can.canonicalizeFile();
     try can.validateForChecking();
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
@@ -213,6 +216,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = other_test_env.builtin_module.env,
     };
 
@@ -282,7 +286,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-    // Load Builtin module once - Bool, Result, and Str are all types within this module
+    // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
@@ -296,7 +300,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs,
@@ -319,9 +323,10 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try can.canonicalizeFile();
     try can.validateForChecking();
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
@@ -329,6 +334,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 
@@ -372,16 +378,23 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !TestEnv {
+    const gpa = std.testing.allocator;
+
     const source_wrapper =
         \\main =
     ;
 
-    var source: [source_wrapper.len + 1 + source_expr.len]u8 = undefined;
-    std.mem.copyForwards(u8, source[0..], source_wrapper);
-    std.mem.copyForwards(u8, source[source_wrapper.len..], " ");
+    const total_len = source_wrapper.len + 1 + source_expr.len;
+    var source = try gpa.alloc(u8, total_len);
+    errdefer gpa.free(source);
+
+    std.mem.copyForwards(u8, source[0..source_wrapper.len], source_wrapper);
+    source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    return TestEnv.init(module_name, &source);
+    var test_env = try TestEnv.init(module_name, source);
+    test_env.owned_source = source;
+    return test_env;
 }
 
 pub fn deinit(self: *TestEnv) void {
@@ -398,6 +411,10 @@ pub fn deinit(self: *TestEnv) void {
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
 
+    if (self.owned_source) |buffer| {
+        self.gpa.free(buffer);
+    }
+
     self.module_envs.deinit();
 
     // Clean up loaded Builtin module (only if we own it)
@@ -411,9 +428,7 @@ pub fn deinit(self: *TestEnv) void {
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
 
@@ -445,9 +460,7 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
@@ -473,6 +486,13 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
 }
 
+/// Assert that there were no parse, canonicalization, or type checking errors.
+pub fn assertNoErrors(self: *TestEnv) !void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertNoTypeProblems();
+}
+
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
 pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
@@ -481,6 +501,33 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert 1 problem
     try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that at least one type error occurred and the first error's title matches.
+/// Unlike assertOneTypeError, this allows multiple errors.
+pub fn assertHasTypeError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    // Assert at least 1 problem
+    try testing.expect(self.checker.problems.problems.items.len >= 1);
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem

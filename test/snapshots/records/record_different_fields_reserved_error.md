@@ -16,7 +16,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:8
-IF WITHOUT ELSE - record_different_fields_reserved_error.md:2:5:2:7
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:22:2:23
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:25
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:26
@@ -32,7 +32,8 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:2:5:2:23
+INVALID IF CONDITION - :0:0:0:0
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:2:22:2:23
 MALFORMED TYPE - record_different_fields_reserved_error.md:3:11:3:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:12:3:25
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:25:3:26
@@ -64,16 +65,15 @@ Expressions can be identifiers, literals, function calls, or operators.
       ^
 
 
-**IF WITHOUT ELSE**
-This `if` is being used as an expression, but it doesn't have an `else`.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
-
-**record_different_fields_reserved_error.md:2:5:2:7:**
+**record_different_fields_reserved_error.md:2:22:2:23:**
 ```roc
     if: "conditional",
 ```
-    ^^
+                     ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -241,14 +241,19 @@ Expressions can be identifiers, literals, function calls, or operators.
                   ^
 
 
+**INVALID IF CONDITION**
+The condition in this `if` expression could not be processed.
+
+The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
-**record_different_fields_reserved_error.md:2:5:2:23:**
+**record_different_fields_reserved_error.md:2:22:2:23:**
 ```roc
     if: "conditional",
 ```
-    ^^^^^^^^^^^^^^^^^^
+                     ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -364,6 +369,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `Bool.true` does not exist.
 
+`Bool` is in scope, but it has no associated `true`.
+
+It's referenced here:
 **record_different_fields_reserved_error.md:6:10:6:19:**
 ```roc
     and: Bool.true,
@@ -407,6 +415,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `Bool.false` does not exist.
 
+`Bool` is in scope, but it has no associated `false`.
+
+It's referenced here:
 **record_different_fields_reserved_error.md:7:9:7:19:**
 ```roc
     or: Bool.false,
@@ -475,7 +486,11 @@ EndOfFile,
 ~~~clojure
 (e-block
 	(statements
-		(e-malformed (reason "no_else"))
+		(e-if-without-else
+			(e-malformed (reason "expr_unexpected_token"))
+			(e-string
+				(e-string-part (raw "conditional"))))
+		(e-malformed (reason "expr_unexpected_token"))
 		(s-type-anno (name "when")
 			(ty-malformed (tag "ty_anno_unexpected_token")))
 		(e-malformed (reason "expr_unexpected_token"))
@@ -503,6 +518,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
+	if  "conditional"
 	
 	when : 
 			
@@ -520,6 +536,8 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
+	(s-expr
+		(e-runtime-error (tag "if_condition_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-let
@@ -550,7 +568,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "nested_value_not_found")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -558,7 +576,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "nested_value_not_found")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
