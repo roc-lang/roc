@@ -108,7 +108,7 @@ fn platform_main() !void {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .host_fns = undefined, // No host functions for this simple example
+        .hosted_fns = .{ .count = 0, .fns = undefined }, // No host functions for this simple example
     };
 
     // Use deterministic test values

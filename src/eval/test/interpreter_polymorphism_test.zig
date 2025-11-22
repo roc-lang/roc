@@ -73,7 +73,7 @@ fn makeOps(host: *TestHost) RocOps {
         .roc_dbg = testRocDbg,
         .roc_expect_failed = testRocExpectFailed,
         .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
 }
 

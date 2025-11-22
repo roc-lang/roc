@@ -227,7 +227,7 @@ pub const ComptimeEvaluator = struct {
                 .roc_dbg = comptimeRocDbg,
                 .roc_expect_failed = comptimeRocExpectFailed,
                 .roc_crashed = comptimeRocCrashed,
-                .host_fns = undefined, // Not used in compile-time eval
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in compile-time eval
             };
         }
         self.crash.reset();

@@ -1,0 +1,3 @@
+Stderr := [].{
+    line! : Str => {}
+}
