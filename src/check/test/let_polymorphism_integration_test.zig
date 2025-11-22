@@ -74,7 +74,7 @@ test "polymorphic cons function" {
         \\    { list1, list2 }
         \\}
     ;
-    try typeCheck(source, "{ list1: List(item), list2: List(Str) } where [_a.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ list1: List(item), list2: List(Str) } where [item.from_numeral : _arg -> _ret]");
 }
 
 test "polymorphic record constructor" {

@@ -1224,7 +1224,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a } where [_e.from_numeral : _arg -> _ret, _h.from_numeral : _arg2 -> _ret2, _i.from_numeral : _arg3 -> _ret3, _j.from_numeral : _arg4 -> _ret4, _k.from_numeral : _arg5 -> _ret5]")))
+		(patt (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a } where [a.from_numeral : _arg -> _ret, a.from_numeral : _arg2 -> _ret2, _e.from_numeral : _arg3 -> _ret3, c.from_numeral : _arg4 -> _ret4, a.from_numeral : _arg5 -> _ret5]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1238,5 +1238,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a } where [_e.from_numeral : _arg -> _ret, _h.from_numeral : _arg2 -> _ret2, _i.from_numeral : _arg3 -> _ret3, _j.from_numeral : _arg4 -> _ret4, _k.from_numeral : _arg5 -> _ret5]"))))
+		(expr (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a } where [a.from_numeral : _arg -> _ret, a.from_numeral : _arg2 -> _ret2, _e.from_numeral : _arg3 -> _ret3, c.from_numeral : _arg4 -> _ret4, a.from_numeral : _arg5 -> _ret5]"))))
 ~~~
