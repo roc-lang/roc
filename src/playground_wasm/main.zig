@@ -949,7 +949,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .gpa = gpa,
                 .common = common,
                 .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-                .module_kind = ModuleEnv.Serialized.decodeModuleKind(serialized_ptr.module_kind),
+                .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,

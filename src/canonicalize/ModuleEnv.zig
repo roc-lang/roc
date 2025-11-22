@@ -40,6 +40,56 @@ pub const ModuleKind = union(enum) {
     hosted,
     deprecated_module,
     malformed,
+
+    /// Extern-compatible tag for serialization
+    pub const Tag = enum(u32) {
+        type_module,
+        default_app,
+        app,
+        package,
+        platform,
+        hosted,
+        deprecated_module,
+        malformed,
+    };
+
+    /// Extern-compatible payload union for serialization
+    pub const Payload = extern union {
+        type_module_ident: Ident.Idx,
+        none: u32,
+    };
+
+    /// Extern-compatible serialized form
+    pub const Serialized = extern struct {
+        tag: Tag,
+        payload: Payload,
+
+        pub fn encode(kind: ModuleKind) @This() {
+            return switch (kind) {
+                .type_module => |idx| .{ .tag = .type_module, .payload = .{ .type_module_ident = idx } },
+                .default_app => .{ .tag = .default_app, .payload = .{ .none = 0 } },
+                .app => .{ .tag = .app, .payload = .{ .none = 0 } },
+                .package => .{ .tag = .package, .payload = .{ .none = 0 } },
+                .platform => .{ .tag = .platform, .payload = .{ .none = 0 } },
+                .hosted => .{ .tag = .hosted, .payload = .{ .none = 0 } },
+                .deprecated_module => .{ .tag = .deprecated_module, .payload = .{ .none = 0 } },
+                .malformed => .{ .tag = .malformed, .payload = .{ .none = 0 } },
+            };
+        }
+
+        pub fn decode(self: @This()) ModuleKind {
+            return switch (self.tag) {
+                .type_module => .{ .type_module = self.payload.type_module_ident },
+                .default_app => .default_app,
+                .app => .app,
+                .package => .package,
+                .platform => .platform,
+                .hosted => .hosted,
+                .deprecated_module => .deprecated_module,
+                .malformed => .malformed,
+            };
+        }
+    };
 };
 
 gpa: std.mem.Allocator,
@@ -1670,7 +1720,7 @@ pub const Serialized = extern struct {
     module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: [2]u32, // Serialized ModuleKind (tag + optional payload), decoded via decodeModuleKind
+    module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
     from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
@@ -1704,7 +1754,7 @@ pub const Serialized = extern struct {
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
-        self.module_kind = encodeModuleKind(env.module_kind);
+        self.module_kind = ModuleKind.Serialized.encode(env.module_kind);
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
@@ -1771,7 +1821,7 @@ pub const Serialized = extern struct {
             .gpa = gpa,
             .common = common,
             .types = self.types.deserialize(offset, gpa).*,
-            .module_kind = decodeModuleKind(self.module_kind),
+            .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
@@ -1807,35 +1857,6 @@ pub const Serialized = extern struct {
         };
 
         return env;
-    }
-
-    /// Encode a ModuleKind to a serializable [2]u32 representation
-    pub fn encodeModuleKind(kind: ModuleKind) [2]u32 {
-        return switch (kind) {
-            .type_module => |idx| .{ 0, @bitCast(idx) },
-            .default_app => .{ 1, 0 },
-            .app => .{ 2, 0 },
-            .package => .{ 3, 0 },
-            .platform => .{ 4, 0 },
-            .hosted => .{ 5, 0 },
-            .deprecated_module => .{ 6, 0 },
-            .malformed => .{ 7, 0 },
-        };
-    }
-
-    /// Decode a [2]u32 representation back to a ModuleKind
-    pub fn decodeModuleKind(encoded: [2]u32) ModuleKind {
-        return switch (encoded[0]) {
-            0 => .{ .type_module = @bitCast(encoded[1]) },
-            1 => .default_app,
-            2 => .app,
-            3 => .package,
-            4 => .platform,
-            5 => .hosted,
-            6 => .deprecated_module,
-            7 => .malformed,
-            else => unreachable,
-        };
     }
 };
 
