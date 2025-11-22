@@ -145,7 +145,7 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(patt (type "_a where [_b.from_numeral : _arg -> _ret]"))
 		(patt (type "U64"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
@@ -158,7 +158,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
+		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))
 		(expr (type "U64"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

@@ -4,7 +4,7 @@
 //! of integer literals and integer expressions from CIR into the types store.
 //!
 //! Number literals in the current type system are represented as flex variables
-//! with static dispatch constraints for the `from_num_literal` method.
+//! with static dispatch constraints for the `from_numeral` method.
 
 const std = @import("std");
 const testing = std.testing;
@@ -32,8 +32,8 @@ test "infers type for small nums" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_num_literal constraints
-        try test_env.assertLastDefTypeContains("from_num_literal");
+        // Number literals produce flex variables with from_numeral constraints
+        try test_env.assertLastDefTypeContains("from_numeral");
     }
 }
 
@@ -71,8 +71,8 @@ test "infers type for zero" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_num_literal constraints
-        try test_env.assertLastDefTypeContains("from_num_literal");
+        // Number literals produce flex variables with from_numeral constraints
+        try test_env.assertLastDefTypeContains("from_numeral");
     }
 }
 
@@ -91,8 +91,8 @@ test "infers type for hex literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_num_literal constraints
-        try test_env.assertLastDefTypeContains("from_num_literal");
+        // Number literals produce flex variables with from_numeral constraints
+        try test_env.assertLastDefTypeContains("from_numeral");
     }
 }
 
@@ -110,8 +110,8 @@ test "infers type for binary literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_num_literal constraints
-        try test_env.assertLastDefTypeContains("from_num_literal");
+        // Number literals produce flex variables with from_numeral constraints
+        try test_env.assertLastDefTypeContains("from_numeral");
     }
 }
 
@@ -129,7 +129,7 @@ test "infers type for octal literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_num_literal constraints
-        try test_env.assertLastDefTypeContains("from_num_literal");
+        // Number literals produce flex variables with from_numeral constraints
+        try test_env.assertLastDefTypeContains("from_numeral");
     }
 }

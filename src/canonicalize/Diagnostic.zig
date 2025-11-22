@@ -359,7 +359,7 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(
+    pub fn buildInvalidNumeralReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
         literal_text: []const u8,

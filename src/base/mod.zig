@@ -92,7 +92,7 @@ pub const FracLiteral = union(enum) {
 };
 
 /// An integer or fractional number literal.
-pub const NumLiteral = union(enum) {
+pub const Numeral = union(enum) {
     Int: IntLiteral,
     Frac: FracLiteral,
 };

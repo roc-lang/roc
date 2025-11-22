@@ -12,7 +12,7 @@ MISSING METHOD - can_nested_heterogeneous_lists.md:1:3:1:4
 MISSING METHOD - can_nested_heterogeneous_lists.md:1:20:1:21
 # PROBLEMS
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **can_nested_heterogeneous_lists.md:1:3:1:4:**
 ```roc
 [[1, "hello"], [2, 3]]
@@ -20,10 +20,10 @@ This **from_num_literal** method is being called on the type **Str**, which has 
   ^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **can_nested_heterogeneous_lists.md:1:20:1:21:**
 ```roc
 [[1, "hello"], [2, 3]]
@@ -31,7 +31,7 @@ This **from_num_literal** method is being called on the type **Str**, which has 
                    ^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

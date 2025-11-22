@@ -874,7 +874,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    __f where [j.from_num_literal : j]_
+    __f where [j.from_numeral : j]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -974,7 +974,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [(j, Str, Error, [O]k, (Error, Error), List(l)).from_num_literal : (j, Str, Error, [O]k, (Error, Error), List(l)), (j, Str, Error, [O]k, (Error, Error), List(l)).from_num_literal : (j, Str, Error, [O]k, (Error, Error), List(l))]_
+    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [(j, Str, Error, [O]k, (Error, Error), List(l)).from_numeral : (j, Str, Error, [O]k, (Error, Error), List(l)), (j, Str, Error, [O]k, (Error, Error), List(l)).from_numeral : (j, Str, Error, [O]k, (Error, Error), List(l))]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2002,7 +2002,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> _ret where [_f.from_num_literal : _arg -> _ret2]"))
+		(patt (type "Bool -> _ret where [_f.from_numeral : _arg -> _ret2]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
@@ -2039,7 +2039,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> _ret where [_f.from_num_literal : _arg -> _ret2]"))
+		(expr (type "Bool -> _ret where [_f.from_numeral : _arg -> _ret2]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))

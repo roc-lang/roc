@@ -193,9 +193,9 @@ pub const Interpreter = struct {
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
-    /// Target type for num_from_num_literal (set by callLowLevelBuiltinWithTargetType)
+    /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
-    /// Last error message from num_from_num_literal when payload area is too small
+    /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
@@ -2255,9 +2255,9 @@ pub const Interpreter = struct {
         return dest;
     }
 
-    /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_num_literal
+    /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
     pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
-        // For num_from_num_literal, we need to pass the target type through a different mechanism
+        // For num_from_numeral, we need to pass the target type through a different mechanism
         // since the standard handler extracts it from the return type which has a generic parameter.
         // Store the target type temporarily so the handler can use it.
         const saved_target = self.num_literal_target_type;
@@ -2891,28 +2891,28 @@ pub const Interpreter = struct {
                 self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
                 return error.Crash;
             },
-            .num_from_num_literal => {
-                // num.from_num_literal : NumLiteral -> Try(num, [InvalidNumLiteral(Str)])
-                // NumLiteral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
-                std.debug.assert(args.len == 1); // expects 1 argument: NumLiteral record
+            .num_from_numeral => {
+                // num.from_numeral : Numeral -> Try(num, [InvalidNumeral(Str)])
+                // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
+                std.debug.assert(args.len == 1); // expects 1 argument: Numeral record
 
                 const result_rt_var = return_rt_var orelse {
-                    self.triggerCrash("num_from_num_literal requires return type info", false, roc_ops);
+                    self.triggerCrash("num_from_numeral requires return type info", false, roc_ops);
                     return error.Crash;
                 };
 
                 // Get the result layout (Try tag union)
                 const result_layout = try self.getRuntimeLayout(result_rt_var);
 
-                // Extract fields from NumLiteral record
+                // Extract fields from Numeral record
                 const num_literal_arg = args[0];
                 if (num_literal_arg.ptr == null) {
-                    self.triggerCrash("num_from_num_literal: null argument", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: null argument", false, roc_ops);
                     return error.Crash;
                 }
 
                 var acc = num_literal_arg.asRecord(&self.runtime_layout_store) catch {
-                    self.triggerCrash("num_from_num_literal: argument is not a record", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: argument is not a record", false, roc_ops);
                     return error.Crash;
                 };
 
@@ -2920,32 +2920,32 @@ pub const Interpreter = struct {
                 // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
                 const layout_env = self.runtime_layout_store.env;
                 const is_neg_idx = acc.findFieldIndex(layout_env, "is_negative") orelse {
-                    self.triggerCrash("num_from_num_literal: missing is_negative field", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: missing is_negative field", false, roc_ops);
                     return error.Crash;
                 };
                 const is_neg_field = acc.getFieldByIndex(is_neg_idx) catch {
-                    self.triggerCrash("num_from_num_literal: failed to get is_negative field", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: failed to get is_negative field", false, roc_ops);
                     return error.Crash;
                 };
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
                 const before_idx = acc.findFieldIndex(layout_env, "digits_before_pt") orelse {
-                    self.triggerCrash("num_from_num_literal: missing digits_before_pt field", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: missing digits_before_pt field", false, roc_ops);
                     return error.Crash;
                 };
                 const before_field = acc.getFieldByIndex(before_idx) catch {
-                    self.triggerCrash("num_from_num_literal: failed to get digits_before_pt field", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: failed to get digits_before_pt field", false, roc_ops);
                     return error.Crash;
                 };
 
                 // Get digits_after_pt field (List(U8))
                 const after_idx = acc.findFieldIndex(layout_env, "digits_after_pt") orelse {
-                    self.triggerCrash("num_from_num_literal: missing digits_after_pt field", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: missing digits_after_pt field", false, roc_ops);
                     return error.Crash;
                 };
                 const after_field = acc.getFieldByIndex(after_idx) catch {
-                    self.triggerCrash("num_from_num_literal: failed to get digits_after_pt field", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: failed to get digits_after_pt field", false, roc_ops);
                     return error.Crash;
                 };
 
@@ -2981,7 +2981,7 @@ pub const Interpreter = struct {
                 // Resolve the Try type to get Ok's payload type
                 const resolved = self.resolveBaseVar(result_rt_var);
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    self.triggerCrash("num_from_num_literal: expected Try tag union result type", false, roc_ops);
+                    self.triggerCrash("num_from_numeral: expected Try tag union result type", false, roc_ops);
                     return error.Crash;
                 }
 
@@ -3272,7 +3272,7 @@ pub const Interpreter = struct {
                             }
                         }
                     } else if (!in_range and err_payload_var != null) {
-                        // For Err case, construct InvalidNumLiteral(Str) with descriptive message
+                        // For Err case, construct InvalidNumeral(Str) with descriptive message
                         // Format the number that was rejected
                         var num_str_buf: [128]u8 = undefined;
                         const num_str = blk: {
@@ -3330,7 +3330,7 @@ pub const Interpreter = struct {
                         };
 
                         if (error_msg) |msg| {
-                            // Get the Err payload layout (which is [InvalidNumLiteral(Str)])
+                            // Get the Err payload layout (which is [InvalidNumeral(Str)])
                             const err_payload_layout = try self.getRuntimeLayout(err_payload_var.?);
                             const payload_field_size = self.runtime_layout_store.layoutSize(payload_field.layout);
 
@@ -3344,7 +3344,7 @@ pub const Interpreter = struct {
                                 const roc_str = RocStr.fromSlice(msg, roc_ops);
 
                                 if (err_payload_layout.tag == .record) {
-                                    // InvalidNumLiteral tag union is a record { tag, payload }
+                                    // InvalidNumeral tag union is a record { tag, payload }
                                     // Set is_initialized to true since we're about to write to this memory
                                     var err_inner = StackValue{
                                         .ptr = outer_payload_ptr,
@@ -3353,14 +3353,14 @@ pub const Interpreter = struct {
                                     };
                                     var err_acc = try err_inner.asRecord(&self.runtime_layout_store);
 
-                                    // Set the tag to InvalidNumLiteral (index 0, assuming it's the first/only tag)
+                                    // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
                                     // Use layout store's env for field lookup to match comptime_evaluator
                                     if (err_acc.findFieldIndex(layout_env, "tag")) |inner_tag_idx| {
                                         const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx);
                                         if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
                                             var tmp = inner_tag_field;
                                             tmp.is_initialized = false;
-                                            try tmp.setInt(0); // InvalidNumLiteral tag index
+                                            try tmp.setInt(0); // InvalidNumeral tag index
                                         }
                                     }
 
@@ -3390,7 +3390,7 @@ pub const Interpreter = struct {
                     return dest;
                 }
 
-                self.triggerCrash("num_from_num_literal: unsupported result layout", false, roc_ops);
+                self.triggerCrash("num_from_numeral: unsupported result layout", false, roc_ops);
                 return error.Crash;
             },
         }
@@ -5341,7 +5341,7 @@ pub const Interpreter = struct {
                             // Always translate idents to the runtime_layout_store's env's ident store.
                             // This is critical because the layout store was initialized with that env,
                             // and ident comparisons in the layout store use that env's ident indices.
-                            // Note: self.env may be temporarily switched during from_num_literal evaluation,
+                            // Note: self.env may be temporarily switched during from_numeral evaluation,
                             // so we MUST use runtime_layout_store.env which remains constant.
                             const layout_env = self.runtime_layout_store.env;
                             // Compare the underlying interner pointers to detect different ident stores

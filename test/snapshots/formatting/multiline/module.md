@@ -48,9 +48,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_c where [_d.from_num_literal : _arg -> _ret]"))
-		(patt (type "_c where [_d.from_num_literal : _arg -> _ret]")))
+		(patt (type "_c where [_d.from_numeral : _arg -> _ret]"))
+		(patt (type "_c where [_d.from_numeral : _arg -> _ret]")))
 	(expressions
-		(expr (type "_c where [_d.from_num_literal : _arg -> _ret]"))
-		(expr (type "_c where [_d.from_num_literal : _arg -> _ret]"))))
+		(expr (type "_c where [_d.from_numeral : _arg -> _ret]"))
+		(expr (type "_c where [_d.from_numeral : _arg -> _ret]"))))
 ~~~

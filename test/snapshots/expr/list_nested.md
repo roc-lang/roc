@@ -50,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(_a)) where [_b.from_num_literal : _arg -> _ret]"))
+(expr (type "List(List(_a)) where [_b.from_numeral : _arg -> _ret]"))
 ~~~

@@ -26,7 +26,7 @@ main! = |_| {}
 MISSING METHOD - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **item**, which has no method with that name:
+This **from_numeral** method is being called on the type **item**, which has no method with that name:
 **type_var_mismatch.md:7:9:7:11:**
 ```roc
 	item = 42
@@ -34,7 +34,7 @@ This **from_num_literal** method is being called on the type **item**, which has
 	       ^^
 
 
-**Hint: ** Did you forget to specify **from_num_literal** in the type annotation?
+**Hint: ** Did you forget to specify **from_numeral** in the type annotation?
 
 # TOKENS
 ~~~zig

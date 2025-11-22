@@ -38,5 +38,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_arg, _arg2 -> _ret where [_a.from_num_literal : _arg3 -> _ret2]"))
+(expr (type "_arg, _arg2 -> _ret where [_a.from_numeral : _arg3 -> _ret2]"))
 ~~~

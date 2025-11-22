@@ -137,5 +137,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ address: { city: Str, coordinates: { lat: _field, lng: _field2 }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: _field3, name: Str } } where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2, _c.from_num_literal : _arg3 -> _ret3]"))
+(expr (type "{ address: { city: Str, coordinates: { lat: _field, lng: _field2 }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: _field3, name: Str } } where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2, _c.from_numeral : _arg3 -> _ret3]"))
 ~~~

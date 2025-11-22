@@ -40,7 +40,7 @@ UnusedType := _
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **UsedType**, which has no method with that name:
+This **from_numeral** method is being called on the type **UsedType**, which has no method with that name:
 **usage_test.md:6:9:6:11:**
 ```roc
 value = 42
@@ -48,7 +48,7 @@ value = 42
         ^^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

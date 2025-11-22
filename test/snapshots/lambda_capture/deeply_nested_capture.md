@@ -128,5 +128,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_d where [_e.from_num_literal : _arg -> _ret]"))
+(expr (type "_d where [_e.from_numeral : _arg -> _ret]"))
 ~~~

@@ -891,8 +891,8 @@ test "parseIntWithUnderscores function" {
     }
 }
 
-test "parseNumLiteralWithSuffix function" {
-    // Test the parseNumLiteralWithSuffix function to ensure correct parsing of prefixes and suffixes
+test "parseNumeralWithSuffix function" {
+    // Test the parseNumeralWithSuffix function to ensure correct parsing of prefixes and suffixes
     const test_cases = [_]struct {
         input: []const u8,
         expected_num_text: []const u8,
@@ -930,10 +930,10 @@ test "parseNumLiteralWithSuffix function" {
     };
 
     for (test_cases) |tc| {
-        const result = types.parseNumLiteralWithSuffix(tc.input);
+        const result = types.parseNumeralWithSuffix(tc.input);
 
         if (!std.mem.eql(u8, result.num_text, tc.expected_num_text)) {
-            std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{s}').num_text = '{s}' (expected '{s}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
+            std.debug.print("MISMATCH num_text: parseNumeralWithSuffix('{s}').num_text = '{s}' (expected '{s}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
         }
         try std.testing.expectEqualSlices(u8, tc.expected_num_text, result.num_text);
 
@@ -964,7 +964,7 @@ test "hex literal parsing logic integration" {
 
     for (test_cases) |tc| {
         // Mimic the exact parsing logic from canonicalizeExpr
-        const parsed = types.parseNumLiteralWithSuffix(tc.literal);
+        const parsed = types.parseNumeralWithSuffix(tc.literal);
 
         const is_negated = parsed.num_text[0] == '-';
         const after_minus_sign = @as(usize, @intFromBool(is_negated));

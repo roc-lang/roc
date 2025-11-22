@@ -91,7 +91,7 @@ But the seventh argument has the type:
 `multi_arg_fn` needs these arguments to have compatible types.
 
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **lambda_multi_arg_mismatch.md:9:5:9:7:**
 ```roc
     42,        # x1: U64 (type 'a')
@@ -99,10 +99,10 @@ This **from_num_literal** method is being called on the type **Str**, which has 
     ^^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **lambda_multi_arg_mismatch.md:13:5:13:9:**
 ```roc
     3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
@@ -110,7 +110,7 @@ This **from_num_literal** method is being called on the type **Str**, which has 
     ^^^^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -23,7 +23,7 @@ foo = if tru 0
 
 
 **TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_num_literal` on a type that doesn't support methods:
+You're calling the method `from_numeral` on a type that doesn't support methods:
 **expr_if_missing_else.md:1:14:1:15:**
 ```roc
 foo = if tru 0

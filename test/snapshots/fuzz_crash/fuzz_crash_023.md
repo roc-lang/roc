@@ -2574,7 +2574,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> _ret where [_d.from_num_literal : _arg -> _ret2]"))
+		(patt (type "Bool -> _ret where [_d.from_numeral : _arg -> _ret2]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
@@ -2621,7 +2621,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> _ret where [_d.from_num_literal : _arg -> _ret2]"))
+		(expr (type "Bool -> _ret where [_d.from_numeral : _arg -> _ret2]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))

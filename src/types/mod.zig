@@ -19,7 +19,7 @@ pub const Alias = types.Alias;
 pub const Flex = types.Flex;
 pub const Rigid = types.Rigid;
 pub const RecursionVar = types.RecursionVar;
-pub const NumLiteralInfo = types.NumLiteralInfo;
+pub const NumeralInfo = types.NumeralInfo;
 pub const RecursionInfo = types.RecursionInfo;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;
@@ -45,7 +45,7 @@ pub const Int = types.Int;
 pub const Frac = types.Frac;
 pub const IntRequirements = types.IntRequirements;
 pub const FracRequirements = types.FracRequirements;
-pub const parseNumLiteralWithSuffix = types.parseNumLiteralWithSuffix;
+pub const parseNumeralWithSuffix = types.parseNumeralWithSuffix;
 
 pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;

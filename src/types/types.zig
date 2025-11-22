@@ -615,7 +615,7 @@ pub const FracRequirements = struct {
 
 /// Parse a number literal with an optional type suffix (e.g., "123u8", "45.67f64")
 /// Used by Can.zig for canonicalization
-pub fn parseNumLiteralWithSuffix(text: []const u8) struct { num_text: []const u8, suffix: ?[]const u8 } {
+pub fn parseNumeralWithSuffix(text: []const u8) struct { num_text: []const u8, suffix: ?[]const u8 } {
     var split_index: usize = text.len;
     var is_hex_or_bin = false;
     var start_index: usize = 0;
@@ -781,11 +781,11 @@ pub const TwoTags = struct {
 
 // content //
 
-/// Information about a numeric literal for from_num_literal constraint checking
+/// Information about a numeric literal for from_numeral constraint checking
 ///
 /// Stores the parsed numeric value and metadata needed to validate conversion
 /// to a specific numeric type at compile-time.
-pub const NumLiteralInfo = struct {
+pub const NumeralInfo = struct {
     /// The parsed numeric value stored as raw bytes
     /// For fractional literals, this is scaled by 10^18 (Dec representation)
     bytes: [16]u8,
@@ -803,17 +803,17 @@ pub const NumLiteralInfo = struct {
     region: base.Region,
 
     /// Get the value as i128 (may overflow for large u128 values)
-    pub fn toI128(self: NumLiteralInfo) i128 {
+    pub fn toI128(self: NumeralInfo) i128 {
         return @bitCast(self.bytes);
     }
 
     /// Get the value as u128
-    pub fn toU128(self: NumLiteralInfo) u128 {
+    pub fn toU128(self: NumeralInfo) u128 {
         return @bitCast(self.bytes);
     }
 
     /// Create from an i128 value
-    pub fn fromI128(val: i128, is_negative: bool, is_fractional: bool, region: base.Region) NumLiteralInfo {
+    pub fn fromI128(val: i128, is_negative: bool, is_fractional: bool, region: base.Region) NumeralInfo {
         return .{
             .bytes = @bitCast(val),
             .is_u128 = false,
@@ -824,7 +824,7 @@ pub const NumLiteralInfo = struct {
     }
 
     /// Create from a u128 value
-    pub fn fromU128(val: u128, is_fractional: bool, region: base.Region) NumLiteralInfo {
+    pub fn fromU128(val: u128, is_fractional: bool, region: base.Region) NumeralInfo {
         return .{
             .bytes = @bitCast(val),
             .is_u128 = true,
@@ -864,15 +864,15 @@ pub const StaticDispatchConstraint = struct {
     origin: Origin,
     /// Optional recursion information if this constraint is recursive
     recursion_info: ?RecursionInfo = null,
-    /// Optional numeric literal info for from_num_literal constraints
-    num_literal: ?NumLiteralInfo = null,
+    /// Optional numeric literal info for from_numeral constraints
+    num_literal: ?NumeralInfo = null,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u2) {
         desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
         method_call, // From .method() syntax
         where_clause, // From where clause in type annotation
-        from_num_literal, // From numeric literal conversion
+        from_numeral, // From numeric literal conversion
     };
 
     /// A safe list of static dispatch constraints

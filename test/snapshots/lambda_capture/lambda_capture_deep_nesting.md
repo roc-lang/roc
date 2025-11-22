@@ -120,5 +120,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_f where [_g.from_num_literal : _arg -> _ret]"))
+(expr (type "_f where [_g.from_numeral : _arg -> _ret]"))
 ~~~

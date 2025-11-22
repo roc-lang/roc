@@ -25,7 +25,7 @@ if bool {
 
 
 **TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_num_literal` on a type that doesn't support methods:
+You're calling the method `from_numeral` on a type that doesn't support methods:
 **if_then_else_simple_block_formatting.md:3:8:3:9:**
 ```roc
 } else 2

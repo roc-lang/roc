@@ -88,7 +88,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [b.from_num_literal : b -> c]")))
+		(patt (type "a -> a where [b.from_numeral : b -> c]")))
 	(expressions
-		(expr (type "a -> a where [b.from_num_literal : b -> c]"))))
+		(expr (type "a -> a where [b.from_numeral : b -> c]"))))
 ~~~

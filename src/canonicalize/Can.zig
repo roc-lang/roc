@@ -584,7 +584,7 @@ fn processAssociatedBlock(
                             if (nested_pattern == .ident) {
                                 const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
                                 if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
-                                    // Build fully qualified name (e.g., "Builtin.Num.NumLiteral.is_negative")
+                                    // Build fully qualified name (e.g., "Builtin.Num.Numeral.is_negative")
                                     const qualified_text = self.env.getIdent(qualified_ident_idx);
                                     const nested_decl_text = self.env.getIdent(nested_decl_ident);
                                     const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
@@ -600,7 +600,7 @@ fn processAssociatedBlock(
                                             // Add unqualified name (e.g., "is_negative")
                                             try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
 
-                                            // Add type-qualified name (e.g., "NumLiteral.is_negative")
+                                            // Add type-qualified name (e.g., "Numeral.is_negative")
                                             const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
                                             try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                                         },
@@ -875,7 +875,7 @@ fn processAssociatedItemsSecondPass(
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                                     // Check if this is still a placeholder before updating.
-                                    // For nested types with associated blocks (e.g., NumLiteral inside Num),
+                                    // For nested types with associated blocks (e.g., Numeral inside Num),
                                     // the item may have already been fully processed during the recursive
                                     // processAssociatedBlock call in Phase 2b of processAssociatedItemsFirstPass.
                                     // In that case, the placeholder was already consumed and we should skip it.
@@ -3522,7 +3522,7 @@ pub fn canonicalizeExpr(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed = types.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumeralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -3668,7 +3668,7 @@ pub fn canonicalizeExpr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed_num = types.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumeralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -3719,7 +3719,7 @@ pub fn canonicalizeExpr(
             }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
-                error.InvalidNumLiteral => {
+                error.InvalidNumeral => {
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
@@ -5114,7 +5114,7 @@ fn canonicalizePattern(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed = types.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumeralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -5258,7 +5258,7 @@ fn canonicalizePattern(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed_num = types.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumeralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -5300,7 +5300,7 @@ fn canonicalizePattern(
             }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
-                error.InvalidNumLiteral => {
+                error.InvalidNumeral => {
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
@@ -5969,7 +5969,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     // First, always parse as f64 to get the numeric value
     const f64_val = std.fmt.parseFloat(f64, token_text) catch {
         // If it can't be parsed as F64, it's too big to fit in any of Roc's Frac types.
-        return error.InvalidNumLiteral;
+        return error.InvalidNumeral;
     };
 
     // Check if it has scientific notation

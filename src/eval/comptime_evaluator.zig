@@ -442,29 +442,29 @@ pub const ComptimeEvaluator = struct {
         }
     }
 
-    /// Validates all deferred numeric literals by invoking their from_num_literal constraints
+    /// Validates all deferred numeric literals by invoking their from_numeral constraints
     ///
     /// This function is called at the beginning of compile-time evaluation, after type checking
     /// has completed. Each deferred literal contains:
     /// - expr_idx: The CIR expression index
     /// - type_var: The type variable the literal unified with (now concrete after unification)
-    /// - constraint: The from_num_literal StaticDispatchConstraint with:
-    ///   - fn_name: "from_num_literal" identifier
+    /// - constraint: The from_numeral StaticDispatchConstraint with:
+    ///   - fn_name: "from_numeral" identifier
     ///   - fn_var: Type variable for the function
-    ///   - num_literal: NumLiteralInfo with value, is_negative, is_fractional
+    ///   - num_literal: NumeralInfo with value, is_negative, is_fractional
     /// - region: Source location for error reporting
     ///
     /// Implementation steps (to be completed):
     /// 1. Resolve type_var to get the concrete nominal type (e.g., I64, U32, custom type)
-    /// 2. Look up the from_num_literal definition for that type:
-    ///    - For built-in types: find in Num module (e.g., I64.from_num_literal)
+    /// 2. Look up the from_numeral definition for that type:
+    ///    - For built-in types: find in Num module (e.g., I64.from_numeral)
     ///    - For user types: find in the type's origin module
-    /// 3. Build a NumLiteral value: [Self(is_negative: Bool)]
+    /// 3. Build a Numeral value: [Self(is_negative: Bool)]
     ///    - This is a tag union with tag "Self" and Bool payload
     ///    - Can create synthetically or use interpreter to evaluate an e_tag expression
-    /// 4. Invoke from_num_literal via interpreter:
+    /// 4. Invoke from_numeral via interpreter:
     ///    - Create a function call expression or use evalMinimal
-    ///    - Pass the NumLiteral value as argument
+    ///    - Pass the Numeral value as argument
     /// 5. Handle the Try result:
     ///    - Pattern match on Ok/Err tags
     ///    - For Ok: validation succeeded
@@ -485,11 +485,11 @@ pub const ComptimeEvaluator = struct {
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nom| nom,
                     else => {
-                        // Non-nominal types (e.g., records, tuples, functions) don't have from_num_literal
+                        // Non-nominal types (e.g., records, tuples, functions) don't have from_numeral
                         // This is a type error - numeric literal can't be used as this type
                         const error_msg = try std.fmt.allocPrint(
                             self.allocator,
-                            "Numeric literal cannot be used as this type (type doesn't support from_num_literal)",
+                            "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
                             .{},
                         );
                         try self.error_names.append(error_msg);
@@ -506,11 +506,11 @@ pub const ComptimeEvaluator = struct {
                 else => {
                     // Non-structure types (flex, rigid, alias, etc.)
                     // If still flex, type checking didn't fully resolve it - this is OK, may resolve later
-                    // If rigid/alias, it doesn't support from_num_literal
+                    // If rigid/alias, it doesn't support from_numeral
                     if (content != .flex) {
                         const error_msg = try std.fmt.allocPrint(
                             self.allocator,
-                            "Numeric literal cannot be used as this type (type doesn't support from_num_literal)",
+                            "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
                             .{},
                         );
                         try self.error_names.append(error_msg);
@@ -526,7 +526,7 @@ pub const ComptimeEvaluator = struct {
                 },
             };
 
-            // Step 2: Look up the from_num_literal method for this nominal type
+            // Step 2: Look up the from_numeral method for this nominal type
             // Get the module where the type is defined
             const origin_module_ident = nominal_type.origin_module;
             const is_builtin = origin_module_ident == self.env.builtin_module_ident;
@@ -548,7 +548,7 @@ pub const ComptimeEvaluator = struct {
                 };
             };
 
-            // Build the qualified method name: ModuleName.TypeName.from_num_literal
+            // Build the qualified method name: ModuleName.TypeName.from_numeral
             const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
             const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
 
@@ -558,7 +558,7 @@ pub const ComptimeEvaluator = struct {
             else
                 type_name_bytes;
 
-            // Build qualified name: Builtin.Num.TypeName.from_num_literal
+            // Build qualified name: Builtin.Num.TypeName.from_numeral
             // Note: type_name_bytes may be "Num.I64" or just "I64" depending on context
             // We need to use the full type_name_bytes to preserve module nesting
             var qualified_name_buf: [256]u8 = undefined;
@@ -570,10 +570,10 @@ pub const ComptimeEvaluator = struct {
 
             // Look up the identifier in the origin module
             const ident_in_origin = origin_env.getIdentStoreConst().findByString(qualified_name) orelse {
-                // Method not found - the type doesn't have a from_num_literal method
+                // Method not found - the type doesn't have a from_numeral method
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "Type {s} does not have a from_num_literal method",
+                    "Type {s} does not have a from_numeral method",
                     .{short_type_name},
                 );
                 try self.error_names.append(error_msg);
@@ -592,7 +592,7 @@ pub const ComptimeEvaluator = struct {
                 // Definition not exposed - this is also an error
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "Type {s} does not have an accessible from_num_literal method",
+                    "Type {s} does not have an accessible from_numeral method",
                     .{short_type_name},
                 );
                 try self.error_names.append(error_msg);
@@ -610,13 +610,13 @@ pub const ComptimeEvaluator = struct {
 
             // Get num_lit_info for validation
             const num_lit_info = literal.constraint.num_literal orelse {
-                // No NumLiteralInfo means this isn't a from_num_literal constraint
+                // No NumeralInfo means this isn't a from_numeral constraint
                 continue;
             };
 
-            // Step 3: Validate the literal by invoking from_num_literal
+            // Step 3: Validate the literal by invoking from_numeral
             // All types (builtin and user-defined) use the same unified path
-            const is_valid = try self.invokeFromNumLiteral(
+            const is_valid = try self.invokeFromNumeral(
                 origin_env,
                 def_idx,
                 num_lit_info,
@@ -625,7 +625,7 @@ pub const ComptimeEvaluator = struct {
             );
 
             if (!is_valid) {
-                // Error already reported by invokeFromNumLiteral
+                // Error already reported by invokeFromNumeral
                 // Mark this expression as failed so we skip evaluating it
                 try self.failed_literal_exprs.put(literal.expr_idx, {});
                 continue;
@@ -645,7 +645,7 @@ pub const ComptimeEvaluator = struct {
         self: *ComptimeEvaluator,
         expr_idx: CIR.Expr.Idx,
         type_name: []const u8,
-        num_lit_info: types_mod.NumLiteralInfo,
+        num_lit_info: types_mod.NumeralInfo,
     ) !void {
         const current_expr = self.env.store.getExpr(expr_idx);
 
@@ -721,19 +721,19 @@ pub const ComptimeEvaluator = struct {
         // For Dec type, keep the original e_dec/e_dec_small expression
     }
 
-    /// Invoke a user-defined from_num_literal function and check the result.
+    /// Invoke a user-defined from_numeral function and check the result.
     /// Returns true if validation passed (Ok), false if it failed (Err).
-    fn invokeFromNumLiteral(
+    fn invokeFromNumeral(
         self: *ComptimeEvaluator,
         origin_env: *const ModuleEnv,
         def_idx: CIR.Def.Idx,
-        num_lit_info: types_mod.NumLiteralInfo,
+        num_lit_info: types_mod.NumeralInfo,
         region: base.Region,
         target_ct_type_var: types_mod.Var, // The compile-time type variable the literal is being converted to
     ) !bool {
         const roc_ops = self.get_ops();
 
-        // Look up the from_num_literal function
+        // Look up the from_numeral function
         const target_def = origin_env.store.getDef(def_idx);
 
         // Save current environment and switch to origin_env BEFORE building the record
@@ -747,7 +747,7 @@ pub const ComptimeEvaluator = struct {
             self.interpreter.bindings.items.len = saved_bindings_len;
         }
 
-        // Build NumLiteral record: { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
+        // Build Numeral record: { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
         // Must be built AFTER switching to origin_env so ident indices are from the correct store
 
         // Convert the numeric value to base-256 digits
@@ -809,15 +809,15 @@ pub const ComptimeEvaluator = struct {
         const after_list = try self.buildU8List(digits_after, roc_ops);
         defer after_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
-        // Build the NumLiteral record
-        const num_literal_record = try self.buildNumLiteralRecord(is_neg_value, before_list, after_list, roc_ops);
+        // Build the Numeral record
+        const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
         defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
-        // Evaluate the from_num_literal function to get a closure
+        // Evaluate the from_numeral function to get a closure
         const func_value = self.interpreter.evalMinimal(target_def.expr, roc_ops) catch |err| {
             const error_msg = try std.fmt.allocPrint(
                 self.allocator,
-                "Failed to evaluate from_num_literal function: {s}",
+                "Failed to evaluate from_numeral function: {s}",
                 .{@errorName(err)},
             );
             try self.error_names.append(error_msg);
@@ -836,7 +836,7 @@ pub const ComptimeEvaluator = struct {
         if (func_value.layout.tag != .closure) {
             const error_msg = try std.fmt.allocPrint(
                 self.allocator,
-                "from_num_literal is not a function",
+                "from_numeral is not a function",
                 .{},
             );
             try self.error_names.append(error_msg);
@@ -857,7 +857,7 @@ pub const ComptimeEvaluator = struct {
         if (params.len != 1) {
             const error_msg = try std.fmt.allocPrint(
                 self.allocator,
-                "from_num_literal has wrong number of parameters (expected 1, got {d})",
+                "from_numeral has wrong number of parameters (expected 1, got {d})",
                 .{params.len},
             );
             try self.error_names.append(error_msg);
@@ -906,12 +906,12 @@ pub const ComptimeEvaluator = struct {
             // This tells the interpreter what type the literal is being converted to
             const target_rt_var = try self.interpreter.translateTypeVar(self.env, target_ct_type_var);
 
-            // Call the low-level builtin with our NumLiteral argument and target type
+            // Call the low-level builtin with our Numeral argument and target type
             var args = [_]eval_mod.StackValue{num_literal_record};
             result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "from_num_literal builtin failed: {s}",
+                    "from_numeral builtin failed: {s}",
                     .{@errorName(err)},
                 );
                 try self.error_names.append(error_msg);
@@ -941,7 +941,7 @@ pub const ComptimeEvaluator = struct {
             result = self.interpreter.evalMinimal(closure_header.body_idx, roc_ops) catch |err| {
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "from_num_literal evaluation failed: {s}",
+                    "from_numeral evaluation failed: {s}",
                     .{@errorName(err)},
                 );
                 try self.error_names.append(error_msg);
@@ -1014,10 +1014,10 @@ pub const ComptimeEvaluator = struct {
         return dest;
     }
 
-    /// Build a NumLiteral record from its components
+    /// Build a Numeral record from its components
     /// Uses self.env for layout store operations (since layout store was initialized with user's env)
     /// but uses self.interpreter.env for field index lookups during value setting
-    fn buildNumLiteralRecord(
+    fn buildNumeralRecord(
         self: *ComptimeEvaluator,
         is_negative: eval_mod.StackValue,
         digits_before_pt: eval_mod.StackValue,
@@ -1064,7 +1064,7 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Check a Try result value - returns true if Ok, false if Err
-    /// For Err case, extracts the InvalidNumLiteral(Str) message if present
+    /// For Err case, extracts the InvalidNumeral(Str) message if present
     fn checkTryResult(
         self: *ComptimeEvaluator,
         result: eval_mod.StackValue,
@@ -1125,8 +1125,8 @@ pub const ComptimeEvaluator = struct {
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 const tag_value = tag_field.asI128();
                 if (tag_value == 0) {
-                    // This is an Err - try to extract InvalidNumLiteral(Str) message
-                    const error_msg = try self.extractInvalidNumLiteralMessage(accessor, region);
+                    // This is an Err - try to extract InvalidNumeral(Str) message
+                    const error_msg = try self.extractInvalidNumeralMessage(accessor, region);
                     try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
@@ -1145,8 +1145,8 @@ pub const ComptimeEvaluator = struct {
         return true; // Unknown format, optimistically allow
     }
 
-    /// Extract the error message from an Err(InvalidNumLiteral(Str)) payload
-    fn extractInvalidNumLiteralMessage(
+    /// Extract the error message from an Err(InvalidNumeral(Str)) payload
+    fn extractInvalidNumeralMessage(
         self: *ComptimeEvaluator,
         try_accessor: eval_mod.StackValue.RecordAccessor,
         region: base.Region,
@@ -1158,25 +1158,25 @@ pub const ComptimeEvaluator = struct {
         const layout_env = self.interpreter.runtime_layout_store.env;
         const payload_idx = try_accessor.findFieldIndex(layout_env, "payload") orelse {
             // This should never happen - Try type must have a payload field
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned malformed Try value (missing payload field)", .{});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
         const payload_field = try_accessor.getFieldByIndex(payload_idx) catch {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned malformed Try value (could not access payload)", .{});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not access payload)", .{});
         };
 
-        // The payload for Err is the error type: [InvalidNumLiteral(Str), ...]
+        // The payload for Err is the error type: [InvalidNumeral(Str), ...]
         // This is itself a tag union which may be a record { tag, payload } or just a scalar
         if (payload_field.layout.tag == .record) {
-            // Tag union with payload - look for InvalidNumLiteral tag
+            // Tag union with payload - look for InvalidNumeral tag
             var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
-                return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error payload is not a valid record", .{});
+                return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a valid record", .{});
             };
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
             if (err_accessor.findFieldIndex(layout_env, "payload")) |err_payload_idx| {
                 const err_payload = err_accessor.getFieldByIndex(err_payload_idx) catch {
-                    return try std.fmt.allocPrint(self.allocator, "Internal error: could not access InvalidNumLiteral payload", .{});
+                    return try std.fmt.allocPrint(self.allocator, "Internal error: could not access InvalidNumeral payload", .{});
                 };
                 return try self.extractStrFromValue(err_payload);
             }
@@ -1191,13 +1191,13 @@ pub const ComptimeEvaluator = struct {
                 }
             }
 
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error has no string message in InvalidNumLiteral", .{});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error has no string message in InvalidNumeral", .{});
         } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
             // Direct Str payload (single-tag union optimized to just the payload)
             return try self.extractStrFromValue(payload_field);
         }
 
-        return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned unexpected error type (expected InvalidNumLiteral with Str payload)", .{});
+        return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned unexpected error type (expected InvalidNumeral with Str payload)", .{});
     }
 
     /// Extract a Str value from a StackValue
@@ -1210,14 +1210,14 @@ pub const ComptimeEvaluator = struct {
                     // Copy the string to our allocator so we own it
                     return try self.allocator.dupe(u8, str_bytes);
                 }
-                return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal returned empty error message", .{});
+                return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned empty error message", .{});
             }
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error string has null pointer", .{});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error string has null pointer", .{});
         }
         if (value.layout.tag == .scalar) {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.data.scalar.tag)});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.data.scalar.tag)});
         }
-        return try std.fmt.allocPrint(self.allocator, "Internal error: from_num_literal error payload is not a string (layout tag: {s})", .{@tagName(value.layout.tag)});
+        return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: {s})", .{@tagName(value.layout.tag)});
     }
 
     /// Evaluates all top-level declarations in the module

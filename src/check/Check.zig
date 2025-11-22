@@ -48,7 +48,7 @@ pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
     /// The type variable that the literal unified with
     type_var: Var,
-    /// The from_num_literal constraint attached to this literal
+    /// The from_numeral constraint attached to this literal
     constraint: StaticDispatchConstraint,
     /// Source region for error reporting
     region: Region,
@@ -152,8 +152,8 @@ pub const CommonIdents = struct {
     str_stmt: can.CIR.Statement.Idx,
     /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
     builtin_module: ?*const ModuleEnv,
-    /// Cached identifier for "from_num_literal" (used for numeric literal constraints)
-    from_num_literal: ?base.Ident.Idx = null,
+    /// Cached identifier for "from_numeral" (used for numeric literal constraints)
+    from_numeral: ?base.Ident.Idx = null,
 };
 
 /// Init type solver
@@ -699,29 +699,29 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     );
 }
 
-/// Create a StaticDispatchConstraint for from_num_literal
+/// Create a StaticDispatchConstraint for from_numeral
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.
-fn mkFromNumLiteralConstraint(
+fn mkFromNumeralConstraint(
     self: *Self,
-    num_literal_info: types_mod.NumLiteralInfo,
+    num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) !types_mod.StaticDispatchConstraint.SafeList.Range {
-    // Get or create the from_num_literal identifier
-    const from_num_literal_ident = blk: {
-        if (self.common_idents.from_num_literal) |ident| {
+    // Get or create the from_numeral identifier
+    const from_numeral_ident = blk: {
+        if (self.common_idents.from_numeral) |ident| {
             break :blk ident;
         }
         // First time - create and cache it
         const ident = try @constCast(self.cir).insertIdent(
-            base.Ident.for_text("from_num_literal"),
+            base.Ident.for_text("from_numeral"),
         );
-        self.common_idents.from_num_literal = ident;
+        self.common_idents.from_numeral = ident;
         break :blk ident;
     };
 
-    // Create a placeholder function type var for from_num_literal
-    // The actual from_num_literal function type will be looked up and unified
+    // Create a placeholder function type var for from_numeral
+    // The actual from_numeral function type will be looked up and unified
     // during constraint checking, but we need a function type structure here
     // so that unwrapFunc() doesn't fail
     const arg_var = try self.fresh(env, num_literal_info.region);
@@ -740,9 +740,9 @@ fn mkFromNumLiteralConstraint(
 
     // Create the constraint with numeric literal info
     const constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = from_num_literal_ident,
+        .fn_name = from_numeral_ident,
         .fn_var = fn_var,
-        .origin = .from_num_literal,
+        .origin = .from_numeral,
         .num_literal = num_literal_info,
     };
 
@@ -2196,17 +2196,17 @@ fn checkPatternHelp(
         },
         // nums //
         .num_literal => |num| {
-            // For unannotated literals (.num_unbound, .int_unbound), create a flex var with from_num_literal constraint
+            // For unannotated literals (.num_unbound, .int_unbound), create a flex var with from_numeral constraint
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
-                    // Create NumLiteralInfo for constraint checking
+                    // Create NumeralInfo for constraint checking
                     const num_literal_info = switch (num.value.kind) {
-                        .u128 => types_mod.NumLiteralInfo.fromU128(@bitCast(num.value.bytes), false, pattern_region),
-                        .i128 => types_mod.NumLiteralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, pattern_region),
+                        .u128 => types_mod.NumeralInfo.fromU128(@bitCast(num.value.bytes), false, pattern_region),
+                        .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, pattern_region),
                     };
 
-                    // Create from_num_literal constraint
-                    const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                    // Create from_numeral constraint
+                    const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
 
                     // Create flex var with the constraint
                     const flex_content = types_mod.Content{
@@ -2247,15 +2247,15 @@ fn checkPatternHelp(
                 // Explicit suffix like `3.14dec` - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                // Unannotated decimal literal - create flex var with from_num_literal constraint
-                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                // Unannotated decimal literal - create flex var with from_numeral constraint
+                const num_literal_info = types_mod.NumeralInfo.fromI128(
                     dec.value.num, // RocDec has .num field which is i128 scaled by 10^18
                     dec.value.num < 0,
                     true, // Decimal literals are always fractional
                     pattern_region,
                 );
 
-                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                 const flex_content = types_mod.Content{
                     .flex = types_mod.Flex{
                         .name = null,
@@ -2271,18 +2271,18 @@ fn checkPatternHelp(
                 // Explicit suffix - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                // Unannotated decimal literal - create flex var with from_num_literal constraint
+                // Unannotated decimal literal - create flex var with from_numeral constraint
                 // SmallDecValue stores a numerator (i16) and power of ten
                 // We need to convert this to an i128 scaled by 10^18 for consistency
                 const scaled_value = @as(i128, dec.value.numerator) * std.math.pow(i128, 10, 18 - dec.value.denominator_power_of_ten);
-                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                const num_literal_info = types_mod.NumeralInfo.fromI128(
                     scaled_value,
                     dec.value.numerator < 0,
                     true,
                     pattern_region,
                 );
 
-                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                 const flex_content = types_mod.Content{
                     .flex = types_mod.Flex{
                         .name = null,
@@ -2364,14 +2364,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_num => |num| {
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
-                    // For unannotated literals, create a flex var with from_num_literal constraint
+                    // For unannotated literals, create a flex var with from_numeral constraint
                     const num_literal_info = switch (num.value.kind) {
-                        .u128 => types_mod.NumLiteralInfo.fromU128(@bitCast(num.value.bytes), false, expr_region),
-                        .i128 => types_mod.NumLiteralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, expr_region),
+                        .u128 => types_mod.NumeralInfo.fromU128(@bitCast(num.value.bytes), false, expr_region),
+                        .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, expr_region),
                     };
 
-                    // Create from_num_literal constraint
-                    const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                    // Create from_numeral constraint
+                    const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                     const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
                     // Create flex var with the constraint
@@ -2412,13 +2412,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
-                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                const num_literal_info = types_mod.NumeralInfo.fromI128(
                     @as(i128, @as(u32, @bitCast(frac.value))),
                     frac.value < 0,
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
                     .flex = types_mod.Flex{
@@ -2441,13 +2441,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
-                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                const num_literal_info = types_mod.NumeralInfo.fromI128(
                     @as(i128, @as(u64, @bitCast(frac.value))),
                     frac.value < 0,
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
                     .flex = types_mod.Flex{
@@ -2470,13 +2470,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unsuffixed Dec literal - create constrained flex var
-                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                const num_literal_info = types_mod.NumeralInfo.fromI128(
                     frac.value.num,
                     frac.value.num < 0,
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
                     .flex = types_mod.Flex{
@@ -2501,13 +2501,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Unsuffixed small Dec literal - create constrained flex var
                 // Scale the value to i128 representation
                 const scaled_value = @as(i128, frac.value.numerator) * std.math.pow(i128, 10, 18 - frac.value.denominator_power_of_ten);
-                const num_literal_info = types_mod.NumLiteralInfo.fromI128(
+                const num_literal_info = types_mod.NumeralInfo.fromI128(
                     scaled_value,
                     scaled_value < 0,
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumLiteralConstraint(num_literal_info, env);
+                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 const flex_content = types_mod.Content{
                     .flex = types_mod.Flex{
@@ -4282,12 +4282,12 @@ fn handleRecursiveConstraint(
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-/// Check a from_num_literal constraint - actual validation happens during comptime evaluation
-fn checkNumLiteralConstraint(
+/// Check a from_numeral constraint - actual validation happens during comptime evaluation
+fn checkNumeralConstraint(
     self: *Self,
     type_var: Var,
     constraint: types_mod.StaticDispatchConstraint,
-    num_lit_info: types_mod.NumLiteralInfo,
+    num_lit_info: types_mod.NumeralInfo,
     nominal_type: types_mod.NominalType,
     type_name_bytes: []const u8,
     env: *Env,
@@ -4603,9 +4603,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (any_arg_failed or ret_result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
-                } else if (constraint.origin == .from_num_literal and constraint.num_literal != null) {
-                    // For from_num_literal constraints on builtin types, do compile-time validation
-                    try self.checkNumLiteralConstraint(
+                } else if (constraint.origin == .from_numeral and constraint.num_literal != null) {
+                    // For from_numeral constraints on builtin types, do compile-time validation
+                    try self.checkNumeralConstraint(
                         deferred_constraint.var_,
                         constraint,
                         constraint.num_literal.?,

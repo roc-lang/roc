@@ -92,5 +92,5 @@ match (1, 2) {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(_field, _field2) where [_a.from_num_literal : _arg -> _ret, _b.from_num_literal : _arg2 -> _ret2]"))
+(expr (type "(_field, _field2) where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]"))
 ~~~

@@ -125,7 +125,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Str where [_a.from_num_literal : _arg2 -> _ret]")))
+		(patt (type "_arg -> Str where [_a.from_numeral : _arg2 -> _ret]")))
 	(expressions
-		(expr (type "_arg -> Str where [_a.from_num_literal : _arg2 -> _ret]"))))
+		(expr (type "_arg -> Str where [_a.from_numeral : _arg2 -> _ret]"))))
 ~~~

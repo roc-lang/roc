@@ -19,7 +19,7 @@ This expression is used in an unexpected way:
   ^^^^
 
 It has the type:
-    _[C(_a)][False, True] where [[C(b)][False, True].from_num_literal : [C(b)][False, True]]_
+    _[C(_a)][False, True] where [[C(b)][False, True].from_numeral : [C(b)][False, True]]_
 
 But I expected it to be:
     _Bool_

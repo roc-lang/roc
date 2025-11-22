@@ -72,7 +72,7 @@ But I expected it to be:
     _Bool_
 
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **multiline_string_complex.md:37:3:37:4:**
 ```roc
 		0 - \\
@@ -80,7 +80,7 @@ This **from_num_literal** method is being called on the type **Str**, which has 
 		^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

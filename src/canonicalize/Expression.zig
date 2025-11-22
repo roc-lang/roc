@@ -425,7 +425,7 @@ pub const Expr = union(enum) {
         // Numeric parsing operations
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
-        num_from_num_literal, // Parse NumLiteral -> Try(num, [InvalidNumLiteral(Str)])
+        num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
     };
 
     pub const Idx = enum(u32) { _ };

@@ -217,13 +217,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // from_num_literal (all numeric types)
+    // from_numeral (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
 
-        const from_num_literal = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_num_literal", .{num_type});
-        if (env.common.findIdent(from_num_literal)) |ident| {
-            try low_level_map.put(ident, .num_from_num_literal);
+        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
+        if (env.common.findIdent(from_numeral)) |ident| {
+            try low_level_map.put(ident, .num_from_numeral);
         }
     }
 
@@ -299,7 +299,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_num_literal, .num_from_int_digits => 1,
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits => 1,
                         else => 2, // Most numeric operations are binary
                     };
 

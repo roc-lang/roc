@@ -446,7 +446,7 @@ fn rewriteNumericLiteralExpr(
     env: *ModuleEnv,
     expr_idx: CIR.Expr.Idx,
     type_name: []const u8,
-    num_lit_info: types.NumLiteralInfo,
+    num_lit_info: types.NumeralInfo,
 ) !void {
     const current_expr = env.store.getExpr(expr_idx);
 

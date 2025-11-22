@@ -16,7 +16,7 @@ MISSING METHOD - can_list_multiline_mismatch.md:2:5:2:7
 MISSING METHOD - can_list_multiline_mismatch.md:4:5:4:8
 # PROBLEMS
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **can_list_multiline_mismatch.md:2:5:2:7:**
 ```roc
     42,
@@ -24,10 +24,10 @@ This **from_num_literal** method is being called on the type **Str**, which has 
     ^^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **from_num_literal** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
 **can_list_multiline_mismatch.md:4:5:4:8:**
 ```roc
     100
@@ -35,7 +35,7 @@ This **from_num_literal** method is being called on the type **Str**, which has 
     ^^^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_num_literal** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
