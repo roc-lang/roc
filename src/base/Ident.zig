@@ -105,7 +105,8 @@ pub const Store = struct {
     next_unique_name: u32 = 0,
 
     /// Serialized representation of an Ident.Store
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         interner: SmallStringInterner.Serialized,
         attributes: collections.SafeList(Attributes).Serialized,
         next_unique_name: u32,

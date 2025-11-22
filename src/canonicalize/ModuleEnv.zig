@@ -1655,8 +1655,8 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 }
 
 /// Serialized representation of ModuleEnv.
-/// NOTE: Field order matters for cross-platform compatibility! Keep `module_kind` at the end.
-pub const Serialized = struct {
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
@@ -1670,7 +1670,7 @@ pub const Serialized = struct {
     module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: ModuleKind,
+    module_kind: [2]u32, // Serialized ModuleKind (tag + optional payload), decoded via decodeModuleKind
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
     from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
@@ -1680,7 +1680,7 @@ pub const Serialized = struct {
     plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
     minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
     times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
-    div_by_ident_reserved: u32, // Reserved space for div_by_ident field (interned during deserialization)
+    div_by_ident_reserved: u32, // Reserved space for div_by_ field (interned during deserialization)
     div_trunc_by_ident_reserved: u32, // Reserved space for div_trunc_by_ident field (interned during deserialization)
     rem_by_ident_reserved: u32, // Reserved space for rem_by_ident field (interned during deserialization)
     negate_ident_reserved: u32, // Reserved space for negate_ident field (interned during deserialization)
@@ -1704,7 +1704,7 @@ pub const Serialized = struct {
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
-        self.module_kind = env.module_kind;
+        self.module_kind = encodeModuleKind(env.module_kind);
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
@@ -1714,7 +1714,6 @@ pub const Serialized = struct {
         try self.imports.serialize(&env.imports, allocator, writer);
 
         self.diagnostics = env.diagnostics;
-        self.module_kind = env.module_kind;
 
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
@@ -1772,7 +1771,7 @@ pub const Serialized = struct {
             .gpa = gpa,
             .common = common,
             .types = self.types.deserialize(offset, gpa).*,
-            .module_kind = self.module_kind,
+            .module_kind = decodeModuleKind(self.module_kind),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
@@ -1808,6 +1807,35 @@ pub const Serialized = struct {
         };
 
         return env;
+    }
+
+    /// Encode a ModuleKind to a serializable [2]u32 representation
+    pub fn encodeModuleKind(kind: ModuleKind) [2]u32 {
+        return switch (kind) {
+            .type_module => |idx| .{ 0, @bitCast(idx) },
+            .default_app => .{ 1, 0 },
+            .app => .{ 2, 0 },
+            .package => .{ 3, 0 },
+            .platform => .{ 4, 0 },
+            .hosted => .{ 5, 0 },
+            .deprecated_module => .{ 6, 0 },
+            .malformed => .{ 7, 0 },
+        };
+    }
+
+    /// Decode a [2]u32 representation back to a ModuleKind
+    pub fn decodeModuleKind(encoded: [2]u32) ModuleKind {
+        return switch (encoded[0]) {
+            0 => .{ .type_module = @bitCast(encoded[1]) },
+            1 => .default_app,
+            2 => .app,
+            3 => .package,
+            4 => .platform,
+            5 => .hosted,
+            6 => .deprecated_module,
+            7 => .malformed,
+            else => unreachable,
+        };
     }
 };
 

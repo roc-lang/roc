@@ -720,7 +720,8 @@ pub const Store = struct {
     // serialization //
 
     /// Serialized representation of types store
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
         slots: SlotStore.Serialized,
         descs: DescStore.Serialized,
@@ -922,7 +923,8 @@ const SlotStore = struct {
     }
 
     /// Serialized representation of SlotStore
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         backing: collections.SafeList(Slot).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
@@ -1024,7 +1026,8 @@ const DescStore = struct {
     }
 
     /// Serialized representation of DescStore
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         backing: DescSafeMultiList.Serialized,
 
         /// Serialize a DescStore into this Serialized struct, appending data to the writer

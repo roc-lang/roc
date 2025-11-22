@@ -75,7 +75,7 @@ pub const BuiltinIndices = struct {
 /// Represents a definition (binding of a pattern to an expression) in the CIR
 pub const Def = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     pattern: Pattern.Idx,
     expr: Expr.Idx,
@@ -134,7 +134,7 @@ pub const Def = struct {
 /// Represents a type header (e.g., 'Maybe a' or 'Try err ok') in type annotations
 pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { start: u32, len: u32 };
+    pub const Span = extern struct { start: u32, len: u32 };
 
     name: base.Ident.Idx,
     args: TypeAnno.Span,
@@ -170,7 +170,7 @@ pub const TypeHeader = struct {
 /// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     w_method: struct {
         var_: TypeAnno.Idx,
@@ -293,7 +293,7 @@ pub const Annotation = struct {
 /// Represents an item exposed by a module's interface
 pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     name: base.Ident.Idx,
     alias: ?base.Ident.Idx,
@@ -321,7 +321,7 @@ pub const ExposedItem = struct {
 /// Represents a field in a record pattern for pattern matching
 pub const PatternRecordField = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { start: u32, len: u32 };
+    pub const Span = extern struct { start: u32, len: u32 };
 };
 
 /// Represents an arbitrary precision smallish decimal value
@@ -678,10 +678,11 @@ pub const Import = struct {
             self.imports.relocate(offset);
         }
 
-        pub const Serialized = struct {
+        /// Uses extern struct to guarantee consistent field layout across optimization levels.
+        pub const Serialized = extern struct {
             // Placeholder to match Store size - not serialized
             // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
-            map: [3]u64 = undefined,
+            map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -730,7 +731,7 @@ pub const Import = struct {
 /// Represents a field in a record expression
 pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     name: base.Ident.Idx,
     value: Expr.Idx,
@@ -761,7 +762,7 @@ pub const ExternalDecl = struct {
     region: Region,
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
 

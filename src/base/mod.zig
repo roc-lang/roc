@@ -13,7 +13,7 @@ pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const safe_memory = @import("safe_memory.zig");
 
 pub const target = @import("target.zig");
-pub const DataSpan = @import("DataSpan.zig");
+pub const DataSpan = @import("DataSpan.zig").DataSpan;
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;

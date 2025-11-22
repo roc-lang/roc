@@ -97,7 +97,7 @@ pub const TypeAnno = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
@@ -325,7 +325,7 @@ pub const TypeAnno = union(enum) {
         ty: TypeAnno.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: DataSpan };
+        pub const Span = extern struct { span: DataSpan };
     };
 
     /// Either a locally declare type, or an external type

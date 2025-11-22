@@ -252,7 +252,7 @@ pub const Diagnostic = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Helper to extract the region from any diagnostic variant
     pub fn toRegion(self: Diagnostic) Region {
