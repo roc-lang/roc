@@ -63,7 +63,6 @@ const Allocators = base.Allocators;
 const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
 test "main cli tests" {
-    _ = @import("test_bundle_logic.zig");
     _ = @import("libc_finder.zig");
     _ = @import("test_shared_memory_system.zig");
 }
@@ -900,12 +899,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
                     // as specified in the design document.
 
                     const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs.gpa)) |libc_info| {
-                        defer {
-                            var info = libc_info;
-                            info.deinit();
-                        }
-
+                    if (libc_finder.findLibc(allocs)) |libc_info| {
                         // Use system CRT files from the detected lib directory
                         // TODO: Remove this once platforms provide their own CRT files
                         const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {
@@ -2513,7 +2507,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     defer builtin_module.deinit();
 
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -2794,6 +2788,31 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Additional errors from std library that might be missing
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
+    // Interpreter errors (propagate from eval during build)
+    Crash,
+    DivisionByZero,
+    IntegerOverflow,
+    InvalidMethodReceiver,
+    InvalidNumExt,
+    InvalidTagExt,
+    ListIndexOutOfBounds,
+    MethodLookupFailed,
+    MethodNotFound,
+    NotImplemented,
+    NotNumeric,
+    NullStackPointer,
+    RecordIndexOutOfBounds,
+    StackOverflow,
+    StringOrderingNotSupported,
+    TupleIndexOutOfBounds,
+    TypeMismatch,
+    ZeroSizedType,
+    // Layout errors
+    TypeContainedMismatch,
+    InvalidRecordExtension,
+    InvalidNumberExtension,
+    BugUnboxedFlexVar,
+    BugUnboxedRigidVar,
 };
 
 /// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)

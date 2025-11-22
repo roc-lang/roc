@@ -9,6 +9,7 @@ get_name!({}) ?? "Bob"
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
+NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `get_name!` in this scope.
@@ -20,6 +21,11 @@ get_name!({}) ?? "Bob"
 ```
 ^^^^^^^^^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 # TOKENS
 ~~~zig
@@ -41,14 +47,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "null_coalesce")
-	(e-call
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-empty_record))
-	(e-string
-		(e-literal (string "Bob"))))
+(e-runtime-error (tag "not_implemented"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

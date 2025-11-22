@@ -124,15 +124,24 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// This is used when loading a NodeStore from shared memory at a different address.
+pub fn relocate(store: *NodeStore, offset: isize) void {
+    store.nodes.relocate(offset);
+    store.regions.relocate(offset);
+    store.extra_data.relocate(offset);
+    // scratch is null for deserialized NodeStores, no need to relocate
+}
+
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 58;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 35;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 15;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -271,6 +280,10 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             .patt = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
             .body = @enumFromInt(node.data_3),
+        } },
+        .statement_while => return CIR.Statement{ .s_while = .{
+            .cond = @enumFromInt(node.data_1),
+            .body = @enumFromInt(node.data_2),
         } },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
@@ -1298,6 +1311,11 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_1 = @intFromEnum(s.patt);
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = @intFromEnum(s.body);
+        },
+        .s_while => |s| {
+            node.tag = .statement_while;
+            node.data_1 = @intFromEnum(s.cond);
+            node.data_2 = @intFromEnum(s.body);
         },
         .s_return => |s| {
             node.tag = .statement_return;
@@ -2776,6 +2794,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_if_else_not_canonicalized;
             region = r.region;
         },
+        .if_expr_without_else => |r| {
+            node.tag = .diag_if_expr_without_else;
+            region = r.region;
+        },
         .malformed_type_annotation => |r| {
             node.tag = .diag_malformed_type_annotation;
             region = r.region;
@@ -3118,6 +3140,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = store.getRegionAt(node_idx),
         } },
@@ -3404,7 +3429,8 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error
 }
 
 /// Serialized representation of NodeStore
-pub const Serialized = struct {
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,

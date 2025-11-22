@@ -79,6 +79,7 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
+        IntegerOverflow,
         InvalidMethodReceiver,
         InvalidNumExt,
         InvalidTagExt,
@@ -169,6 +170,7 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
+    builtin_module_env: ?*const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
@@ -183,8 +185,6 @@ pub const Interpreter = struct {
     bindings: std.array_list.Managed(Binding),
     // Track active closures during calls (for capture lookup)
     active_closures: std.array_list.Managed(StackValue),
-    bool_false_index: u8,
-    bool_true_index: u8,
     canonical_bool_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
@@ -193,8 +193,12 @@ pub const Interpreter = struct {
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
+    /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
+    num_literal_target_type: ?types.Var,
+    /// Last error message from num_from_numeral when payload area is too small
+    last_error_message: ?[]const u8,
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, other_envs: []const *const can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -230,7 +234,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -246,6 +250,7 @@ pub const Interpreter = struct {
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
+        builtin_module_env: ?*const can.ModuleEnv,
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -262,6 +267,7 @@ pub const Interpreter = struct {
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
+            .builtin_module_env = builtin_module_env,
             .module_envs = module_envs,
             .module_ids = module_ids,
             .import_envs = import_envs,
@@ -273,13 +279,13 @@ pub const Interpreter = struct {
             .stack_memory = try stack.Stack.initCapacity(allocator, 8 * 1024 * 1024), // 8MB stack
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
-            .bool_false_index = 0,
-            .bool_true_index = 1,
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
+            .num_literal_target_type = null,
+            .last_error_message = null,
         };
 
         // Get the "Builtin.Str" identifier from the runtime module's identifier store
@@ -469,14 +475,6 @@ pub const Interpreter = struct {
                                 try Placeholder.add(self, d.pattern, d.expr);
                             }
                         },
-                        .s_decl_gen => |d| {
-                            const patt = self.env.store.getPattern(d.pattern);
-                            if (patt != .assign) continue;
-                            const rhs = self.env.store.getExpr(d.expr);
-                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
-                                try Placeholder.add(self, d.pattern, d.expr);
-                            }
-                        },
                         .s_var => |v| {
                             const patt = self.env.store.getPattern(v.pattern_idx);
                             if (patt != .assign) continue;
@@ -494,27 +492,6 @@ pub const Interpreter = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |d| {
-                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                            defer {
-                                self.trimBindingList(&temp_binds, 0, roc_ops);
-                                temp_binds.deinit();
-                            }
-
-                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
-                            defer val.decref(&self.runtime_layout_store, roc_ops);
-
-                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
-                                return error.TypeMismatch;
-                            }
-
-                            for (temp_binds.items) |binding| {
-                                try self.upsertBinding(binding, original_len, roc_ops);
-                            }
-                            temp_binds.items.len = 0;
-                        },
-                        .s_decl_gen => |d| {
                             const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                             const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
@@ -579,14 +556,8 @@ pub const Interpreter = struct {
                         },
                         .s_expect => |expect_stmt| {
                             const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
-                            // Get the actual type of the expression
-                            const expr_ct_var = can.ModuleEnv.varFrom(expect_stmt.body);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
-                            // Try using the expression's actual type first, then fall back to canonical Bool type
-                            const is_true = self.boolValueIsTrue(cond_val, expr_rt_var) catch blk: {
-                                break :blk try self.boolValueIsTrue(cond_val, bool_rt_var);
-                            };
+                            const is_true = boolValueEquals(true, cond_val);
                             if (!is_true) {
                                 try self.handleExpectFailure(expect_stmt.body, roc_ops);
                                 return error.Crash;
@@ -666,6 +637,32 @@ pub const Interpreter = struct {
                                 elem_value.decref(&self.runtime_layout_store, roc_ops);
                             }
                         },
+                        .s_while => |while_stmt| {
+                            // Loop until condition becomes false
+                            while (true) {
+                                // 1. EVALUATE CONDITION
+                                const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
+                                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                                const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
+
+                                // 2. CHECK IF CONDITION IS TRUE
+                                const cond_is_true = boolValueEquals(true, cond_value);
+
+                                // 3. EXIT LOOP IF CONDITION IS FALSE
+                                if (!cond_is_true) {
+                                    break;
+                                }
+
+                                // 4. EVALUATE BODY
+                                const body_result = try self.evalExprMinimal(while_stmt.body, roc_ops, null);
+                                defer body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Body result is {} (empty record), so nothing to do with it
+                                // Loop continues to next iteration
+                            }
+
+                            // While loop completes and returns {} (implicitly)
+                        },
                         else => return error.NotImplemented,
                     }
                 }
@@ -684,15 +681,26 @@ pub const Interpreter = struct {
                 value.is_initialized = false;
                 switch (layout_val.tag) {
                     .scalar => switch (layout_val.data.scalar.tag) {
-                        .int => value.setInt(num_lit.value.toI128()),
+                        .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
                         .frac => switch (layout_val.data.scalar.data.frac) {
                             .f32 => {
                                 const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = @floatFromInt(num_lit.value.toI128());
+                                // For u128 values, convert from the raw bytes
+                                if (num_lit.value.kind == .u128) {
+                                    const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                                    ptr.* = @floatFromInt(u128_val);
+                                } else {
+                                    ptr.* = @floatFromInt(num_lit.value.toI128());
+                                }
                             },
                             .f64 => {
                                 const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = @floatFromInt(num_lit.value.toI128());
+                                if (num_lit.value.kind == .u128) {
+                                    const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                                    ptr.* = @floatFromInt(u128_val);
+                                } else {
+                                    ptr.* = @floatFromInt(num_lit.value.toI128());
+                                }
                             },
                             .dec => {
                                 const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
@@ -706,189 +714,87 @@ pub const Interpreter = struct {
                 value.is_initialized = true;
                 return value;
             },
+            .e_unary_minus => |unary_minus| {
+                // Desugar `-a` to `a.negate()`
+                return try self.dispatchUnaryOpMethod(self.env.negate_ident, unary_minus.expr, roc_ops);
+            },
+            .e_unary_not => |unary_not| {
+                // Desugar `!a` to `a.not()`
+                return try self.dispatchUnaryOpMethod(self.env.not_ident, unary_not.expr, roc_ops);
+            },
             .e_binop => |binop| {
-                if (binop.op == .add) {
-                    // Desugar `a + b` to `a.plus(b)` using method lookup
-                    // For built-in numeric types (represented as .num), fall back to direct arithmetic
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                switch (binop.op) {
+                    .add => {
+                        // Desugar `a + b` to `a.plus(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.plus_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .sub => {
+                        // Desugar `a - b` to `a.minus(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.minus_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .mul => {
+                        // Desugar `a * b` to `a.times(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.times_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .div => {
+                        // Desugar `a / b` to `a.div_by(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.div_by_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .div_trunc => {
+                        // Desugar `a // b` to `a.div_trunc_by(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.div_trunc_by_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .rem => {
+                        // Desugar `a % b` to `a.rem_by(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.rem_by_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .lt => {
+                        // Desugar `a < b` to `a.is_lt(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.is_lt_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .le => {
+                        // Desugar `a <= b` to `a.is_lte(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.is_lte_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .gt => {
+                        // Desugar `a > b` to `a.is_gt(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.is_gt_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .ge => {
+                        // Desugar `a >= b` to `a.is_gte(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.is_gte_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .eq => {
+                        // Desugar `a == b` to `a.is_eq(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .ne => {
+                        // Desugar `a != b` to `a.is_ne(b)`
+                        return try self.dispatchBinaryOpMethod(self.env.is_ne_ident, binop.lhs, binop.rhs, roc_ops);
+                    },
+                    .@"or" => {
+                        var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                        defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                        if (boolValueEquals(true, lhs)) {
+                            return try self.makeBoolValue(true);
+                        }
 
-                    // Check if lhs is a numeric type (could be .num structure or flex/rigid with numeric content)
-                    // For built-in numeric types, use direct arithmetic; for user nominal types, use method dispatch
-                    const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-                    const is_user_nominal = switch (lhs_resolved.desc.content) {
-                        .structure => |s| s == .nominal_type,
-                        else => false,
-                    };
+                        var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                        defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                        return try self.makeBoolValue(boolValueEquals(true, rhs));
+                    },
+                    .@"and" => {
+                        var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                        defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                        if (boolValueEquals(false, lhs)) {
+                            return try self.makeBoolValue(false);
+                        }
 
-                    if (!is_user_nominal) {
-                        // For built-in numeric types (or any non-nominal type), use direct arithmetic evaluation
-                        // This includes .num, flex vars, rigid vars, etc.
-                        const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                        const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                        return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
-                    }
-
-                    // For user-defined nominal types with plus methods, use method dispatch
-                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Get the nominal type information from lhs
-                    const nominal_info = switch (lhs_resolved.desc.content) {
-                        .structure => |s| switch (s) {
-                            .nominal_type => |nom| .{
-                                .origin = nom.origin_module,
-                                .ident = nom.ident.ident_idx,
-                            },
-                            else => return error.InvalidMethodReceiver,
-                        },
-                        else => return error.InvalidMethodReceiver,
-                    };
-
-                    // Get the pre-cached "plus" identifier from the ModuleEnv
-                    const method_name = self.env.plus_ident;
-
-                    // Resolve the plus method function
-                    const method_func = try self.resolveMethodFunction(
-                        nominal_info.origin,
-                        nominal_info.ident,
-                        method_name,
-                        roc_ops,
-                    );
-                    defer method_func.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Prepare arguments: lhs (receiver) + rhs
-                    var args = [2]StackValue{ lhs, rhs };
-
-                    // Call the method closure
-                    if (method_func.layout.tag != .closure) {
-                        return error.TypeMismatch;
-                    }
-
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-                    // Switch to the closure's source module
-                    const saved_env = self.env;
-                    const saved_layout_env = self.runtime_layout_store.env;
-                    const saved_bindings_len = self.bindings.items.len;
-                    self.env = @constCast(closure_header.source_env);
-                    self.runtime_layout_store.env = self.env;
-                    defer {
-                        self.env = saved_env;
-                        self.runtime_layout_store.env = saved_layout_env;
-                        self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-                    }
-
-                    const params = self.env.store.slicePatterns(closure_header.params);
-                    if (params.len != args.len) {
-                        return error.TypeMismatch;
-                    }
-
-                    // Provide closure context for capture lookup
-                    try self.active_closures.append(method_func);
-                    defer _ = self.active_closures.pop();
-
-                    // Check if this is a low-level lambda - if so, dispatch to builtin
-                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-                        // Dispatch to actual low-level builtin implementation
-                        return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops);
-                    }
-
-                    // Bind parameters
-                    for (params, 0..) |param, i| {
-                        try self.bindings.append(.{
-                            .pattern_idx = param,
-                            .value = args[i],
-                            .expr_idx = @enumFromInt(0),
-                        });
-                    }
-
-                    // Evaluate the method body
-                    const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
-
-                    // Clean up bindings
-                    var k = params.len;
-                    while (k > 0) {
-                        k -= 1;
-                        _ = self.bindings.pop();
-                    }
-
-                    return result;
-                } else if (binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-
-                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
-                } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
-                    // Comparison operators - evaluate both sides and compare
-                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
-
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-
-                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Compare the values
-                    const comparison_result = try self.compareValues(lhs, rhs, binop.op, roc_ops);
-                    return try self.makeBoolValue(result_rt_var, comparison_result);
-                } else if (binop.op == .@"or") {
-                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
-
-                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    if (try self.boolValueIsTrue(lhs, lhs_rt_var)) {
-                        return try self.makeBoolValue(result_rt_var, true);
-                    }
-
-                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                    const rhs_truthy = try self.boolValueIsTrue(rhs, rhs_rt_var);
-                    return try self.makeBoolValue(result_rt_var, rhs_truthy);
-                } else if (binop.op == .@"and") {
-                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
-
-                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    if (!try self.boolValueIsTrue(lhs, lhs_rt_var)) {
-                        return try self.makeBoolValue(result_rt_var, false);
-                    }
-
-                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                    const rhs_truthy = try self.boolValueIsTrue(rhs, rhs_rt_var);
-                    return try self.makeBoolValue(result_rt_var, rhs_truthy);
+                        var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                        defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                        return try self.makeBoolValue(boolValueEquals(true, rhs));
+                    },
                 }
-                return error.NotImplemented;
             },
             .e_if => |if_expr| {
                 const branches = self.env.store.sliceIfBranches(if_expr.branches);
@@ -897,9 +803,7 @@ pub const Interpreter = struct {
                 while (i < branches.len) : (i += 1) {
                     const br = self.env.store.getIfBranch(branches[i]);
                     const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
-                    const cond_ct_var = can.ModuleEnv.varFrom(br.cond);
-                    const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
-                    if (try self.boolValueIsTrue(cond_val, cond_rt_var)) {
+                    if (boolValueEquals(true, cond_val)) {
                         return try self.evalExprMinimal(br.body, roc_ops, null);
                     }
                 }
@@ -1057,26 +961,41 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
 
+                // Get the first element's variables, which is representative of all the element vars
+                const elems = self.env.store.sliceExpr(list_expr.elems);
+                std.debug.assert(elems.len > 0);
+                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
+
+                const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
+                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
+
                 var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
                 defer values.deinit();
 
-                // Evaluate first element without expected type to get its concrete layout
-                const first_val = try self.evalExprMinimal(elem_indices[0], roc_ops, null);
-                const elem_layout = first_val.layout;
-                try values.append(first_val);
-
-                // Evaluate remaining elements using first element's type as expected type
-                // Get the runtime type variable for the first element
-                const first_elem_ct_var = can.ModuleEnv.varFrom(elem_indices[0]);
-                const first_elem_rt_var = try self.translateTypeVar(self.env, first_elem_ct_var);
-
-                for (elem_indices[1..]) |elem_idx| {
-                    const val = try self.evalExprMinimal(elem_idx, roc_ops, first_elem_rt_var);
+                for (elem_indices) |elem_idx| {
+                    const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
                     try values.append(val);
                 }
 
                 const list_layout = try self.getRuntimeLayout(list_rt_var);
-                const dest = try self.pushRaw(list_layout, 0);
+
+                // Ensure the list layout's element layout matches the actual evaluated element layout.
+                // This handles cases where the type system's layout doesn't match the actual
+                // element layout after runtime defaulting (e.g., numeric literals defaulting to Dec).
+                const actual_list_layout = if (list_layout.tag == .list) blk: {
+                    const stored_elem_layout_idx = list_layout.data.list;
+                    const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+
+                    const layouts_match = std.meta.eql(stored_elem_layout, elem_layout);
+                    if (!layouts_match) {
+                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
+                        break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                    } else {
+                        break :blk list_layout;
+                    }
+                } else list_layout;
+
+                const dest = try self.pushRaw(actual_list_layout, 0);
                 if (dest.ptr == null) return dest;
                 const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
@@ -1089,10 +1008,6 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
                 const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
                 const elements_refcounted = elem_layout.isRefcounted();
-
-                if (std.debug.runtime_safety) {
-                    if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .int) {}
-                }
 
                 var runtime_list = RocList.allocateExact(
                     elem_alignment_u32,
@@ -1315,37 +1230,27 @@ pub const Interpreter = struct {
                     return error.Crash;
                 }
                 const layout_val = try self.getRuntimeLayout(rt_var);
-                if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
-                    try self.prepareBoolIndices(rt_var);
-                    return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
-                }
-                // If layout is scalar (bool/uint), write discriminant directly
+                // If layout is scalar (int), write discriminant directly
                 if (layout_val.tag == .scalar) {
                     var out = try self.pushRaw(layout_val, 0);
-                    if (layout_val.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                        p.* = @intCast(tag_index);
-                        return out;
-                    } else if (layout_val.data.scalar.tag == .int) {
+                    if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
-                        out.setInt(@intCast(tag_index));
+                        try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
                         return out;
                     }
                     return error.NotImplemented;
-                } else if (layout_val.tag == .tuple) {
-                    // Tuple (payload, tag) where payload is ZST
+                } else if (layout_val.tag == .record) {
+                    // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
-                    var tuple_acc = try dest.asTuple(&self.runtime_layout_store);
-                    const tag_field = try tuple_acc.getElement(1); // tag is element 1
-                    // write tag as int/byte
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const tag_field = try acc.getFieldByIndex(tag_idx);
+                    // write tag as int
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
-                        tmp.setInt(@intCast(tag_index));
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        p.* = @intCast(tag_index);
+                        try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
                     return dest;
                 }
@@ -1380,47 +1285,36 @@ pub const Interpreter = struct {
                 }
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
-                if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
-                    try self.prepareBoolIndices(rt_var);
-                    return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
-                }
+
                 if (layout_val.tag == .scalar) {
                     // No payload union
                     var out = try self.pushRaw(layout_val, 0);
-                    if (layout_val.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                        p.* = @intCast(tag_index);
-                        return out;
-                    } else if (layout_val.data.scalar.tag == .int) {
+                    if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
-                        out.setInt(@intCast(tag_index));
+                        try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
                         return out;
                     }
                     return error.NotImplemented;
-                } else if (layout_val.tag == .tuple) {
-                    // Has payload: tuple (payload, tag)
+                } else if (layout_val.tag == .record) {
+                    // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
-                    var tuple_acc = try dest.asTuple(&self.runtime_layout_store);
-
-                    // Get tag field (element 1) and write discriminant
-                    const tag_field = try tuple_acc.getElement(1);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    // write tag discriminant
+                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
-                        tmp.setInt(@intCast(tag_index));
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        p.* = @intCast(tag_index);
+                        try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
                     const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
                     if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
-
-                    // Get payload field (element 0)
-                    const payload_field = try tuple_acc.getElement(0);
+                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
 
                     if (payload_field.ptr) |payload_ptr| {
                         const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
@@ -1479,9 +1373,13 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_match => |m| {
-                // Evaluate scrutinee once
-                const scrutinee = try self.evalExprMinimal(m.cond, roc_ops, null);
+                // Evaluate scrutinee once and protect from stack corruption
+                // Use pushCopy to allocate a new stack location for the scrutinee header,
+                // preventing it from being corrupted by pattern match bindings
+                const scrutinee_temp = try self.evalExprMinimal(m.cond, roc_ops, null);
+                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
                 defer scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
                 const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
                 const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
                 const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -1514,7 +1412,7 @@ pub const Interpreter = struct {
                             const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
                             const guard_val = try self.evalExprMinimal(guard_idx, roc_ops, guard_rt_var);
                             defer guard_val.decref(&self.runtime_layout_store, roc_ops);
-                            guard_pass = try self.boolValueIsTrue(guard_val, guard_rt_var);
+                            guard_pass = boolValueEquals(true, guard_val);
                         }
 
                         if (!guard_pass) {
@@ -1538,7 +1436,7 @@ pub const Interpreter = struct {
             .e_expect => |expect_expr| {
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
                 const cond_val = try self.evalExprMinimal(expect_expr.body, roc_ops, bool_rt_var);
-                const succeeded = try self.boolValueIsTrue(cond_val, bool_rt_var);
+                const succeeded = boolValueEquals(true, cond_val);
                 if (succeeded) {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     const rt_var = try self.translateTypeVar(self.env, ct_var);
@@ -1846,11 +1744,13 @@ pub const Interpreter = struct {
                     }
                     break :blk null;
                 };
+                // Get call expression's return type for low-level builtins
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+
                 // Unify this call expression's return var with the function's constrained return var
                 // Only do this if we have a polymorphic call entry (concrete function type)
                 if (poly_entry) |entry| {
-                    const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
                     _ = try unify.unifyWithConf(
                         self.env,
                         self.runtime_types,
@@ -1883,13 +1783,10 @@ pub const Interpreter = struct {
 
                     // Switch to the closure's source module for correct expression evaluation
                     const saved_env = self.env;
-                    const saved_layout_env = self.runtime_layout_store.env;
                     const saved_bindings_len = self.bindings.items.len;
                     self.env = @constCast(header.source_env);
-                    self.runtime_layout_store.env = self.env;
                     defer {
                         self.env = saved_env;
-                        self.runtime_layout_store.env = saved_layout_env;
                         self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                     }
 
@@ -1904,19 +1801,11 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, call_ret_rt_var);
 
-                        // Decref all args UNLESS the operation takes ownership of them.
-                        // List.concat takes ownership of its arguments and manages their refcounts internally.
-                        const takes_ownership = switch (low_level.op) {
-                            .list_concat => true,
-                            else => false,
-                        };
-
-                        if (!takes_ownership) {
-                            for (arg_values) |arg| {
-                                arg.decref(&self.runtime_layout_store, roc_ops);
-                            }
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
                         }
 
                         return result;
@@ -2127,13 +2016,10 @@ pub const Interpreter = struct {
 
                 // Switch to the closure's source module for correct expression evaluation
                 const saved_env = self.env;
-                const saved_layout_env = self.runtime_layout_store.env;
                 const saved_bindings_len = self.bindings.items.len;
                 self.env = @constCast(closure_header.source_env);
-                self.runtime_layout_store.env = self.env;
                 defer {
                     self.env = saved_env;
-                    self.runtime_layout_store.env = saved_layout_env;
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
@@ -2155,20 +2041,15 @@ pub const Interpreter = struct {
                 if (lambda_expr == .e_low_level_lambda) {
                     const low_level = lambda_expr.e_low_level_lambda;
 
+                    // Get return type for low-level builtin
+                    const method_call_ret_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+
                     // Dispatch to actual low-level builtin implementation
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops);
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, method_call_ret_rt_var);
 
-                    // Decref all args UNLESS the operation takes ownership of them.
-                    // List.concat takes ownership of its arguments and manages their refcounts internally.
-                    const takes_ownership = switch (low_level.op) {
-                        .list_concat => true,
-                        else => false,
-                    };
-
-                    if (!takes_ownership) {
-                        for (all_args) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
-                        }
+                    // Decref all args
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
                     }
 
                     return result;
@@ -2209,8 +2090,7 @@ pub const Interpreter = struct {
                             }
                             // e_low_level_lambda is always a closure, so no special check needed
                         }
-                        // Use pushIncref for variable lookups to increment refcount instead of cloning
-                        return self.pushIncref(b.value);
+                        return try self.pushCopy(b.value, roc_ops);
                     }
                 }
                 // If not found, try active closure captures by variable name
@@ -2230,8 +2110,7 @@ pub const Interpreter = struct {
                             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                             if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
                                 const field_val = try accessor.getFieldByIndex(fidx);
-                                // Closure capture lookup - use pushIncref like regular variable lookup
-                                return self.pushIncref(field_val);
+                                return try self.pushCopy(field_val, roc_ops);
                             }
                         }
                     }
@@ -2242,10 +2121,26 @@ pub const Interpreter = struct {
                 for (all_defs) |def_idx| {
                     const def = self.env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        // Found the definition - evaluate it directly
-                        // This handles cross-function calls within the same module
-                        // (e.g., List.get calling List.len)
-                        return try self.evalExprMinimal(def.expr, roc_ops, null);
+                        const def_expr = self.env.store.getExpr(def.expr);
+                        if (def_expr == .e_anno_only) {
+                            // This is an anno-only def being accessed - evaluate it now
+                            // For functions, this creates a closure that crashes when called
+                            // For non-functions, this crashes immediately
+                            return try self.evalExprMinimal(def.expr, roc_ops, null);
+                        }
+
+                        // In debug builds, panic if this def should have been in bindings but wasn't
+                        if (builtin.mode == .Debug) {
+                            const pat = self.env.store.getPattern(lookup.pattern_idx);
+                            const var_name = switch (pat) {
+                                .assign => |a| self.env.getIdent(a.ident),
+                                else => "(non-assign pattern)",
+                            };
+                            std.debug.panic(
+                                "Bug in compiler: top-level definition '{s}' (pattern_idx={}) should have been added to bindings but wasn't found there",
+                                .{ var_name, lookup.pattern_idx },
+                            );
+                        }
                     }
                 }
 
@@ -2257,47 +2152,25 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
-                // The target_node_idx should always point to a def node
+                // The target_node_idx is a Def.Idx in the other module
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const target_def = other_env.store.getDef(target_def_idx);
 
                 // Save both env and bindings state
                 const saved_env = self.env;
-                const saved_layout_env = self.runtime_layout_store.env;
                 const saved_bindings_len = self.bindings.items.len;
                 self.env = @constCast(other_env);
-                self.runtime_layout_store.env = self.env;
                 defer {
                     self.env = saved_env;
-                    self.runtime_layout_store.env = saved_layout_env;
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
                 // Evaluate the definition's expression in the other module's context
+                // If this is being called as a function, pass through the instantiated type
+                // from the call site (via expected_rt_var) to avoid re-translating generic types
                 const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
+
                 return result;
-            },
-            .e_unary_minus => |unary| {
-                const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
-                const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
-                const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
-                defer operand.decref(&self.runtime_layout_store, roc_ops);
-
-                // Use the num_negate low-level operation
-                var args = [_]StackValue{operand};
-                return try self.callLowLevelBuiltin(.num_negate, args[0..], roc_ops);
-            },
-            .e_unary_not => |unary| {
-                const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
-                const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
-
-                const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
-                defer operand.decref(&self.runtime_layout_store, roc_ops);
-
-                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                const truthy = try self.boolValueIsTrue(operand, operand_rt_var);
-                return try self.makeBoolValue(result_rt_var, !truthy);
             },
             .e_runtime_error => |rt_err| {
                 _ = rt_err;
@@ -2382,24 +2255,18 @@ pub const Interpreter = struct {
         return dest;
     }
 
-    /// Create a new reference to a value by incrementing its refcount (for refcounted types)
-    /// or returning the value directly (for non-refcounted types like integers).
-    /// This is used for variable lookups where we want to alias the value, not copy it.
-    pub fn pushIncref(self: *Interpreter, src: StackValue) StackValue {
-        _ = self; // Interpreter not needed for incref, but kept for API consistency
-
-        // For refcounted types, increment the refcount and return the same value
-        if (src.layout.isRefcounted()) {
-            src.incref();
-            return src;
-        }
-
-        // For non-refcounted types (integers, booleans, etc.), just return the value
-        // These are typically small and copied by value anyway
-        return src;
+    /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
+    pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
+        // For num_from_numeral, we need to pass the target type through a different mechanism
+        // since the standard handler extracts it from the return type which has a generic parameter.
+        // Store the target type temporarily so the handler can use it.
+        const saved_target = self.num_literal_target_type;
+        self.num_literal_target_type = target_type_var;
+        defer self.num_literal_target_type = saved_target;
+        return self.callLowLevelBuiltin(op, args, roc_ops, return_rt_var);
     }
 
-    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps) !StackValue {
+    pub fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool
@@ -2409,9 +2276,8 @@ pub const Interpreter = struct {
                 std.debug.assert(str_arg.ptr != null); // low-level .str_is_empty expects non-null string pointer
 
                 const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
-                const result = builtins.str.isEmpty(roc_str.*);
 
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
             },
             .list_len => {
                 // List.len : List(a) -> U64
@@ -2429,7 +2295,7 @@ pub const Interpreter = struct {
                 const result_layout = layout.Layout.int(.u64);
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
-                out.setInt(@intCast(len_u64));
+                try out.setInt(@intCast(len_u64));
                 out.is_initialized = true;
                 return out;
             },
@@ -2443,7 +2309,7 @@ pub const Interpreter = struct {
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const result = builtins.list.listIsEmpty(roc_list.*);
 
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .list_get_unsafe => {
                 // Internal operation: Get element at index without bounds checking
@@ -2569,15 +2435,14 @@ pub const Interpreter = struct {
                 const lhs = args[0].asBool();
                 const rhs = args[1].asBool();
                 const result = lhs == rhs;
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .bool_is_ne => {
                 // Bool.is_ne : Bool, Bool -> Bool
                 std.debug.assert(args.len == 2); // low-level .bool_is_ne expects 2 arguments
                 const lhs = args[0].asBool();
                 const rhs = args[1].asBool();
-                const result = lhs != rhs;
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(lhs != rhs);
             },
 
             // Numeric type checking operations
@@ -2591,7 +2456,7 @@ pub const Interpreter = struct {
                     .f64 => |f| f == 0.0,
                     .dec => |d| d.num == 0,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_negative => {
                 // num.is_negative : num -> Bool (signed types only)
@@ -2603,7 +2468,7 @@ pub const Interpreter = struct {
                     .f64 => |f| f < 0.0,
                     .dec => |d| d.num < 0,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_positive => {
                 // num.is_positive : num -> Bool (signed types only)
@@ -2615,7 +2480,7 @@ pub const Interpreter = struct {
                     .f64 => |f| f > 0.0,
                     .dec => |d| d.num > 0,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
 
             // Numeric comparison operations
@@ -2632,7 +2497,7 @@ pub const Interpreter = struct {
                         return error.Crash;
                     },
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_ne => {
                 // num.is_ne : num, num -> Bool (Dec only)
@@ -2646,7 +2511,7 @@ pub const Interpreter = struct {
                         return error.Crash;
                     },
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_gt => {
                 // num.is_gt : num, num -> Bool
@@ -2659,7 +2524,7 @@ pub const Interpreter = struct {
                     .f64 => |l| l > rhs.f64,
                     .dec => |l| l.num > rhs.dec.num,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_gte => {
                 // num.is_gte : num, num -> Bool
@@ -2672,7 +2537,7 @@ pub const Interpreter = struct {
                     .f64 => |l| l >= rhs.f64,
                     .dec => |l| l.num >= rhs.dec.num,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_lt => {
                 // num.is_lt : num, num -> Bool
@@ -2685,7 +2550,7 @@ pub const Interpreter = struct {
                     .f64 => |l| l < rhs.f64,
                     .dec => |l| l.num < rhs.dec.num,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
             .num_is_lte => {
                 // num.is_lte : num, num -> Bool
@@ -2698,7 +2563,7 @@ pub const Interpreter = struct {
                     .f64 => |l| l <= rhs.f64,
                     .dec => |l| l.num <= rhs.dec.num,
                 };
-                return try self.makeSimpleBoolValue(result);
+                return try self.makeBoolValue(result);
             },
 
             // Numeric arithmetic operations
@@ -2712,7 +2577,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (num_val) {
-                    .int => |i| out.setInt(-i),
+                    .int => |i| try out.setInt(-i),
                     .f32 => |f| out.setF32(-f),
                     .f64 => |f| out.setF64(-f),
                     .dec => |d| out.setDec(RocDec{ .num = -d.num }),
@@ -2730,7 +2595,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| out.setInt(l + rhs.int),
+                    .int => |l| try out.setInt(l + rhs.int),
                     .f32 => |l| out.setF32(l + rhs.f32),
                     .f64 => |l| out.setF64(l + rhs.f64),
                     .dec => |l| out.setDec(RocDec{ .num = l.num + rhs.dec.num }),
@@ -2748,7 +2613,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| out.setInt(l - rhs.int),
+                    .int => |l| try out.setInt(l - rhs.int),
                     .f32 => |l| out.setF32(l - rhs.f32),
                     .f64 => |l| out.setF64(l - rhs.f64),
                     .dec => |l| out.setDec(RocDec{ .num = l.num - rhs.dec.num }),
@@ -2766,7 +2631,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| out.setInt(l * rhs.int),
+                    .int => |l| try out.setInt(l * rhs.int),
                     .f32 => |l| out.setF32(l * rhs.f32),
                     .f64 => |l| out.setF64(l * rhs.f64),
                     .dec => |l| out.setDec(RocDec{ .num = @divTrunc(l.num * rhs.dec.num, RocDec.one_point_zero_i128) }),
@@ -2786,7 +2651,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| {
                         if (rhs.int == 0) return error.DivisionByZero;
-                        out.setInt(@divTrunc(l, rhs.int));
+                        try out.setInt(@divTrunc(l, rhs.int));
                     },
                     .f32 => |l| {
                         if (rhs.f32 == 0) return error.DivisionByZero;
@@ -2795,6 +2660,37 @@ pub const Interpreter = struct {
                     .f64 => |l| {
                         if (rhs.f64 == 0) return error.DivisionByZero;
                         out.setF64(l / rhs.f64);
+                    },
+                    .dec => |l| {
+                        if (rhs.dec.num == 0) return error.DivisionByZero;
+                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
+                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_div_trunc_by => {
+                std.debug.assert(args.len == 2); // low-level .num_div_trunc_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| {
+                        if (rhs.int == 0) return error.DivisionByZero;
+                        try out.setInt(@divTrunc(l, rhs.int));
+                    },
+                    .f32 => |l| {
+                        if (rhs.f32 == 0) return error.DivisionByZero;
+                        out.setF32(@trunc(l / rhs.f32));
+                    },
+                    .f64 => |l| {
+                        if (rhs.f64 == 0) return error.DivisionByZero;
+                        out.setF64(@trunc(l / rhs.f64));
                     },
                     .dec => |l| {
                         if (rhs.dec.num == 0) return error.DivisionByZero;
@@ -2817,7 +2713,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| {
                         if (rhs.int == 0) return error.DivisionByZero;
-                        out.setInt(@rem(l, rhs.int));
+                        try out.setInt(@rem(l, rhs.int));
                     },
                     .f32 => |l| {
                         if (rhs.f32 == 0) return error.DivisionByZero;
@@ -2839,7 +2735,155 @@ pub const Interpreter = struct {
             // Numeric parsing operations
             .num_from_int_digits => {
                 // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])
-                self.triggerCrash("num_from_int_digits not yet implemented", false, roc_ops);
+                std.debug.assert(args.len == 1); // expects 1 argument: List(U8)
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("num_from_int_digits requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get the result layout (Try tag union)
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Extract base-256 digits from List(U8)
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const list_len = roc_list.len();
+                const digits_ptr = roc_list.elements(u8);
+                const digits: []const u8 = if (digits_ptr) |ptr| ptr[0..list_len] else &[_]u8{};
+
+                // Convert base-256 digits to u128 (max intermediate precision)
+                var value: u128 = 0;
+                var overflow = false;
+                for (digits) |digit| {
+                    const new_value = @mulWithOverflow(value, 256);
+                    if (new_value[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    const add_result = @addWithOverflow(new_value[0], digit);
+                    if (add_result[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    value = add_result[0];
+                }
+
+                // Resolve the Try type to get Ok's payload type (the numeric type)
+                const resolved = self.resolveBaseVar(result_rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("num_from_int_digits: expected Try tag union result type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Find tag indices for Ok and Err
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(result_rt_var, &tag_list);
+
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+                var ok_payload_var: ?types.Var = null;
+
+                for (tag_list.items, 0..) |tag_info, i| {
+                    const tag_name = self.env.getIdent(tag_info.name);
+                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                        ok_index = i;
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                        if (arg_vars.len >= 1) {
+                            ok_payload_var = arg_vars[0];
+                        }
+                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                        err_index = i;
+                    }
+                }
+
+                // Determine target numeric type and check range
+                var in_range = !overflow;
+                if (in_range and ok_payload_var != null) {
+                    const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                    if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                        // Check if value fits in target integer type
+                        const int_type = num_layout.data.scalar.data.int;
+                        in_range = switch (int_type) {
+                            .u8 => value <= std.math.maxInt(u8),
+                            .i8 => value <= std.math.maxInt(i8),
+                            .u16 => value <= std.math.maxInt(u16),
+                            .i16 => value <= std.math.maxInt(i16),
+                            .u32 => value <= std.math.maxInt(u32),
+                            .i32 => value <= std.math.maxInt(i32),
+                            .u64 => value <= std.math.maxInt(u64),
+                            .i64 => value <= std.math.maxInt(i64),
+                            .u128, .i128 => true, // u128 fits, i128 needs sign check
+                        };
+                    }
+                }
+
+                // Construct the result tag union
+                if (result_layout.tag == .scalar) {
+                    // Simple tag with no payload (shouldn't happen for Try)
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                    try out.setInt(@intCast(tag_idx));
+                    out.is_initialized = true;
+                    return out;
+                } else if (result_layout.tag == .record) {
+                    // Record { tag, payload }
+                    var dest = try self.pushRaw(result_layout, 0);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+
+                    // Write tag discriminant
+                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        try tmp.setInt(@intCast(tag_idx));
+                    } else return error.NotImplemented;
+
+                    // Clear payload area
+                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    // Write payload
+                    if (in_range and ok_payload_var != null) {
+                        // Write the numeric value as Ok payload
+                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                                // Write integer value directly to payload
+                                const int_type = num_layout.data.scalar.data.int;
+                                switch (int_type) {
+                                    .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
+                                    .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                }
+                            }
+                        }
+                    }
+                    // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
+
+                    return dest;
+                }
+
+                self.triggerCrash("num_from_int_digits: unsupported result layout", false, roc_ops);
                 return error.Crash;
             },
             .num_from_dec_digits => {
@@ -2847,17 +2891,518 @@ pub const Interpreter = struct {
                 self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
                 return error.Crash;
             },
+            .num_from_numeral => {
+                // num.from_numeral : Numeral -> Try(num, [InvalidNumeral(Str)])
+                // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
+                std.debug.assert(args.len == 1); // expects 1 argument: Numeral record
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("num_from_numeral requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get the result layout (Try tag union)
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Extract fields from Numeral record
+                const num_literal_arg = args[0];
+                if (num_literal_arg.ptr == null) {
+                    self.triggerCrash("num_from_numeral: null argument", false, roc_ops);
+                    return error.Crash;
+                }
+
+                var acc = num_literal_arg.asRecord(&self.runtime_layout_store) catch {
+                    self.triggerCrash("num_from_numeral: argument is not a record", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get is_negative field
+                // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
+                const layout_env = self.runtime_layout_store.env;
+                const is_neg_idx = acc.findFieldIndex(layout_env, "is_negative") orelse {
+                    self.triggerCrash("num_from_numeral: missing is_negative field", false, roc_ops);
+                    return error.Crash;
+                };
+                const is_neg_field = acc.getFieldByIndex(is_neg_idx) catch {
+                    self.triggerCrash("num_from_numeral: failed to get is_negative field", false, roc_ops);
+                    return error.Crash;
+                };
+                const is_negative = getRuntimeU8(is_neg_field) != 0;
+
+                // Get digits_before_pt field (List(U8))
+                const before_idx = acc.findFieldIndex(layout_env, "digits_before_pt") orelse {
+                    self.triggerCrash("num_from_numeral: missing digits_before_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+                const before_field = acc.getFieldByIndex(before_idx) catch {
+                    self.triggerCrash("num_from_numeral: failed to get digits_before_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get digits_after_pt field (List(U8))
+                const after_idx = acc.findFieldIndex(layout_env, "digits_after_pt") orelse {
+                    self.triggerCrash("num_from_numeral: missing digits_after_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+                const after_field = acc.getFieldByIndex(after_idx) catch {
+                    self.triggerCrash("num_from_numeral: failed to get digits_after_pt field", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Extract list data from digits_before_pt
+                const before_list: *const builtins.list.RocList = @ptrCast(@alignCast(before_field.ptr.?));
+                const before_len = before_list.len();
+                const before_ptr = before_list.elements(u8);
+                const digits_before: []const u8 = if (before_ptr) |ptr| ptr[0..before_len] else &[_]u8{};
+
+                // Extract list data from digits_after_pt
+                const after_list: *const builtins.list.RocList = @ptrCast(@alignCast(after_field.ptr.?));
+                const after_len = after_list.len();
+                const after_ptr = after_list.elements(u8);
+                const digits_after: []const u8 = if (after_ptr) |ptr| ptr[0..after_len] else &[_]u8{};
+
+                // Convert base-256 digits to u128
+                var value: u128 = 0;
+                var overflow = false;
+                for (digits_before) |digit| {
+                    const new_value = @mulWithOverflow(value, 256);
+                    if (new_value[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    const add_result = @addWithOverflow(new_value[0], digit);
+                    if (add_result[1] != 0) {
+                        overflow = true;
+                        break;
+                    }
+                    value = add_result[0];
+                }
+
+                // Resolve the Try type to get Ok's payload type
+                const resolved = self.resolveBaseVar(result_rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("num_from_numeral: expected Try tag union result type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Find tag indices for Ok and Err
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(result_rt_var, &tag_list);
+
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+                var ok_payload_var: ?types.Var = null;
+                var err_payload_var: ?types.Var = null;
+
+                for (tag_list.items, 0..) |tag_info, i| {
+                    const tag_name = self.env.getIdent(tag_info.name);
+                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                        ok_index = i;
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                        if (arg_vars.len >= 1) {
+                            ok_payload_var = arg_vars[0];
+                        }
+                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                        err_index = i;
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                        if (arg_vars.len >= 1) {
+                            err_payload_var = arg_vars[0];
+                        }
+                    }
+                }
+
+                // Determine target numeric type and check range
+                var in_range = !overflow;
+                var rejection_reason: enum { none, overflow, negative_unsigned, fractional_integer, out_of_range } = .none;
+                if (overflow) rejection_reason = .overflow;
+
+                // Track target type info for error messages
+                var type_name: []const u8 = "number";
+                var min_value_str: []const u8 = "";
+                var max_value_str: []const u8 = "";
+
+                // Use the explicit target type if provided, otherwise fall back to ok_payload_var
+                const target_type_var = self.num_literal_target_type orelse ok_payload_var;
+
+                if (in_range and target_type_var != null) {
+                    // Use the target type var directly - getRuntimeLayout handles nominal types properly
+                    // (Don't use resolveBaseVar here as it strips away nominal type info needed for layout)
+                    const num_layout = try self.getRuntimeLayout(target_type_var.?);
+                    if (num_layout.tag == .scalar) {
+                        if (num_layout.data.scalar.tag == .int) {
+                            // Integer type - check range and sign
+                            const int_type = num_layout.data.scalar.data.int;
+
+                            // Set type info for error messages
+                            switch (int_type) {
+                                .u8 => {
+                                    type_name = "U8";
+                                    min_value_str = "0";
+                                    max_value_str = "255";
+                                },
+                                .i8 => {
+                                    type_name = "I8";
+                                    min_value_str = "-128";
+                                    max_value_str = "127";
+                                },
+                                .u16 => {
+                                    type_name = "U16";
+                                    min_value_str = "0";
+                                    max_value_str = "65535";
+                                },
+                                .i16 => {
+                                    type_name = "I16";
+                                    min_value_str = "-32768";
+                                    max_value_str = "32767";
+                                },
+                                .u32 => {
+                                    type_name = "U32";
+                                    min_value_str = "0";
+                                    max_value_str = "4294967295";
+                                },
+                                .i32 => {
+                                    type_name = "I32";
+                                    min_value_str = "-2147483648";
+                                    max_value_str = "2147483647";
+                                },
+                                .u64 => {
+                                    type_name = "U64";
+                                    min_value_str = "0";
+                                    max_value_str = "18446744073709551615";
+                                },
+                                .i64 => {
+                                    type_name = "I64";
+                                    min_value_str = "-9223372036854775808";
+                                    max_value_str = "9223372036854775807";
+                                },
+                                .u128 => {
+                                    type_name = "U128";
+                                    min_value_str = "0";
+                                    max_value_str = "340282366920938463463374607431768211455";
+                                },
+                                .i128 => {
+                                    type_name = "I128";
+                                    min_value_str = "-170141183460469231731687303715884105728";
+                                    max_value_str = "170141183460469231731687303715884105727";
+                                },
+                            }
+
+                            // Check sign for unsigned types
+                            if (is_negative) {
+                                switch (int_type) {
+                                    .u8, .u16, .u32, .u64, .u128 => {
+                                        in_range = false;
+                                        rejection_reason = .negative_unsigned;
+                                    },
+                                    else => {},
+                                }
+                            }
+
+                            // Check value range
+                            if (in_range) {
+                                const value_in_range = switch (int_type) {
+                                    .u8 => value <= std.math.maxInt(u8),
+                                    .i8 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i8)))) else value <= std.math.maxInt(i8),
+                                    .u16 => value <= std.math.maxInt(u16),
+                                    .i16 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i16)))) else value <= std.math.maxInt(i16),
+                                    .u32 => value <= std.math.maxInt(u32),
+                                    .i32 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i32)))) else value <= std.math.maxInt(i32),
+                                    .u64 => value <= std.math.maxInt(u64),
+                                    .i64 => if (is_negative) value <= @as(u128, @abs(@as(i128, std.math.minInt(i64)))) else value <= std.math.maxInt(i64),
+                                    .u128 => true,
+                                    .i128 => true,
+                                };
+                                if (!value_in_range) {
+                                    in_range = false;
+                                    rejection_reason = .out_of_range;
+                                }
+                            }
+
+                            // Fractional part not allowed for integers
+                            if (in_range and digits_after.len > 0) {
+                                var has_fractional = false;
+                                for (digits_after) |d| {
+                                    if (d != 0) {
+                                        has_fractional = true;
+                                        break;
+                                    }
+                                }
+                                if (has_fractional) {
+                                    in_range = false;
+                                    rejection_reason = .fractional_integer;
+                                }
+                            }
+                        } else if (num_layout.data.scalar.tag == .frac) {
+                            const frac_type = num_layout.data.scalar.data.frac;
+                            switch (frac_type) {
+                                .f32 => type_name = "F32",
+                                .f64 => type_name = "F64",
+                                .dec => type_name = "Dec",
+                            }
+                        }
+                    }
+                }
+
+                // Construct the result tag union
+                if (result_layout.tag == .scalar) {
+                    // Simple tag with no payload
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                    try out.setInt(@intCast(tag_idx));
+                    out.is_initialized = true;
+                    return out;
+                } else if (result_layout.tag == .record) {
+                    // Record { tag, payload }
+                    var dest = try self.pushRaw(result_layout, 0);
+                    var result_acc = try dest.asRecord(&self.runtime_layout_store);
+                    // Use layout_env for field lookups since record fields use layout store's env idents
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse return error.NotImplemented;
+
+                    // Write tag discriminant
+                    const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        try tmp.setInt(@intCast(tag_idx));
+                    } else return error.NotImplemented;
+
+                    // Clear payload area
+                    const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    // Write payload for Ok case
+                    if (in_range and ok_payload_var != null) {
+                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                                const int_type = num_layout.data.scalar.data.int;
+                                if (is_negative) {
+                                    // Write negative value
+                                    // For i128, we need special handling because the minimum value's absolute
+                                    // value (2^127) doesn't fit in i128 (max is 2^127-1). Use wrapping negation.
+                                    switch (int_type) {
+                                        .i8 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i16 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i32 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i64 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i128 => {
+                                            // For i128, we need special handling because the minimum value's absolute
+                                            // value (2^127) doesn't fit in i128 (max is 2^127-1).
+                                            // We interpret the u128 value as an i128 and negate using wrapping arithmetic.
+                                            // This correctly handles i128 min value: -(2^127) wraps to itself.
+                                            const as_signed: i128 = @bitCast(value);
+                                            const neg_value: i128 = -%as_signed;
+                                            @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                        },
+                                        else => {}, // Unsigned types already rejected above
+                                    }
+                                } else {
+                                    // Write positive value
+                                    switch (int_type) {
+                                        .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
+                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    }
+                                }
+                            } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
+                                // Floating-point and Dec types
+                                const frac_precision = num_layout.data.scalar.data.frac;
+                                const float_value: f64 = if (is_negative)
+                                    -@as(f64, @floatFromInt(value))
+                                else
+                                    @as(f64, @floatFromInt(value));
+
+                                // Handle fractional part for floats
+                                var final_value = float_value;
+                                if (digits_after.len > 0) {
+                                    var frac_value: f64 = 0;
+                                    var frac_mult: f64 = 1.0 / 256.0;
+                                    for (digits_after) |digit| {
+                                        frac_value += @as(f64, @floatFromInt(digit)) * frac_mult;
+                                        frac_mult /= 256.0;
+                                    }
+                                    if (is_negative) {
+                                        final_value -= frac_value;
+                                    } else {
+                                        final_value += frac_value;
+                                    }
+                                }
+
+                                switch (frac_precision) {
+                                    .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(final_value),
+                                    .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = final_value,
+                                    .dec => {
+                                        // Dec type - RocDec has i128 internal representation
+                                        const dec_value: i128 = if (is_negative)
+                                            -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
+                                        else
+                                            @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
+                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                    },
+                                }
+                            }
+                        }
+                    } else if (!in_range and err_payload_var != null) {
+                        // For Err case, construct InvalidNumeral(Str) with descriptive message
+                        // Format the number that was rejected
+                        var num_str_buf: [128]u8 = undefined;
+                        const num_str = blk: {
+                            var writer = std.io.fixedBufferStream(&num_str_buf);
+                            if (is_negative) writer.writer().writeAll("-") catch {};
+                            // Format integer part
+                            writer.writer().print("{d}", .{value}) catch {};
+                            // Format fractional part if present
+                            if (digits_after.len > 0) {
+                                var has_nonzero = false;
+                                for (digits_after) |d| {
+                                    if (d != 0) {
+                                        has_nonzero = true;
+                                        break;
+                                    }
+                                }
+                                if (has_nonzero) {
+                                    writer.writer().writeAll(".") catch {};
+                                    // Convert base-256 fractional digits to decimal
+                                    var frac: f64 = 0;
+                                    var mult: f64 = 1.0 / 256.0;
+                                    for (digits_after) |digit| {
+                                        frac += @as(f64, @floatFromInt(digit)) * mult;
+                                        mult /= 256.0;
+                                    }
+                                    // Print fractional part (removing leading "0.")
+                                    var frac_buf: [32]u8 = undefined;
+                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
+                                        writer.writer().writeAll(frac_str[2..]) catch {};
+                                    }
+                                }
+                            }
+                            break :blk num_str_buf[0..writer.pos];
+                        };
+
+                        // Create descriptive error message
+                        const error_msg = switch (rejection_reason) {
+                            .negative_unsigned => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .fractional_integer => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .out_of_range, .overflow => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                                .{ num_str, type_name, type_name, min_value_str, max_value_str },
+                            ) catch null,
+                            .none => null,
+                        };
+
+                        if (error_msg) |msg| {
+                            // Get the Err payload layout (which is [InvalidNumeral(Str)])
+                            const err_payload_layout = try self.getRuntimeLayout(err_payload_var.?);
+                            const payload_field_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+
+                            // Check if payload area has enough space for RocStr (24 bytes on 64-bit)
+                            // The layout computation may be wrong for error types, so check against actual RocStr size
+                            const roc_str_size = @sizeOf(RocStr);
+                            if (payload_field_size >= roc_str_size and payload_field.ptr != null) {
+                                defer self.allocator.free(msg);
+                                const outer_payload_ptr = payload_field.ptr.?;
+                                // Create the RocStr for the error message
+                                const roc_str = RocStr.fromSlice(msg, roc_ops);
+
+                                if (err_payload_layout.tag == .record) {
+                                    // InvalidNumeral tag union is a record { tag, payload }
+                                    // Set is_initialized to true since we're about to write to this memory
+                                    var err_inner = StackValue{
+                                        .ptr = outer_payload_ptr,
+                                        .layout = err_payload_layout,
+                                        .is_initialized = true,
+                                    };
+                                    var err_acc = try err_inner.asRecord(&self.runtime_layout_store);
+
+                                    // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
+                                    // Use layout store's env for field lookup to match comptime_evaluator
+                                    if (err_acc.findFieldIndex(layout_env, "tag")) |inner_tag_idx| {
+                                        const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx);
+                                        if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
+                                            var tmp = inner_tag_field;
+                                            tmp.is_initialized = false;
+                                            try tmp.setInt(0); // InvalidNumeral tag index
+                                        }
+                                    }
+
+                                    // Set the payload to the Str
+                                    if (err_acc.findFieldIndex(layout_env, "payload")) |inner_payload_idx| {
+                                        const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx);
+                                        if (inner_payload_field.ptr) |str_ptr| {
+                                            const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
+                                            str_dest.* = roc_str;
+                                        }
+                                    }
+                                } else if (err_payload_layout.tag == .scalar and err_payload_layout.data.scalar.tag == .str) {
+                                    // Direct Str payload (single-tag union optimized away)
+                                    const str_dest: *RocStr = @ptrCast(@alignCast(outer_payload_ptr));
+                                    str_dest.* = roc_str;
+                                }
+                            } else {
+                                // Payload area is too small for RocStr - store the error message in the interpreter
+                                // for retrieval by the caller. This happens when layout optimization doesn't
+                                // allocate enough space for the Err payload.
+                                // Note: Do NOT free msg here - it will be used and freed by the caller
+                                self.last_error_message = msg;
+                            }
+                        }
+                    }
+
+                    return dest;
+                }
+
+                self.triggerCrash("num_from_numeral: unsupported result layout", false, roc_ops);
+                return error.Crash;
+            },
         }
     }
 
     /// Helper to create a simple boolean StackValue (for low-level builtins)
-    fn makeSimpleBoolValue(self: *Interpreter, value: bool) !StackValue {
-        const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
-        const bool_value = try self.pushRaw(bool_layout, 0);
-        if (bool_value.ptr) |ptr| {
-            const bool_ptr: *bool = @ptrCast(@alignCast(ptr));
-            bool_ptr.* = value;
-        }
+    fn makeBoolValue(self: *Interpreter, value: bool) !StackValue {
+        const bool_layout = Layout.int(.u8);
+        var bool_value = try self.pushRaw(bool_layout, 0);
+        bool_value.is_initialized = false;
+        try bool_value.setInt(@intFromBool(value));
+        bool_value.is_initialized = true;
         return bool_value;
     }
 
@@ -2881,56 +3426,25 @@ pub const Interpreter = struct {
         roc_ops.crash(message);
     }
 
-    fn extractBoolTagIndex(self: *Interpreter, value: StackValue, bool_var: ?types.Var) !usize {
-        const raw_index: usize = switch (value.layout.tag) {
-            .scalar => switch (value.layout.data.scalar.tag) {
-                .bool => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const b: *const u8 = @ptrCast(@alignCast(ptr));
-                    return @intCast(b.*);
-                },
-                .int => {
-                    return @intCast(value.asI128());
-                },
-                else => return error.TypeMismatch,
-            },
-            .tuple => {
-                var tuple_acc = try value.asTuple(&self.runtime_layout_store);
-                const tag_field = try tuple_acc.getElement(1); // tag is element 1
-                const tag_value = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                return try self.extractBoolTagIndex(tag_value, bool_var);
-            },
-            else => return error.TypeMismatch,
-        };
+    fn getRuntimeU8(value: StackValue) u8 {
+        std.debug.assert(value.layout.tag == .scalar);
+        std.debug.assert(value.layout.data.scalar.tag == .int);
+        std.debug.assert(value.layout.data.scalar.data.int == .u8);
 
-        if (bool_var) |_var| {
-            try self.prepareBoolIndices(_var);
-            if (raw_index == self.bool_false_index or raw_index == self.bool_true_index) {
-                return raw_index;
-            }
-            return error.TypeMismatch;
-        }
+        const ptr = value.ptr orelse unreachable;
+        const b: *const u8 = @ptrCast(@alignCast(ptr));
 
-        return raw_index;
+        return b.*;
     }
 
-    fn boolValueIsTrue(self: *Interpreter, value: StackValue, rt_var: types.Var) !bool {
-        // Check that the layout is compatible with Bool
-        if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
-
-        // Try to verify this is actually a Bool type
-        try self.prepareBoolIndices(rt_var);
-        if (!try self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
-
-        // Bool values are ALWAYS stored with canonical indices: 0=False, 1=True
-        const idx = try self.extractBoolTagIndex(value, rt_var);
-        return idx == self.bool_true_index;
+    fn boolValueEquals(equals: bool, value: StackValue) bool {
+        debugAssertIsBoolLayout(value.layout);
+        return getRuntimeU8(value) == @intFromBool(equals);
     }
 
     const NumericKind = enum { int, dec, f32, f64 };
 
-    fn numericKindFromLayout(self: *Interpreter, layout_val: Layout) ?NumericKind {
-        _ = self;
+    fn numericKindFromLayout(layout_val: Layout) ?NumericKind {
         if (layout_val.tag != .scalar) return null;
         return switch (layout_val.data.scalar.tag) {
             .int => .int,
@@ -2983,8 +3497,8 @@ pub const Interpreter = struct {
         rhs: StackValue,
         rhs_rt_var: types.Var,
     ) !Layout {
-        const lhs_kind_opt = self.numericKindFromLayout(lhs.layout);
-        const rhs_kind_opt = self.numericKindFromLayout(rhs.layout);
+        const lhs_kind_opt = numericKindFromLayout(lhs.layout);
+        const rhs_kind_opt = numericKindFromLayout(rhs.layout);
         if (lhs_kind_opt == null or rhs_kind_opt == null) return current_layout;
 
         const desired_kind = unifyNumericKinds(lhs_kind_opt.?, rhs_kind_opt.?) orelse return error.TypeMismatch;
@@ -3004,74 +3518,6 @@ pub const Interpreter = struct {
         const updated_layout = try self.getRuntimeLayout(result_rt_var);
         if (!self.layoutMatchesKind(updated_layout, desired_kind)) return error.TypeMismatch;
         return updated_layout;
-    }
-
-    fn evalArithmeticBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        expr_idx: can.CIR.Expr.Idx,
-        lhs: StackValue,
-        rhs: StackValue,
-        lhs_rt_var: types.Var,
-        rhs_rt_var: types.Var,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-        const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-        var result_layout = try self.getRuntimeLayout(result_rt_var);
-
-        result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);
-
-        if (result_layout.tag != .scalar) return error.TypeMismatch;
-
-        // Map binary operator to low-level operation
-        const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
-            .add => .num_plus,
-            .sub => .num_minus,
-            .mul => .num_times,
-            .div, .div_trunc => .num_div_by,
-            .rem => .num_rem_by,
-            else => return error.NotImplemented,
-        };
-
-        // Call the low-level builtin with both arguments
-        var args = [_]StackValue{ lhs, rhs };
-        return try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
-    }
-
-    fn evalIntBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        result_layout: Layout,
-        lhs: StackValue,
-        rhs: StackValue,
-    ) !StackValue {
-        if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-        if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-
-        const lhs_val = lhs.asI128();
-        const rhs_val = rhs.asI128();
-
-        const result_val: i128 = switch (op) {
-            .add => lhs_val + rhs_val,
-            .sub => lhs_val - rhs_val,
-            .mul => lhs_val * rhs_val,
-            .div, .div_trunc => blk: {
-                if (rhs_val == 0) return error.DivisionByZero;
-                break :blk @divTrunc(lhs_val, rhs_val);
-            },
-            .rem => blk: {
-                if (rhs_val == 0) return error.DivisionByZero;
-                break :blk @rem(lhs_val, rhs_val);
-            },
-            else => return error.NotImplemented,
-        };
-
-        var out = try self.pushRaw(result_layout, 0);
-        out.is_initialized = false;
-        out.setInt(result_val);
-        out.is_initialized = true;
-        return out;
     }
 
     fn evalDecBinop(
@@ -3198,10 +3644,10 @@ pub const Interpreter = struct {
         }
     }
 
-    fn isBoolLayout(self: *Interpreter, layout_val: Layout) bool {
-        _ = self;
-        if (layout_val.tag != .scalar) return false;
-        return layout_val.data.scalar.tag == .bool or layout_val.data.scalar.tag == .int;
+    fn debugAssertIsBoolLayout(layout_val: Layout) void {
+        std.debug.assert(layout_val.tag == .scalar);
+        std.debug.assert(layout_val.data.scalar.tag == .int);
+        std.debug.assert(layout_val.data.scalar.data.int == .u8);
     }
 
     const NumericValue = union(enum) {
@@ -3332,20 +3778,15 @@ pub const Interpreter = struct {
         lhs: StackValue,
         lhs_var: types.Var,
         rhs: StackValue,
-        rhs_var: types.Var,
+        _: types.Var, // rhs_var unused
     ) StructuralEqError!bool {
-        // Handle scalar comparisons (bool, numbers, strings) directly.
+        // Handle scalar comparisons (numbers, strings) directly.
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
             const rhs_scalar = rhs.layout.data.scalar;
             if (lhs_scalar.tag != rhs_scalar.tag) return error.TypeMismatch;
 
             switch (lhs_scalar.tag) {
-                .bool => {
-                    const lhs_bool = try self.boolValueIsTrue(lhs, lhs_var);
-                    const rhs_bool = try self.boolValueIsTrue(rhs, rhs_var);
-                    return lhs_bool == rhs_bool;
-                },
                 .int, .frac => {
                     const order = try self.compareNumericScalars(lhs, rhs);
                     return order == .eq;
@@ -3566,105 +4007,6 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn runtimeVarIsBool(self: *Interpreter, rt_var: types.Var) !bool {
-        var resolved = self.runtime_types.resolveVar(rt_var);
-
-        unwrap: while (true) {
-            switch (resolved.desc.content) {
-                .alias => |al| {
-                    const backing = self.runtime_types.getAliasBackingVar(al);
-                    resolved = self.runtime_types.resolveVar(backing);
-                },
-                .structure => |st| switch (st) {
-                    .nominal_type => |nom| {
-                        const backing = self.runtime_types.getNominalBackingVar(nom);
-                        resolved = self.runtime_types.resolveVar(backing);
-                    },
-                    else => {
-                        break :unwrap;
-                    },
-                },
-                else => {
-                    break :unwrap;
-                },
-            }
-        }
-
-        if (resolved.desc.content != .structure) {
-            return false;
-        }
-        const structure = resolved.desc.content.structure;
-        if (structure != .tag_union) {
-            return false;
-        }
-        const tu = structure.tag_union;
-
-        const scratch_tags_top = self.scratch_tags.items.len;
-        defer self.scratch_tags.shrinkRetainingCapacity(scratch_tags_top);
-
-        const tag_slice = self.runtime_types.getTagsSlice(tu.tags);
-        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
-            _ = try self.scratch_tags.append(.{ .name = name, .args = args });
-        }
-
-        var current_ext = tu.ext;
-        while (true) {
-            const resolved_ext = self.runtime_types.resolveVar(current_ext);
-            switch (resolved_ext.desc.content) {
-                .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
-                    .tag_union => |ext_tag_union| {
-                        if (ext_tag_union.tags.len() > 0) {
-                            const ext_tag_slice = self.runtime_types.getTagsSlice(ext_tag_union.tags);
-                            for (ext_tag_slice.items(.name), ext_tag_slice.items(.args)) |name, args| {
-                                _ = try self.scratch_tags.append(.{ .name = name, .args = args });
-                            }
-                            current_ext = ext_tag_union.ext;
-                        } else {
-                            break;
-                        }
-                    },
-                    else => return Error.InvalidTagExt,
-                },
-                .alias => |alias| {
-                    current_ext = self.runtime_types.getAliasBackingVar(alias);
-                },
-                else => return Error.InvalidTagExt,
-            }
-        }
-
-        const tags = self.scratch_tags.items[scratch_tags_top..];
-        if (tags.len == 0 or tags.len > 2) {
-            return false;
-        }
-
-        var false_idx: ?usize = null;
-        var true_idx: ?usize = null;
-        for (tags, 0..) |tag, i| {
-            const name_text = self.env.getIdent(tag.name);
-            if (std.mem.eql(u8, name_text, "False")) {
-                false_idx = i;
-            } else if (std.mem.eql(u8, name_text, "True")) {
-                true_idx = i;
-            } else {
-                return false;
-            }
-        }
-
-        // Accept types that have True OR False (for anonymous tags like [True]_others)
-        // Not just full Bool types with both tags
-        if (false_idx == null and true_idx == null) {
-            return false;
-        }
-        // IMPORTANT: Bool values are ALWAYS stored with canonical indices: False=0, True=1
-        // This is true regardless of the tag order in the type.
-        // The tag list indices (false_idx, true_idx) tell us which tag is which,
-        // but the actual runtime values always use canonical indices.
-        self.bool_false_index = 0; // False is always 0
-        self.bool_true_index = 1; // True is always 1
-        return true;
-    }
-
     fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
@@ -3705,21 +4047,6 @@ pub const Interpreter = struct {
         };
         self.canonical_bool_rt_var = backing_rt_var;
         return backing_rt_var;
-    }
-
-    fn prepareBoolIndices(self: *Interpreter, rt_var: types.Var) !void {
-        if (try self.runtimeVarIsBool(rt_var)) return;
-        const canonical = try self.getCanonicalBoolRuntimeVar();
-        _ = try self.runtimeVarIsBool(canonical);
-    }
-
-    fn ensureBoolRuntimeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var, runtime_var: types.Var) !types.Var {
-        if (try self.runtimeVarIsBool(runtime_var)) return runtime_var;
-
-        const canonical = try self.getCanonicalBoolRuntimeVar();
-        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
-        try self.translate_cache.put(key, canonical);
-        return canonical;
     }
 
     fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
@@ -3794,181 +4121,62 @@ pub const Interpreter = struct {
     fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
         switch (value.layout.tag) {
             .scalar => switch (value.layout.data.scalar.tag) {
-                .bool => {
-                    const idx = try self.extractBoolTagIndex(value, null);
-                    return .{ .index = idx, .payload = null };
-                },
                 .int => {
                     return .{ .index = @intCast(value.asI128()), .payload = null };
                 },
                 else => return error.TypeMismatch,
             },
-            .tuple => {
-                var tuple_acc = try value.asTuple(&self.runtime_layout_store);
-                const tag_field = try tuple_acc.getElement(1); // tag is element 1
+            .record => {
+                var acc = try value.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
                 var tag_index: usize = undefined;
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                     tag_index = @intCast(tmp.asI128());
-                } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                    const ptr = tag_field.ptr orelse return error.TypeMismatch;
-                    const b: *const u8 = @ptrCast(@alignCast(ptr));
-                    tag_index = b.*;
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
-                // Get payload from element 0
-                const payload_field = try tuple_acc.getElement(0);
-                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                defer tag_list.deinit();
-                try self.appendUnionTags(union_rt_var, &tag_list);
-                if (tag_index >= tag_list.items.len) return error.TypeMismatch;
-                const tag_info = tag_list.items[tag_index];
-                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                    payload_value = try acc.getFieldByIndex(payload_idx);
+                    if (payload_value) |field_value| {
+                        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                        defer tag_list.deinit();
+                        try self.appendUnionTags(union_rt_var, &tag_list);
+                        if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+                        const tag_info = tag_list.items[tag_index];
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
 
-                if (arg_vars.len == 0) {
-                    payload_value = null;
-                } else if (arg_vars.len == 1) {
-                    const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
-                    payload_value = StackValue{
-                        .layout = arg_layout,
-                        .ptr = payload_field.ptr,
-                        .is_initialized = payload_field.is_initialized,
-                    };
-                } else {
-                    var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
-                    defer self.allocator.free(elem_layouts);
-                    for (arg_vars, 0..) |arg_var, i| {
-                        elem_layouts[i] = try self.getRuntimeLayout(arg_var);
+                        if (arg_vars.len == 0) {
+                            payload_value = null;
+                        } else if (arg_vars.len == 1) {
+                            const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
+                            payload_value = StackValue{
+                                .layout = arg_layout,
+                                .ptr = field_value.ptr,
+                                .is_initialized = field_value.is_initialized,
+                            };
+                        } else {
+                            var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
+                            defer self.allocator.free(elem_layouts);
+                            for (arg_vars, 0..) |arg_var, i| {
+                                elem_layouts[i] = try self.getRuntimeLayout(arg_var);
+                            }
+                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                            payload_value = StackValue{
+                                .layout = tuple_layout,
+                                .ptr = field_value.ptr,
+                                .is_initialized = field_value.is_initialized,
+                            };
+                        }
                     }
-                    const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                    const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                    payload_value = StackValue{
-                        .layout = tuple_layout,
-                        .ptr = payload_field.ptr,
-                        .is_initialized = payload_field.is_initialized,
-                    };
                 }
 
                 return .{ .index = tag_index, .payload = payload_value };
             },
             else => return error.TypeMismatch,
         }
-    }
-
-    fn makeBoolValue(self: *Interpreter, target_rt_var: types.Var, truthy: bool) !StackValue {
-        const layout_val = try self.getRuntimeLayout(target_rt_var);
-        if (!self.isBoolLayout(layout_val)) return error.NotImplemented;
-        try self.prepareBoolIndices(target_rt_var);
-        const chosen_index: u8 = if (truthy) self.bool_true_index else self.bool_false_index;
-        var out = try self.pushRaw(layout_val, 0);
-
-        switch (layout_val.tag) {
-            .scalar => switch (layout_val.data.scalar.tag) {
-                .bool => {
-                    const ptr = out.ptr orelse return error.NotImplemented;
-                    const p: *u8 = @ptrCast(@alignCast(ptr));
-                    p.* = chosen_index;
-                    return out;
-                },
-                .int => {
-                    out.is_initialized = false;
-                    out.setInt(chosen_index);
-                    out.is_initialized = true;
-                    return out;
-                },
-                else => return error.NotImplemented,
-            },
-            .tuple => {
-                var tuple_acc = try out.asTuple(&self.runtime_layout_store);
-                const tag_field = try tuple_acc.getElement(1); // tag is element 1
-                var tag_slot = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                switch (tag_slot.layout.tag) {
-                    .scalar => switch (tag_slot.layout.data.scalar.tag) {
-                        .bool => {
-                            const ptr = tag_slot.ptr orelse return error.NotImplemented;
-                            const p: *u8 = @ptrCast(@alignCast(ptr));
-                            p.* = chosen_index;
-                        },
-                        .int => {
-                            tag_slot.is_initialized = false;
-                            tag_slot.setInt(chosen_index);
-                            tag_slot.is_initialized = true;
-                        },
-                        else => return error.NotImplemented,
-                    },
-                    else => return error.NotImplemented,
-                }
-
-                // Get payload from element 0
-                const payload_field = try tuple_acc.getElement(0);
-                const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_size > 0 and payload_field.ptr != null) {
-                    @memset(@as([*]u8, @ptrCast(payload_field.ptr.?))[0..payload_size], 0);
-                }
-
-                return out;
-            },
-            else => return error.NotImplemented,
-        }
-    }
-
-    fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op, roc_ops: *RocOps) !bool {
-        // Handle numeric comparisons using the new low-level dispatch system
-        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const lhs_scalar = lhs.layout.data.scalar;
-            const rhs_scalar = rhs.layout.data.scalar;
-
-            // Check if both operands are numeric types
-            const is_numeric = (lhs_scalar.tag == .int or lhs_scalar.tag == .frac) and
-                (rhs_scalar.tag == .int or rhs_scalar.tag == .frac);
-
-            if (is_numeric) {
-                // Map binary operator to low-level operation
-                const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
-                    .eq => .num_is_eq,
-                    .ne => .num_is_ne,
-                    .lt => .num_is_lt,
-                    .le => .num_is_lte,
-                    .gt => .num_is_gt,
-                    .ge => .num_is_gte,
-                    else => return error.NotImplemented,
-                };
-
-                // Call the low-level builtin with both arguments
-                var args = [_]StackValue{ lhs, rhs };
-                const result = try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
-
-                // Extract boolean result
-                if (result.ptr) |ptr| {
-                    const bool_ptr: *const bool = @ptrCast(@alignCast(ptr));
-                    return bool_ptr.*;
-                }
-                return error.TypeMismatch;
-            }
-
-            // Handle bool comparisons using low-level dispatch
-            if (lhs_scalar.tag == .bool and rhs_scalar.tag == .bool) {
-                const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
-                    .eq => .bool_is_eq,
-                    .ne => .bool_is_ne,
-                    else => return error.NotImplemented,
-                };
-
-                var args = [_]StackValue{ lhs, rhs };
-                const result = try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
-
-                // Extract boolean result
-                if (result.ptr) |ptr| {
-                    const bool_ptr: *const bool = @ptrCast(@alignCast(ptr));
-                    return bool_ptr.*;
-                }
-                return error.TypeMismatch;
-            }
-        }
-
-        // For now, only numeric and bool comparisons are supported
-        return error.NotImplemented;
     }
 
     fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
@@ -4041,7 +4249,23 @@ pub const Interpreter = struct {
         start: usize,
         count: usize,
     ) !StackValue {
-        const dest = try self.pushRaw(list_layout, 0);
+        // Apply layout correction if needed.
+        // This handles cases where the type system's layout doesn't match the actual
+        // element layout after runtime defaulting (e.g., numeric literals defaulting to Dec).
+        const actual_list_layout = if (list_layout.tag == .list) blk: {
+            const stored_elem_layout_idx = list_layout.data.list;
+            const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+
+            const layouts_match = std.meta.eql(stored_elem_layout, elem_layout);
+            if (!layouts_match) {
+                const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
+                break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+            } else {
+                break :blk list_layout;
+            }
+        } else list_layout;
+
+        const dest = try self.pushRaw(actual_list_layout, 0);
         if (dest.ptr == null) return dest;
         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
@@ -4132,10 +4356,8 @@ pub const Interpreter = struct {
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
-                // NOTE: We do NOT incref here! The value passed in already has the correct refcount.
-                // When this value came from a variable lookup, the lookup already incref'd it.
-                // The defer val.decref in the statement handler will balance things out.
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = value, .expr_idx = expr_idx });
+                const copied = try self.pushCopy(value, roc_ops);
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx });
                 return true;
             },
             .as => |as_pat| {
@@ -4151,9 +4373,23 @@ pub const Interpreter = struct {
             },
             .underscore => return true,
             .num_literal => |il| {
-                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .int)) return false;
+                if (value.layout.tag != .scalar) return false;
                 const lit = il.value.toI128();
-                return value.asI128() == lit;
+
+                // Handle both int and Dec (frac) layouts for numeric literals
+                return switch (value.layout.data.scalar.tag) {
+                    .int => value.asI128() == lit,
+                    .frac => blk: {
+                        // For Dec type, extract the value and compare
+                        if (value.layout.data.scalar.data.frac != .dec) break :blk false;
+                        const dec_value = value.asDec();
+                        // Dec stores values scaled by 10^18, so we need to compare scaled values
+                        // For integer literals, we scale the literal value
+                        const scaled_lit = lit * RocDec.one_point_zero_i128;
+                        break :blk dec_value.num == scaled_lit;
+                    },
+                    else => false,
+                };
             },
             .str_literal => |sl| {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
@@ -4198,17 +4434,31 @@ pub const Interpreter = struct {
             .list => |list_pat| {
                 if (value.layout.tag != .list and value.layout.tag != .list_of_zst) return false;
 
-                const list_layout = try self.getRuntimeLayout(value_rt_var);
+                // Use the layout from the StackValue instead of re-querying the type system.
+                // The StackValue has the correct layout that was used to allocate the list,
+                // which may differ from the type system's layout if runtime defaulting occurred.
+                const list_layout = value.layout;
 
                 const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
                 const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
                 std.debug.assert(list_rt_content == .structure);
                 std.debug.assert(list_rt_content.structure == .nominal_type);
 
+                // Extract the element type variable from the List type
+                // Note: nominal.vars contains [backing_var, elem_var] for List types
+                // where backing_var is the ProvidedByCompiler tag union, and elem_var is the element type
                 const nominal = list_rt_content.structure.nominal_type;
-                const nominal_args = self.runtime_types.sliceNominalArgs(nominal);
-                const elem_rt_var = nominal_args[0];
-                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
+                const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
+                std.debug.assert(vars.len == 2); // List has backing var + elem var
+                const elem_rt_var = vars[1];
+
+                // Get element layout from the actual list layout, not from the type system.
+                // The list's runtime layout may differ from the type system's expectation
+                // due to numeric literal defaulting.
+                const elem_layout = if (list_layout.tag == .list)
+                    self.runtime_layout_store.getLayout(list_layout.data.list)
+                else
+                    Layout.zst(); // list_of_zst has zero-sized elements
 
                 var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
                 const total_len = accessor.len();
@@ -4310,18 +4560,24 @@ pub const Interpreter = struct {
                 const tag_data = try self.extractTagValue(value, value_rt_var);
                 if (tag_data.index >= tag_list.items.len) return false;
 
+                // Find the expected tag's index in the tag list by matching the name
                 const expected_name = self.env.getIdent(tag_pat.name);
-                if (try self.runtimeVarIsBool(value_rt_var)) {
-                    const actual_name = if (tag_data.index == self.bool_true_index) "True" else "False";
-                    if (!std.mem.eql(u8, expected_name, actual_name)) return false;
-                } else {
-                    try self.prepareBoolIndices(value_rt_var);
-                    const actual_name = self.env.getIdent(tag_list.items[tag_data.index].name);
-                    if (!std.mem.eql(u8, expected_name, actual_name)) return false;
+                var expected_index: ?usize = null;
+                for (tag_list.items, 0..) |tag_info, i| {
+                    if (std.mem.eql(u8, self.env.getIdent(tag_info.name), expected_name)) {
+                        expected_index = i;
+                        break;
+                    }
                 }
 
+                // If the pattern's tag doesn't exist in the union, the match fails
+                if (expected_index == null) return false;
+
+                // Compare runtime tag discriminant with expected tag discriminant
+                if (tag_data.index != expected_index.?) return false;
+
                 const arg_patterns = self.env.store.slicePatterns(tag_pat.args);
-                const arg_vars_range = tag_list.items[tag_data.index].args;
+                const arg_vars_range = tag_list.items[expected_index.?].args;
                 const arg_vars = self.runtime_types.sliceVars(arg_vars_range);
                 if (arg_patterns.len != arg_vars.len) return false;
 
@@ -4407,6 +4663,12 @@ pub const Interpreter = struct {
     /// Get the module environment for a given origin module identifier.
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
+        // Check if it's the Builtin module
+        if (origin_module == self.env.builtin_module_ident) {
+            // In shim context, builtins are embedded in the main module env
+            // (builtin_module_env is null), so fall back to self.env
+            return self.builtin_module_env orelse self.env;
+        }
         // Check if it's the current module
         if (self.env.module_name_idx == origin_module) {
             return self.env;
@@ -4427,10 +4689,15 @@ pub const Interpreter = struct {
     }
 
     /// Build a fully-qualified method identifier in the form "TypeName.method".
+    /// Note: nominal_ident comes from the runtime type store (translated idents),
+    /// while method_name comes from the current environment.
     fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
-        const ident_store = self.env.common.getIdentStore();
-        const type_name = ident_store.getText(nominal_ident);
-        const method_name_str = ident_store.getText(method_name);
+        // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
+        const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        const type_name = runtime_ident_store.getText(nominal_ident);
+        // method_name is from the current environment (e.g., plus_ident)
+        const current_ident_store = self.env.common.getIdentStore();
+        const method_name_str = current_ident_store.getText(method_name);
         return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
     }
 
@@ -4460,6 +4727,229 @@ pub const Interpreter = struct {
         return error.MethodNotFound;
     }
 
+    /// Dispatch a binary operator to its corresponding method.
+    /// Handles the full method dispatch including:
+    /// - Type resolution with Dec default for flex/rigid vars
+    /// - Operand evaluation
+    /// - Method lookup and invocation
+    /// Returns the result of the method call.
+    fn dispatchBinaryOpMethod(
+        self: *Interpreter,
+        method_ident: base_pkg.Ident.Idx,
+        lhs_expr: can.CIR.Expr.Idx,
+        rhs_expr: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const lhs_ct_var = can.ModuleEnv.varFrom(lhs_expr);
+        const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+        const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr);
+        const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+
+        // Resolve the lhs type to get nominal type information
+        var lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+
+        // If the type is still a flex/rigid var, default to Dec
+        // (Unsuffixed numeric literals default to Dec in Roc)
+        if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
+            // Create Dec nominal type content
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+            lhs_resolved = self.runtime_types.resolveVar(dec_var);
+        }
+
+        // Evaluate both operands
+        var lhs = try self.evalExprMinimal(lhs_expr, roc_ops, lhs_rt_var);
+        defer lhs.decref(&self.runtime_layout_store, roc_ops);
+        var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
+        defer rhs.decref(&self.runtime_layout_store, roc_ops);
+
+        // Get the nominal type information from lhs
+        const nominal_info = switch (lhs_resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .nominal_type => |nom| .{
+                    .origin = nom.origin_module,
+                    .ident = nom.ident.ident_idx,
+                },
+                else => return error.InvalidMethodReceiver,
+            },
+            else => return error.InvalidMethodReceiver,
+        };
+
+        // Resolve the method function
+        const method_func = self.resolveMethodFunction(
+            nominal_info.origin,
+            nominal_info.ident,
+            method_ident,
+            roc_ops,
+        ) catch |err| return err;
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+        // Prepare arguments: lhs (receiver) + rhs
+        var args = [2]StackValue{ lhs, rhs };
+
+        // Call the method closure
+        if (method_func.layout.tag != .closure) {
+            return error.TypeMismatch;
+        }
+
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+        // Switch to the closure's source module
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != args.len) {
+            return error.TypeMismatch;
+        }
+
+        // Provide closure context for capture lookup
+        try self.active_closures.append(method_func);
+        defer _ = self.active_closures.pop();
+
+        // Check if this is a low-level lambda - if so, dispatch to builtin
+        const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+        if (lambda_expr == .e_low_level_lambda) {
+            const low_level = lambda_expr.e_low_level_lambda;
+            // Dispatch to actual low-level builtin implementation
+            // Binary ops don't need return type info (not num_from_int_digits etc)
+            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+        }
+
+        // Bind parameters
+        for (params, 0..) |param, i| {
+            try self.bindings.append(.{
+                .pattern_idx = param,
+                .value = args[i],
+                .expr_idx = @enumFromInt(0),
+            });
+        }
+
+        // Evaluate the method body
+        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+
+        // Clean up bindings
+        var k = params.len;
+        while (k > 0) {
+            k -= 1;
+            _ = self.bindings.pop();
+        }
+
+        return result;
+    }
+
+    /// Dispatch a unary operator to a method call.
+    /// For example, `!a` desugars to `a.not()` and `-a` desugars to `a.negate()`.
+    fn dispatchUnaryOpMethod(
+        self: *Interpreter,
+        method_ident: base_pkg.Ident.Idx,
+        operand_expr: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const operand_ct_var = can.ModuleEnv.varFrom(operand_expr);
+        const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+
+        // Resolve the operand type to get nominal type information
+        var operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+
+        // If the type is still a flex/rigid var, default to Dec for numeric operations
+        // (Unsuffixed numeric literals default to Dec in Roc)
+        if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
+            // Create Dec nominal type content
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+            operand_resolved = self.runtime_types.resolveVar(dec_var);
+        }
+
+        // Evaluate the operand
+        var operand = try self.evalExprMinimal(operand_expr, roc_ops, operand_rt_var);
+        defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+        // Get the nominal type information from operand
+        const nominal_info = switch (operand_resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .nominal_type => |nom| .{
+                    .origin = nom.origin_module,
+                    .ident = nom.ident.ident_idx,
+                },
+                else => return error.InvalidMethodReceiver,
+            },
+            else => return error.InvalidMethodReceiver,
+        };
+
+        // Resolve the method function
+        const method_func = try self.resolveMethodFunction(
+            nominal_info.origin,
+            nominal_info.ident,
+            method_ident,
+            roc_ops,
+        );
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+        // Prepare arguments: just the operand (receiver)
+        var args = [1]StackValue{operand};
+
+        // Call the method closure
+        if (method_func.layout.tag != .closure) {
+            return error.TypeMismatch;
+        }
+
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+        // Switch to the closure's source module
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != args.len) {
+            return error.TypeMismatch;
+        }
+
+        // Provide closure context for capture lookup
+        try self.active_closures.append(method_func);
+        defer _ = self.active_closures.pop();
+
+        // Check if this is a low-level lambda - if so, dispatch to builtin
+        const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+        if (lambda_expr == .e_low_level_lambda) {
+            const low_level = lambda_expr.e_low_level_lambda;
+            // Dispatch to actual low-level builtin implementation
+            // Binary ops don't need return type info (not num_from_int_digits etc)
+            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+        }
+
+        // Bind parameters
+        for (params, 0..) |param, i| {
+            try self.bindings.append(.{
+                .pattern_idx = param,
+                .value = args[i],
+                .expr_idx = @enumFromInt(0),
+            });
+        }
+
+        // Evaluate the method body
+        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+
+        // Clean up bindings
+        var k = params.len;
+        while (k > 0) {
+            k -= 1;
+            _ = self.bindings.pop();
+        }
+
+        return result;
+    }
+
     /// Resolve and evaluate a method function from its origin module.
     /// Returns a StackValue representing the method function.
     /// The caller is responsible for decref'ing the returned value.
@@ -4479,20 +4969,39 @@ pub const Interpreter = struct {
         var qualified_name_buf: [256]u8 = undefined;
         const qualified_name = try self.getMethodQualifiedIdent(nominal_ident, method_name, &qualified_name_buf);
 
+        const method_name_str = self.env.common.getIdentStore().getText(method_name);
+
         // Try to find the method in the origin module's exposed items
         const method_ident = blk: {
             if (origin_env.common.findIdent(qualified_name)) |ident| {
                 break :blk ident;
             }
+
+            // Try with "Builtin." prefix for builtin module methods
+            // (Associated items in builtin module are stored with full "Builtin.Type.method" names)
+            var builtin_buf: [256]u8 = undefined;
+            const builtin_qualified = try std.fmt.bufPrint(&builtin_buf, "Builtin.{s}", .{qualified_name});
+            if (origin_env.common.findIdent(builtin_qualified)) |ident| {
+                break :blk ident;
+            }
+
             // Try unqualified name as fallback
-            const method_name_str = self.env.common.getIdentStore().getText(method_name);
             if (origin_env.common.findIdent(method_name_str)) |ident| {
                 break :blk ident;
             }
             return error.MethodLookupFailed;
         };
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse {
+        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            // Fallback: search all definitions for the method
+            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+            for (all_defs) |def_idx| {
+                const def = origin_env.store.getDef(def_idx);
+                const pat = origin_env.store.getPattern(def.pattern);
+                if (pat == .assign and pat.assign.ident == method_ident) {
+                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                }
+            }
             return error.MethodLookupFailed;
         };
 
@@ -4502,13 +5011,10 @@ pub const Interpreter = struct {
 
         // Save current environment and bindings
         const saved_env = self.env;
-        const saved_layout_env = self.runtime_layout_store.env;
         const saved_bindings_len = self.bindings.items.len;
         self.env = @constCast(origin_env);
-        self.runtime_layout_store.env = self.env;
         defer {
             self.env = saved_env;
-            self.runtime_layout_store.env = saved_layout_env;
             // Restore bindings
             self.bindings.items.len = saved_bindings_len;
         }
@@ -4533,6 +5039,39 @@ pub const Interpreter = struct {
         @memset(self.var_to_layout_slot.items[old_len..], 0);
     }
 
+    /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
+    fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
+        const origin_module_id = self.env.builtin_module_ident;
+
+        // Number types are nested in Num module, so the qualified name is "Num.Dec", "Num.I64", etc.
+        const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Num.{s}", .{type_name});
+        defer self.allocator.free(qualified_type_name);
+        const type_name_ident = try @constCast(self.env.getIdentStore()).insert(self.allocator, base_pkg.Ident.for_text(qualified_type_name));
+        const type_ident = types.TypeIdent{
+            .ident_idx = type_name_ident,
+        };
+
+        // Number types backing is [] (empty tag union with closed extension)
+        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+        const empty_tag_union = types.TagUnion{
+            .tags = types.Tag.SafeMultiList.Range.empty(),
+            .ext = ext_var,
+        };
+        const backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+        const backing_var = try self.runtime_types.freshFromContent(backing_content);
+
+        // Number types have no type arguments
+        const no_type_args: []const types.Var = &.{};
+
+        return try self.runtime_types.mkNominal(
+            type_ident,
+            backing_var,
+            no_type_args,
+            origin_module_id,
+        );
+    }
+
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         var resolved = self.runtime_types.resolveVar(type_var);
@@ -4551,6 +5090,16 @@ pub const Interpreter = struct {
         const idx: usize = @intFromEnum(resolved.var_);
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
+
+        // If we have a flex var, default it to Dec
+        // This is the interpreter-time defaulting for numeric literals
+        if (resolved.desc.content == .flex) {
+            // Directly return Dec's scalar layout
+            const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
+            const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
+            slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;
+            return dec_layout;
+        }
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
             const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
@@ -4658,62 +5207,6 @@ pub const Interpreter = struct {
             switch (resolved.desc.content) {
                 .structure => |flat| {
                     switch (flat) {
-                        .num => |initial_num| {
-                            const compact_num: types.Num.Compact = prec: {
-                                var num = initial_num;
-                                while (true) {
-                                    switch (num) {
-                                        .num_compact => |compact| break :prec compact,
-                                        .int_precision => |precision| break :prec .{ .int = precision },
-                                        .frac_precision => |precision| break :prec .{ .frac = precision },
-                                        // For polymorphic types, use default precision
-                                        .num_unbound => |_| {
-                                            // TODO: Should we consider requirements here?
-                                            break :prec .{ .int = types.Num.Int.Precision.default };
-                                        },
-                                        .int_unbound => {
-                                            // TODO: Should we consider requirements here?
-                                            break :prec .{ .int = types.Num.Int.Precision.default };
-                                        },
-                                        .frac_unbound => {
-                                            // TODO: Should we consider requirements here?
-                                            break :prec .{ .frac = types.Num.Frac.Precision.default };
-                                        },
-                                        .num_poly => |var_| {
-                                            const next_type = module.types.resolveVar(var_).desc.content;
-                                            if (next_type == .structure and next_type.structure == .num) {
-                                                num = next_type.structure.num;
-                                            } else if (next_type == .flex) {
-                                                break :prec .{ .int = types.Num.Int.Precision.default };
-                                            } else {
-                                                return Error.InvalidNumExt;
-                                            }
-                                        },
-                                        .int_poly => |var_| {
-                                            const next_type = module.types.resolveVar(var_).desc.content;
-                                            if (next_type == .structure and next_type.structure == .num) {
-                                                num = next_type.structure.num;
-                                            } else if (next_type == .flex) {
-                                                break :prec .{ .int = types.Num.Int.Precision.default };
-                                            } else {
-                                                return Error.InvalidNumExt;
-                                            }
-                                        },
-                                        .frac_poly => |var_| {
-                                            const next_type = module.types.resolveVar(var_).desc.content;
-                                            if (next_type == .structure and next_type.structure == .num) {
-                                                num = next_type.structure.num;
-                                            } else if (next_type == .flex) {
-                                                break :prec .{ .frac = types.Num.Frac.Precision.default };
-                                            } else {
-                                                return Error.InvalidNumExt;
-                                            }
-                                        },
-                                    }
-                                }
-                            };
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = compact_num } } });
-                        },
                         .tag_union => |tu| {
                             var rt_tag_args = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
                             defer rt_tag_args.deinit(self.allocator);
@@ -4845,7 +5338,23 @@ pub const Interpreter = struct {
                             for (ct_args, 0..) |ct_arg, i| {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
-                            const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
+                            // Always translate idents to the runtime_layout_store's env's ident store.
+                            // This is critical because the layout store was initialized with that env,
+                            // and ident comparisons in the layout store use that env's ident indices.
+                            // Note: self.env may be temporarily switched during from_numeral evaluation,
+                            // so we MUST use runtime_layout_store.env which remains constant.
+                            const layout_env = self.runtime_layout_store.env;
+                            // Compare the underlying interner pointers to detect different ident stores
+                            const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
+                            const translated_ident = if (needs_translation) ident_blk: {
+                                const type_name_str = module.getIdent(nom.ident.ident_idx);
+                                break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
+                            } else nom.ident;
+                            const translated_origin = if (needs_translation) origin_blk: {
+                                const origin_str = module.getIdent(nom.origin_module);
+                                break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                            } else nom.origin_module;
+                            const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin);
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                     }
@@ -5070,6 +5579,7 @@ pub const Interpreter = struct {
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
                     .empty_tag_union => break,
+                    .empty_record => break,
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             const ext_tag_slice = module.types.getTagsSlice(ext_tag_union.tags);
@@ -5080,6 +5590,10 @@ pub const Interpreter = struct {
                         } else {
                             break;
                         }
+                    },
+                    .nominal_type => |nom| {
+                        // Nominal types (like numeric types) act as their backing type
+                        current_ext = module.types.getNominalBackingVar(nom);
                     },
                     else => {
                         // TODO: Don't use unreachable here
@@ -5232,41 +5746,6 @@ test "interpreter: wiring works" {
 }
 
 // RED: expect Var->Layout slot to work (will fail until implemented)
-test "interpreter: Var->Layout slot caches computed layout" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create a concrete runtime type: i64
-    const i64_var = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-
-    // Initially, slot is either absent or zero; ensure capacity then check
-    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(i64_var).var_);
-    try interp.ensureVarLayoutCapacity(root_idx + 1);
-    try std.testing.expectEqual(@as(u32, 0), interp.var_to_layout_slot.items[root_idx]);
-
-    // Retrieve layout and expect scalar.int; slot becomes non-zero
-    const layout_value = try interp.getRuntimeLayout(i64_var);
-    try std.testing.expect(layout_value.tag == .scalar);
-    try std.testing.expect(layout_value.data.scalar.tag == .int);
-    try std.testing.expect(interp.var_to_layout_slot.items[root_idx] != 0);
-}
 
 // RED: translating a compile-time str var should produce a runtime str var
 test "interpreter: translateTypeVar for str" {
@@ -5287,7 +5766,7 @@ test "interpreter: translateTypeVar for str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Get the actual Str type from the Builtin module using the str_stmt index
@@ -5301,229 +5780,9 @@ test "interpreter: translateTypeVar for str" {
 }
 
 // RED: translating a compile-time concrete int64 should produce a runtime int64
-test "interpreter: translateTypeVar for int64" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const rt_var = try interp.translateTypeVar(&env, ct_int);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .structure);
-    switch (resolved.desc.content.structure) {
-        .num => |n| switch (n) {
-            .num_compact => |c| switch (c) {
-                .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
-                else => return error.TestUnexpectedResult,
-            },
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-// RED: translating a compile-time concrete f64 should produce a runtime f64
-test "interpreter: translateTypeVar for f64" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
-    const rt_var = try interp.translateTypeVar(&env, ct_frac);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .structure);
-    switch (resolved.desc.content.structure) {
-        .num => |n| switch (n) {
-            .num_compact => |c| switch (c) {
-                .frac => |p| try std.testing.expectEqual(types.Num.Frac.Precision.f64, p),
-                else => return error.TestUnexpectedResult,
-            },
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
-
 // RED: translating a compile-time tuple (Str, I64) should produce a runtime tuple with same element shapes
-test "interpreter: translateTypeVar for tuple(Str, I64)" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create a nominal Str type for compile-time use
-    const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
-    const str_nominal = types.NominalType{
-        .ident = types.TypeIdent{ .ident_idx = str_ident },
-        .vars = .{ .nonempty = str_vars_range },
-        .origin_module = builtin_ident,
-    };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const elems = [_]types.Var{ ct_str, ct_i64 };
-    const ct_tuple = try env.types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try env.types.appendVars(&elems) } } });
-
-    const rt_var = try interp.translateTypeVar(&env, ct_tuple);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .structure);
-    switch (resolved.desc.content.structure) {
-        .tuple => |t| {
-            const rt_elems = interp.runtime_types.sliceVars(t.elems);
-            try std.testing.expectEqual(@as(usize, 2), rt_elems.len);
-            // elem 0: str (nominal type)
-            const e0 = interp.runtime_types.resolveVar(rt_elems[0]);
-            try std.testing.expect(e0.desc.content == .structure);
-            try std.testing.expect(e0.desc.content.structure == .nominal_type);
-            // elem 1: i64
-            const e1 = interp.runtime_types.resolveVar(rt_elems[1]);
-            try std.testing.expect(e1.desc.content == .structure);
-            switch (e1.desc.content.structure) {
-                .num => |n| switch (n) {
-                    .num_compact => |c| switch (c) {
-                        .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
-                        else => return error.TestUnexpectedResult,
-                    },
-                    else => return error.TestUnexpectedResult,
-                },
-                else => return error.TestUnexpectedResult,
-            }
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
 
 // RED: translating a compile-time record { first: Str, second: I64 } should produce equivalent runtime record
-test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Build compile-time record content
-    const name_first = try env.common.idents.insert(gpa, @import("base").Ident.for_text("first"));
-    const name_second = try env.common.idents.insert(gpa, @import("base").Ident.for_text("second"));
-
-    // Create nominal Str type
-    const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
-    const str_nominal = types.NominalType{
-        .ident = types.TypeIdent{ .ident_idx = str_ident },
-        .vars = .{ .nonempty = str_vars_range },
-        .origin_module = builtin_ident,
-    };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    var ct_fields = [_]types.RecordField{
-        .{ .name = name_first, .var_ = ct_str },
-        .{ .name = name_second, .var_ = ct_i64 },
-    };
-    const ct_fields_range = try env.types.appendRecordFields(&ct_fields);
-    const ct_ext_empty = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const ct_record = try env.types.freshFromContent(.{ .structure = .{ .record = .{ .fields = ct_fields_range, .ext = ct_ext_empty } } });
-
-    // Translate
-    const rt_var = try interp.translateTypeVar(&env, ct_record);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .structure);
-    switch (resolved.desc.content.structure) {
-        .record => |rec| {
-            const rt_fields = interp.runtime_types.getRecordFieldsSlice(rec.fields);
-            try std.testing.expectEqual(@as(u32, 2), rt_fields.len);
-            const f0 = rt_fields.get(0);
-            const f1 = rt_fields.get(1);
-            // Field names are preserved
-            try std.testing.expectEqual(name_first, f0.name);
-            try std.testing.expectEqual(name_second, f1.name);
-            // Field 0 type is Str (nominal type)
-            const e0 = interp.runtime_types.resolveVar(f0.var_);
-            try std.testing.expect(e0.desc.content == .structure);
-            try std.testing.expect(e0.desc.content.structure == .nominal_type);
-            // Field 1 type is I64
-            const e1 = interp.runtime_types.resolveVar(f1.var_);
-            try std.testing.expect(e1.desc.content == .structure);
-            switch (e1.desc.content.structure) {
-                .num => |n| switch (n) {
-                    .num_compact => |c| switch (c) {
-                        .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
-                        else => return error.TestUnexpectedResult,
-                    },
-                    else => return error.TestUnexpectedResult,
-                },
-                else => return error.TestUnexpectedResult,
-            }
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
 
 // RED: translating a compile-time alias should produce equivalent runtime alias
 test "interpreter: translateTypeVar for alias of Str" {
@@ -5544,7 +5803,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -5596,7 +5855,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -5653,7 +5912,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -5681,7 +5940,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -5693,331 +5952,12 @@ test "interpreter: translateTypeVar for rigid var" {
 }
 
 // RED: translating a flex var with static dispatch constraints should preserve constraints
-test "interpreter: translateTypeVar for flex var with static dispatch constraint" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create nominal Str type
-    const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
-    const str_nominal = types.NominalType{
-        .ident = types.TypeIdent{ .ident_idx = str_ident },
-        .vars = .{ .nonempty = str_vars_range },
-        .origin_module = builtin_ident,
-    };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-
-    // Create a method function type: Str -> I64
-    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const ct_fn_args = [_]types.Var{ct_str};
-    const ct_fn_content = try env.types.mkFuncPure(&ct_fn_args, ct_i64);
-    const ct_fn_var = try env.types.register(.{ .content = ct_fn_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Create a static dispatch constraint
-    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("len"));
-    const ct_constraint = types.StaticDispatchConstraint{
-        .fn_name = method_name,
-        .fn_var = ct_fn_var,
-        .origin = .method_call,
-    };
-    const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
-    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
-
-    // Create a flex var with the constraint
-    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
-
-    // Translate to runtime
-    const rt_var = try interp.translateTypeVar(&env, ct_flex);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-
-    // Verify it's still a flex var
-    try std.testing.expect(resolved.desc.content == .flex);
-    const rt_flex = resolved.desc.content.flex;
-
-    // Verify constraints were translated
-    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints);
-    try std.testing.expectEqual(@as(usize, 1), rt_constraints.len);
-
-    // Verify the method name is preserved
-    try std.testing.expectEqual(method_name, rt_constraints[0].fn_name);
-
-    // Verify the fn_var was translated (should resolve in runtime store)
-    const rt_fn_resolved = interp.runtime_types.resolveVar(rt_constraints[0].fn_var);
-    try std.testing.expect(rt_fn_resolved.desc.content == .structure);
-    switch (rt_fn_resolved.desc.content.structure) {
-        .fn_pure => |f| {
-            const rt_fn_args = interp.runtime_types.sliceVars(f.args);
-            try std.testing.expectEqual(@as(usize, 1), rt_fn_args.len);
-            // Arg should be Str
-            const rt_arg_resolved = interp.runtime_types.resolveVar(rt_fn_args[0]);
-            try std.testing.expect(rt_arg_resolved.desc.content == .structure);
-            try std.testing.expect(rt_arg_resolved.desc.content.structure == .nominal_type);
-            // Return should be I64
-            const rt_ret_resolved = interp.runtime_types.resolveVar(f.ret);
-            try std.testing.expect(rt_ret_resolved.desc.content == .structure);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
 
 // Test multiple constraints on a single flex var
-test "interpreter: translateTypeVar for flex var with multiple static dispatch constraints" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create nominal Str type
-    const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
-    const str_nominal = types.NominalType{
-        .ident = types.TypeIdent{ .ident_idx = str_ident },
-        .vars = .{ .nonempty = str_vars_range },
-        .origin_module = builtin_ident,
-    };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-
-    // Create multiple method function types
-    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const ct_bool = try env.types.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = types.Tag.SafeMultiList.Range.empty(), .ext = try env.types.freshFromContent(.{ .structure = .empty_tag_union }) } } });
-
-    // First method: len: self -> I64
-    const ct_fn1_args = [_]types.Var{ct_str};
-    const ct_fn1_content = try env.types.mkFuncPure(&ct_fn1_args, ct_i64);
-    const ct_fn1_var = try env.types.register(.{ .content = ct_fn1_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Second method: isEmpty: self -> Bool
-    const ct_fn2_args = [_]types.Var{ct_str};
-    const ct_fn2_content = try env.types.mkFuncPure(&ct_fn2_args, ct_bool);
-    const ct_fn2_var = try env.types.register(.{ .content = ct_fn2_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Third method: toStr: self -> Str
-    const ct_fn3_args = [_]types.Var{ct_str};
-    const ct_fn3_content = try env.types.mkFuncPure(&ct_fn3_args, ct_str);
-    const ct_fn3_var = try env.types.register(.{ .content = ct_fn3_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Create static dispatch constraints
-    const method_len = try env.common.idents.insert(gpa, @import("base").Ident.for_text("len"));
-    const method_isEmpty = try env.common.idents.insert(gpa, @import("base").Ident.for_text("isEmpty"));
-    const method_toStr = try env.common.idents.insert(gpa, @import("base").Ident.for_text("toStr"));
-
-    const ct_constraints = [_]types.StaticDispatchConstraint{
-        .{ .fn_name = method_len, .fn_var = ct_fn1_var, .origin = .method_call },
-        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var, .origin = .method_call },
-        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var, .origin = .method_call },
-    };
-    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
-
-    // Create a flex var with all constraints
-    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
-
-    // Translate to runtime
-    const rt_var = try interp.translateTypeVar(&env, ct_flex);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-
-    // Verify it's still a flex var
-    try std.testing.expect(resolved.desc.content == .flex);
-    const rt_flex = resolved.desc.content.flex;
-
-    // Verify all constraints were translated
-    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints);
-    try std.testing.expectEqual(@as(usize, 3), rt_constraints.len);
-
-    // Verify the method names are preserved
-    try std.testing.expectEqual(method_len, rt_constraints[0].fn_name);
-    try std.testing.expectEqual(method_isEmpty, rt_constraints[1].fn_name);
-    try std.testing.expectEqual(method_toStr, rt_constraints[2].fn_name);
-
-    // Verify each constraint's fn_var was translated
-    for (rt_constraints) |constraint| {
-        const rt_fn_resolved = interp.runtime_types.resolveVar(constraint.fn_var);
-        try std.testing.expect(rt_fn_resolved.desc.content == .structure);
-        try std.testing.expect(rt_fn_resolved.desc.content.structure == .fn_pure);
-    }
-}
 
 // Test rigid var with static dispatch constraints
-test "interpreter: translateTypeVar for rigid var with static dispatch constraints" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create nominal Str type
-    const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
-    const str_nominal = types.NominalType{
-        .ident = types.TypeIdent{ .ident_idx = str_ident },
-        .vars = .{ .nonempty = str_vars_range },
-        .origin_module = builtin_ident,
-    };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-
-    // Create a method function type
-    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const ct_fn_args = [_]types.Var{ct_str};
-    const ct_fn_content = try env.types.mkFuncPure(&ct_fn_args, ct_i64);
-    const ct_fn_var = try env.types.register(.{ .content = ct_fn_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Create a static dispatch constraint
-    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("size"));
-    const ct_constraint = types.StaticDispatchConstraint{
-        .fn_name = method_name,
-        .fn_var = ct_fn_var,
-        .origin = .method_call,
-    };
-    const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
-    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
-
-    // Create a rigid var with the constraint
-    const rigid_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("T"));
-    const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(rigid_name).withConstraints(ct_constraints_range) });
-
-    // Translate to runtime
-    const rt_var = try interp.translateTypeVar(&env, ct_rigid);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
-
-    // Verify it's still a rigid var
-    try std.testing.expect(resolved.desc.content == .rigid);
-    const rt_rigid = resolved.desc.content.rigid;
-
-    // Verify the rigid var name is preserved
-    try std.testing.expectEqual(rigid_name, rt_rigid.name);
-
-    // Verify constraints were translated
-    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_rigid.constraints);
-    try std.testing.expectEqual(@as(usize, 1), rt_constraints.len);
-    try std.testing.expectEqual(method_name, rt_constraints[0].fn_name);
-}
 
 // Test getStaticDispatchConstraint helper with flex var
-test "interpreter: getStaticDispatchConstraint finds method on flex var" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    // Create nominal Str type
-    const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
-    const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
-    const str_nominal = types.NominalType{
-        .ident = types.TypeIdent{ .ident_idx = str_ident },
-        .vars = .{ .nonempty = str_vars_range },
-        .origin_module = builtin_ident,
-    };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-
-    // Create method types
-    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-
-    const ct_fn1_args = [_]types.Var{ct_str};
-    const ct_fn1_content = try env.types.mkFuncPure(&ct_fn1_args, ct_i64);
-    const ct_fn1_var = try env.types.register(.{ .content = ct_fn1_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    const ct_fn2_args = [_]types.Var{ct_str};
-    const ct_fn2_content = try env.types.mkFuncPure(&ct_fn2_args, ct_str);
-    const ct_fn2_var = try env.types.register(.{ .content = ct_fn2_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Create constraints
-    const method_count = try env.common.idents.insert(gpa, @import("base").Ident.for_text("count"));
-    const method_reverse = try env.common.idents.insert(gpa, @import("base").Ident.for_text("reverse"));
-
-    const ct_constraints = [_]types.StaticDispatchConstraint{
-        .{ .fn_name = method_count, .fn_var = ct_fn1_var, .origin = .method_call },
-        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var, .origin = .method_call },
-    };
-    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
-
-    // Create flex var and translate
-    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
-    const rt_var = try interp.translateTypeVar(&env, ct_flex);
-
-    // Test finding existing methods
-    const found_count = try interp.getStaticDispatchConstraint(rt_var, method_count);
-    try std.testing.expectEqual(method_count, found_count.fn_name);
-
-    const found_reverse = try interp.getStaticDispatchConstraint(rt_var, method_reverse);
-    try std.testing.expectEqual(method_reverse, found_reverse.fn_name);
-
-    // Test finding non-existent method
-    const method_missing = try env.common.idents.insert(gpa, @import("base").Ident.for_text("nonexistent"));
-    const result = interp.getStaticDispatchConstraint(rt_var, method_missing);
-    try std.testing.expectError(error.MethodNotFound, result);
-}
 
 // Test getStaticDispatchConstraint with non-constrained type
 test "interpreter: getStaticDispatchConstraint returns error for non-constrained types" {
@@ -6038,7 +5978,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create nominal Str type (no constraints)
@@ -6062,143 +6002,10 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
 }
 
 // RED: poly cache miss then hit
-test "interpreter: poly cache insert and lookup" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    const f_id: u32 = 12345;
-    // Get the real Str type from the loaded builtin module and translate to runtime
-    const ct_str = can.ModuleEnv.varFrom(builtin_indices.str_type);
-    const rt_str = try interp.translateTypeVar(str_module.env, ct_str);
-
-    // Create runtime args: (Str, I64)
-    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const args = [_]types.Var{ rt_str, rt_i64 };
-
-    try std.testing.expect(interp.polyLookup(0, f_id, &args) == null);
-
-    // For testing, say return type is Str
-    const ret_var = rt_str;
-    // Precompute layout slot for return type
-    _ = try interp.getRuntimeLayout(ret_var);
-    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(ret_var).var_);
-    try interp.ensureVarLayoutCapacity(root_idx + 1);
-    const slot = interp.var_to_layout_slot.items[root_idx];
-    try std.testing.expect(slot != 0);
-
-    const args_copy = try interp.allocator.alloc(types.Var, args.len);
-    std.mem.copyForwards(types.Var, args_copy, &args);
-    try interp.polyInsert(0, f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
-    const found = interp.polyLookup(0, f_id, &args) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(ret_var, found.return_var);
-    try std.testing.expectEqual(slot, found.return_layout_slot);
-    try std.testing.expect(std.mem.eql(types.Var, found.args, &args));
-}
 
 // RED: prepareCall should miss without hint, then hit after inserting with hint
-test "interpreter: prepareCall miss then hit" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    const func_id: u32 = 7777;
-    // Get the real Str type from the loaded builtin module and translate to runtime
-    const ct_str = can.ModuleEnv.varFrom(builtin_indices.str_type);
-    const rt_str = try interp.translateTypeVar(str_module.env, ct_str);
-    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const args = [_]types.Var{ rt_str, rt_i64 };
-
-    // miss without hint
-    const miss = try interp.prepareCall(0, func_id, &args, null);
-    try std.testing.expect(miss == null);
-
-    // insert with hint
-    const entry = (try interp.prepareCall(0, func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(rt_str, entry.return_var);
-    try std.testing.expect(entry.return_layout_slot != 0);
-
-    // subsequent call should hit without hint
-    const hit = (try interp.prepareCall(0, func_id, &args, null)) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(rt_str, hit.return_var);
-    try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
-}
 
 // RED: prepareCallWithFuncVar populates cache based on function type
-test "interpreter: prepareCallWithFuncVar populates cache" {
-    const gpa = std.testing.allocator;
-
-    var env = try can.ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
-    defer result_module.deinit();
-    const str_source = compiled_builtins.builtin_source;
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
-    defer str_module.deinit();
-
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
-    defer interp.deinit();
-
-    const func_id: u32 = 9999;
-    // Get the real Str type from the loaded builtin module and translate to runtime
-    const ct_str = can.ModuleEnv.varFrom(builtin_indices.str_type);
-    const rt_str = try interp.translateTypeVar(str_module.env, ct_str);
-    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const args = [_]types.Var{ rt_str, rt_i64 };
-
-    // Build a runtime function type: (Str, I64) -> Str
-    const func_content = try interp.runtime_types.mkFuncPure(&args, rt_str);
-    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-
-    // Should populate cache
-    const entry = try interp.prepareCallWithFuncVar(0, func_id, func_var, &args);
-    try std.testing.expectEqual(rt_str, entry.return_var);
-    try std.testing.expect(entry.return_layout_slot != 0);
-
-    // Now a plain prepareCall without hint should hit
-    const hit = (try interp.prepareCall(0, func_id, &args, null)) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(rt_str, hit.return_var);
-    try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
-}
 
 // RED: unification constrains return type for polymorphic (a -> a), when called with Str
 test "interpreter: unification constrains (a->a) with Str" {
@@ -6219,7 +6026,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -6269,7 +6076,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -6325,7 +6132,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Register module B

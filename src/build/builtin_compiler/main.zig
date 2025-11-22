@@ -217,6 +217,16 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // from_numeral (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
+        if (env.common.findIdent(from_numeral)) |ident| {
+            try low_level_map.put(ident, .num_from_numeral);
+        }
+    }
+
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -243,6 +253,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
         if (env.common.findIdent(div_by)) |ident| {
             try low_level_map.put(ident, .num_div_by);
+        }
+
+        // div_trunc_by
+        const div_trunc_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_trunc_by", .{num_type});
+        if (env.common.findIdent(div_trunc_by)) |ident| {
+            try low_level_map.put(ident, .num_div_trunc_by);
         }
 
         // rem_by
@@ -280,15 +296,23 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create a dummy parameter pattern for the lambda
-                    // Use the identifier "_arg" for the parameter
-                    const arg_ident = env.common.findIdent("_arg") orelse try env.common.insertIdent(gpa, base.Ident.for_text("_arg"));
-                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                    // Create parameter patterns for the lambda
+                    // Binary operations need 2 parameters, unary operations need 1
+                    const num_params: u32 = switch (low_level_op) {
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits => 1,
+                        else => 2, // Most numeric operations are binary
+                    };
 
-                    // Create a pattern span containing just this one parameter
                     const patterns_start = env.store.scratchTop("patterns");
-                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
-                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+                    var i: u32 = 0;
+                    while (i < num_params) : (i += 1) {
+                        var arg_name_buf: [16]u8 = undefined;
+                        const arg_name = try std.fmt.bufPrint(&arg_name_buf, "_arg{d}", .{i});
+                        const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
+                        const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                        try env.store.scratch.?.patterns.append(arg_pattern_idx);
+                    }
+                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = num_params } };
 
                     // Create an e_runtime_error body that crashes when the function is called
                     const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");

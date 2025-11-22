@@ -25,7 +25,7 @@ You're calling the method `to_str` on a type that doesn't support methods:
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This type doesn't support methods:
-    _{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }_
+    _{ first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d } where [{ first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }.from_numeral : { first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }, { first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }.from_numeral : { first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }]_
 
 
 

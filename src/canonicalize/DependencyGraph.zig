@@ -221,6 +221,10 @@ fn collectExprDependencies(
                     .s_for => |for_stmt| {
                         try collectExprDependencies(cir, for_stmt.expr, dependencies, allocator);
                     },
+                    .s_while => |while_stmt| {
+                        try collectExprDependencies(cir, while_stmt.cond, dependencies, allocator);
+                        try collectExprDependencies(cir, while_stmt.body, dependencies, allocator);
+                    },
                     .s_return => |ret| {
                         try collectExprDependencies(cir, ret.expr, dependencies, allocator);
                     },

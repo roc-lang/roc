@@ -35,6 +35,10 @@ pub const AutoImportedType = struct {
 
 env: *ModuleEnv,
 parse_ir: *AST,
+/// Track whether we're in statement position (true) or expression position (false)
+/// Statement position: if without else is OK (default)
+/// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
+in_statement_position: bool = true,
 scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
@@ -580,7 +584,7 @@ fn processAssociatedBlock(
                             if (nested_pattern == .ident) {
                                 const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
                                 if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
-                                    // Build fully qualified name (e.g., "Builtin.Num.NumLiteral.is_negative")
+                                    // Build fully qualified name (e.g., "Builtin.Num.Numeral.is_negative")
                                     const qualified_text = self.env.getIdent(qualified_ident_idx);
                                     const nested_decl_text = self.env.getIdent(nested_decl_ident);
                                     const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
@@ -596,7 +600,7 @@ fn processAssociatedBlock(
                                             // Add unqualified name (e.g., "is_negative")
                                             try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
 
-                                            // Add type-qualified name (e.g., "NumLiteral.is_negative")
+                                            // Add type-qualified name (e.g., "Numeral.is_negative")
                                             const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
                                             try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                                         },
@@ -712,8 +716,11 @@ fn canonicalizeAssociatedDecl(
         }
     };
 
-    // Canonicalize the body expression
+    // Canonicalize the body expression in expression context (RHS of assignment)
+    const saved_stmt_pos = self.in_statement_position;
+    self.in_statement_position = false;
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+    self.in_statement_position = saved_stmt_pos;
 
     // Create the def with no annotation (type annotations are handled via canonicalizeAssociatedDeclWithAnno)
     const def = CIR.Def{
@@ -749,8 +756,11 @@ fn canonicalizeAssociatedDeclWithAnno(
         }
     };
 
-    // Canonicalize the body expression
+    // Canonicalize the body expression in expression context (RHS of assignment)
+    const saved_stmt_pos = self.in_statement_position;
+    self.in_statement_position = false;
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+    self.in_statement_position = saved_stmt_pos;
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -865,7 +875,7 @@ fn processAssociatedItemsSecondPass(
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                                     // Check if this is still a placeholder before updating.
-                                    // For nested types with associated blocks (e.g., NumLiteral inside Num),
+                                    // For nested types with associated blocks (e.g., Numeral inside Num),
                                     // the item may have already been fully processed during the recursive
                                     // processAssociatedBlock call in Phase 2b of processAssociatedItemsFirstPass.
                                     // In that case, the placeholder was already consumed and we should skip it.
@@ -1521,6 +1531,15 @@ pub fn canonicalizeFile(
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("for");
                 const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
+            .@"while" => |while_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("while");
+                const region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                     .region = region,
@@ -3503,7 +3522,7 @@ pub fn canonicalizeExpr(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumeralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -3627,6 +3646,7 @@ pub fn canonicalizeExpr(
                     .{ .e_num = .{ .value = int_value, .kind = num_suffix } },
                     region,
                 );
+
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
@@ -3648,7 +3668,7 @@ pub fn canonicalizeExpr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumeralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -3699,7 +3719,7 @@ pub fn canonicalizeExpr(
             }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
-                error.InvalidNumLiteral => {
+                error.InvalidNumeral => {
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
@@ -4134,12 +4154,18 @@ pub fn canonicalizeExpr(
                 .OpGreaterThanOrEq => .ge,
                 .OpEquals => .eq,
                 .OpNotEquals => .ne,
-                .OpCaret => .pow,
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
-                .OpPizza => .pipe_forward,
-                .OpDoubleQuestion => .null_coalesce,
+                // OpCaret (^), OpPizza (|>), OpDoubleQuestion (?) are not supported
+                .OpCaret, .OpPizza, .OpDoubleQuestion => {
+                    const feature = try self.env.insertString("unsupported operator");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                },
                 else => {
                     // Unknown operator
                     const feature = try self.env.insertString("binop");
@@ -4273,6 +4299,68 @@ pub fn canonicalizeExpr(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
+                },
+            }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+        },
+        .if_without_else => |e| {
+            // Statement form: if without else
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Check if we're in expression context (e.g., assignment, function call)
+            // If so, emit error explaining that if-expressions need else
+            if (!self.in_statement_position) {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                    .if_expr_without_else = .{ .region = region },
+                });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            }
+
+            // Desugar to if-then-else with empty record {} as the final else
+            // Type checking will ensure the then-branch also has type {}
+
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize condition
+            const can_cond = try self.canonicalizeExpr(e.condition) orelse {
+                const ast_cond = self.parse_ir.store.getExpr(e.condition);
+                const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                    .if_condition_not_canonicalized = .{ .region = cond_region },
+                });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            };
+
+            // Canonicalize then branch
+            const can_then = try self.canonicalizeExpr(e.then) orelse {
+                const ast_then = self.parse_ir.store.getExpr(e.then);
+                const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                    .if_then_not_canonicalized = .{ .region = then_region },
+                });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            };
+
+            // Create an empty record {} as the implicit else
+            const empty_record_idx = try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, region);
+
+            // Create single if branch
+            const scratch_top = self.env.store.scratchIfBranchTop();
+            const if_branch = Expr.IfBranch{
+                .cond = can_cond.idx,
+                .body = can_then.idx,
+            };
+            const if_branch_idx = try self.env.addIfBranch(if_branch, region);
+            try self.env.store.addScratchIfBranch(if_branch_idx);
+            const branches_span = try self.env.store.ifBranchSpanFrom(scratch_top);
+
+            // Create if expression with empty record as final else
+            const expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_if = .{
+                    .branches = branches_span,
+                    .final_else = empty_record_idx,
                 },
             }, region);
 
@@ -4487,7 +4575,44 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }, region);
 
     if (e.qualifiers.span.len == 0) {
-        // Tag without a qualifier is an anonymous structural tag
+        // Check if the tag name itself is a type in scope
+        // This handles cases like: MyNum := [].{ negate = |_| MyNum }
+        // where MyNum refers to the nominal type being defined
+        if (self.scopeLookupTypeDecl(tag_name)) |nominal_type_decl_stmt_idx| {
+            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                .s_nominal_decl => {
+                    // This tag name is a nominal type in scope - treat it as such
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                            .backing_expr = tag_expr_idx,
+                            .backing_type = .tag,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{
+                        .idx = expr_idx,
+                        .free_vars = free_vars_span,
+                    };
+                },
+                .s_alias_decl => {
+                    // Type alias - report error (same as qualified case)
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = tag_name,
+                            .region = region,
+                        } }),
+                        .free_vars = null,
+                    };
+                },
+                else => {
+                    // Not a type declaration, fall through to treat as structural tag
+                },
+            }
+        }
+
+        // Tag without a qualifier and not a type in scope - treat as anonymous structural tag
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
     } else if (e.qualifiers.span.len == 1) {
         // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
@@ -4988,7 +5113,7 @@ fn canonicalizePattern(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumeralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -5132,7 +5257,7 @@ fn canonicalizePattern(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumeralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -5174,7 +5299,7 @@ fn canonicalizePattern(
             }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
-                error.InvalidNumLiteral => {
+                error.InvalidNumeral => {
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
@@ -5774,15 +5899,15 @@ const FracLiteralResult = union(enum) {
     small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
     dec: struct {
         value: RocDec,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
     f64: struct {
         value: f64,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
 };
 
@@ -5843,7 +5968,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     // First, always parse as f64 to get the numeric value
     const f64_val = std.fmt.parseFloat(f64, token_text) catch {
         // If it can't be parsed as F64, it's too big to fit in any of Roc's Frac types.
-        return error.InvalidNumLiteral;
+        return error.InvalidNumeral;
     };
 
     // Check if it has scientific notation
@@ -5872,7 +5997,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 .small = .{
                     .numerator = small.numerator,
                     .denominator_power_of_ten = small.denominator_power_of_ten,
-                    .requirements = types.Num.Frac.Requirements{
+                    .requirements = types.Frac.Requirements{
                         .fits_in_f32 = CIR.fitsInF32(small_f64_val),
                         .fits_in_dec = true,
                     },
@@ -5889,7 +6014,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             .small = .{
                 .numerator = @as(i16, @intFromFloat(rounded)),
                 .denominator_power_of_ten = 0,
-                .requirements = types.Num.Frac.Requirements{
+                .requirements = types.Frac.Requirements{
                     .fits_in_f32 = CIR.fitsInF32(f64_val),
                     .fits_in_dec = true,
                 },
@@ -5921,7 +6046,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 return FracLiteralResult{
                     .f64 = .{
                         .value = f64_val,
-                        .requirements = types.Num.Frac.Requirements{
+                        .requirements = types.Frac.Requirements{
                             .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
@@ -5939,7 +6064,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 return FracLiteralResult{
                     .f64 = .{
                         .value = f64_val,
-                        .requirements = types.Num.Frac.Requirements{
+                        .requirements = types.Frac.Requirements{
                             .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
@@ -5950,7 +6075,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             return FracLiteralResult{
                 .dec = .{
                     .value = RocDec{ .num = dec_num },
-                    .requirements = types.Num.Frac.Requirements{
+                    .requirements = types.Frac.Requirements{
                         .fits_in_f32 = CIR.fitsInF32(f64_val),
                         .fits_in_dec = true,
                     },
@@ -5963,7 +6088,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     return FracLiteralResult{
         .f64 = .{
             .value = f64_val,
-            .requirements = types.Num.Frac.Requirements{
+            .requirements = types.Frac.Requirements{
                 .fits_in_f32 = CIR.fitsInF32(f64_val),
                 .fits_in_dec = false,
             },
@@ -7816,6 +7941,71 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 .s_for = .{
                     .patt = ptrn,
                     .expr = expr.idx,
+                    .body = body.idx,
+                },
+            }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .@"while" => |while_stmt| {
+            // Tmp state to capture free vars from both cond & body
+            var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+            defer captures.deinit(self.env.gpa);
+
+            // Canonicalize the condition expression
+            // while $count < 10 {
+            //       ^^^^^^^^^
+            const cond = blk: {
+                const cond_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(cond_free_vars_start);
+
+                const czerd_cond = try self.canonicalizeExprOrMalformed(while_stmt.cond);
+
+                // Copy free vars into captures
+                const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_cond.free_vars orelse DataSpan.empty());
+                for (free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk czerd_cond;
+            };
+
+            // Canonicalize the body
+            // while $count < 10 {
+            //     print!($count.toStr())  <<<<
+            //     $count = $count + 1
+            // }
+            const body = blk: {
+                const body_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                const body_expr = try self.canonicalizeExprOrMalformed(while_stmt.body);
+
+                // Copy free vars into captures
+                const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars orelse DataSpan.empty());
+                for (body_free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk body_expr;
+            };
+
+            // Get captures and copy to free_vars for parent
+            const free_vars_start = self.scratch_free_vars.top();
+            var captures_iter = captures.keyIterator();
+            while (captures_iter.next()) |capture| {
+                try self.scratch_free_vars.append(capture.*);
+            }
+            const free_vars = if (self.scratch_free_vars.top() > free_vars_start)
+                self.scratch_free_vars.spanFrom(free_vars_start)
+            else
+                null;
+
+            // Insert into store
+            const region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region);
+            const stmt_idx = try self.env.addStatement(Statement{
+                .s_while = .{
+                    .cond = cond.idx,
                     .body = body.idx,
                 },
             }, region);

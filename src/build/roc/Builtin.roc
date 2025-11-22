@@ -39,7 +39,7 @@ Builtin :: [].{
 		}
 	}
 
-	Bool := [True, False].{
+	Bool := [False, True].{
 		not : Bool -> Bool
 		not = |bool| match bool {
 			Bool.True => Bool.False
@@ -114,11 +114,27 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
-		NumLiteral :: [Self(Bool)].{
-			is_negative : NumLiteral -> Bool
+		Numeral :: [Self({ # TODO get rid of the "Self" wrapper once we have nominal records"
+		    # True iff there was a minus sign in front of the literal
+    		is_negative: Bool,
+            # Base-256 digits before and after the decimal point, with any underscores
+            # and leading/trailing zeros removed from the source code.
+            #
+            # Example: If I write "0356.5170" in the source file, that will be:
+            # - [1, 100] before the pt, because in base-256, 356 = (1 * 256^1) + (100 * 256^0)
+            # - [2, 5] after the pt, because in base-256, 517 = (2 * 256^1) + (5 * 256^0)
+            #
+            # This design compactly represents the digits without wasting any memory
+            # (because base-256 stores each digit using every single bit of the U8), and also
+            # allows arbitrary digit length so that userspace custom number types can work with
+            # arbitrarily long number literals as long as the number types can support them.
+            digits_before_pt: List(U8),
+            digits_after_pt: List(U8),
+		})].{
+			is_negative : Numeral -> Bool
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
-				Self(is_negative) => is_negative
+				Self({ is_negative: neg, digits_before_pt: _, digits_after_pt: _ }) => neg
 			}
 		}
 
@@ -134,11 +150,11 @@ Builtin :: [].{
 			minus : U8, U8 -> U8
 			times : U8, U8 -> U8
 			div_by : U8, U8 -> U8
+			div_trunc_by : U8, U8 -> U8
 			rem_by : U8, U8 -> U8
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(U8, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
 		}
 
 		I8 :: [].{
@@ -156,11 +172,11 @@ Builtin :: [].{
 			minus : I8, I8 -> I8
 			times : I8, I8 -> I8
 			div_by : I8, I8 -> I8
+			div_trunc_by : I8, I8 -> I8
 			rem_by : I8, I8 -> I8
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(I8, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
 		}
 
 		U16 :: [].{
@@ -175,11 +191,11 @@ Builtin :: [].{
 			minus : U16, U16 -> U16
 			times : U16, U16 -> U16
 			div_by : U16, U16 -> U16
+			div_trunc_by : U16, U16 -> U16
 			rem_by : U16, U16 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(U16, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
 		}
 
 		I16 :: [].{
@@ -197,11 +213,11 @@ Builtin :: [].{
 			minus : I16, I16 -> I16
 			times : I16, I16 -> I16
 			div_by : I16, I16 -> I16
+			div_trunc_by : I16, I16 -> I16
 			rem_by : I16, I16 -> I16
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(I16, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
 		}
 
 		U32 :: [].{
@@ -216,11 +232,11 @@ Builtin :: [].{
 			minus : U32, U32 -> U32
 			times : U32, U32 -> U32
 			div_by : U32, U32 -> U32
+			div_trunc_by : U32, U32 -> U32
 			rem_by : U32, U32 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(U32, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
 		}
 
 		I32 :: [].{
@@ -238,11 +254,11 @@ Builtin :: [].{
 			minus : I32, I32 -> I32
 			times : I32, I32 -> I32
 			div_by : I32, I32 -> I32
+			div_trunc_by : I32, I32 -> I32
 			rem_by : I32, I32 -> I32
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(I32, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
 		}
 
 		U64 :: [].{
@@ -257,11 +273,11 @@ Builtin :: [].{
 			minus : U64, U64 -> U64
 			times : U64, U64 -> U64
 			div_by : U64, U64 -> U64
+			div_trunc_by : U64, U64 -> U64
 			rem_by : U64, U64 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(U64, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
 		}
 
 		I64 :: [].{
@@ -279,11 +295,11 @@ Builtin :: [].{
 			minus : I64, I64 -> I64
 			times : I64, I64 -> I64
 			div_by : I64, I64 -> I64
+			div_trunc_by : I64, I64 -> I64
 			rem_by : I64, I64 -> I64
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(I64, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
 		}
 
 		U128 :: [].{
@@ -298,11 +314,11 @@ Builtin :: [].{
 			minus : U128, U128 -> U128
 			times : U128, U128 -> U128
 			div_by : U128, U128 -> U128
+			div_trunc_by : U128, U128 -> U128
 			rem_by : U128, U128 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(U128, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
 		}
 
 		I128 :: [].{
@@ -320,11 +336,11 @@ Builtin :: [].{
 			minus : I128, I128 -> I128
 			times : I128, I128 -> I128
 			div_by : I128, I128 -> I128
+			div_trunc_by : I128, I128 -> I128
 			rem_by : I128, I128 -> I128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(I128, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
 		}
 
 		Dec :: [].{
@@ -343,12 +359,12 @@ Builtin :: [].{
 			minus : Dec, Dec -> Dec
 			times : Dec, Dec -> Dec
 			div_by : Dec, Dec -> Dec
+			div_trunc_by : Dec, Dec -> Dec
 			rem_by : Dec, Dec -> Dec
 
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(Dec, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
 		}
 
 		F32 :: [].{
@@ -365,12 +381,12 @@ Builtin :: [].{
 			minus : F32, F32 -> F32
 			times : F32, F32 -> F32
 			div_by : F32, F32 -> F32
+			div_trunc_by : F32, F32 -> F32
 			rem_by : F32, F32 -> F32
 
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(F32, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
 		}
 
 		F64 :: [].{
@@ -387,12 +403,12 @@ Builtin :: [].{
 			minus : F64, F64 -> F64
 			times : F64, F64 -> F64
 			div_by : F64, F64 -> F64
+			div_trunc_by : F64, F64 -> F64
 			rem_by : F64, F64 -> F64
 
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
-			from_num_literal : NumLiteral -> Try(F64, [InvalidNumLiteral(Str)])
-			from_num_literal = |_| Try.Err(InvalidNumLiteral(""))
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
 		}
 	}
 }

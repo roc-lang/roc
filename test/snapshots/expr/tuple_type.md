@@ -13,21 +13,30 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - tuple_type.md:5:7:5:13
+MISSING METHOD - tuple_type.md:5:8:5:9
+MISSING METHOD - tuple_type.md:5:11:5:12
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**tuple_type.md:5:7:5:13:**
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**tuple_type.md:5:8:5:9:**
 ```roc
     f((1, 2))
 ```
-      ^^^^^^
+       ^
 
-This argument has the type:
-    _(Num(_size), Num(_size2))_
 
-But `f` needs the first argument to be:
-    _(Str, Str)_
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**tuple_type.md:5:11:5:12:**
+```roc
+    f((1, 2))
+```
+          ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -91,5 +100,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "(Str, Str)"))
 ~~~

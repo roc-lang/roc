@@ -619,6 +619,24 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(f.body);
             },
+            .@"while" => |w| {
+                try fmt.pushAll("while");
+                const cond_region = fmt.nodeRegion(@intFromEnum(w.cond));
+                if (multiline and try fmt.flushCommentsBefore(cond_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(w.cond);
+                if (multiline and try fmt.flushCommentsBefore(cond_region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(w.body);
+            },
             .crash => |c| {
                 try fmt.pushAll("crash");
                 const body_region = fmt.nodeRegion(@intFromEnum(c.expr));
@@ -1140,6 +1158,27 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.@"else");
+            },
+            .if_without_else => |i| {
+                try fmt.pushAll("if");
+                const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
+                var flushed = try fmt.flushCommentsBefore(cond_region.start);
+                if (flushed) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(i.condition);
+                const then_region = fmt.nodeRegion(@intFromEnum(i.then));
+                flushed = try fmt.flushCommentsBefore(then_region.start);
+                if (flushed) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(i.then);
             },
             .match => |m| {
                 try fmt.pushAll("match ");
@@ -2185,6 +2224,13 @@ const Formatter = struct {
                         }
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.@"else");
+                    },
+                    .if_without_else => |i| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, i.condition)) {
+                            return true;
+                        }
+
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.then);
                     },
                     .local_dispatch => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.left)) {

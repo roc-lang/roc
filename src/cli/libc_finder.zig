@@ -8,6 +8,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
+const Allocators = base.Allocators;
 const fs = std.fs;
 const process = std.process;
 
@@ -24,16 +26,6 @@ pub const LibcInfo = struct {
 
     /// System architecture (e.g., "x86_64", "aarch64")
     arch: []const u8,
-
-    /// Allocator used for all allocations
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *LibcInfo) void {
-        self.allocator.free(self.dynamic_linker);
-        self.allocator.free(self.libc_path);
-        self.allocator.free(self.lib_dir);
-        self.allocator.free(self.arch);
-    }
 };
 
 /// Validate that a path is safe (absolute and no traversal)
@@ -58,47 +50,44 @@ fn getDynamicLinkerName(arch: []const u8) []const u8 {
     }
 }
 
-/// Main entry point - finds libc and dynamic linker
-pub fn findLibc(allocator: std.mem.Allocator) !LibcInfo {
+/// finds libc and dynamic linker
+/// Solely allocates into the arena
+pub fn findLibc(allocs: *Allocators) !LibcInfo {
     // Try compiler-based detection first (most reliable)
-    if (try findViaCompiler(allocator)) |info| {
-        return info;
-    }
-
-    // Fall back to filesystem search
-    return try findViaFilesystem(allocator);
+    if (try findViaCompiler(allocs.arena)) |info|
+        return info
+    else
+        // Fall back to filesystem search
+        return try findViaFilesystem(allocs.arena);
 }
 
 /// Find libc using compiler queries (gcc/clang)
-fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
+fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
     const compilers = [_][]const u8{ "gcc", "clang", "cc" };
 
     // Get architecture first
-    const arch = try getArchitecture(allocator);
-    defer allocator.free(arch);
+    const arch = try getArchitecture(arena);
 
     // Get the expected dynamic linker name for this architecture
     const ld_name = getDynamicLinkerName(arch);
 
     for (compilers) |compiler| {
         // Try to get dynamic linker path from compiler
-        const ld_cmd = try std.fmt.allocPrint(allocator, "-print-file-name={s}", .{ld_name});
-        defer allocator.free(ld_cmd);
+        const ld_cmd = try std.fmt.allocPrint(arena, "-print-file-name={s}", .{ld_name});
 
-        const ld_result = process.Child.run(.{
-            .allocator = allocator,
+        // TODO: Do we need to do something with this process' stdout,
+        // or is this only here to continue to the next iteration?
+        // Could be that it was forgotten before I refactored it and now to intent is lost.
+        _ = process.Child.run(.{
+            .allocator = arena,
             .argv = &[_][]const u8{ compiler, ld_cmd },
         }) catch continue;
-        defer allocator.free(ld_result.stdout);
-        defer allocator.free(ld_result.stderr);
 
         // Try to get libc path from compiler
         const libc_result = process.Child.run(.{
-            .allocator = allocator,
+            .allocator = arena,
             .argv = &[_][]const u8{ compiler, "-print-file-name=libc.so" },
         }) catch continue;
-        defer allocator.free(libc_result.stdout);
-        defer allocator.free(libc_result.stderr);
 
         const libc_path = std.mem.trimRight(u8, libc_result.stdout, "\n\r \t");
         if (libc_path.len == 0 or std.mem.eql(u8, libc_path, "libc.so")) continue;
@@ -113,18 +102,16 @@ fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
         const lib_dir = fs.path.dirname(libc_path) orelse continue;
 
         // Find dynamic linker
-        const dynamic_linker = try findDynamicLinker(allocator, arch, lib_dir) orelse continue;
-        defer allocator.free(dynamic_linker);
+        const dynamic_linker = try findDynamicLinker(arena, arch, lib_dir) orelse continue;
 
         // Validate dynamic linker path
         if (!validatePath(dynamic_linker)) continue;
 
         return LibcInfo{
-            .dynamic_linker = try allocator.dupe(u8, dynamic_linker),
-            .libc_path = try allocator.dupe(u8, libc_path),
-            .lib_dir = try allocator.dupe(u8, lib_dir),
-            .arch = try allocator.dupe(u8, arch),
-            .allocator = allocator,
+            .dynamic_linker = dynamic_linker,
+            .libc_path = libc_path,
+            .lib_dir = lib_dir,
+            .arch = arch,
         };
     }
 
@@ -132,23 +119,12 @@ fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
 }
 
 /// Find libc by searching the filesystem
-fn findViaFilesystem(allocator: std.mem.Allocator) !LibcInfo {
-    // Get architecture and duplicate it for later use
-    const arch_temp = try getArchitecture(allocator);
-    defer allocator.free(arch_temp);
-    const arch = try allocator.dupe(u8, arch_temp);
-    errdefer allocator.free(arch);
-
-    const search_paths = try getSearchPaths(allocator, arch);
-    defer {
-        for (search_paths.items) |path| {
-            allocator.free(path);
-        }
-        search_paths.deinit();
-    }
+fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
+    const arch = try getArchitecture(arena);
+    const search_paths = try getSearchPaths(arena, arch);
 
     // Search for libc in standard paths
-    for (search_paths.items) |lib_dir| {
+    for (search_paths) |lib_dir| {
         var dir = fs.openDirAbsolute(lib_dir, .{}) catch continue;
         defer dir.close();
 
@@ -163,39 +139,34 @@ fn findViaFilesystem(allocator: std.mem.Allocator) !LibcInfo {
         };
 
         for (libc_names) |libc_name| {
-            const libc_path = try fs.path.join(allocator, &[_][]const u8{ lib_dir, libc_name });
-            defer allocator.free(libc_path);
+            const libc_path = try fs.path.join(arena, &[_][]const u8{ lib_dir, libc_name });
 
             // Check if file exists and close it properly
             const libc_file = fs.openFileAbsolute(libc_path, .{}) catch continue;
             libc_file.close();
 
             // Try to find dynamic linker
-            const dynamic_linker = try findDynamicLinker(allocator, arch, lib_dir) orelse continue;
-            errdefer allocator.free(dynamic_linker);
+            const dynamic_linker = try findDynamicLinker(arena, arch, lib_dir) orelse continue;
 
             // Validate paths for security
             if (!validatePath(libc_path) or !validatePath(dynamic_linker)) {
-                allocator.free(dynamic_linker);
                 continue;
             }
 
             return LibcInfo{
+                .lib_dir = lib_dir,
                 .dynamic_linker = dynamic_linker,
-                .libc_path = try allocator.dupe(u8, libc_path),
-                .lib_dir = try allocator.dupe(u8, lib_dir),
-                .arch = arch, // Transfer ownership
-                .allocator = allocator,
+                .libc_path = libc_path,
+                .arch = arch,
             };
         }
     }
 
-    allocator.free(arch);
     return error.LibcNotFound;
 }
 
 /// Find the dynamic linker for the given architecture
-fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []const u8) !?[]const u8 {
+fn findDynamicLinker(arena: std.mem.Allocator, arch: []const u8, lib_dir: []const u8) !?[]const u8 {
     // Map architecture to dynamic linker names (including musl)
     const ld_names = if (std.mem.eql(u8, arch, "x86_64"))
         &[_][]const u8{ "ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1", "ld-linux.so.2" }
@@ -210,12 +181,11 @@ fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []
 
     // Search in the lib directory first
     for (ld_names) |ld_name| {
-        const path = try fs.path.join(allocator, &[_][]const u8{ lib_dir, ld_name });
-        defer allocator.free(path);
+        const path = try fs.path.join(arena, &[_][]const u8{ lib_dir, ld_name });
 
         if (fs.openFileAbsolute(path, .{})) |file| {
             file.close();
-            return try allocator.dupe(u8, path);
+            return path;
         } else |_| {}
     }
 
@@ -231,12 +201,11 @@ fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []
 
     for (common_paths) |search_dir| {
         for (ld_names) |ld_name| {
-            const path = try fs.path.join(allocator, &[_][]const u8{ search_dir, ld_name });
-            defer allocator.free(path);
+            const path = try fs.path.join(arena, &[_][]const u8{ search_dir, ld_name });
 
             if (fs.openFileAbsolute(path, .{})) |file| {
                 file.close();
-                return try allocator.dupe(u8, path);
+                return path;
             } else |_| {}
         }
     }
@@ -245,123 +214,108 @@ fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []
 }
 
 /// Get system architecture using uname
-fn getArchitecture(allocator: std.mem.Allocator) ![]const u8 {
+fn getArchitecture(arena: std.mem.Allocator) ![]const u8 {
     const result = try process.Child.run(.{
-        .allocator = allocator,
+        .allocator = arena,
         .argv = &[_][]const u8{ "uname", "-m" },
     });
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
 
-    const arch = std.mem.trimRight(u8, result.stdout, "\n\r \t");
-    return allocator.dupe(u8, arch);
+    return std.mem.trimRight(u8, result.stdout, "\n\r \t");
 }
 
 /// Get library search paths for the given architecture
-fn getSearchPaths(allocator: std.mem.Allocator, arch: []const u8) !std.array_list.Managed([]const u8) {
-    var paths = std.array_list.Managed([]const u8).init(allocator);
-    errdefer {
-        for (paths.items) |path| {
-            allocator.free(path);
+fn getSearchPaths(arena: std.mem.Allocator, arch: []const u8) ![]const []const u8 {
+    const triplet = getMultiarchTriplet(arena, arch) catch |err| blk: {
+        switch (err) {
+            error.UnrecognisedArch => break :blk arch,
+            else => |other_err| return other_err,
         }
-        paths.deinit();
-    }
+    };
 
-    // Get multiarch triplet if possible
-    const triplet = try getMultiarchTriplet(allocator, arch);
-    defer allocator.free(triplet);
+    // Dynamic string allocations for multiarch locations
+    const path_lib_triplet = try std.fmt.allocPrint(arena, "/lib/{s}", .{triplet});
+    const path_usr_lib_triplet = try std.fmt.allocPrint(arena, "/usr/lib/{s}", .{triplet});
 
-    // Add multiarch paths
-    try paths.append(try std.fmt.allocPrint(allocator, "/lib/{s}", .{triplet}));
-    try paths.append(try std.fmt.allocPrint(allocator, "/usr/lib/{s}", .{triplet}));
+    const arch_paths = if (std.mem.eql(u8, arch, "x86_64"))
+        &[_][]const u8{
+            "/lib64",
+            "/usr/lib64",
+            "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+        }
+    else if (std.mem.eql(u8, arch, "aarch64"))
+        &[_][]const u8{
+            "/lib64",
+            "/usr/lib64",
+            "/lib/aarch64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+        }
+    else if (std.mem.startsWith(u8, arch, "arm"))
+        &[_][]const u8{
+            "/lib32",
+            "/usr/lib32",
+            "/lib/arm-linux-gnueabihf",
+            "/usr/lib/arm-linux-gnueabihf",
+        }
+    else
+        &[_][]const u8{};
 
-    // Add architecture-specific paths
-    if (std.mem.eql(u8, arch, "x86_64")) {
-        try paths.append(try allocator.dupe(u8, "/lib64"));
-        try paths.append(try allocator.dupe(u8, "/usr/lib64"));
-        try paths.append(try allocator.dupe(u8, "/lib/x86_64-linux-gnu"));
-        try paths.append(try allocator.dupe(u8, "/usr/lib/x86_64-linux-gnu"));
-    } else if (std.mem.eql(u8, arch, "aarch64")) {
-        try paths.append(try allocator.dupe(u8, "/lib64"));
-        try paths.append(try allocator.dupe(u8, "/usr/lib64"));
-        try paths.append(try allocator.dupe(u8, "/lib/aarch64-linux-gnu"));
-        try paths.append(try allocator.dupe(u8, "/usr/lib/aarch64-linux-gnu"));
-    } else if (std.mem.startsWith(u8, arch, "arm")) {
-        try paths.append(try allocator.dupe(u8, "/lib32"));
-        try paths.append(try allocator.dupe(u8, "/usr/lib32"));
-        try paths.append(try allocator.dupe(u8, "/lib/arm-linux-gnueabihf"));
-        try paths.append(try allocator.dupe(u8, "/usr/lib/arm-linux-gnueabihf"));
-    }
+    // Always include these generic/musl paths
+    const root_bases = [_][]const u8{
+        path_lib_triplet,
+        path_usr_lib_triplet,
+        "/lib",
+        "/usr/lib",
+        "/usr/local/lib",
+        "/lib/musl",
+        "/usr/lib/musl",
+    };
 
-    // Add generic paths
-    try paths.append(try allocator.dupe(u8, "/lib"));
-    try paths.append(try allocator.dupe(u8, "/usr/lib"));
-    try paths.append(try allocator.dupe(u8, "/usr/local/lib"));
+    const total_len = root_bases.len + arch_paths.len;
+    const result = try arena.alloc([]const u8, total_len);
+    @memcpy(result[0..root_bases.len], root_bases[0..]);
+    @memcpy(result[root_bases.len..], arch_paths[0..]);
 
-    // Add musl-specific paths
-    try paths.append(try allocator.dupe(u8, "/lib/musl"));
-    try paths.append(try allocator.dupe(u8, "/usr/lib/musl"));
-
-    return paths;
+    return result;
 }
 
 /// Get multiarch triplet (e.g., x86_64-linux-gnu)
-fn getMultiarchTriplet(allocator: std.mem.Allocator, arch: []const u8) ![]const u8 {
+fn getMultiarchTriplet(arena: std.mem.Allocator, arch: []const u8) ![]const u8 {
     // Try to get from gcc first
     const result = process.Child.run(.{
-        .allocator = allocator,
+        .allocator = arena,
         .argv = &[_][]const u8{ "gcc", "-dumpmachine" },
     }) catch |err| switch (err) {
         error.FileNotFound => {
             // Fallback to common triplets
             if (std.mem.eql(u8, arch, "x86_64")) {
-                return allocator.dupe(u8, "x86_64-linux-gnu");
+                return "x86_64-linux-gnu";
             } else if (std.mem.eql(u8, arch, "aarch64")) {
-                return allocator.dupe(u8, "aarch64-linux-gnu");
+                return "aarch64-linux-gnu";
             } else if (std.mem.startsWith(u8, arch, "arm")) {
-                return allocator.dupe(u8, "arm-linux-gnueabihf");
+                return "arm-linux-gnueabihf";
             } else {
-                return allocator.dupe(u8, arch);
+                return error.UnrecognisedArch;
             }
         },
         else => return err,
     };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
 
-    const triplet = std.mem.trimRight(u8, result.stdout, "\n\r \t");
-    return allocator.dupe(u8, triplet);
-}
-
-/// Find a file in a directory
-fn findFile(allocator: std.mem.Allocator, dir_path: []const u8, filename: []const u8) !?[]const u8 {
-    const full_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, filename });
-    defer allocator.free(full_path);
-
-    if (fs.openFileAbsolute(full_path, .{})) |file| {
-        file.close();
-        return try allocator.dupe(u8, full_path);
-    } else |_| {
-        return null;
-    }
+    return std.mem.trimRight(u8, result.stdout, "\n\r \t");
 }
 
 test "libc detection integration test" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(std.testing.allocator);
+    defer allocs.deinit();
 
-    const allocator = std.testing.allocator;
-
-    const libc_info = findLibc(allocator) catch |err| switch (err) {
+    const libc_info = findLibc(&allocs) catch |err| switch (err) {
         error.LibcNotFound => {
             std.log.warn("Libc not found on this system - this may be expected in some environments", .{});
-            return error.SkipZigTest;
+            return;
         },
         else => return err,
     };
-    defer {
-        var info = libc_info;
-        info.deinit();
-    }
 
     // Verify we got valid information
     try std.testing.expect(libc_info.arch.len > 0);

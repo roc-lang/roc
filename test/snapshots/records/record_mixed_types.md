@@ -72,5 +72,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: Num(_size), balance: Num(Frac(_size2)), name: Str, scores: List(Num(_size3)) }"))
+(expr (type "{ active: Error, age: _field, balance: _field2, name: Str, scores: List(_a) } where [_b.from_numeral : _arg -> _ret, _c.from_numeral : _arg2 -> _ret2, _d.from_numeral : _arg3 -> _ret3]"))
 ~~~

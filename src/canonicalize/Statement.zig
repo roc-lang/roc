@@ -121,6 +121,20 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         body: Expr.Idx,
     },
+    /// A block of code that will run repeatedly while a condition is true.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// while $count < 10 {
+    ///     print!($count.toStr())
+    ///     $count = $count + 1
+    /// }
+    /// ```
+    s_while: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
@@ -176,7 +190,7 @@ pub const Statement = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
@@ -279,6 +293,18 @@ pub const Statement = union(enum) {
 
                 try env.store.getPattern(s.patt).pushToSExprTree(env, tree, s.patt);
                 try env.store.getExpr(s.expr).pushToSExprTree(env, tree, s.expr);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_while => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
                 try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
 
                 try tree.endNode(begin, attrs);

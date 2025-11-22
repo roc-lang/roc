@@ -21,7 +21,7 @@ jobs:
 
       - name: zig lints
         run: |
-          ./ci/zig_lints.sh
+          zig run ci/zig_lints.zig
 
           zig build check-fmt
 
@@ -257,8 +257,10 @@ jobs:
           use-cache: true
 
       - name: cross compile with llvm
-        run: |
-          ./ci/retry_flaky.sh zig build -Dtarget=${{ matrix.target }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build -Dtarget=${{ matrix.target }}
+          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure"
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:

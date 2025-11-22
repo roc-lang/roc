@@ -8,26 +8,18 @@ type=expr
 [1, 2, "hello"]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - list_type_err.md:1:5:1:5
+MISSING METHOD - list_type_err.md:1:5:1:6
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The second and third elements in this list have incompatible types:
-**list_type_err.md:1:5:**
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**list_type_err.md:1:5:1:6:**
 ```roc
 [1, 2, "hello"]
 ```
-    ^  ^^^^^^^
+    ^
 
-The second element has this type:
-    _Num(_size)_
 
-However, the third element has this type:
-    _Str_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -57,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(Str)"))
 ~~~

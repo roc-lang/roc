@@ -358,6 +358,13 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.rhs = @intFromEnum(f.body);
             node.region = f.region;
         },
+        .@"while" => |w| {
+            node.tag = .@"while";
+            node.main_token = @intFromEnum(w.cond);
+            node.data.lhs = @intFromEnum(w.cond);
+            node.data.rhs = @intFromEnum(w.body);
+            node.region = w.region;
+        },
         .@"return" => |r| {
             node.tag = .@"return";
             node.data.lhs = @intFromEnum(r.expr);
@@ -686,6 +693,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, @intFromEnum(i.then));
             try store.extra_data.append(store.gpa, @intFromEnum(i.@"else"));
+        },
+        .if_without_else => |i| {
+            node.tag = .if_without_else;
+            node.region = i.region;
+            node.data.lhs = @intFromEnum(i.condition);
+            node.data.rhs = @intFromEnum(i.then);
         },
         .match => |m| {
             node.tag = .match;
@@ -1190,6 +1203,13 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
+        .@"while" => {
+            return .{ .@"while" = .{
+                .cond = @enumFromInt(node.data.lhs),
+                .body = @enumFromInt(node.data.rhs),
+                .region = node.region,
+            } };
+        },
         .crash => {
             return .{ .crash = .{
                 .expr = @enumFromInt(node.data.lhs),
@@ -1578,6 +1598,13 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .condition = @enumFromInt(node.data.lhs),
                 .then = @enumFromInt(then_ed),
                 .@"else" = @enumFromInt(else_ed),
+            } };
+        },
+        .if_without_else => {
+            return .{ .if_without_else = .{
+                .region = node.region,
+                .condition = @enumFromInt(node.data.lhs),
+                .then = @enumFromInt(node.data.rhs),
             } };
         },
         .match => {

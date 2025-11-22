@@ -198,8 +198,8 @@ expect sumResult == 10
 (inferred-types
 	(defs
 		(patt (type "List(item), state, (state, item -> state) -> state"))
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "U64")))
 	(expressions
 		(expr (type "List(item), state, (state, item -> state) -> state"))
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "U64"))))
 ~~~

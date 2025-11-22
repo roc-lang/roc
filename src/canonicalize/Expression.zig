@@ -419,15 +419,17 @@ pub const Expr = union(enum) {
         num_minus, // All numeric types
         num_times, // All numeric types
         num_div_by, // All numeric types
+        num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
 
         // Numeric parsing operations
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
+        num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
     };
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     /// A single branch of an if expression.
     /// Contains a condition expression and the body to execute if the condition is true.
@@ -444,7 +446,7 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
     };
 
     /// A closure, which is a lambda expression that captures variables
@@ -504,12 +506,9 @@ pub const Expr = union(enum) {
             ge, // >=
             eq, // ==
             ne, // !=
-            pow, // ^
             div_trunc, // //
             @"and", // and
             @"or", // or
-            pipe_forward, // |>
-            null_coalesce, // ?
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
@@ -1152,7 +1151,7 @@ pub const Expr = union(enum) {
         exhaustive: TypeVar,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
 
         /// A single branch within a match expression.
         /// Contains patterns to match against, an optional guard condition,
@@ -1211,7 +1210,7 @@ pub const Expr = union(enum) {
             }
 
             pub const Idx = enum(u32) { _ };
-            pub const Span = struct { span: DataSpan };
+            pub const Span = extern struct { span: DataSpan };
         };
 
         /// A pattern within a match branch, which may be part of an OR pattern.
@@ -1234,7 +1233,7 @@ pub const Expr = union(enum) {
             degenerate: bool,
 
             pub const Idx = enum(u32) { _ };
-            pub const Span = struct { span: base.DataSpan };
+            pub const Span = extern struct { span: base.DataSpan };
         };
 
         pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
@@ -1268,6 +1267,6 @@ pub const Expr = union(enum) {
         scope_depth: u32,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
     };
 };

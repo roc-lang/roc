@@ -68,39 +68,39 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 switch (precision) {
                     .u8 => {
                         const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
                     },
                     .u16 => {
                         const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
                     },
                     .u32 => {
                         const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
                     },
                     .u64 => {
                         const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
                     },
                     .u128 => {
                         const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
                     },
                     .i8 => {
                         const typed_ptr: *i8 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
                     },
                     .i16 => {
                         const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
                     },
                     .i32 => {
                         const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
                     },
                     .i64 => {
                         const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
                     },
                     .i128 => {
                         const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));
@@ -219,7 +219,8 @@ pub fn asI128(self: StackValue) i128 {
 }
 
 /// Initialise the StackValue integer value
-pub fn setInt(self: *StackValue, value: i128) void {
+/// Returns error.IntegerOverflow if the value doesn't fit in the target type
+pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
 
     // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
@@ -235,42 +236,43 @@ pub fn setInt(self: *StackValue, value: i128) void {
     const precision = self.layout.data.scalar.data.int;
 
     // Inline integer writing logic with proper type casting and alignment
+    // Use std.math.cast to safely check if value fits, returning error instead of panicking
     switch (precision) {
         .u8 => {
             const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
         },
         .u16 => {
             const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
         },
         .u32 => {
             const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
         },
         .u64 => {
             const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
         },
         .u128 => {
             const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
         },
         .i8 => {
             const typed_ptr: *i8 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
         },
         .i16 => {
             const typed_ptr: *i16 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
         },
         .i32 => {
             const typed_ptr: *i32 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
         },
         .i64 => {
             const typed_ptr: *i64 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
         },
         .i128 => {
             const typed_ptr: *i128 = @ptrCast(@alignCast(self.ptr.?));
@@ -279,13 +281,64 @@ pub fn setInt(self: *StackValue, value: i128) void {
     }
 }
 
+/// Initialise the StackValue integer value from raw bytes
+/// This variant handles u128 values that don't fit in i128
+pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{IntegerOverflow}!void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is an integer
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+
+    // Assert this is uninitialised memory
+    std.debug.assert(!self.is_initialized);
+
+    const precision = self.layout.data.scalar.data.int;
+
+    // For u128 values, use bitcast directly; for i128 values, use the signed path
+    if (is_u128) {
+        const u128_value: u128 = @bitCast(bytes);
+        switch (precision) {
+            .u8 => {
+                const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u8, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u16 => {
+                const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u16, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u32 => {
+                const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u32, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u64 => {
+                const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u64, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u128 => {
+                const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = u128_value;
+            },
+            .i8, .i16, .i32, .i64, .i128 => {
+                // Can't assign u128 to signed types - always overflow
+                return error.IntegerOverflow;
+            },
+        }
+    } else {
+        const i128_value: i128 = @bitCast(bytes);
+        try self.setInt(i128_value);
+        return;
+    }
+}
+
 /// Initialise the StackValue boolean value
 pub fn setBool(self: *StackValue, value: u8) void {
     // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
 
-    // Assert this is a boolean
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    // Assert this is a boolean (u8 int)
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.data.scalar.data.int == .u8);
 
     // Assert this is uninitialised memory
     //
@@ -301,7 +354,8 @@ pub fn setBool(self: *StackValue, value: u8) void {
 pub fn asBool(self: StackValue) bool {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.data.scalar.data.int == .u8);
 
     // Read the boolean value as a byte
     const bool_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));
@@ -971,6 +1025,33 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (self.ptr == null) return;
             const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
             slot.* = 0;
+            return;
+        },
+        .tuple => {
+            if (self.ptr == null) return;
+            const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
+            if (tuple_data.fields.count == 0) return;
+
+            const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+            var elem_index: usize = 0;
+            while (elem_index < element_layouts.len) : (elem_index += 1) {
+                const elem_info = element_layouts.get(elem_index);
+                const elem_layout = layout_cache.getLayout(elem_info.layout);
+
+                const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
+                const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+
+                const elem_value = StackValue{
+                    .layout = elem_layout,
+                    .ptr = elem_ptr,
+                    .is_initialized = true,
+                };
+
+                elem_value.decref(layout_cache, ops);
+            }
+
             return;
         },
         else => {},

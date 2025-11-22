@@ -33,6 +33,7 @@ pub const Tag = enum {
     statement_expr,
     statement_expect,
     statement_for,
+    statement_while,
     statement_return,
     statement_import,
     statement_alias_decl,
@@ -209,4 +210,5 @@ pub const Tag = enum {
     diag_underscore_in_type_declaration,
     diagnostic_exposed_but_not_implemented,
     diag_redundant_exposed,
+    diag_if_expr_without_else,
 };
