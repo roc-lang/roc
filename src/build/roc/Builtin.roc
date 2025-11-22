@@ -56,6 +56,8 @@ Builtin :: [].{
 		#Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 	}
 
+	Box(item) :: [ProvidedByCompiler].{}
+
 	Try(ok, err) := [Ok(ok), Err(err)].{
 		is_ok : Try(_ok, _err) -> Bool
 		is_ok = |try| match try {

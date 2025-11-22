@@ -312,7 +312,15 @@ test "instantiate - box and list" {
 
     // Test Box a
     {
-        const box_var = try env.types.freshFromContent(.{ .structure = .{ .box = rigid_a } });
+        const box_ident_idx = try env.idents.insert(gpa, .for_text("Box"));
+        const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+        const box_content = try env.types.mkNominal(
+            .{ .ident_idx = box_ident_idx },
+            rigid_a,
+            &[_]Var{rigid_a},
+            builtin_module_idx,
+        );
+        const box_var = try env.types.freshFromContent(box_content);
 
         var instantiator = Instantiator{
             .store = &env.types,
@@ -324,8 +332,11 @@ test "instantiate - box and list" {
         const instantiated = try instantiator.instantiateVar(box_var);
         const resolved = env.types.resolveVar(instantiated);
 
-        try std.testing.expect(resolved.desc.content.structure == .box);
-        try std.testing.expect(resolved.desc.content.structure.box != rigid_a);
+        try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+        const nominal = resolved.desc.content.structure.nominal_type;
+        const args = env.types.sliceNominalArgs(nominal);
+        try std.testing.expect(args.len == 1);
+        try std.testing.expect(args[0] != rigid_a);
     }
 
     // Test List a

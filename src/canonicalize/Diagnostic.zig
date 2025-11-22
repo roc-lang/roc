@@ -76,6 +76,9 @@ pub const Diagnostic = union(enum) {
     if_else_not_canonicalized: struct {
         region: Region,
     },
+    if_expr_without_else: struct {
+        region: Region,
+    },
     malformed_type_annotation: struct {
         region: Region,
     },

@@ -308,9 +308,6 @@ pub const Generalizer = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .empty_record, .empty_tag_union => return Rank.top_level,
-                    .box => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
-                    },
                     .tuple => |tuple| {
                         var next_rank = Rank.top_level;
                         for (self.store.sliceVars(tuple.elems)) |arg_var| {

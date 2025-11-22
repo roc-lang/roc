@@ -637,6 +637,32 @@ pub const Interpreter = struct {
                                 elem_value.decref(&self.runtime_layout_store, roc_ops);
                             }
                         },
+                        .s_while => |while_stmt| {
+                            // Loop until condition becomes false
+                            while (true) {
+                                // 1. EVALUATE CONDITION
+                                const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
+                                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                                const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
+
+                                // 2. CHECK IF CONDITION IS TRUE
+                                const cond_is_true = try self.boolValueIsTrue(cond_value, cond_rt_var);
+
+                                // 3. EXIT LOOP IF CONDITION IS FALSE
+                                if (!cond_is_true) {
+                                    break;
+                                }
+
+                                // 4. EVALUATE BODY
+                                const body_result = try self.evalExprMinimal(while_stmt.body, roc_ops, null);
+                                defer body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Body result is {} (empty record), so nothing to do with it
+                                // Loop continues to next iteration
+                            }
+
+                            // While loop completes and returns {} (implicitly)
+                        },
                         else => return error.NotImplemented,
                     }
                 }
@@ -5184,10 +5210,6 @@ pub const Interpreter = struct {
                             const range = try self.runtime_types.appendVars(buf);
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
                         },
-                        .box => |elem_var| {
-                            const rt_elem = try self.translateTypeVar(module, elem_var);
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
-                        },
                         .record => |rec| {
                             var acc = try FieldAccumulator.init(self.allocator);
                             defer acc.deinit();
@@ -5440,12 +5462,6 @@ pub const Interpreter = struct {
                         const new_ret = try self.instantiateType(f.ret, subst_map);
                         const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
                         break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .box => |boxed_var| blk_box: {
-                        // Recursively instantiate the boxed type
-                        const new_boxed = try self.instantiateType(boxed_var, subst_map);
-                        const content = types.Content{ .structure = .{ .box = new_boxed } };
-                        break :blk_box try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .tuple => |tuple| blk_tuple: {
                         // Recursively instantiate tuple element types

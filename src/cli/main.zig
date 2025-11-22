@@ -63,7 +63,6 @@ const Allocators = base.Allocators;
 const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
 test "main cli tests" {
-    _ = @import("test_bundle_logic.zig");
     _ = @import("libc_finder.zig");
     _ = @import("test_shared_memory_system.zig");
 }
@@ -900,12 +899,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
                     // as specified in the design document.
 
                     const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs.gpa)) |libc_info| {
-                        defer {
-                            var info = libc_info;
-                            info.deinit();
-                        }
-
+                    if (libc_finder.findLibc(allocs)) |libc_info| {
                         // Use system CRT files from the detected lib directory
                         // TODO: Remove this once platforms provide their own CRT files
                         const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {

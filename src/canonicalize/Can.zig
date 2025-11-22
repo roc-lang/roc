@@ -35,6 +35,10 @@ pub const AutoImportedType = struct {
 
 env: *ModuleEnv,
 parse_ir: *AST,
+/// Track whether we're in statement position (true) or expression position (false)
+/// Statement position: if without else is OK (default)
+/// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
+in_statement_position: bool = true,
 scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
@@ -712,8 +716,11 @@ fn canonicalizeAssociatedDecl(
         }
     };
 
-    // Canonicalize the body expression
+    // Canonicalize the body expression in expression context (RHS of assignment)
+    const saved_stmt_pos = self.in_statement_position;
+    self.in_statement_position = false;
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+    self.in_statement_position = saved_stmt_pos;
 
     // Create the def with no annotation (type annotations are handled via canonicalizeAssociatedDeclWithAnno)
     const def = CIR.Def{
@@ -749,8 +756,11 @@ fn canonicalizeAssociatedDeclWithAnno(
         }
     };
 
-    // Canonicalize the body expression
+    // Canonicalize the body expression in expression context (RHS of assignment)
+    const saved_stmt_pos = self.in_statement_position;
+    self.in_statement_position = false;
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+    self.in_statement_position = saved_stmt_pos;
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -1521,6 +1531,15 @@ pub fn canonicalizeFile(
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("for");
                 const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
+            .@"while" => |while_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("while");
+                const region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                     .region = region,
@@ -4280,6 +4299,68 @@ pub fn canonicalizeExpr(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
+                },
+            }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+        },
+        .if_without_else => |e| {
+            // Statement form: if without else
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Check if we're in expression context (e.g., assignment, function call)
+            // If so, emit error explaining that if-expressions need else
+            if (!self.in_statement_position) {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                    .if_expr_without_else = .{ .region = region },
+                });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            }
+
+            // Desugar to if-then-else with empty record {} as the final else
+            // Type checking will ensure the then-branch also has type {}
+
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize condition
+            const can_cond = try self.canonicalizeExpr(e.condition) orelse {
+                const ast_cond = self.parse_ir.store.getExpr(e.condition);
+                const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                    .if_condition_not_canonicalized = .{ .region = cond_region },
+                });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            };
+
+            // Canonicalize then branch
+            const can_then = try self.canonicalizeExpr(e.then) orelse {
+                const ast_then = self.parse_ir.store.getExpr(e.then);
+                const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                    .if_then_not_canonicalized = .{ .region = then_region },
+                });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            };
+
+            // Create an empty record {} as the implicit else
+            const empty_record_idx = try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, region);
+
+            // Create single if branch
+            const scratch_top = self.env.store.scratchIfBranchTop();
+            const if_branch = Expr.IfBranch{
+                .cond = can_cond.idx,
+                .body = can_then.idx,
+            };
+            const if_branch_idx = try self.env.addIfBranch(if_branch, region);
+            try self.env.store.addScratchIfBranch(if_branch_idx);
+            const branches_span = try self.env.store.ifBranchSpanFrom(scratch_top);
+
+            // Create if expression with empty record as final else
+            const expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_if = .{
+                    .branches = branches_span,
+                    .final_else = empty_record_idx,
                 },
             }, region);
 
@@ -7861,6 +7942,71 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 .s_for = .{
                     .patt = ptrn,
                     .expr = expr.idx,
+                    .body = body.idx,
+                },
+            }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .@"while" => |while_stmt| {
+            // Tmp state to capture free vars from both cond & body
+            var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+            defer captures.deinit(self.env.gpa);
+
+            // Canonicalize the condition expression
+            // while $count < 10 {
+            //       ^^^^^^^^^
+            const cond = blk: {
+                const cond_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(cond_free_vars_start);
+
+                const czerd_cond = try self.canonicalizeExprOrMalformed(while_stmt.cond);
+
+                // Copy free vars into captures
+                const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_cond.free_vars orelse DataSpan.empty());
+                for (free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk czerd_cond;
+            };
+
+            // Canonicalize the body
+            // while $count < 10 {
+            //     print!($count.toStr())  <<<<
+            //     $count = $count + 1
+            // }
+            const body = blk: {
+                const body_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                const body_expr = try self.canonicalizeExprOrMalformed(while_stmt.body);
+
+                // Copy free vars into captures
+                const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars orelse DataSpan.empty());
+                for (body_free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk body_expr;
+            };
+
+            // Get captures and copy to free_vars for parent
+            const free_vars_start = self.scratch_free_vars.top();
+            var captures_iter = captures.keyIterator();
+            while (captures_iter.next()) |capture| {
+                try self.scratch_free_vars.append(capture.*);
+            }
+            const free_vars = if (self.scratch_free_vars.top() > free_vars_start)
+                self.scratch_free_vars.spanFrom(free_vars_start)
+            else
+                null;
+
+            // Insert into store
+            const region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region);
+            const stmt_idx = try self.env.addStatement(Statement{
+                .s_while = .{
+                    .cond = cond.idx,
                     .body = body.idx,
                 },
             }, region);

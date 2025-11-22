@@ -843,15 +843,6 @@ const Unifier = struct {
         defer trace.end();
 
         switch (a_flat_type) {
-            .box => |a_var| {
-                switch (b_flat_type) {
-                    .box => |b_var| {
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
             .tuple => |a_tuple| {
                 switch (b_flat_type) {
                     .tuple => |b_tuple| {

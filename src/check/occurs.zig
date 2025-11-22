@@ -160,9 +160,6 @@ const CheckOccurs = struct {
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
-                        .box => |sub_var| {
-                            try self.occursSubVar(root, sub_var, ctx.allowRecursion());
-                        },
                         .tuple => |tuple| {
                             const elems = self.types_store.sliceVars(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
@@ -384,7 +381,7 @@ test "occurs: no recurcion (v = Str)" {
     try std.testing.expectEqual(.not_recursive, result);
 }
 
-test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
+test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
     defer types_store.deinit();
@@ -395,7 +392,14 @@ test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
     const v1 = try types_store.fresh();
     const v2 = try types_store.fresh();
 
-    try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
+    // Create a nominal Box type wrapping v2
+    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
+    try types_store.setVarContent(v1, try types_store.mkNominal(
+        undefined,
+        backing_var,
+        &.{v2},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
     try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
 
     const result = occurs(&types_store, &scratch, v1);
@@ -540,9 +544,15 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const linked_list = try types_store.fresh();
     const elem = try types_store.fresh();
 
-    // Wrap the recursive var in a Box to simulate nesting
+    // Wrap the recursive var in a nominal Box to simulate nesting
     const boxed_linked_list = try types_store.fresh();
-    try types_store.setRootVarContent(boxed_linked_list, .{ .structure = .{ .box = linked_list } });
+    const box_backing_var = try types_store.freshFromContent(.{ .structure = .empty_record });
+    try types_store.setVarContent(boxed_linked_list, try types_store.mkNominal(
+        undefined,
+        box_backing_var,
+        &.{linked_list},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
 
     // Build tag args: (elem, Box(linked_list))
     const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, boxed_linked_list });

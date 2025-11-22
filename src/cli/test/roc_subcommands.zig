@@ -25,6 +25,33 @@ test "roc check writes parse errors to stderr" {
     try testing.expect(has_error);
 }
 
+test "roc check displays correct file path in parse error messages" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_parse_error.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code) due to parse error
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains error information
+    try testing.expect(result.stderr.len > 0);
+
+    // 3. Stderr contains the actual file path, not mangled bytes
+    // The error message should include "has_parse_error.roc" in the location indicator
+    const has_file_path = std.mem.indexOf(u8, result.stderr, "has_parse_error.roc") != null;
+    try testing.expect(has_file_path);
+
+    // 4. Stderr should NOT contain sequences of 0xaa bytes (indicates path encoding issue)
+    // When paths are mangled, they appear as repeated 0xaa bytes in the output
+    const mangled_path_pattern = [_]u8{ 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
+    const has_mangled_path = std.mem.indexOf(u8, result.stderr, &mangled_path_pattern) != null;
+    try testing.expect(!has_mangled_path);
+}
+
 test "roc check succeeds on valid file" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -363,4 +390,30 @@ test "roc check reports type error - plus operator with incompatible types" {
         std.mem.indexOf(u8, result.stderr, "error") != null or
         std.mem.indexOf(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
+}
+
+test "roc test/int/app.roc runs successfully" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc test/str/app.roc runs successfully" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/str/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
 }

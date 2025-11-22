@@ -750,6 +750,31 @@ fn mkFromNumLiteralConstraint(
     return try self.types.appendStaticDispatchConstraints(&.{constraint});
 }
 
+/// Create a nominal Box type with the given element type
+fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where Box is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    const box_ident = types_mod.TypeIdent{
+        .ident_idx = self.common_idents.box,
+    };
+
+    // The backing var is the element type var
+    const backing_var = elem_var;
+    const type_args = [_]Var{elem_var};
+
+    return try self.types.mkNominal(
+        box_ident,
+        backing_var,
+        &type_args,
+        origin_module_id,
+    );
+}
+
 // updating vars //
 
 /// Unify the provided variable with the provided content
@@ -1798,8 +1823,9 @@ fn generateBuiltinTypeInstance(
                 return try self.freshFromContent(.err, env, anno_region);
             }
 
-            // Create the type
-            return try self.freshFromContent(.{ .structure = .{ .box = anno_args[0] } }, env, anno_region);
+            // Create the nominal Box type
+            const box_content = try self.mkBoxContent(anno_args[0]);
+            return try self.freshFromContent(box_content, env, anno_region);
         },
         // Polymorphic number types (Num, Int, Frac) are no longer supported
         // They have been replaced with concrete nominal types (U8, I32, F64, Dec, etc.)
@@ -3492,6 +3518,32 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 _ = try self.unify(body_ret, for_body_var, env);
 
                 _ = try self.unify(stmt_var, for_body_var, env);
+            },
+            .s_while => |while_stmt| {
+                // Check the condition
+                // while $count < 10 {
+                //       ^^^^^^^^^^^
+                does_fx = try self.checkExpr(while_stmt.cond, env, .no_expectation) or does_fx;
+                const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
+                const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
+
+                // Check that condition is Bool
+                const bool_var = try self.freshBool(env, cond_region);
+                _ = try self.unify(bool_var, cond_var, env);
+
+                // Check the body
+                // while $count < 10 {
+                //     print!($count.toStr())  <<<<
+                //     $count = $count + 1
+                // }
+                does_fx = try self.checkExpr(while_stmt.body, env, .no_expectation) or does_fx;
+                const while_body_var: Var = ModuleEnv.varFrom(while_stmt.body);
+
+                // Check that the while body evaluates to {}
+                const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
+                _ = try self.unify(body_ret, while_body_var, env);
+
+                _ = try self.unify(stmt_var, while_body_var, env);
             },
             .s_expr => |expr| {
                 does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;

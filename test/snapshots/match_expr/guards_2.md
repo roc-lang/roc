@@ -14,11 +14,7 @@ match value {
 # EXPECTED
 PARSE ERROR - guards_2.md:2:25:2:25
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:47:2:49
-IF WITHOUT ELSE - guards_2.md:2:25:2:27
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:75
-PARSE ERROR - guards_2.md:2:75:2:75
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:77
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:77:2:80
+PARSE ERROR - guards_2.md:2:50:2:51
 PARSE ERROR - guards_2.md:2:92:2:92
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:92:2:93
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:2:93
@@ -26,20 +22,16 @@ PARSE ERROR - guards_2.md:2:93:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
 PARSE ERROR - guards_2.md:3:12:3:12
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:24
-IF WITHOUT ELSE - guards_2.md:3:12:3:14
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:48
-PARSE ERROR - guards_2.md:3:48:3:48
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:50
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:50:3:53
+PARSE ERROR - guards_2.md:3:25:3:26
 PARSE ERROR - guards_2.md:3:61:3:61
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:61:3:62
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
 PARSE ERROR - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
-UNRECOGNIZED SYNTAX - guards_2.md:2:25:2:51
+INVALID IF BRANCH - :0:0:0:0
 UNUSED VARIABLE - guards_2.md:2:6:2:11
-UNUSED VARIABLE - guards_2.md:1:1:1:1
+UNRECOGNIZED SYNTAX - guards_2.md:2:92:2:93
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -63,60 +55,15 @@ Expressions can be identifiers, literals, function calls, or operators.
                                               ^^
 
 
-**IF WITHOUT ELSE**
-This `if` is being used as an expression, but it doesn't have an `else`.
-
-When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
-
-**guards_2.md:2:25:2:27:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                        ^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **long list starting with ** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-**guards_2.md:2:51:2:75:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                  ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
+A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
 
-**guards_2.md:2:75:2:75:**
+**guards_2.md:2:50:2:51:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                                          ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **${** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**guards_2.md:2:75:2:77:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                                          ^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **Num** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-**guards_2.md:2:77:2:80:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                                            ^^^
+                                                 ^
 
 
 **PARSE ERROR**
@@ -196,60 +143,15 @@ Expressions can be identifiers, literals, function calls, or operators.
                      ^^
 
 
-**IF WITHOUT ELSE**
-This `if` is being used as an expression, but it doesn't have an `else`.
-
-When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
-
-**guards_2.md:3:12:3:14:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-           ^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **pair of equal values: ** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-**guards_2.md:3:26:3:48:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                         ^^^^^^^^^^^^^^^^^^^^^^
-
-
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
+A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
 
-**guards_2.md:3:48:3:48:**
+**guards_2.md:3:25:3:26:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                               ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **${** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**guards_2.md:3:48:3:50:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                                               ^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **Num** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-**guards_2.md:3:50:3:53:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                                                 ^^^
+                        ^
 
 
 **PARSE ERROR**
@@ -318,16 +220,10 @@ match value {
       ^^^^^
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+**INVALID IF BRANCH**
+The branch in this `if` expression could not be processed.
 
-**guards_2.md:2:25:2:51:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
+The branch must contain a valid expression. Check for syntax errors or missing values.
 
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
@@ -341,17 +237,16 @@ The unused variable is declared here:
      ^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**guards_2.md:1:1:1:1:**
+**guards_2.md:2:92:2:93:**
 ```roc
-match value {
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-^
+                                                                                           ^
 
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -371,12 +266,15 @@ EndOfFile,
 			(p-list
 				(p-ident (raw "first"))
 				(p-list-rest (name "rest")))
-			(e-malformed (reason "no_else")))
+			(e-if-without-else
+				(e-binop (op ">")
+					(e-apply
+						(e-ident (raw "List.len"))
+						(e-ident (raw "rest")))
+					(e-int (raw "5")))
+				(e-malformed (reason "expr_unexpected_token"))))
 		(branch
-			(p-malformed (tag "pattern_unexpected_token"))
-			(e-malformed (reason "expr_unexpected_token")))
-		(branch
-			(p-malformed (tag "pattern_unexpected_token"))
+			(p-string (raw """))
 			(e-malformed (reason "expr_unexpected_token")))
 		(branch
 			(p-malformed (tag "pattern_unexpected_token"))
@@ -385,12 +283,13 @@ EndOfFile,
 			(p-list
 				(p-ident (raw "x"))
 				(p-ident (raw "y")))
-			(e-malformed (reason "no_else")))
+			(e-if-without-else
+				(e-binop (op "==")
+					(e-ident (raw "x"))
+					(e-ident (raw "y")))
+				(e-malformed (reason "expr_unexpected_token"))))
 		(branch
-			(p-malformed (tag "pattern_unexpected_token"))
-			(e-malformed (reason "expr_unexpected_token")))
-		(branch
-			(p-malformed (tag "pattern_unexpected_token"))
+			(p-string (raw """))
 			(e-malformed (reason "expr_unexpected_token")))
 		(branch
 			(p-malformed (tag "pattern_unexpected_token"))
@@ -403,12 +302,10 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 match value {
-	[first, .. as rest] => 
+	[first, .. as rest] => if List.len(rest) > 5 
 	 => 
 	 => 
-	 => 
-	[x, y] => 
-	 => 
+	[x, y] => if x == y 
 	 => 
 	 => 
 	_ => "other"
