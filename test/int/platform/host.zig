@@ -111,10 +111,9 @@ fn platform_main() !void {
         .host_fns = undefined, // No host functions for this simple example
     };
 
-    // Generate random integers using current timestamp as seed
-    var rand = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-    const a = rand.random().intRangeAtMost(i64, 0, 100);
-    const b = rand.random().intRangeAtMost(i64, 0, 100);
+    // Use deterministic test values
+    const a: i64 = 28;
+    const b: i64 = 31;
 
     // Arguments struct for passing two integers to Roc as a tuple
     const Args = extern struct { a: i64, b: i64 };

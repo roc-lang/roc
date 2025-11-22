@@ -124,6 +124,15 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// This is used when loading a NodeStore from shared memory at a different address.
+pub fn relocate(store: *NodeStore, offset: isize) void {
+    store.nodes.relocate(offset);
+    store.regions.relocate(offset);
+    store.extra_data.relocate(offset);
+    // scratch is null for deserialized NodeStores, no need to relocate
+}
+
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///

@@ -3188,13 +3188,34 @@ pub const Interpreter = struct {
                                 const int_type = num_layout.data.scalar.data.int;
                                 if (is_negative) {
                                     // Write negative value
-                                    const neg_value: i128 = -@as(i128, @intCast(value));
+                                    // For i128, we need special handling because the minimum value's absolute
+                                    // value (2^127) doesn't fit in i128 (max is 2^127-1). Use wrapping negation.
                                     switch (int_type) {
-                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
-                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
-                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
-                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value),
-                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value,
+                                        .i8 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i16 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i32 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i64 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i128 => {
+                                            // For i128, we need special handling because the minimum value's absolute
+                                            // value (2^127) doesn't fit in i128 (max is 2^127-1).
+                                            // We interpret the u128 value as an i128 and negate using wrapping arithmetic.
+                                            // This correctly handles i128 min value: -(2^127) wraps to itself.
+                                            const as_signed: i128 = @bitCast(value);
+                                            const neg_value: i128 = -%as_signed;
+                                            @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                        },
                                         else => {}, // Unsigned types already rejected above
                                     }
                                 } else {
@@ -4644,7 +4665,9 @@ pub const Interpreter = struct {
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
         // Check if it's the Builtin module
         if (origin_module == self.env.builtin_module_ident) {
-            return self.builtin_module_env;
+            // In shim context, builtins are embedded in the main module env
+            // (builtin_module_env is null), so fall back to self.env
+            return self.builtin_module_env orelse self.env;
         }
         // Check if it's the current module
         if (self.env.module_name_idx == origin_module) {
@@ -4666,10 +4689,15 @@ pub const Interpreter = struct {
     }
 
     /// Build a fully-qualified method identifier in the form "TypeName.method".
+    /// Note: nominal_ident comes from the runtime type store (translated idents),
+    /// while method_name comes from the current environment.
     fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
-        const ident_store = self.env.common.getIdentStore();
-        const type_name = ident_store.getText(nominal_ident);
-        const method_name_str = ident_store.getText(method_name);
+        // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
+        const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        const type_name = runtime_ident_store.getText(nominal_ident);
+        // method_name is from the current environment (e.g., plus_ident)
+        const current_ident_store = self.env.common.getIdentStore();
+        const method_name_str = current_ident_store.getText(method_name);
         return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
     }
 
@@ -4748,12 +4776,12 @@ pub const Interpreter = struct {
         };
 
         // Resolve the method function
-        const method_func = try self.resolveMethodFunction(
+        const method_func = self.resolveMethodFunction(
             nominal_info.origin,
             nominal_info.ident,
             method_ident,
             roc_ops,
-        );
+        ) catch |err| return err;
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
         // Prepare arguments: lhs (receiver) + rhs
@@ -4964,7 +4992,16 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse {
+        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            // Fallback: search all definitions for the method
+            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+            for (all_defs) |def_idx| {
+                const def = origin_env.store.getDef(def_idx);
+                const pat = origin_env.store.getPattern(def.pattern);
+                if (pat == .assign and pat.assign.ident == method_ident) {
+                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                }
+            }
             return error.MethodLookupFailed;
         };
 
@@ -5301,7 +5338,23 @@ pub const Interpreter = struct {
                             for (ct_args, 0..) |ct_arg, i| {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
-                            const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
+                            // Always translate idents to the runtime_layout_store's env's ident store.
+                            // This is critical because the layout store was initialized with that env,
+                            // and ident comparisons in the layout store use that env's ident indices.
+                            // Note: self.env may be temporarily switched during from_num_literal evaluation,
+                            // so we MUST use runtime_layout_store.env which remains constant.
+                            const layout_env = self.runtime_layout_store.env;
+                            // Compare the underlying interner pointers to detect different ident stores
+                            const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
+                            const translated_ident = if (needs_translation) ident_blk: {
+                                const type_name_str = module.getIdent(nom.ident.ident_idx);
+                                break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
+                            } else nom.ident;
+                            const translated_origin = if (needs_translation) origin_blk: {
+                                const origin_str = module.getIdent(nom.origin_module);
+                                break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                            } else nom.origin_module;
+                            const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin);
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                     }

@@ -79,8 +79,11 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             var have_tag = false;
             if (value.layout.tag == .scalar) {
                 if (value.layout.data.scalar.tag == .int) {
-                    tag_index = @intCast(value.asI128());
-                    have_tag = true;
+                    // Only treat as tag if value fits in usize (valid tag discriminants are small)
+                    if (std.math.cast(usize, value.asI128())) |idx| {
+                        tag_index = idx;
+                        have_tag = true;
+                    }
                 }
                 if (have_tag and tag_index < tags.len) {
                     const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
@@ -95,8 +98,11 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const tag_field = try acc.getFieldByIndex(idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                        tag_index = @intCast(tmp_sv.asI128());
-                        have_tag = true;
+                        // Only treat as tag if value fits in usize (valid tag discriminants are small)
+                        if (std.math.cast(usize, tmp_sv.asI128())) |tag_idx| {
+                            tag_index = tag_idx;
+                            have_tag = true;
+                        }
                     }
                 }
                 if (have_tag and tag_index < tags.len) {

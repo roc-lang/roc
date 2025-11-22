@@ -68,39 +68,39 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 switch (precision) {
                     .u8 => {
                         const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
                     },
                     .u16 => {
                         const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
                     },
                     .u32 => {
                         const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
                     },
                     .u64 => {
                         const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
                     },
                     .u128 => {
                         const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
                     },
                     .i8 => {
                         const typed_ptr: *i8 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
                     },
                     .i16 => {
                         const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
                     },
                     .i32 => {
                         const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
                     },
                     .i64 => {
                         const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
                     },
                     .i128 => {
                         const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));

@@ -143,7 +143,8 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.imports.relocate(offset);
-    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
+    self.store.relocate(offset);
+    self.deferred_numeric_literals.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -201,6 +202,21 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const is_gte_ident = try common.insertIdent(gpa, Ident.for_text("is_gte"));
     const is_eq_ident = try common.insertIdent(gpa, Ident.for_text("is_eq"));
     const is_ne_ident = try common.insertIdent(gpa, Ident.for_text("is_ne"));
+
+    // Pre-intern numeric type identifiers for layout store (these get looked up during runtime layout generation)
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U8"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I8"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U16"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I16"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U32"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I32"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U64"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I64"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U128"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I128"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.F32"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.F64"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.Dec"));
 
     return Self{
         .gpa = gpa,
