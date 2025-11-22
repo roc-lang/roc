@@ -4576,44 +4576,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }, region);
 
     if (e.qualifiers.span.len == 0) {
-        // Check if the tag name itself is a type in scope
-        // This handles cases like: MyNum := [].{ negate = |_| MyNum }
-        // where MyNum refers to the nominal type being defined
-        if (self.scopeLookupTypeDecl(tag_name)) |nominal_type_decl_stmt_idx| {
-            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
-                .s_nominal_decl => {
-                    // This tag name is a nominal type in scope - treat it as such
-                    const expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_nominal = .{
-                            .nominal_type_decl = nominal_type_decl_stmt_idx,
-                            .backing_expr = tag_expr_idx,
-                            .backing_type = .tag,
-                        },
-                    }, region);
-
-                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
-                    return CanonicalizedExpr{
-                        .idx = expr_idx,
-                        .free_vars = free_vars_span,
-                    };
-                },
-                .s_alias_decl => {
-                    // Type alias - report error (same as qualified case)
-                    return CanonicalizedExpr{
-                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                            .name = tag_name,
-                            .region = region,
-                        } }),
-                        .free_vars = null,
-                    };
-                },
-                else => {
-                    // Not a type declaration, fall through to treat as structural tag
-                },
-            }
-        }
-
-        // Tag without a qualifier and not a type in scope - treat as anonymous structural tag
+        // Unqualified tag - treat as anonymous structural tag
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
     } else if (e.qualifiers.span.len == 1) {
         // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
