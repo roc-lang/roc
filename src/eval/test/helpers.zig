@@ -519,6 +519,7 @@ fn rewriteNumericLiteralExpr(
     // For Dec type, keep the original e_dec/e_dec_small expression
 }
 
+/// Parses and canonicalizes a Roc expression for testing, returning all necessary context.
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) TestParseError!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,

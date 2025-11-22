@@ -21,6 +21,7 @@ const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
 const MkSafeMultiList = collections.SafeMultiList;
 
+/// The content of a type snapshot, mirroring types.Content for error reporting.
 pub const SnapshotContent = union(enum) {
     flex: SnapshotFlex,
     rigid: SnapshotRigid,
@@ -31,28 +32,33 @@ pub const SnapshotContent = union(enum) {
     err,
 };
 
+/// A snapshotted recursion variable that points to its recursive structure.
 pub const SnapshotRecursionVar = struct {
     structure: SnapshotContentIdx,
     name: ?base.Ident.Idx,
 };
 
+/// A snapshotted flex (unbound) type variable with optional name and constraints.
 pub const SnapshotFlex = struct {
     name: ?Ident.Idx,
     var_: Var,
     constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
+/// A snapshotted rigid (bound) type variable with name and constraints.
 pub const SnapshotRigid = struct {
     name: Ident.Idx,
     constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
+/// A snapshotted type alias with its backing type and type variables.
 pub const SnapshotAlias = struct {
     ident: types.TypeIdent,
     backing: SnapshotContentIdx,
     vars: SnapshotContentIdxSafeList.Range,
 };
 
+/// A snapshotted flat type structure (non-variable types like records, functions, etc).
 pub const SnapshotFlatType = union(enum) {
     box: SnapshotContentIdx,
     tuple: SnapshotTuple,
@@ -67,37 +73,44 @@ pub const SnapshotFlatType = union(enum) {
     empty_tag_union,
 };
 
+/// A snapshotted tuple type with its element types.
 pub const SnapshotTuple = struct {
     elems: SnapshotContentIdxSafeList.Range,
 };
 
+/// A snapshotted nominal (named) type with its type parameters and origin module.
 pub const SnapshotNominalType = struct {
     ident: types.TypeIdent,
     vars: SnapshotContentIdxSafeList.Range,
     origin_module: Ident.Idx,
 };
 
+/// A snapshotted function type with argument types, return type, and instantiation flag.
 pub const SnapshotFunc = struct {
     args: SnapshotContentIdxSafeList.Range,
     ret: SnapshotContentIdx,
     needs_instantiation: bool,
 };
 
+/// A snapshotted record type with fields and extension variable.
 pub const SnapshotRecord = struct {
     fields: SnapshotRecordFieldSafeList.Range,
     ext: SnapshotContentIdx,
 };
 
+/// A single field in a snapshotted record type.
 pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx,
 
     const Self = @This();
 
+    /// Returns true if field `a` should sort before field `b` by name.
     pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
         return Self.orderByName(ident_store, a, b) == .lt;
     }
 
+    /// Compares two record fields by their name for ordering.
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
         const a_text = store.getText(a.name);
         const b_text = store.getText(b.name);
@@ -105,16 +118,19 @@ pub const SnapshotRecordField = struct {
     }
 };
 
+/// A snapshotted tag union type with its tags and extension variable.
 pub const SnapshotTagUnion = struct {
     tags: SnapshotTagSafeList.Range,
     ext: SnapshotContentIdx,
 };
 
+/// A single tag in a snapshotted tag union with its name and argument types.
 pub const SnapshotTag = struct {
     name: Ident.Idx,
     args: SnapshotContentIdxSafeList.Range,
 };
 
+/// A snapshotted static dispatch constraint for method resolution.
 pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,
@@ -1206,6 +1222,7 @@ pub const Store = struct {
     }
 };
 
+/// Writer for serializing type snapshots to a human-readable string format.
 pub const SnapshotWriter = struct {
     const Self = @This();
 

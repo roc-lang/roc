@@ -98,6 +98,7 @@ const MiniCiStep = struct {
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
         try runSubBuild(b, "fmt", "zig build fmt");
+        try runScript(b, "./ci/zig_lints.sh");
         try runSubBuild(b, null, "zig build");
         try runSubBuild(b, "snapshot", "zig build snapshot");
         try runSubBuild(b, "test", "zig build test");
@@ -143,6 +144,33 @@ const MiniCiStep = struct {
             },
             else => {
                 std.debug.print("minici: `{s}` terminated abnormally\n", .{display});
+                return error.MakeFailed;
+            },
+        }
+    }
+
+    fn runScript(b: *std.Build, script: []const u8) !void {
+        std.debug.print("---- minici: running `{s}` ----\n", .{script});
+
+        var child = std.process.Child.init(&.{script}, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    std.debug.print(
+                        "minici: `{s}` failed with exit code {d}\n",
+                        .{ script, code },
+                    );
+                    return error.MakeFailed;
+                }
+            },
+            else => {
+                std.debug.print("minici: `{s}` terminated abnormally\n", .{script});
                 return error.MakeFailed;
             },
         }
