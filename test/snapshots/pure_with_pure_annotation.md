@@ -143,11 +143,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(patt (type "Num(Int(Signed32))")))
+		(patt (type "I32, I32 -> I32"))
+		(patt (type "I32 -> I32"))
+		(patt (type "I32")))
 	(expressions
-		(expr (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
-		(expr (type "Num(Int(Signed32))"))))
+		(expr (type "I32, I32 -> I32"))
+		(expr (type "I32 -> I32"))
+		(expr (type "I32"))))
 ~~~

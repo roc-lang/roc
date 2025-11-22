@@ -46,7 +46,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Frac(Decimal))")))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "Num(Frac(Decimal))"))))
+		(expr (type "Dec"))))
 ~~~

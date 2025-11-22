@@ -19,7 +19,7 @@ type_idx: ?u32,
 /// Index type for referencing external declarations in storage.
 pub const Idx = enum(u32) { _ };
 /// A span of external declarations stored contiguously in memory.
-pub const Span = struct { span: DataSpan };
+pub const Span = extern struct { span: DataSpan };
 
 /// Converts this external declaration to an S-expression tree representation for debugging
 pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {

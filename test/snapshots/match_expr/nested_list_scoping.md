@@ -13,7 +13,6 @@ match nestedList {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
-TYPE MISMATCH - nested_list_scoping.md:4:17:4:18
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `nestedList` in this scope.
@@ -25,20 +24,6 @@ match nestedList {
 ```
       ^^^^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nested_list_scoping.md:4:17:4:18:**
-```roc
-    [x, [y]] => x * y
-```
-                ^
-
-It has the type:
-    _List(_a)_
-
-But I expected it to be:
-    _Num(_size)_
 
 # TOKENS
 ~~~zig
@@ -145,5 +130,5 @@ match nestedList {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "List(...)"))
 ~~~

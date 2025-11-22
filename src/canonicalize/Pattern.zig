@@ -231,7 +231,7 @@ pub const Pattern = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Represents the destructuring of a single field within a record pattern.
     /// Each record destructure specifies how to extract a field from a record.
@@ -247,7 +247,7 @@ pub const Pattern = union(enum) {
         kind: Kind,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
 
         /// The kind of record field destructuring pattern.
         pub const Kind = union(enum) {

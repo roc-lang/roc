@@ -21,7 +21,6 @@ pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !Ro
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     // Build argv: [roc_path, ...args]
@@ -57,7 +56,6 @@ pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     const test_file = try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });

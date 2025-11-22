@@ -3522,7 +3522,7 @@ pub fn canonicalizeExpr(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumLiteralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -3646,6 +3646,7 @@ pub fn canonicalizeExpr(
                     .{ .e_num = .{ .value = int_value, .kind = num_suffix } },
                     region,
                 );
+
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
@@ -3667,7 +3668,7 @@ pub fn canonicalizeExpr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
-            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumLiteralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -4153,12 +4154,18 @@ pub fn canonicalizeExpr(
                 .OpGreaterThanOrEq => .ge,
                 .OpEquals => .eq,
                 .OpNotEquals => .ne,
-                .OpCaret => .pow,
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
-                .OpPizza => .pipe_forward,
-                .OpDoubleQuestion => .null_coalesce,
+                // OpCaret (^), OpPizza (|>), OpDoubleQuestion (?) are not supported
+                .OpCaret, .OpPizza, .OpDoubleQuestion => {
+                    const feature = try self.env.insertString("unsupported operator");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                },
                 else => {
                     // Unknown operator
                     const feature = try self.env.insertString("binop");
@@ -4569,7 +4576,44 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }, region);
 
     if (e.qualifiers.span.len == 0) {
-        // Tag without a qualifier is an anonymous structural tag
+        // Check if the tag name itself is a type in scope
+        // This handles cases like: MyNum := [].{ negate = |_| MyNum }
+        // where MyNum refers to the nominal type being defined
+        if (self.scopeLookupTypeDecl(tag_name)) |nominal_type_decl_stmt_idx| {
+            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                .s_nominal_decl => {
+                    // This tag name is a nominal type in scope - treat it as such
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                            .backing_expr = tag_expr_idx,
+                            .backing_type = .tag,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{
+                        .idx = expr_idx,
+                        .free_vars = free_vars_span,
+                    };
+                },
+                .s_alias_decl => {
+                    // Type alias - report error (same as qualified case)
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = tag_name,
+                            .region = region,
+                        } }),
+                        .free_vars = null,
+                    };
+                },
+                else => {
+                    // Not a type declaration, fall through to treat as structural tag
+                },
+            }
+        }
+
+        // Tag without a qualifier and not a type in scope - treat as anonymous structural tag
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
     } else if (e.qualifiers.span.len == 1) {
         // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
@@ -5070,7 +5114,7 @@ fn canonicalizePattern(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed = types.parseNumLiteralWithSuffix(token_text);
 
             // Parse the integer value
             const is_negated = parsed.num_text[0] == '-';
@@ -5214,7 +5258,7 @@ fn canonicalizePattern(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+            const parsed_num = types.parseNumLiteralWithSuffix(token_text);
 
             if (parsed_num.suffix) |suffix| {
                 const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
@@ -5856,15 +5900,15 @@ const FracLiteralResult = union(enum) {
     small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
     dec: struct {
         value: RocDec,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
     f64: struct {
         value: f64,
-        requirements: types.Num.Frac.Requirements,
+        requirements: types.Frac.Requirements,
     },
 };
 
@@ -5954,7 +5998,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 .small = .{
                     .numerator = small.numerator,
                     .denominator_power_of_ten = small.denominator_power_of_ten,
-                    .requirements = types.Num.Frac.Requirements{
+                    .requirements = types.Frac.Requirements{
                         .fits_in_f32 = CIR.fitsInF32(small_f64_val),
                         .fits_in_dec = true,
                     },
@@ -5971,7 +6015,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             .small = .{
                 .numerator = @as(i16, @intFromFloat(rounded)),
                 .denominator_power_of_ten = 0,
-                .requirements = types.Num.Frac.Requirements{
+                .requirements = types.Frac.Requirements{
                     .fits_in_f32 = CIR.fitsInF32(f64_val),
                     .fits_in_dec = true,
                 },
@@ -6003,7 +6047,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 return FracLiteralResult{
                     .f64 = .{
                         .value = f64_val,
-                        .requirements = types.Num.Frac.Requirements{
+                        .requirements = types.Frac.Requirements{
                             .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
@@ -6021,7 +6065,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 return FracLiteralResult{
                     .f64 = .{
                         .value = f64_val,
-                        .requirements = types.Num.Frac.Requirements{
+                        .requirements = types.Frac.Requirements{
                             .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
@@ -6032,7 +6076,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             return FracLiteralResult{
                 .dec = .{
                     .value = RocDec{ .num = dec_num },
-                    .requirements = types.Num.Frac.Requirements{
+                    .requirements = types.Frac.Requirements{
                         .fits_in_f32 = CIR.fitsInF32(f64_val),
                         .fits_in_dec = true,
                     },
@@ -6045,7 +6089,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     return FracLiteralResult{
         .f64 = .{
             .value = f64_val,
-            .requirements = types.Num.Frac.Requirements{
+            .requirements = types.Frac.Requirements{
                 .fits_in_f32 = CIR.fitsInF32(f64_val),
                 .fits_in_dec = false,
             },

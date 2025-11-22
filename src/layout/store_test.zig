@@ -60,42 +60,9 @@ test "addTypeVar - bool type" {
 
     const retrieved_layout = lt.layout_store.getLayout(bool_layout_idx);
     try testing.expect(retrieved_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.bool, retrieved_layout.data.scalar.tag);
+    try testing.expectEqual(layout.ScalarTag.int, retrieved_layout.data.scalar.tag);
+    try testing.expectEqual(types.Int.Precision.u8, retrieved_layout.data.scalar.data.int);
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
-}
-
-test "addTypeVar - default layouts for polymorphic types" {
-    var lt: LayoutTest = undefined;
-    lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
-    lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
-    lt.type_scope = TypeScope.init(lt.gpa);
-    defer lt.deinit();
-
-    // Flex number var (Num a) defaults to Dec
-    const num_var = try lt.type_store.fresh();
-    const flex_num_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = num_var } } });
-    const num_layout_idx = try lt.layout_store.addTypeVar(flex_num_var, &lt.type_scope);
-    const num_layout = lt.layout_store.getLayout(num_layout_idx);
-    try testing.expect(num_layout.tag == .scalar);
-    try testing.expect(num_layout.data.scalar.data.frac == .dec);
-
-    // Flex int var (Int a) defaults to Dec
-    const int_var = try lt.type_store.fresh();
-    const flex_int_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = int_var } } });
-    const int_layout_idx = try lt.layout_store.addTypeVar(flex_int_var, &lt.type_scope);
-    const int_layout = lt.layout_store.getLayout(int_layout_idx);
-    try testing.expect(int_layout.tag == .scalar);
-    try testing.expect(int_layout.data.scalar.data.frac == .dec);
-
-    // Flex frac var (Frac a) defaults to Dec
-    const frac_var = try lt.type_store.fresh();
-    const flex_frac_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = frac_var } } });
-    const frac_layout_idx = try lt.layout_store.addTypeVar(flex_frac_var, &lt.type_scope);
-    const frac_layout = lt.layout_store.getLayout(frac_layout_idx);
-    try testing.expect(frac_layout.tag == .scalar);
-    try testing.expect(frac_layout.data.scalar.data.frac == .dec);
 }
 
 test "addTypeVar - host opaque types compile to opaque_ptr" {
@@ -173,33 +140,6 @@ test "addTypeVar - zero-sized types (ZST)" {
     try testing.expect(lt.layout_store.getLayout(list_zst_idx).tag == .list_of_zst);
 }
 
-test "addTypeVar - record with zero-sized fields keeps them" {
-    var lt: LayoutTest = undefined;
-    lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
-    lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
-    lt.type_scope = TypeScope.init(lt.gpa);
-    defer lt.deinit();
-
-    const zst_var1 = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const zst_var2 = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const i32_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
-
-    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("zst1")), .var_ = zst_var1 },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("zst2")), .var_ = zst_var2 },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("age")), .var_ = i32_var },
-    });
-    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = zst_var2 } } });
-    const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
-    const record_layout = lt.layout_store.getLayout(record_idx);
-
-    try testing.expect(record_layout.tag == .record);
-    const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
-    try testing.expectEqual(@as(usize, 3), field_slice.len); // All fields including ZST "empty" field are kept
-}
-
 test "addTypeVar - record with only zero-sized fields" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
@@ -233,119 +173,6 @@ test "addTypeVar - record with only zero-sized fields" {
     const box_record_var = try lt.mkBoxType(record_var, box_ident_idx, builtin_module_idx);
     const box_idx = try lt.layout_store.addTypeVar(box_record_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
-}
-
-test "record field sorting by alignment then name" {
-    var lt: LayoutTest = undefined;
-    lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
-    lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
-    lt.type_scope = TypeScope.init(lt.gpa);
-    defer lt.deinit();
-
-    const u8_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
-    const u32_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
-    const u64_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
-
-    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("c_u32")), .var_ = u32_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("a_u64")), .var_ = u64_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("d_u8")), .var_ = u8_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("b_u64")), .var_ = u64_var },
-    });
-
-    const empty_ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_ext } } });
-    const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
-    const record_layout = lt.layout_store.getLayout(record_idx);
-
-    try testing.expect(record_layout.tag == .record);
-    const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
-
-    // Expected order: a_u64, b_u64 (sorted by name), c_u32, d_u8
-    try testing.expectEqualStrings("a_u64", lt.module_env.getIdent(field_slice.get(0).name));
-    try testing.expectEqualStrings("b_u64", lt.module_env.getIdent(field_slice.get(1).name));
-    try testing.expectEqualStrings("c_u32", lt.module_env.getIdent(field_slice.get(2).name));
-    try testing.expectEqualStrings("d_u8", lt.module_env.getIdent(field_slice.get(3).name));
-}
-
-test "record size and alignment calculation" {
-    var lt: LayoutTest = undefined;
-    lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
-    lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
-    lt.type_scope = TypeScope.init(lt.gpa);
-    defer lt.deinit();
-
-    // { a: u8, b: u32, c: u8, d: u64 }
-    // After sorting by alignment: d: u64, b: u32, a: u8, c: u8
-    // Layout: [d: 8 bytes] [b: 4 bytes] [a: 1 byte] [c: 1 byte] [padding: 2 bytes] -> Total: 16 bytes
-    // Alignment should be max of fields, which is 8 from u64.
-    const u8_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
-    const u32_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
-    const u64_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
-
-    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("a")), .var_ = u8_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("b")), .var_ = u32_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("c")), .var_ = u8_var },
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("d")), .var_ = u64_var },
-    });
-
-    const empty_ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_ext } } });
-    const record_idx = try lt.layout_store.addTypeVar(record_var, &lt.type_scope);
-    const record_layout = lt.layout_store.getLayout(record_idx);
-
-    try testing.expect(record_layout.tag == .record);
-    for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(@as(u32, 16), lt.layout_store.layoutSize(record_layout));
-        try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
-    }
-}
-
-test "record with chained extensions" {
-    var lt: LayoutTest = undefined;
-    lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
-    lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
-    lt.type_scope = TypeScope.init(lt.gpa);
-    defer lt.deinit();
-
-    // Innermost: { z: u8 }
-    const u8_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
-    const empty_ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const inner_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("z")), .var_ = u8_var }});
-    const inner_rec = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = empty_ext } } });
-
-    // Middle: { y: f64 } extends inner
-    const f64_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
-    const middle_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("y")), .var_ = f64_var }});
-    const middle_rec = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = inner_rec } } });
-
-    // Outer: { x: zst } extends middle - zst field will be dropped
-    const zst_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
-    const outer_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("x")), .var_ = zst_var }});
-    const outer_rec_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = middle_rec } } });
-
-    const record_idx = try lt.layout_store.addTypeVar(outer_rec_var, &lt.type_scope);
-    const record_layout = lt.layout_store.getLayout(record_idx);
-    try testing.expect(record_layout.tag == .record);
-
-    const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
-    try testing.expectEqual(@as(usize, 3), field_slice.len); // All fields including ZST x are kept
-
-    // Verify all three fields are present (order may vary for ZST fields)
-    try testing.expectEqualStrings("y", lt.module_env.getIdent(field_slice.get(0).name));
-    // Fields 1 and 2 should be x and z in some order
-    const name1 = lt.module_env.getIdent(field_slice.get(1).name);
-    const name2 = lt.module_env.getIdent(field_slice.get(2).name);
-    const has_x = std.mem.eql(u8, name1, "x") or std.mem.eql(u8, name2, "x");
-    const has_z = std.mem.eql(u8, name1, "z") or std.mem.eql(u8, name2, "z");
-    try testing.expect(has_x and has_z);
 }
 
 test "record extension with empty_record succeeds" {

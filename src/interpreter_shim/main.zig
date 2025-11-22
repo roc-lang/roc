@@ -3,37 +3,22 @@
 //! memory safety, and interpreter integration.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
-const types = @import("types");
 const eval = @import("eval");
 const ipc = @import("ipc");
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
-const is_windows = builtin.target.os.tag == .windows;
-
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
-    .mode = .streaming,
-};
-
-fn stderrTraceWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
-    return &stderr_file_writer.interface;
-}
-
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
 var global_env_ptr: ?*ModuleEnv = null;
+var global_builtin_modules: ?eval.BuiltinModules = null;
 var shm_mutex: std.Thread.Mutex = .{};
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
 const Interpreter = eval.Interpreter;
 const safe_memory = base.safe_memory;
@@ -113,9 +98,17 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     // Set up ModuleEnv from shared memory
     const env_ptr = try setupModuleEnv(&shm, roc_ops);
 
+    // Load builtin modules from compiled binary (same as CLI does)
+    const builtin_modules = eval.BuiltinModules.init(allocator) catch |err| {
+        const msg2 = std.fmt.bufPrint(&buf, "Failed to load builtin modules: {s}", .{@errorName(err)}) catch "Failed to load builtin modules";
+        roc_ops.crash(msg2);
+        return error.ModuleEnvSetupFailed;
+    };
+
     // Store globals
     global_shm = shm;
     global_env_ptr = env_ptr;
+    global_builtin_modules = builtin_modules;
 
     // Mark as initialized (release semantics ensure all writes above are visible)
     shared_memory_initialized.store(true, .release);
@@ -123,7 +116,6 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
 
 /// Cross-platform shared memory evaluation
 fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
-
     // Initialize shared memory once per process
     try initializeSharedMemoryOnce(roc_ops);
 
@@ -131,8 +123,11 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const shm = global_shm.?;
     const env_ptr = global_env_ptr.?;
 
+    // Get builtin modules
+    const builtin_modules = &global_builtin_modules.?;
+
     // Set up interpreter infrastructure (per-call, as it's lightweight)
-    var interpreter = try createInterpreter(env_ptr, roc_ops);
+    var interpreter = try createInterpreter(env_ptr, builtin_modules, roc_ops);
     defer interpreter.deinit();
 
     // Get expression info from shared memory using entry_idx
@@ -166,7 +161,6 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
 /// Set up ModuleEnv from shared memory with proper relocation
 fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*ModuleEnv {
-
     // Validate memory layout - we need at least space for the header
     const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
     if (shm.total_size < min_required_size) {
@@ -187,7 +181,8 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 
     // Calculate relocation offset
     const child_base_addr = @intFromPtr(base_ptr);
-    const offset = @as(isize, @intCast(child_base_addr)) - @as(isize, @intCast(parent_base_addr));
+    // Use signed arithmetic to avoid overflow on 64-bit addresses
+    const offset: i64 = @as(i64, @intCast(child_base_addr)) - @as(i64, @intCast(parent_base_addr));
 
     // Sanity check for overflow potential
     if (@abs(offset) > std.math.maxInt(isize) / 2) {
@@ -196,38 +191,35 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         return error.ModuleEnvSetupFailed;
     }
 
-    // Get ModuleEnv.Serialized pointer from the offset stored in the header
+    // Get ModuleEnv pointer from the offset stored in the header
+    // The ModuleEnv was allocated directly in shared memory (not serialized with CompactWriter),
+    // so we cast directly to ModuleEnv and use relocate() to fix up pointers.
     const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
-    const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
+    const env_ptr: *ModuleEnv = @ptrFromInt(env_addr);
 
-    // Deserialize the ModuleEnv, which properly reconstructs runtime fields
-    // Empty strings are used for source and module_name since they're not needed in the interpreter
-    const env_ptr = serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
+    // Relocate all pointers in the ModuleEnv by the offset between parent and child address spaces
+    // The offset is (child_base - parent_base), so adding it to parent pointers gives child pointers
+    env_ptr.relocate(@intCast(offset));
+
+    // The gpa (allocator) field contains pointers to the parent process's memory (vtable and state).
+    // We need to set it to a valid allocator in the child process.
+    env_ptr.gpa = std.heap.page_allocator;
 
     return env_ptr;
 }
 
 /// Create and initialize interpreter with heap-allocated stable objects
-fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
+fn createInterpreter(env_ptr: *ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
-    // Extract builtin statement indices from the builtin_statements span
-    // The span contains Bool, Result, and Str statements
-    const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
-    const try_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 1);
-    const str_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 2);
+    // Use builtin types from the loaded builtin modules
+    // This provides the actual definitions of plus, minus, times, etc.
+    const builtin_types = builtin_modules.asBuiltinTypes();
 
-    // In the shim context, builtins are embedded in the main module_env
-    const builtin_types = eval.BuiltinTypes{
-        .bool_stmt = bool_stmt,
-        .try_stmt = try_stmt,
-        .str_stmt = str_stmt,
-        .bool_env = env_ptr,
-        .try_env = env_ptr,
-        .str_env = env_ptr,
-    };
+    // Pass the builtin module's env so method lookup can find builtin method definitions
+    const builtin_module_env = builtin_modules.builtin_module.env;
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch {
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, &[_]*const can.ModuleEnv{}) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

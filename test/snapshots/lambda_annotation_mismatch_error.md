@@ -16,7 +16,6 @@ wrong_type_function = |x| x * 3.14
 # EXPECTED
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has the type **Str**, which has no **plus** method:
@@ -28,22 +27,6 @@ string_function = |x| x + 42
 
 
 **Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:7:31:7:35:**
-```roc
-wrong_type_function = |x| x * 3.14
-```
-                              ^^^^
-
-It has the type:
-    _Num(Frac(_size))_
-
-But the type annotation says it should have the type:
-    _Num(Int(Signed64))_
-
-**Hint:** This might be because the numeric literal is too large to fit in the target type.
 
 # TOKENS
 ~~~zig
@@ -122,8 +105,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Str -> Error"))
-		(patt (type "Error -> Error")))
+		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "Str -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "I64 -> I64"))))
 ~~~

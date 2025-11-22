@@ -258,5 +258,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ dec: Num(Frac(Decimal)), decNeg: Num(Frac(Decimal)), i128: Num(Int(Signed128)), i128Bin: Num(Int(Signed128)), i128Neg: Num(Int(Signed128)), i16: Num(Int(Signed16)), i16Bin: Num(Int(Signed16)), i16Neg: Num(Int(Signed16)), i32: Num(Int(Signed32)), i32Bin: Num(Int(Signed32)), i32Neg: Num(Int(Signed32)), i64: Num(Int(Signed64)), i64Bin: Num(Int(Signed64)), i64Neg: Num(Int(Signed64)), i8: Num(Int(Signed8)), i8Bin: Num(Int(Signed8)), i8Neg: Num(Int(Signed8)), u128: Num(Int(Unsigned128)), u128Bin: Num(Int(Unsigned128)), u128Neg: Num(Int(Unsigned128)), u16: Num(Int(Unsigned16)), u16Bin: Num(Int(Unsigned16)), u16Neg: Num(Int(Unsigned16)), u32: Num(Int(Unsigned32)), u32Bin: Num(Int(Unsigned32)), u32Neg: Num(Int(Unsigned32)), u64: Num(Int(Unsigned64)), u64Bin: Num(Int(Unsigned64)), u64Neg: Num(Int(Unsigned64)), u8: Num(Int(Unsigned8)), u8Bin: Num(Int(Unsigned8)), u8Neg: Num(Int(Unsigned8)) }"))
+(expr (type "{ dec: Dec, decNeg: Dec, i128: I128, i128Bin: I128, i128Neg: I128, i16: I16, i16Bin: I16, i16Neg: I16, i32: I32, i32Bin: I32, i32Neg: I32, i64: I64, i64Bin: I64, i64Neg: I64, i8: I8, i8Bin: I8, i8Neg: I8, u128: U128, u128Bin: U128, u128Neg: U128, u16: U16, u16Bin: U16, u16Neg: U16, u32: U32, u32Bin: U32, u32Neg: U32, u64: U64, u64Bin: U64, u64Neg: U64, u8: U8, u8Bin: U8, u8Neg: U8 }"))
 ~~~

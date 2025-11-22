@@ -114,7 +114,7 @@ extract_age = |person| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))")))
+		(patt (type "{ age: U64 } -> U64")))
 	(expressions
-		(expr (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))"))))
+		(expr (type "{ age: U64 } -> U64"))))
 ~~~

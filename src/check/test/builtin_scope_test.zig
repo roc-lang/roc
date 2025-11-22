@@ -56,7 +56,7 @@ test "builtin types are still available without import" {
 
     // Builtin types like Str and List should work without importing Builtin
     try test_env.assertDefType("x", "Str");
-    try test_env.assertDefType("y", "List(Num(Int(Unsigned64)))");
+    try test_env.assertDefType("y", "List(U64)");
 }
 
 test "can import userspace Builtin module" {

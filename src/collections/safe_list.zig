@@ -112,7 +112,8 @@ pub fn SafeList(comptime T: type) type {
         };
 
         /// Serialized representation of a SafeList
-        pub const Serialized = struct {
+        /// Uses extern struct to guarantee consistent field layout across optimization levels.
+        pub const Serialized = extern struct {
             offset: i64,
             len: u64,
             capacity: u64,
@@ -592,7 +593,8 @@ pub fn SafeMultiList(comptime T: type) type {
         }
 
         /// Serialized representation of a SafeMultiList
-        pub const Serialized = struct {
+        /// Uses extern struct to guarantee consistent field layout across optimization levels.
+        pub const Serialized = extern struct {
             offset: i64,
             len: u64,
             capacity: u64,
@@ -905,7 +907,7 @@ test "SafeList edge cases serialization" {
 
             const Self = @This();
 
-            pub const Serialized = struct {
+            pub const Serialized = extern struct {
                 list_u32: SafeList(u32).Serialized,
                 list_u8: SafeList(u8).Serialized,
 

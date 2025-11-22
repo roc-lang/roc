@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List((Num(Frac(_size)), Str))"))
+(expr (type "List((_field, Str)) where [_a.from_num_literal : _arg -> _ret]"))
 ~~~

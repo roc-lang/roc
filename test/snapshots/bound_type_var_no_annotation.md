@@ -261,11 +261,11 @@ main! = |_| {
 	(defs
 		(patt (type "c -> c"))
 		(patt (type "a, b -> (a, b)"))
-		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt (type "_arg -> Num(Int(Unsigned64))")))
+		(patt (type "U64 -> U64"))
+		(patt (type "_arg -> U64")))
 	(expressions
 		(expr (type "c -> c"))
 		(expr (type "a, b -> (a, b)"))
-		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr (type "_arg -> Num(Int(Unsigned64))"))))
+		(expr (type "U64 -> U64"))
+		(expr (type "_arg -> U64"))))
 ~~~

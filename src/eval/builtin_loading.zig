@@ -65,7 +65,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .gpa = gpa,
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
+        .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -85,6 +85,20 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent("minus") orelse unreachable,
+        .times_ident = common.findIdent("times") orelse unreachable,
+        .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+        .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+        .not_ident = common.findIdent("not") orelse unreachable,
+        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
     };
 
     return LoadedModule{

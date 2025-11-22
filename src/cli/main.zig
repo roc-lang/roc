@@ -2507,7 +2507,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     defer builtin_module.deinit();
 
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -2788,6 +2788,31 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Additional errors from std library that might be missing
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
+    // Interpreter errors (propagate from eval during build)
+    Crash,
+    DivisionByZero,
+    IntegerOverflow,
+    InvalidMethodReceiver,
+    InvalidNumExt,
+    InvalidTagExt,
+    ListIndexOutOfBounds,
+    MethodLookupFailed,
+    MethodNotFound,
+    NotImplemented,
+    NotNumeric,
+    NullStackPointer,
+    RecordIndexOutOfBounds,
+    StackOverflow,
+    StringOrderingNotSupported,
+    TupleIndexOutOfBounds,
+    TypeMismatch,
+    ZeroSizedType,
+    // Layout errors
+    TypeContainedMismatch,
+    InvalidRecordExtension,
+    InvalidNumberExtension,
+    BugUnboxedFlexVar,
+    BugUnboxedRigidVar,
 };
 
 /// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)

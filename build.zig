@@ -98,6 +98,8 @@ const MiniCiStep = struct {
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
         try runSubBuild(b, "fmt", "zig build fmt");
+        try runZigScript(b, "ci/zig_lints.zig");
+        try runZigScript(b, "ci/check_test_wiring.zig");
         try runSubBuild(b, null, "zig build");
         try runSubBuild(b, "snapshot", "zig build snapshot");
         try runSubBuild(b, "test", "zig build test");
@@ -125,6 +127,34 @@ const MiniCiStep = struct {
         }
 
         var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    std.debug.print(
+                        "minici: `{s}` failed with exit code {d}\n",
+                        .{ display, code },
+                    );
+                    return error.MakeFailed;
+                }
+            },
+            else => {
+                std.debug.print("minici: `{s}` terminated abnormally\n", .{display});
+                return error.MakeFailed;
+            },
+        }
+    }
+
+    fn runZigScript(b: *std.Build, comptime script: []const u8) !void {
+        const display = "zig run " ++ script;
+        std.debug.print("---- minici: running `{s}` ----\n", .{display});
+
+        var child = std.process.Child.init(&.{ b.graph.zig_exe, "run", script }, b.allocator);
         child.stdin_behavior = .Inherit;
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;

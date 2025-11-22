@@ -315,25 +315,6 @@ pub const Generalizer = struct {
                         }
                         return next_rank;
                     },
-                    .num => |num| {
-                        switch (num) {
-                            .num_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .int_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .frac_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-
-                            // Unbound - optimizations like list_unbound
-                            .num_unbound, .int_unbound, .frac_unbound => return group_rank,
-
-                            // Concrete - fully determined types with no variables
-                            .int_precision, .frac_precision, .num_compact => return Rank.top_level,
-                        }
-                    },
                     .nominal_type => |nominal| {
                         var next_rank = Rank.top_level;
                         var args_iter = self.store.iterNominalArgs(nominal);

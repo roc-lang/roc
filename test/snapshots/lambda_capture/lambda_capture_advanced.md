@@ -80,5 +80,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(_size)"))
+(expr (type "_d where [_e.from_num_literal : _arg -> _ret]"))
 ~~~

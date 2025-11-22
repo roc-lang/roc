@@ -168,17 +168,17 @@ tag_tuple : Value((a, b, c))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "U64"))
 		(patt (type "Error"))
 		(patt (type "(a, b, c)"))
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(patt (type "U8, U16 -> U32"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "U64"))
 		(expr (type "Error"))
 		(expr (type "(a, b, c)"))
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(expr (type "U8, U16 -> U32"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "Error"))))
 ~~~

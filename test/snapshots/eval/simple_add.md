@@ -101,7 +101,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))")))
+		(patt (type "U8, U8 -> U8")))
 	(expressions
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))"))))
+		(expr (type "U8, U8 -> U8"))))
 ~~~

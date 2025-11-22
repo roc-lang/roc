@@ -362,7 +362,6 @@ test "shared memory allocator cross-process" {
     const testing = std.testing;
 
     // Skip on CI or if not supported
-    if (builtin.os.tag == .wasi) return error.SkipZigTest;
 
     // Parent: Create and write data
     {

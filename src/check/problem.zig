@@ -39,6 +39,7 @@ pub const Problem = union(enum) {
     static_dispach: StaticDispatch,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
+    invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
     infinite_recursion: struct { var_: Var },
     anonymous_recursion: struct { var_: Var },
@@ -90,6 +91,14 @@ pub const NumberDoesNotFit = struct {
 pub const NegativeUnsignedInt = struct {
     literal_var: Var,
     expected_type: SnapshotContentIdx,
+};
+
+/// Invalid numeric literal that cannot be converted to target type
+pub const InvalidNumericLiteral = struct {
+    literal_var: Var,
+    expected_type: SnapshotContentIdx,
+    is_fractional: bool,
+    region: base.Region,
 };
 
 /// Error when a stmt expression returns a non-empty record value
@@ -365,6 +374,9 @@ pub const ReportBuilder = struct {
             },
             .negative_unsigned_int => |data| {
                 return self.buildNegativeUnsignedIntReport(data);
+            },
+            .invalid_numeric_literal => |data| {
+                return self.buildInvalidNumericLiteralReport(data);
             },
             .unused_value => |data| {
                 return self.buildUnusedValueReport(data);
@@ -1842,7 +1854,80 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for "negative unsigned integer" diagnostic
+    /// Build a report for "invalid numeric literal" diagnostic
+    fn buildInvalidNumericLiteralReport(
+        self: *Self,
+        data: InvalidNumericLiteral,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NUMERIC LITERAL", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        const literal_text = self.source[data.region.start.offset..data.region.end.offset];
+
+        if (data.is_fractional) {
+            // Fractional literal to integer type
+            try report.document.addReflowingText("The fractional literal ");
+            try report.document.addAnnotated(literal_text, .emphasized);
+            try report.document.addReflowingText(" cannot be converted to an integer type:");
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+
+            try report.document.addText("Its inferred type is:");
+            try report.document.addLineBreak();
+            try report.document.addText("    ");
+            try report.document.addAnnotated(owned_expected, .type_variable);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Hint: Use a decimal type like ");
+            try report.document.addAnnotated("Dec", .type_variable);
+            try report.document.addReflowingText(" or ");
+            try report.document.addAnnotated("F64", .type_variable);
+            try report.document.addReflowingText(" instead.");
+        } else {
+            // Integer literal out of range
+            try report.document.addReflowingText("The numeric literal ");
+            try report.document.addAnnotated(literal_text, .emphasized);
+            try report.document.addReflowingText(" is out of range for its inferred type:");
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+
+            try report.document.addText("Its inferred type is:");
+            try report.document.addLineBreak();
+            try report.document.addText("    ");
+            try report.document.addAnnotated(owned_expected, .type_variable);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Hint: Use a larger integer type or ");
+            try report.document.addAnnotated("Dec", .type_variable);
+            try report.document.addReflowingText(" for arbitrary precision.");
+        }
+
+        return report;
+    }
+
+    /// Build a report for "unused value" diagnostic
     fn buildUnusedValueReport(self: *Self, data: UnusedValue) !Report {
         var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
         errdefer report.deinit();

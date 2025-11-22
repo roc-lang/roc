@@ -899,7 +899,7 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env);
         _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();

@@ -77,5 +77,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(_size)"))
+(expr (type "_a where [_b.from_num_literal : _arg -> _ret]"))
 ~~~

@@ -405,15 +405,6 @@ pub const Store = struct {
                 }
                 break :blk false;
             },
-            .num => |num| switch (num) {
-                .num_poly => |poly_var| self.needsInstantiation(poly_var),
-                .num_unbound => true,
-                .int_poly => |poly_var| self.needsInstantiation(poly_var),
-                .int_unbound => true,
-                .frac_poly => |poly_var| self.needsInstantiation(poly_var),
-                .frac_unbound => true,
-                else => false, // Concrete numeric types don't need instantiation
-            },
             .nominal_type => false, // Nominal types are concrete
             .fn_pure => |func| func.needs_instantiation,
             .fn_effectful => |func| func.needs_instantiation,
@@ -729,7 +720,8 @@ pub const Store = struct {
     // serialization //
 
     /// Serialized representation of types store
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
         slots: SlotStore.Serialized,
         descs: DescStore.Serialized,
@@ -931,7 +923,8 @@ const SlotStore = struct {
     }
 
     /// Serialized representation of SlotStore
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         backing: collections.SafeList(Slot).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
@@ -1033,7 +1026,8 @@ const DescStore = struct {
     }
 
     /// Serialized representation of DescStore
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         backing: DescSafeMultiList.Serialized,
 
         /// Serialize a DescStore into this Serialized struct, appending data to the writer
@@ -1132,42 +1126,6 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
 
     const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, result.desc.content);
-    try std.testing.expectEqual(c, result.var_);
-    try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
-}
-
-test "resolveVarAndCompressPath - no-op on already root" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
-    const num_var = try store.freshFromContent(num);
-
-    const result = store.resolveVarAndCompressPath(num_var);
-
-    try std.testing.expectEqual(num, result.desc.content);
-    try std.testing.expectEqual(num_var, result.var_);
-    // try std.testing.expectEqual(store.getSlot(num_var), Slot{ .root = num_desc_idx });
-}
-
-test "resolveVarAndCompressPath - flattens redirect chain to structure" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
-    const c = try store.freshFromContent(num);
-    const b = try store.freshRedirect(c);
-    const a = try store.freshRedirect(b);
-
-    const result = store.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(num, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
