@@ -2788,6 +2788,31 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Additional errors from std library that might be missing
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
+    // Interpreter errors (propagate from eval during build)
+    Crash,
+    DivisionByZero,
+    IntegerOverflow,
+    InvalidMethodReceiver,
+    InvalidNumExt,
+    InvalidTagExt,
+    ListIndexOutOfBounds,
+    MethodLookupFailed,
+    MethodNotFound,
+    NotImplemented,
+    NotNumeric,
+    NullStackPointer,
+    RecordIndexOutOfBounds,
+    StackOverflow,
+    StringOrderingNotSupported,
+    TupleIndexOutOfBounds,
+    TypeMismatch,
+    ZeroSizedType,
+    // Layout errors
+    TypeContainedMismatch,
+    InvalidRecordExtension,
+    InvalidNumberExtension,
+    BugUnboxedFlexVar,
+    BugUnboxedRigidVar,
 };
 
 /// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)

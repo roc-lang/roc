@@ -361,14 +361,7 @@ pub const Store = struct {
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
-        const idx_int = @intFromEnum(idx);
-        const layout = self.layouts.get(@enumFromInt(idx_int)).*;
-        if (idx_int == 15) {
-            if (layout.tag != .scalar or layout.data.scalar.tag != .frac) {
-                std.debug.print("[getLayout] ERROR: idx=15 returned NON-DEC layout! tag={s}\n", .{@tagName(layout.tag)});
-            }
-        }
-        return layout;
+        return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }
 
     pub fn getRecordData(self: *const Self, idx: RecordIdx) *const RecordData {

@@ -237,12 +237,7 @@ pub fn SafeList(comptime T: type) type {
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
-            if (end > self.items.items.len) {
-                std.debug.print("FATAL: sliceRange bounds check failed!\n", .{});
-                std.debug.print("  start={}, count={}, end={}, len={}\n", .{ start, range.count, end, self.items.items.len });
-                std.debug.print("  Attempted to slice beyond array bounds\n", .{});
-                @panic("sliceRange bounds check failed");
-            }
+            std.debug.assert(end <= self.items.items.len);
 
             return self.items.items[start..end];
         }

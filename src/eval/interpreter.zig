@@ -646,7 +646,7 @@ pub const Interpreter = struct {
                                 const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
 
                                 // 2. CHECK IF CONDITION IS TRUE
-                                const cond_is_true = try self.boolValueIsTrue(cond_value, cond_rt_var);
+                                const cond_is_true = boolValueEquals(true, cond_value);
 
                                 // 3. EXIT LOOP IF CONDITION IS FALSE
                                 if (!cond_is_true) {

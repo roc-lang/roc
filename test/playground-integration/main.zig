@@ -1125,7 +1125,7 @@ pub fn main() !void {
     get_hover_info_steps[2] = .{
         .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
         .expected_status = "SUCCESS",
-        .expected_hover_info_contains = "Num(Int(Signed32))",
+        .expected_hover_info_contains = "I32",
     };
     try test_cases.append(allocator, .{
         .name = "GET_HOVER_INFO - Specific Type Query",

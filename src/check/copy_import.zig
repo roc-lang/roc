@@ -253,14 +253,6 @@ fn copyFunc(
         // The function's arg range is invalid - this can happen if the function
         // type was created with a range from a different store or the store was modified
         // For now, handle gracefully by returning an empty args function
-        std.debug.print("WARNING: copyFunc encountered invalid range: start={}, count={}, end={}, len={}\n", .{
-            start_idx,
-            func.args.count,
-            end_idx,
-            source_store.vars.items.items.len,
-        });
-        std.debug.print("  This suggests the Func was created with a range from a different store\n", .{});
-
         // Return a function with no args for now to avoid the crash
         // TODO: Investigate why this happens and fix the root cause
         return Func{

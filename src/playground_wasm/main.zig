@@ -971,6 +971,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .times_ident = common.findIdent("times") orelse unreachable,
                 .div_by_ident = common.findIdent("div_by") orelse unreachable,
                 .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+                .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
                 .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
                 .not_ident = common.findIdent("not") orelse unreachable,
                 .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
