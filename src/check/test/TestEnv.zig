@@ -485,6 +485,23 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
+/// Assert that the last definition's type contains the given substring
+pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) !void {
+    try self.assertNoErrors();
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var);
+    const type_str = self.type_writer.get();
+    if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
+        std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });
+        return error.TestExpectedEqual;
+    }
+}
+
 /// Get the inferred type descriptor of the last declaration
 ///
 /// Also assert that there were no problems processing the source code.
