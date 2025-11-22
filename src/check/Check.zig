@@ -2936,7 +2936,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         if (mb_func) |func| {
                             const func_args = self.types.sliceVars(func.args);
 
-                            if (func_args.len == call_arg_expr_idxs.len) {
+                            // Special case: if func has 1 arg that is empty tuple () and call has 0 args, that's valid
+                            const is_unit_arg_call = unit_check: {
+                                if (func_args.len == 1 and call_arg_expr_idxs.len == 0) {
+                                    const arg_resolved = self.types.resolveVar(func_args[0]);
+                                    if (arg_resolved.desc.content == .structure) {
+                                        const struct_flat = arg_resolved.desc.content.structure;
+                                        // Empty tuple has 0 fields
+                                        if (struct_flat == .tuple and struct_flat.tuple.elems.len() == 0) {
+                                            break :unit_check true;
+                                        }
+                                    }
+                                }
+                                break :unit_check false;
+                            };
+
+                            if (func_args.len == call_arg_expr_idxs.len or is_unit_arg_call) {
                                 // First, find all the "rigid" variables in a the function's type
                                 // and unify the matching corresponding call arguments together.
                                 //
@@ -2992,22 +3007,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                                 // Check the function's arguments against the actual
                                 // called arguments, unifying each one
-                                for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
-                                    const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env);
-                                    if (unify_result.isProblem()) {
-                                        // Use the new error detail for bound type variable incompatibility
-                                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                            .incompatible_fn_call_arg = .{
-                                                .fn_name = func_name,
-                                                .arg_var = ModuleEnv.varFrom(call_expr_idx),
-                                                .incompatible_arg_index = @intCast(arg_index),
-                                                .num_args = @intCast(call_arg_expr_idxs.len),
-                                            },
-                                        });
+                                // Skip if this is a unit argument call (0 call args to match against)
+                                if (!is_unit_arg_call) {
+                                    for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
+                                        const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env);
+                                        if (unify_result.isProblem()) {
+                                            // Use the new error detail for bound type variable incompatibility
+                                            self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                                                .incompatible_fn_call_arg = .{
+                                                    .fn_name = func_name,
+                                                    .arg_var = ModuleEnv.varFrom(call_expr_idx),
+                                                    .incompatible_arg_index = @intCast(arg_index),
+                                                    .num_args = @intCast(call_arg_expr_idxs.len),
+                                                },
+                                            });
 
-                                        // Stop execution
-                                        _ = try self.unifyWith(expr_var, .err, env);
-                                        break :blk;
+                                            // Stop execution
+                                            _ = try self.unifyWith(expr_var, .err, env);
+                                            break :blk;
+                                        }
                                     }
                                 }
 
@@ -3208,6 +3226,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // The lambda's type comes from the annotation.
             // Like e_anno_only, this should always have an annotation.
+            // The type will be unified with the expected type in the code below.
+            switch (expected) {
+                .no_expectation => unreachable,
+                .expected => {
+                    // The expr_var will be unified with the annotation var below
+                },
+            }
+        },
+        .e_hosted_lambda => |hosted| {
+            // For hosted lambda expressions, treat like a lambda with a crash body.
+            // Check the body (which will be e_runtime_error or similar)
+            does_fx = try self.checkExpr(hosted.body, env, .no_expectation) or does_fx;
+
+            // The lambda's type comes from the annotation.
+            // Like e_anno_only and e_low_level_lambda, this should always have an annotation.
             // The type will be unified with the expected type in the code below.
             switch (expected) {
                 .no_expectation => unreachable,
@@ -4266,9 +4299,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
             };
 
-            // Get some data about the nominal type
+            // Get the region for error reporting
             const region = self.getRegionAt(deferred_constraint.var_);
-            const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -4283,42 +4315,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // Czer creates this as `TypeName.method_name`
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
 
-                // Calculate the name of the static dispatch function
-                //
-                // TODO: This works for top-level types, but not for deeply
-                // nested types like: MyModule.A.B.C.my_func
-                self.static_dispatch_method_name_buf.clearRetainingCapacity();
-
-                // Check if type_name_bytes already starts with "module_name."
-                const module_prefix = original_env.module_name;
-                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
-                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
-                    type_name_bytes[module_prefix.len] == '.';
-
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else if (already_qualified) {
-                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}.{s}",
-                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
-                    );
-                }
-                const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
-
-                // Get the ident of this method in the original env
-                const ident_in_original_env = original_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
+                // Look up the method by its unqualified name
+                // Associated items are now registered with unqualified names only
+                // (e.g., "to_str" instead of "Test.to_str")
+                const ident_in_original_env = original_env.getIdentStoreConst().findByString(constraint_fn_name_bytes) orelse {
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,

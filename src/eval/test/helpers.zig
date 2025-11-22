@@ -481,7 +481,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.init(module_env, parse_ast, &module_envs_map, false);
 
     // NOTE: Qualified tags like Bool.True and Bool.False do not currently work in test expressions
     // because the canonicalizer doesn't support cross-module type references.

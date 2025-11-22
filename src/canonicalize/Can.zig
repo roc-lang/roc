@@ -24,6 +24,7 @@ const Token = tokenize.Token;
 const DataSpan = base.DataSpan;
 const ModuleEnv = @import("ModuleEnv.zig");
 const Node = @import("Node.zig");
+const HostedCompiler = @import("HostedCompiler.zig");
 
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
@@ -59,6 +60,8 @@ var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
+/// Tracks which pattern indices are from exposed associated items (should not be checked for unused)
+exposed_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of module name identifiers to their type information for import validation
 module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Map from module name string to Import.Idx for tracking unique imports
@@ -81,6 +84,8 @@ scratch_tags: base.Scratch(types.Tag),
 scratch_free_vars: base.Scratch(Pattern.Idx),
 /// Scratch free variables
 scratch_captures: base.Scratch(Pattern.Idx),
+/// Whether the root module is a platform (determines if Type Module transformations should be applied)
+root_is_platform: bool,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -186,6 +191,7 @@ pub fn deinit(
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
+    self.exposed_patterns.deinit(gpa);
     self.scratch_vars.deinit();
     self.scratch_idents.deinit();
     self.scratch_type_var_validation.deinit();
@@ -203,6 +209,7 @@ pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+    root_is_platform: bool,
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -215,6 +222,7 @@ pub fn init(
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
+        .exposed_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .module_envs = module_envs,
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
@@ -228,6 +236,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
+        .root_is_platform = root_is_platform,
     };
 
     // Top-level scope is not a function boundary
@@ -491,10 +500,62 @@ fn processTypeDeclFirstPass(
 
     // For type modules, associate the node index with the exposed type
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.module_name_idx) {
+        const qualified_name_text = self.env.getIdent(qualified_name_idx);
+        const module_name_text = self.env.getIdent(self.env.module_name_idx);
+        // Check if the qualified name matches the module name (with or without .roc extension)
+        const is_main_type = std.mem.eql(u8, qualified_name_text, module_name_text) or
+            (std.mem.endsWith(u8, module_name_text, ".roc") and std.mem.eql(u8, qualified_name_text, module_name_text[0 .. module_name_text.len - 4]));
+        if (is_main_type) {
             // This is the main type of the type module - set its node index
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
+
+            // Extract and expose annotation-only functions, e.g.
+            // `Stdout := [].{ line! : Str => {} }`
+            // (Only do this when building a platform module as the root module)
+            if (self.root_is_platform) {
+                if (type_decl.associated) |assoc| {
+                    const assoc_statements = self.parse_ir.store.statementSlice(assoc.statements);
+
+                    for (assoc_statements) |stmt_idx| {
+                        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+                        if (stmt == .type_anno) {
+                            // This is a type annotation like `line! : Str => {}`
+                            const name_tok = stmt.type_anno.name;
+                            if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |func_name_idx| {
+                                // Canonicalize the type annotation
+                                // Use type_decl_anno since this is in a declaration context (associated block)
+                                const func_anno_idx = try self.canonicalizeTypeAnno(stmt.type_anno.anno, .type_decl_anno);
+
+                                // Create an annotation structure from the function type
+                                const anno_struct = CIR.Annotation{ .anno = func_anno_idx, .where = null };
+                                const annotation_idx = try self.env.addAnnotation(anno_struct, base.Region.zero());
+
+                                // Create a definition for this function with e_anno_only expression
+                                const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = func_name_idx } }, base.Region.zero());
+                                const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+
+                                // Track that we encountered annotation-only defs
+                                self.env.has_anno_only_defs = true;
+
+                                const def_idx = try self.env.addDef(.{
+                                    .pattern = pattern_idx,
+                                    .expr = expr_idx,
+                                    .annotation = annotation_idx,
+                                    .kind = .let,
+                                }, base.Region.zero());
+
+                                try self.env.store.addScratchDef(def_idx);
+
+                                // Add the function to exposed_items with the def index as its node_idx
+                                // (following the same pattern as normal defs)
+                                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                try self.env.setExposedNodeIndexById(func_name_idx, def_idx_u16);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -509,6 +570,12 @@ fn processTypeDeclFirstPass(
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
             try self.processAssociatedBlock(qualified_name_idx, type_header.name, assoc);
+
+            // For type modules, expose all associated items after processing
+            // This populates exposed_items with fully qualified names
+            if (self.env.module_kind == .type_module) {
+                try self.exposeAssociatedItems(qualified_name_idx, type_decl);
+            }
         }
     }
 }
@@ -863,9 +930,27 @@ fn processAssociatedItemsSecondPass(
                                     );
                                     try self.env.store.addScratchDef(def_idx);
 
-                                    // Register this associated item by its qualified name
+                                    // Register this associated item by its unqualified name
+                                    // (e.g., "method!" not "Type.method!")
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    try self.env.setExposedNodeIndexById(decl_ident, def_idx_u16);
+
+                                    // Compute type-qualified name first (e.g., "Bool.not") before exposing
+                                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+
+                                    // Always register by the type-qualified name (e.g., "Bool.not")
+                                    // This is needed so lookups like "Bool.not" work from other modules
+                                    if (type_qualified_idx.idx != decl_ident.idx) {
+                                        try self.env.setExposedNodeIndexById(type_qualified_idx, def_idx_u16);
+                                    }
+
+                                    // Also register by the fully qualified name for type modules (e.g., "Builtin.Bool.not")
+                                    // This is needed so lookups like "Builtin.Bool.not" work
+                                    if (self.env.module_kind == .type_module) {
+                                        if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
+                                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                        }
+                                    }
 
                                     // Make the real pattern available in current scope (replaces placeholder)
                                     // We already added unqualified and type-qualified names earlier,
@@ -884,7 +969,6 @@ fn processAssociatedItemsSecondPass(
                                         try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
 
                                         // Update type-qualified name (e.g., "MyBool.my_not")
-                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
                                         if (type_qualified_idx.idx != decl_ident.idx) {
                                             try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
                                         }
@@ -907,7 +991,7 @@ fn processAssociatedItemsSecondPass(
                 if (!has_matching_decl) {
                     const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
-                    // Build qualified name for the annotation (e.g., "Str.isEmpty")
+                    // Build qualified name for the annotation (e.g., "Builtin.Str.is_empty")
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
@@ -915,9 +999,28 @@ fn processAssociatedItemsSecondPass(
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
-                    // Register this associated item by its qualified name
+                    // Store the DEF index (not the type annotation index) for lookup
+                    // The interpreter needs to find the def, which contains the expression to evaluate
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                    // Register this associated item by its unqualified name using the DEF index
+                    // (e.g., "is_empty" not "Str.is_empty")
+                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                    // Compute type-qualified name (e.g., "Str.is_empty")
+                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+
+                    // Always register by the type-qualified name (e.g., "Str.is_empty") using DEF index
+                    // This is needed so lookups like "Str.is_empty" work from other modules
+                    if (type_qualified_idx.idx != name_ident.idx) {
+                        try self.env.setExposedNodeIndexById(type_qualified_idx, def_idx_u16);
+                    }
+
+                    // Also ALWAYS register by the fully qualified name (e.g., "Builtin.Str.is_empty") using DEF index
+                    // This is needed for nested types inside regular modules (not just type modules)
+                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != name_ident.idx) {
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                    }
 
                     // Make the real pattern available in current scope (replaces placeholder)
                     const def_cir = self.env.store.getDef(def_idx);
@@ -927,8 +1030,7 @@ fn processAssociatedItemsSecondPass(
                     // Update unqualified name (e.g., "is_empty")
                     try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
 
-                    // Update type-qualified name (e.g., "List.is_empty")
-                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+                    // Update type-qualified name (e.g., "List.is_empty") - reuse already computed value
                     if (type_qualified_idx.idx != name_ident.idx) {
                         try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
                     }
@@ -957,9 +1059,23 @@ fn processAssociatedItemsSecondPass(
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Register this associated item by its qualified name
+                        // Register this associated item by its unqualified name
+                        // (e.g., "bar" not "Foo.bar")
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                        try self.env.setExposedNodeIndexById(decl_ident, def_idx_u16);
+
+                        // Compute type-qualified name (e.g., "MyType.bar") and expose it
+                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+                        if (type_qualified_idx.idx != decl_ident.idx) {
+                            try self.env.setExposedNodeIndexById(type_qualified_idx, def_idx_u16);
+                        }
+
+                        // Also register by the fully qualified name for type modules (e.g., "Module.MyType.bar")
+                        if (self.env.module_kind == .type_module) {
+                            if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
+                                try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                            }
+                        }
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
@@ -1134,6 +1250,9 @@ fn processAssociatedItemsFirstPass(
                         };
                         const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
 
+                        // Mark this pattern as exposed (associated item should not be checked for unused)
+                        try self.exposed_patterns.put(self.env.gpa, placeholder_pattern_idx, {});
+
                         // Also compute type-qualified name (e.g., "List.map")
                         // Re-fetch identifiers since insertQualifiedIdent may have reallocated the identifier table
                         const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), self.env.getIdent(decl_ident));
@@ -1165,6 +1284,9 @@ fn processAssociatedItemsFirstPass(
                         },
                     };
                     const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+
+                    // Mark this pattern as exposed (associated item should not be checked for unused)
+                    try self.exposed_patterns.put(self.env.gpa, placeholder_pattern_idx, {});
 
                     // Also compute type-qualified name (e.g., "List.is_empty")
                     // Re-fetch anno_text since insertQualifiedIdent may have reallocated the identifier table
@@ -1404,6 +1526,10 @@ pub fn canonicalizeFile(
                     if (self.exposed_ident_texts.contains(ident_text)) {
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                        // Mark the pattern as exposed (should not be checked for unused)
+                        const def_cir = self.env.store.getDef(def_idx);
+                        try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                     }
                 }
             }
@@ -1422,17 +1548,9 @@ pub fn canonicalizeFile(
                 const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                 const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
 
-                // Build fully qualified name (e.g., "Builtin.Str")
-                // For type-modules where the main type name equals the module name,
-                // use just the module name to avoid "Builtin.Builtin"
-                const module_name_text = self.env.module_name;
-                const type_name_text = self.env.getIdent(type_ident);
-                const qualified_type_ident = if (std.mem.eql(u8, module_name_text, type_name_text))
-                    type_ident // Type-module: use unqualified name
-                else
-                    try self.env.insertQualifiedIdent(module_name_text, type_name_text);
-
-                try self.processAssociatedBlock(qualified_type_ident, type_ident, assoc);
+                // Process associated block with unqualified type name
+                // Module qualification happens later during imports, not during canonicalization
+                try self.processAssociatedBlock(type_ident, type_ident, assoc);
             }
         }
     }
@@ -1686,6 +1804,10 @@ pub fn canonicalizeFile(
                                 if (self.exposed_ident_texts.contains(ident_text)) {
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                                    // Mark the pattern as exposed (should not be checked for unused)
+                                    const def_cir = self.env.store.getDef(def_idx);
+                                    try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                                 }
                             }
                         },
@@ -1700,6 +1822,10 @@ pub fn canonicalizeFile(
                             if (self.exposed_ident_texts.contains(ident_text)) {
                                 const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                 try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                                // Mark the pattern as exposed (should not be checked for unused)
+                                const def_cir = self.env.store.getDef(def_idx);
+                                try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                             }
                         },
                     }
@@ -1717,6 +1843,10 @@ pub fn canonicalizeFile(
                     if (self.exposed_ident_texts.contains(ident_text)) {
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+
+                        // Mark the pattern as exposed (should not be checked for unused)
+                        const def_cir = self.env.store.getDef(def_idx);
+                        try self.exposed_patterns.put(self.env.gpa, def_cir.pattern, {});
                     }
                 }
             },
@@ -1733,6 +1863,95 @@ pub fn canonicalizeFile(
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
+
+    _ = self.env.store.sliceDefs(self.env.all_defs).len;
+
+    // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
+    // This allows platforms to import these modules and use the hosted functions
+    // Only do this when building platform modules (i.e., when root module is a platform)
+    if (self.env.module_kind == .type_module and self.root_is_platform) {
+
+        // First, create definitions for Type Module annotations (like `line! : Str => {}`)
+        // These annotations are exposed but don't have actual definitions yet
+        // We need to create e_anno_only defs for them so replaceAnnoOnlyWithHosted can transform them
+        const type_module_defs_start = self.env.store.scratchDefTop();
+        var exposed_iter = self.env.common.exposed_items.iterator();
+        while (exposed_iter.next()) |entry| {
+            const ident_idx = entry.ident_idx;
+            _ = entry.node_idx;
+            const ident_idx_struct: base.Ident.Idx = @bitCast(ident_idx);
+
+            // Check if this is an annotation (has a type) but no implementation (not in all_defs)
+            // by checking if a def with this pattern already exists
+            const all_defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+            var already_has_def = false;
+            for (all_defs_slice) |existing_def_idx| {
+                const existing_def = self.env.store.getDef(existing_def_idx);
+                const existing_pattern = self.env.store.getPattern(existing_def.pattern);
+                // Compare the full Ident.Idx structures (including attributes)
+                if (existing_pattern == .assign and @as(u32, @bitCast(existing_pattern.assign.ident)) == ident_idx) {
+                    already_has_def = true;
+                    break;
+                }
+            }
+
+            if (!already_has_def) {
+                // This is an exposed annotation without a definition - create an e_anno_only def
+
+                // Create the pattern
+                const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = ident_idx_struct } }, base.Region.zero());
+
+                // Create the e_anno_only expression
+                const expr_idx = try self.env.addExpr(.{ .e_anno_only = .{} }, base.Region.zero());
+
+                // Track that we encountered annotation-only defs
+                self.env.has_anno_only_defs = true;
+
+                // Create the def (no annotation structure for now - it will be added by type checking)
+                const def_idx = try self.env.addDef(.{
+                    .pattern = pattern_idx,
+                    .expr = expr_idx,
+                    .annotation = null, // Type annotations on Type Module items aren't stored as CIR annotations
+                    .kind = .let,
+                }, base.Region.zero());
+
+                try self.env.store.addScratchDef(def_idx);
+            }
+        }
+
+        // Add the new defs to all_defs
+        const new_defs_span = try self.env.store.defSpanFrom(type_module_defs_start);
+        const new_defs_slice = self.env.store.sliceDefs(new_defs_span);
+        if (new_defs_slice.len > 0) {
+            // Append new defs to all_defs by creating a new span
+            const old_defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+            const combined_start = self.env.store.scratchDefTop();
+            for (old_defs_slice) |def_idx| {
+                try self.env.store.addScratchDef(def_idx);
+            }
+            for (new_defs_slice) |def_idx| {
+                try self.env.store.addScratchDef(def_idx);
+            }
+            self.env.all_defs = try self.env.store.defSpanFrom(combined_start);
+        }
+
+        var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
+        defer modified_def_indices.deinit(self.env.gpa);
+
+        // If we transformed any annotation-only defs, collect and sort them to assign indices
+        if (modified_def_indices.items.len > 0) {
+            var sorted_fns = try HostedCompiler.collectAndSortHostedFunctions(self.env);
+            defer {
+                // Free allocated name strings
+                for (sorted_fns.items) |fn_info| {
+                    self.env.gpa.free(fn_info.name_text);
+                }
+                sorted_fns.deinit(self.env.gpa);
+            }
+            try HostedCompiler.assignHostedIndices(self.env, sorted_fns.items);
+        }
+        // Note: The transformation is done in-place, so all_defs span remains valid
+    }
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
@@ -1770,7 +1989,25 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // Store the matching type ident in module_kind if found
             if (matching_type_ident) |type_ident| {
                 main_type_ident.* = type_ident;
-                // The main type and associated items are already exposed in canonicalize()
+
+                // Expose all associated items for the main type
+                // This populates exposed_items with fully qualified names like "Builtin.Str.is_empty"
+                const file = self.parse_ir.store.getFile();
+                for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+                    const stmt = self.parse_ir.store.getStatement(stmt_id);
+                    if (stmt == .type_decl) {
+                        const type_decl = stmt.type_decl;
+                        const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                        const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
+
+                        // Check if this is the main type
+                        if (@as(u32, @bitCast(type_name_ident)) == @as(u32, @bitCast(type_ident))) {
+                            // Expose all associated items of the main type
+                            try self.exposeAssociatedItems(type_ident, type_decl);
+                            break;
+                        }
+                    }
+                }
             }
 
             // Valid if either we have a valid main! or a matching type declaration
@@ -2137,8 +2374,14 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            // Check if this definition's identifier is in the exposed items
-            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
+            // For type modules, use the deterministic "nested under main type" rule
+            // For regular modules, check the exposed_items map
+            const is_exposed = if (self.env.module_kind == .type_module)
+                self.env.isExposedInTypeModule(pattern.assign.ident)
+            else
+                self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident));
+
+            if (is_exposed) {
                 // Add this definition to the exports scratch space
                 try self.env.store.addScratchDef(def_idx);
             }
@@ -2730,10 +2973,12 @@ fn introduceItemsAliased(
             // Check if the item is exposed by the module
             // We need to look up by string because the identifiers are from different modules
             // First, try to find this identifier in the target module's ident store
-            const is_exposed = if (module_env.common.findIdent(item_name_text)) |target_ident|
-                module_env.containsExposedById(target_ident)
-            else
-                false;
+            const is_exposed = if (module_env.common.findIdent(item_name_text)) |target_ident| blk: {
+                const exposed = module_env.containsExposedById(target_ident);
+                break :blk exposed;
+            } else blk: {
+                break :blk false;
+            };
 
             if (!is_exposed) {
                 // Determine if it's a type or value based on capitalization
@@ -3141,12 +3386,21 @@ pub fn canonicalizeExpr(
     self.env.debugAssertArraysInSync();
 
     const expr = self.parse_ir.store.getExpr(ast_expr_idx);
+
+    // Debug all expression types for fx test apps
     switch (expr) {
         .apply => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Check if the function being applied is a tag
             const ast_fn = self.parse_ir.store.getExpr(e.@"fn");
+
+            if (ast_fn == .ident) {
+                const ident_data = ast_fn.ident;
+                const ident_name_opt = self.parse_ir.tokens.resolveIdentifier(ident_data.token);
+                _ = ident_name_opt;
+            }
+
             if (ast_fn == .tag) {
                 // This is a tag application, not a function call
                 const tag_expr = ast_fn.tag;
@@ -3225,7 +3479,8 @@ pub fn canonicalizeExpr(
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
                         // Check if this is a module alias, or an auto-imported module
-                        const module_name = self.scopeLookupModule(module_alias) orelse blk: {
+                        const scope_result = self.scopeLookupModule(module_alias);
+                        const module_name = scope_result orelse blk: {
                             // Not in scope, check if it's an auto-imported module
                             if (self.module_envs) |envs_map| {
                                 if (envs_map.contains(module_alias)) {
@@ -3336,24 +3591,23 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
-                                    // For regular module imports (e.g., A), just use the field name directly
+                                    // For auto-imported nested types (e.g., Bool, Str inside Builtin),
+                                    // use fully qualified names because they share a CommonEnv.
+                                    // For user-defined type modules, use unqualified names.
                                     const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
-                                        // Associated items are stored with the full qualified parent type name
+                                        // Auto-imported nested type: build "Builtin.Str.is_empty"
+                                        // This prevents collisions in the shared exposed_items map
                                         const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
                                         const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
                                         const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
                                         break :blk_name self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
 
-                                    // Look up the associated item by its qualified name
-                                    const qname_ident = module_env.common.findIdent(lookup_name) orelse {
-                                        // Identifier not found - just return null
-                                        // The error will be handled by the code below that checks target_node_idx_opt
+                                    if (module_env.common.findIdent(lookup_name)) |target_ident| {
+                                        break :blk module_env.getExposedNodeIndexById(target_ident);
+                                    } else {
                                         break :blk null;
-                                    };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
+                                    }
                                 } else {
                                     break :blk null;
                                 }
@@ -3495,6 +3749,37 @@ pub fn canonicalizeExpr(
                                     };
                                 }
                                 // Module doesn't exist, fall through to ident_not_in_scope error below
+                            }
+                        }
+
+                        // WORKAROUND: Before giving up, check if this might be a qualified access
+                        // where the parser dropped the module qualifier (parser limitation for Module.func! syntax)
+                        // Look for imported modules that might contain this identifier
+                        if (self.module_envs) |envs_map| {
+                            // Iterate through all imported modules to find one that has this identifier
+                            var envs_iter = envs_map.iterator();
+                            const lookup_ident_text = self.env.getIdent(ident);
+                            while (envs_iter.next()) |entry| {
+                                const candidate_module_name = entry.key_ptr.*;
+                                const candidate_module_entry = entry.value_ptr.*;
+                                const candidate_module_env = candidate_module_entry.env;
+
+                                // Check if this identifier exists in this module
+                                if (candidate_module_env.common.findIdent(lookup_ident_text)) |target_ident| {
+                                    if (candidate_module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                        // Found it! Get the import idx for this module
+                                        const module_text = self.env.getIdent(candidate_module_name);
+                                        if (self.scopeLookupImportedModule(module_text)) |import_idx| {
+                                            // Create e_lookup_external
+                                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                                .module_idx = import_idx,
+                                                .target_node_idx = target_node_idx,
+                                                .region = region,
+                                            } }, region);
+                                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -4117,12 +4402,16 @@ pub fn canonicalizeExpr(
             }
 
             // Regular field access canonicalization
-            return CanonicalizedExpr{
-                .idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null,
-                .free_vars = null,
-            };
+            return CanonicalizedExpr{ .idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null, .free_vars = null };
         },
-        .local_dispatch => |_| {
+        .local_dispatch => |local_dispatch| {
+            // local_dispatch is structurally identical to field_access (both are BinOp)
+            // Try module-qualified lookup first (e.g., Stdout.line!)
+            if (try self.tryModuleQualifiedLookup(local_dispatch)) |expr_idx| {
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+            }
+
+            // If not a cross-module dispatch, fall back to not_implemented for now
             const feature = try self.env.insertString("canonicalize local_dispatch expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
@@ -8530,32 +8819,26 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
             continue;
         }
 
+        // Skip if this pattern is exposed (from associated block or exposes clause)
+        if (self.exposed_patterns.contains(pattern_idx)) {
+            continue;
+        }
+
         // Skip if this is an ignored variable (starts with _)
         if (identIsIgnored(ident_idx)) {
             continue;
         }
 
         // Skip if this identifier is exposed (implicitly used in type modules)
-        if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx))) {
+        // For type modules, use the deterministic "nested under main type" rule
+        // For regular modules, check the exposed_items map
+        const is_exposed = if (self.env.module_kind == .type_module)
+            self.env.isExposedInTypeModule(ident_idx)
+        else
+            self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx));
+
+        if (is_exposed) {
             continue;
-        }
-
-        // Get the pattern to check if it has a different ident than the scope key
-        // For pattern_identifier nodes, check if the qualified ident is exposed
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-
-        // Skip if the pattern doesn't have a corresponding node (e.g., in tests with fake indices)
-        if (@intFromEnum(node_idx) >= self.env.store.nodes.len()) {
-            continue;
-        }
-
-        const node = self.env.store.nodes.get(node_idx);
-
-        if (node.tag == .pattern_identifier) {
-            const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
-            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
-                continue;
-            }
         }
 
         // Get the region for this pattern to provide good error location
@@ -8740,6 +9023,15 @@ fn updatePlaceholder(
     if (builtin.mode == .Debug) {
         std.debug.assert(self.isPlaceholder(ident_idx));
     }
+
+    // Mark the old placeholder pattern as "used" to prevent unused variable warnings
+    // When anno+decl pairs are merged, the annotation's placeholder pattern gets replaced
+    // with the decl's pattern. We need to mark the old pattern as used so it doesn't
+    // trigger an unused variable diagnostic.
+    if (scope.idents.get(ident_idx)) |old_pattern_idx| {
+        try self.used_patterns.put(self.env.gpa, old_pattern_idx, {});
+    }
+
     // Remove from placeholder tracking since it's now a real definition
     if (self.placeholder_idents.count() > 0) {
         _ = self.placeholder_idents.remove(ident_idx);
@@ -9318,10 +9610,14 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     if (left_expr != .ident) return null;
 
     const left_ident = left_expr.ident;
-    const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
+    const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse {
+        return null;
+    };
 
     // Check if this is a module alias
-    const module_name = self.scopeLookupModule(module_alias) orelse return null;
+    const module_name = self.scopeLookupModule(module_alias) orelse {
+        return null;
+    };
     const module_text = self.env.getIdent(module_name);
 
     // Check if this module is imported in the current scope
@@ -9397,7 +9693,8 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             const module_env = auto_imported_type.env;
             if (module_env.common.findIdent(field_text)) |target_ident| {
                 // Found the identifier in the module - check if it's exposed
-                break :blk module_env.getExposedNodeIndexById(target_ident);
+                const node_idx = module_env.getExposedNodeIndexById(target_ident);
+                break :blk node_idx;
             } else {
                 // The identifier doesn't exist in the module at all
                 break :blk null;
@@ -9409,6 +9706,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     } else null;
 
     // If we didn't find a valid node index, return null to fall through to error handling
+    if (target_node_idx_opt == null) {}
     const target_node_idx = target_node_idx_opt orelse return null;
 
     // Create the e_lookup_external expression with Import.Idx
@@ -9626,35 +9924,15 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.met
                     // Only recursively expose its associated items (defs, not types)
                     try self.exposeAssociatedItems(qualified_idx, nested_type_decl);
                 },
-                .decl => |decl| {
-                    // Get the declaration name
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const pattern_ident_tok = pattern.ident.ident_tok;
-                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            // Build qualified name (e.g., "Foo.stuff")
-                            const parent_text = self.env.getIdent(parent_name);
-                            const decl_text = self.env.getIdent(decl_ident);
-                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
-
-                            // Expose the declaration
-                            try self.env.addExposedById(qualified_idx);
-                        }
-                    }
+                .decl => {
+                    // Node index was already set during processAssociatedItemsSecondPass
+                    // for type modules, so there's nothing to do here. The old code was calling
+                    // addExposedById which would overwrite the correct value with 0.
                 },
-                .type_anno => |type_anno| {
-                    // Get the annotation name (for annotation-only definitions like compiler intrinsics)
-                    if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build qualified name (e.g., "Bool.is_ne")
-                        const parent_text = self.env.getIdent(parent_name);
-                        const anno_text = self.env.getIdent(anno_ident);
-                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
-
-                        // Expose the qualified name
-                        // The unqualified name is added to scope but doesn't need to be in exposed_items
-                        // because lookups use the qualified name
-                        try self.env.addExposedById(qualified_idx);
-                    }
+                .type_anno => {
+                    // Node index was already set during processAssociatedItemsSecondPass
+                    // for type modules, so there's nothing to do here. The old code was calling
+                    // addExposedById which would overwrite the correct value with 0.
                 },
                 else => {},
             }

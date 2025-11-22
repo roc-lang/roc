@@ -44,7 +44,7 @@ const TestHost = struct {
             .roc_dbg = testRocDbg,
             .roc_expect_failed = testRocExpectFailed,
             .roc_crashed = recordCrashCallback,
-            .host_fns = undefined,
+            .hosted_fns = .{ .count = 0, .fns = undefined },
         };
     }
 

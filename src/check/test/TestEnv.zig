@@ -199,7 +199,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    can.* = try Can.init(module_env, parse_ast, &module_envs, false);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -317,7 +317,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    can.* = try Can.init(module_env, parse_ast, &module_envs, false);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -501,6 +501,33 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert 1 problem
     try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that at least one type error occurred and the first error's title matches.
+/// Unlike assertOneTypeError, this allows multiple errors.
+pub fn assertHasTypeError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    // Assert at least 1 problem
+    try testing.expect(self.checker.problems.problems.items.len >= 1);
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem

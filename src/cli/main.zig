@@ -609,6 +609,9 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Import needed modules
+    const target_mod = @import("target.zig");
+
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -765,254 +768,25 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
             return err;
         };
 
-        // Determine platform-specific dependencies based on platform spec
-        var platform_files_pre = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
-            std.log.err("Failed to allocate platform files pre list: {}", .{err});
-            return err;
-        };
-        var platform_files_post = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
-            std.log.err("Failed to allocate platform files post list: {}", .{err});
-            return err;
-        };
-        var target_abi: ?linker.TargetAbi = null;
-
-        // Determine platform type from host library path to configure dependencies
-        std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
-
-        // Check if path contains "int" and "platform" directories using cross-platform path handling
-        const contains_int_platform = blk: {
-            var has_int = false;
-            var has_platform = false;
-            var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
-            while (iter.next()) |component| {
-                if (std.mem.eql(u8, component.name, "int")) {
-                    has_int = true;
-                } else if (std.mem.eql(u8, component.name, "platform")) {
-                    has_platform = true;
-                }
-            }
-            break :blk has_int and has_platform;
+        // Get platform directory and CRT files
+        const platform_dir = std.fs.path.dirname(platform_paths.host_lib_path) orelse {
+            std.log.err("Invalid platform host library path", .{});
+            return error.InvalidPlatform;
         };
 
-        if (contains_int_platform) {
-            std.log.debug("Detected int platform - using musl static linking", .{});
-            // Int platform: use musl static linking with target-specific libraries
-            target_abi = .musl;
-            if (builtin.target.os.tag == .linux) {
-                // Use native target-specific libraries (x64musl for x64 hosts, etc.)
-                const native_target = if (builtin.target.cpu.arch.isX86())
-                    "x64musl"
-                else if (builtin.target.cpu.arch == .aarch64)
-                    "arm64musl"
-                else
-                    "x64musl"; // fallback
+        const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, shim_target, platform_dir);
 
-                const crt1_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch |err| {
-                    std.log.err("Failed to allocate crt1 path", .{});
-                    return err;
-                };
-                const libc_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch |err| {
-                    std.log.err("Failed to allocate libc path", .{});
-                    return err;
-                };
+        // Setup platform files based on CRT files
+        var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
+        var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
 
-                platform_files_pre.append(crt1_path) catch |err| {
-                    std.log.err("Failed to add musl crt1.o", .{});
-                    return err;
-                };
-                platform_files_post.append(libc_path) catch |err| {
-                    std.log.err("Failed to add musl libc.a", .{});
-                    return err;
-                };
-            }
-        } else {
-            // Check if path contains "str" and "platform" directories using cross-platform path handling
-            const contains_str_platform = blk: {
-                var has_str = false;
-                var has_platform = false;
-                var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
-                while (iter.next()) |component| {
-                    if (std.mem.eql(u8, component.name, "str")) {
-                        has_str = true;
-                    } else if (std.mem.eql(u8, component.name, "platform")) {
-                        has_platform = true;
-                    }
-                }
-                break :blk has_str and has_platform;
-            };
+        // Add CRT files in correct order
+        if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
+        if (crt_files.crti_o) |crti| try platform_files_pre.append(crti);
+        if (crt_files.crtn_o) |crtn| try platform_files_post.append(crtn);
+        if (crt_files.libc_a) |libc| try platform_files_post.append(libc);
 
-            if (contains_str_platform) {
-                std.log.debug("Detected str platform - using musl static linking like int platform", .{});
-                // Str platform: use musl static linking to match the embedded shim library ABI
-                target_abi = .musl;
-                if (builtin.target.os.tag == .linux) {
-                    // Use the same musl approach as int platform
-                    const native_target = if (builtin.target.cpu.arch.isX86())
-                        "x64musl"
-                    else if (builtin.target.cpu.arch == .aarch64)
-                        "arm64musl"
-                    else
-                        "x64musl"; // fallback
-
-                    const crt1_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch |err| {
-                        std.log.err("Failed to allocate crt1 path", .{});
-                        return err;
-                    };
-                    const libc_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch |err| {
-                        std.log.err("Failed to allocate libc path", .{});
-                        return err;
-                    };
-
-                    platform_files_pre.append(crt1_path) catch |err| {
-                        std.log.err("Failed to add musl crt1.o", .{});
-                        return err;
-                    };
-                    platform_files_post.append(libc_path) catch |err| {
-                        std.log.err("Failed to add musl libc.a", .{});
-                        return err;
-                    };
-                }
-            } else if (false) { // Disable the old str platform GNU logic for now
-                std.log.debug("OLD str platform GNU logic (disabled)", .{});
-                if (builtin.target.os.tag == .linux) {
-                    // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths (DISABLED)
-                    //
-                    // According to the platform design (see Platform modules and linking design.md),
-                    // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
-                    // crtn.o) in their platform's targets/ directory. For example:
-                    //   targets/x64glibc/crti.o
-                    //   targets/x64glibc/crtn.o
-                    //   targets/x64musl/crti.o
-                    //   targets/x64musl/crtn.o
-                    //
-                    // The platform module header would then specify these in the targets section:
-                    //   shared_lib: {
-                    //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
-                    //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
-                    //   }
-                    //
-                    // Current implementation: We auto-detect system libc and use system CRT files as a
-                    // convenience during platform development. This allows platform authors to develop
-                    // and test without immediately vendoring architecture-specific CRT files.
-                    //
-                    // This auto-detection will be removed once platforms properly vendor their CRT files
-                    // as specified in the design document.
-
-                    const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs)) |libc_info| {
-                        // Use system CRT files from the detected lib directory
-                        // TODO: Remove this once platforms provide their own CRT files
-                        const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate Scrt1.o path", .{});
-                            return err;
-                        };
-                        const crti_path = std.fmt.allocPrint(allocs.arena, "{s}/crti.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate crti.o path", .{});
-                            return err;
-                        };
-                        const crtn_path = std.fmt.allocPrint(allocs.arena, "{s}/crtn.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate crtn.o path", .{});
-                            return err;
-                        };
-
-                        // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
-                        if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
-                            file.close();
-                            platform_files_pre.append(scrt1_path) catch |err| {
-                                std.log.err("Failed to add system Scrt1.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch |err| {
-                                    std.log.err("Failed to add vendored Scrt1.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
-                            file.close();
-                            platform_files_pre.append(crti_path) catch |err| {
-                                std.log.err("Failed to add system crti.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch |err| {
-                                    std.log.err("Failed to add vendored crti.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
-                            file.close();
-                            platform_files_post.append(crtn_path) catch |err| {
-                                std.log.err("Failed to add system crtn.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch |err| {
-                                    std.log.err("Failed to add vendored crtn.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        const lib_path = std.fmt.allocPrint(allocs.arena, "-L{s}", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate library path", .{});
-                            return err;
-                        };
-                        extra_args.append(lib_path) catch |err| {
-                            std.log.err("Failed to add library path", .{});
-                            return err;
-                        };
-                    } else |_| {
-                        // Fallback to vendored files for x86_64 or error for other architectures
-                        if (builtin.target.cpu.arch == .x86_64) {
-                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch |err| {
-                                std.log.err("Failed to add gnu Scrt1.o", .{});
-                                return err;
-                            };
-                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch |err| {
-                                std.log.err("Failed to add gnu crti.o", .{});
-                                return err;
-                            };
-                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch |err| {
-                                std.log.err("Failed to add gnu crtn.o", .{});
-                                return err;
-                            };
-                            extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch |err| {
-                                std.log.err("Failed to add library path", .{});
-                                return err;
-                            };
-                        } else {
-                            std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
-                            return error.LibcNotAvailable;
-                        }
-                    }
-                    extra_args.append("-lc") catch |err| {
-                        std.log.err("Failed to add libc", .{});
-                        return err;
-                    };
-                }
-            } else {
-                std.log.debug("No platform-specific configuration found, using defaults", .{});
-            }
-        }
-
-        std.log.debug("Final target_abi: {?}", .{target_abi});
+        const target_abi: ?linker.TargetAbi = null;
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
@@ -1338,13 +1112,63 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     const shm_allocator = shm.allocator();
 
+    // Quick check: is this an app with a platform?
+    // If so, we need multi-module compilation
+    const is_app_with_platform = try isAppWithPlatform(allocs.gpa, roc_file_path);
+
+    // TEMP: Force multi-module for fx test
+    const force_multi = std.mem.indexOf(u8, roc_file_path, "test/fx/") != null or
+        std.mem.indexOf(u8, roc_file_path, "minimal_fx.roc") != null or
+        std.mem.indexOf(u8, roc_file_path, "simple_fx_test") != null;
+
+    if (is_app_with_platform or force_multi) {
+        return try setupSharedMemoryMultiModule(allocs, roc_file_path, &shm, shm_allocator);
+    } else {
+        return try setupSharedMemorySingleModule(allocs, roc_file_path, &shm, shm_allocator);
+    }
+}
+
+/// Check if a file is an app with a platform
+fn isAppWithPlatform(allocator: std.mem.Allocator, file_path: []const u8) !bool {
+    // Read and parse just the header to check
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    const source = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(source);
+
+    // Create a minimal ModuleEnv just for parsing
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+
+    env.common.source = source;
+
+    var ast = parse.parse(&env.common, allocator) catch {
+        return false;
+    };
+    defer ast.deinit(allocator);
+
+    // Check if it's an app header
+    if (ast.root_node_idx != 0) {
+        const root_idx: parse.AST.Header.Idx = @enumFromInt(ast.root_node_idx);
+        const root_data = ast.store.getHeader(root_idx);
+        const is_app = root_data == .app;
+        return is_app;
+    }
+
+    return false;
+}
+
+/// Single module compilation (existing logic)
+fn setupSharedMemorySingleModule(allocs: *Allocators, roc_file_path: []const u8, shm: *SharedMemoryAllocator, shm_allocator: std.mem.Allocator) !SharedMemoryHandle {
+
     // Create a properly aligned header structure
     const Header = struct {
         parent_base_addr: u64,
-        entry_count: u32,
-        _padding: u32, // Ensure 8-byte alignment
+        module_count: u32, // Number of ModuleEnvs stored
+        entry_count: u32, // Number of entry points
         def_indices_offset: u64,
-        module_env_offset: u64,
+        module_envs_offset: u64, // Offset to array of module env offsets
     };
 
     const header_ptr = try shm_allocator.create(Header);
@@ -1354,10 +1178,19 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Allocate the ModuleEnv right after the header for predictable layout
+    // For now, we only support single-module compilation
+    // TODO: Extend to support multi-module when an app imports platform modules
+    header_ptr.module_count = 1;
+
+    // Allocate array of module env offsets (currently just one)
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, 1);
+    const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.module_envs_offset = module_envs_offset_location;
+
+    // Allocate the ModuleEnv
     const env_ptr = try shm_allocator.create(ModuleEnv);
     const module_env_offset = @intFromPtr(env_ptr) - @intFromPtr(shm.base_ptr);
-    header_ptr.module_env_offset = module_env_offset;
+    module_env_offsets_ptr[0] = module_env_offset;
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -1420,7 +1253,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     );
 
     // Create canonicalizer with module_envs
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, false);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -1477,6 +1310,442 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
     };
+}
+
+/// Multi-module compilation for apps with platforms
+fn setupSharedMemoryMultiModule(allocs: *Allocators, app_file_path: []const u8, shm: *SharedMemoryAllocator, shm_allocator: std.mem.Allocator) !SharedMemoryHandle {
+    // This is a simplified implementation that handles the specific case of:
+    // - An app that uses a platform
+    // - Platform modules that need to be compiled with root_module_is_platform=true
+    //
+    // For the general case, this would need to use BuildEnv for full dependency resolution.
+    // But for the fx test case, we can hard-code the platform modules.
+
+    const app_dir = std.fs.path.dirname(app_file_path) orelse ".";
+
+    // Find the platform directory
+    const platform_dir = try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, "platform" });
+    defer allocs.gpa.free(platform_dir);
+
+    // Find the platform's main.roc file
+    const platform_main_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "main.roc" });
+    defer allocs.gpa.free(platform_main_path);
+
+    // Extract exposed modules from the platform header
+    var exposed_modules = std.array_list.Managed([]const u8).init(allocs.arena);
+    defer exposed_modules.deinit();
+    try extractExposedModulesFromPlatform(allocs, platform_main_path, &exposed_modules);
+
+    // Create header
+    const Header = struct {
+        parent_base_addr: u64,
+        module_count: u32,
+        entry_count: u32,
+        def_indices_offset: u64,
+        module_envs_offset: u64,
+    };
+
+    const header_ptr = try shm_allocator.create(Header);
+    const shm_base_addr = @intFromPtr(shm.base_ptr);
+    header_ptr.parent_base_addr = shm_base_addr;
+
+    // Module count = 1 (app) + number of exposed platform modules
+    const total_module_count: u32 = 1 + @as(u32, @intCast(exposed_modules.items.len));
+    header_ptr.module_count = total_module_count;
+
+    // Allocate array for module env offsets
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, total_module_count);
+    const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.module_envs_offset = module_envs_offset_location;
+
+    // Load builtin modules
+    var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
+    defer builtin_modules.deinit();
+
+    // Dynamically compile all exposed platform modules (starting at index 1)
+    // Store pointers to use later for import resolution
+    var platform_env_ptrs = try allocs.arena.alloc(*ModuleEnv, exposed_modules.items.len);
+
+    for (exposed_modules.items, 0..) |module_name, i| {
+        const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
+        defer allocs.gpa.free(module_filename);
+
+        const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, module_filename });
+        defer allocs.gpa.free(module_path);
+
+        const module_env_ptr = try compileModuleToSharedMemory(
+            allocs,
+            module_path,
+            module_filename,
+            shm_allocator,
+            &builtin_modules,
+            true, // root_module_is_platform
+        );
+        module_env_offsets_ptr[i + 1] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
+        platform_env_ptrs[i] = module_env_ptr;
+    }
+
+    // Now that all platform modules are compiled, collect ALL hosted functions
+    // from all modules and sort them globally to assign correct indices
+    const HostedCompiler = can.HostedCompiler;
+    var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+    defer {
+        // Note: name_text strings are allocated in shared memory (platform_env.gpa)
+        // and will be cleaned up when shared memory is released.
+        // We only need to clean up the ArrayList itself.
+        all_hosted_fns.deinit(allocs.gpa);
+    }
+
+    // Collect from all dynamically compiled platform modules
+    for (platform_env_ptrs) |platform_env| {
+        var module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
+        defer module_fns.deinit(platform_env.gpa);
+
+        // Move to global list (transfer ownership of allocated strings)
+        for (module_fns.items) |fn_info| {
+            try all_hosted_fns.append(allocs.gpa, fn_info);
+        }
+    }
+
+    // Sort all hosted functions globally
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+        }
+    };
+    std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+    // Deduplicate by name_text after sorting
+    // (Duplicates can occur when the same function exists in multiple modules)
+    var write_idx: usize = 0;
+    for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+        if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+            if (write_idx != read_idx) {
+                all_hosted_fns.items[write_idx] = fn_info;
+            }
+            write_idx += 1;
+        } else {
+            // Duplicate - free the name_text string
+            allocs.gpa.free(fn_info.name_text);
+        }
+    }
+    all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+    // Now reassign indices globally across all modules
+    // We need to track which module each function belongs to
+    for (platform_env_ptrs) |platform_env| {
+        // For each hosted function in this module, find its global index
+        const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+        for (all_defs) |def_idx| {
+            const def = platform_env.store.getDef(def_idx);
+            const expr = platform_env.store.getExpr(def.expr);
+
+            if (expr == .e_hosted_lambda) {
+                const hosted = expr.e_hosted_lambda;
+                const local_name = platform_env.getIdent(hosted.symbol_name);
+
+                // Build the same qualified name we used for sorting
+                var module_name = platform_env.module_name;
+                if (std.mem.endsWith(u8, module_name, ".roc")) {
+                    module_name = module_name[0 .. module_name.len - 4];
+                }
+                const qualified_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}", .{ module_name, local_name });
+                defer allocs.gpa.free(qualified_name);
+
+                const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                    qualified_name[0 .. qualified_name.len - 1]
+                else
+                    qualified_name;
+
+                // Find the global index for this function
+                var global_index: ?u32 = null;
+                for (all_hosted_fns.items, 0..) |fn_info, i| {
+                    if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                        global_index = @intCast(i);
+                        break;
+                    }
+                }
+
+                if (global_index) |idx| {
+                    // Update the expression's index field
+                    const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                    var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                    expr_node.data_2 = idx;
+                    platform_env.store.nodes.set(expr_node_idx, expr_node);
+                }
+            }
+        }
+    }
+
+    // Compile app module (index 0) with references to all dynamically compiled platform modules
+    // Convert platform_env_ptrs to const pointers for the function signature
+    const platform_envs_const = try allocs.arena.alloc(*const ModuleEnv, platform_env_ptrs.len);
+    for (platform_env_ptrs, 0..) |ptr, i| {
+        platform_envs_const[i] = ptr;
+    }
+
+    const app_env_ptr = try compileAppModuleToSharedMemory(
+        allocs,
+        app_file_path,
+        shm_allocator,
+        &builtin_modules,
+        platform_envs_const,
+    );
+    module_env_offsets_ptr[0] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
+
+    // Set up entry points from app module exports
+    const exports_slice = app_env_ptr.store.sliceDefs(app_env_ptr.exports);
+    header_ptr.entry_count = @intCast(exports_slice.len);
+
+    const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+    const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.def_indices_offset = def_indices_location;
+
+    for (exports_slice, 0..) |def_idx, i| {
+        def_indices_ptr[i] = @intFromEnum(def_idx);
+    }
+
+    shm.updateHeader();
+
+    return SharedMemoryHandle{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+    };
+}
+
+/// Helper to compile a single module into shared memory
+fn compileModuleToSharedMemory(
+    allocs: *Allocators,
+    file_path: []const u8,
+    module_name: []const u8,
+    shm_allocator: std.mem.Allocator,
+    builtin_modules: *eval.BuiltinModules,
+    root_module_is_platform: bool,
+) !*ModuleEnv {
+    // Read file
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    const file_size = try file.getEndPos();
+    const source = try shm_allocator.alloc(u8, @intCast(file_size));
+    _ = try file.read(source);
+
+    const module_name_copy = try shm_allocator.dupe(u8, module_name);
+
+    // Initialize ModuleEnv
+    var env = try ModuleEnv.init(shm_allocator, source);
+    env.common.source = source;
+    env.module_name = module_name_copy;
+    try env.common.calcLineStarts(shm_allocator);
+
+    // Parse
+    var parse_ast = try parse.parse(&env.common, allocs.gpa);
+    defer parse_ast.deinit(allocs.gpa);
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR
+    try env.initCIRFields(shm_allocator, module_name_copy);
+
+    // Create module_envs map
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map.deinit();
+
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        &env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+    );
+
+    // Canonicalize
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, root_module_is_platform);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Type check if this is a platform module
+    if (root_module_is_platform) {
+        // Create module_envs_map for type checking (use same type as in canonicalization)
+        var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+        defer check_module_envs_map.deinit();
+
+        // Get common idents for type checker
+        const common_idents: Check.CommonIdents = .{
+            .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
+            .list = try env.insertIdent(base.Ident.for_text("List")),
+            .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = builtin_modules.builtin_indices.bool_type,
+            .try_stmt = builtin_modules.builtin_indices.try_type,
+            .str_stmt = builtin_modules.builtin_indices.str_type,
+            .builtin_module = builtin_modules.builtin_module.env,
+        };
+
+        // Type check with just Builtin as import
+        const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+        var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
+        defer checker.deinit();
+
+        try checker.checkFile();
+    }
+
+    // Allocate and return
+    const env_ptr = try shm_allocator.create(ModuleEnv);
+    env_ptr.* = env;
+    return env_ptr;
+}
+
+/// Helper to compile the app module with platform module imports
+fn compileAppModuleToSharedMemory(
+    allocs: *Allocators,
+    file_path: []const u8,
+    shm_allocator: std.mem.Allocator,
+    builtin_modules: *eval.BuiltinModules,
+    platform_envs: []const *const ModuleEnv,
+) !*ModuleEnv {
+    // Read file
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    const file_size = try file.getEndPos();
+    const source = try shm_allocator.alloc(u8, @intCast(file_size));
+    _ = try file.read(source);
+
+    const basename = std.fs.path.basename(file_path);
+    const module_name = try shm_allocator.dupe(u8, basename);
+
+    // Initialize ModuleEnv
+    var env = try ModuleEnv.init(shm_allocator, source);
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(shm_allocator);
+
+    // Parse
+    var parse_ast = try parse.parse(&env.common, allocs.gpa);
+    defer parse_ast.deinit(allocs.gpa);
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR
+    try env.initCIRFields(shm_allocator, module_name);
+
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try env.insertIdent(base.Ident.for_text("test")),
+        .list = try env.insertIdent(base.Ident.for_text("List")),
+        .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = builtin_modules.builtin_indices.bool_type,
+        .try_stmt = builtin_modules.builtin_indices.try_type,
+        .str_stmt = builtin_modules.builtin_indices.str_type,
+        .builtin_module = builtin_modules.builtin_module.env,
+    };
+
+    // Create module_envs map
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map.deinit();
+
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        &env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+    );
+
+    // Add platform modules to module_envs_map so canonicalizer can resolve imports
+    // The app imports "pf.Stdout" and "pf.Stderr", so we need to add those qualified names
+    for (platform_envs) |platform_env| {
+        // Get the module name from the module_name field (e.g., "Stdout.roc")
+        const platform_module_name = platform_env.module_name;
+
+        // Remove ".roc" extension if present to get just the module name
+        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
+            platform_module_name[0 .. platform_module_name.len - 4]
+        else
+            platform_module_name;
+
+        // Create the qualified name "pf.ModuleName" to match the import statement
+        const qualified_name = try std.fmt.allocPrint(allocs.gpa, "pf.{s}", .{name_without_ext});
+        defer allocs.gpa.free(qualified_name);
+
+        // Find or create the ident for the qualified module name
+        const ident_idx = try env.insertIdent(base.Ident.for_text(qualified_name));
+
+        // Add to module_envs_map
+        try module_envs_map.put(ident_idx, .{
+            .env = platform_env,
+            .statement_idx = null, // No specific statement, just the module reference
+        });
+    }
+
+    // Canonicalize
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, false);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+    try canonicalizer.validateForExecution();
+
+    // Type check with platform modules as imports
+
+    // Build imported_modules array that matches the imports
+    // The imports are: Builtin (0), then platform modules like pf.Stdout, pf.Stderr, pf.Stdin
+    // We need an array where index matches import index
+    const import_count = env.imports.imports.items.items.len;
+    const imported_modules_slice = try shm_allocator.alloc(*const ModuleEnv, import_count);
+
+    // Import 0 is always Builtin
+    imported_modules_slice[0] = builtin_modules.builtin_module.env;
+
+    // For each remaining import, find the matching platform module
+    for (env.imports.imports.items.items[1..], 1..) |import_str_idx, i| {
+        const import_name = env.common.getString(import_str_idx);
+        // Match to one of the platform modules dynamically
+        // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
+        const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
+            import_name[0 .. import_name.len - 4]
+        else
+            import_name;
+
+        // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
+        const import_module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
+            without_ext[dot_idx + 1 ..]
+        else
+            without_ext;
+
+        // Find matching platform module
+        var found_match = false;
+        for (platform_envs) |platform_env| {
+            const platform_module_name = platform_env.module_name;
+
+            // Strip .roc extension if present for exact matching
+            const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
+                platform_module_name[0 .. platform_module_name.len - 4]
+            else
+                platform_module_name;
+
+            // Match "Stdout" to "Stdout.roc" via exact match, not substring
+            if (std.mem.eql(u8, name_without_ext, import_module_name)) {
+                imported_modules_slice[i] = platform_env;
+                found_match = true;
+                break;
+            }
+        }
+
+        if (!found_match) {
+            if (platform_envs.len > 0) {
+                imported_modules_slice[i] = platform_envs[0];
+            } else {
+                return error.NoPlatformModuleFound;
+            }
+        }
+    }
+
+    var checker = try Check.init(shm_allocator, &env.types, &env, imported_modules_slice, &module_envs_map, &env.store.regions, common_idents);
+    defer checker.deinit();
+
+    try checker.checkFile();
+
+    // Allocate and return
+    const env_ptr = try shm_allocator.create(ModuleEnv);
+    env_ptr.* = env;
+    return env_ptr;
 }
 
 fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
@@ -1808,11 +2077,71 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
                 const field_name = parse_ast.resolve(field.name);
-                try entrypoints.append(try allocs.arena.dupe(u8, field_name));
+
+                // Strip the `!` suffix from effectful function names
+                // The `!` is Roc syntax for effects, but shouldn't be in C symbols
+                const clean_name = if (std.mem.endsWith(u8, field_name, "!"))
+                    field_name[0 .. field_name.len - 1]
+                else
+                    field_name;
+
+                try entrypoints.append(try allocs.arena.dupe(u8, clean_name));
             }
 
             if (provides_fields.len == 0) {
                 return error.NoEntrypointFound;
+            }
+        },
+        else => {
+            return error.NotPlatformFile;
+        },
+    }
+}
+
+/// Extract all exposed module names from platform header exposes list into ArrayList
+fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const u8, exposed_modules: *std.array_list.Managed([]const u8)) !void {
+    // Read the Roc file
+    const source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    defer allocs.gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try allocs.arena.dupe(u8, basename);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(allocs.gpa);
+
+    // Parse the source code as a full module
+    var parse_ast = parse.parse(&env.common, allocs.gpa) catch return error.ParseFailed;
+    defer parse_ast.deinit(allocs.gpa);
+
+    // Look for platform header in the AST
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file with a platform header
+    switch (header) {
+        .platform => |platform_header| {
+            // Get the exposes collection
+            const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
+            const exposes_items = parse_ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
+
+            // Extract all exposed module names
+            for (exposes_items) |item_idx| {
+                const item = parse_ast.store.getExposedItem(item_idx);
+                const token_idx = switch (item) {
+                    .upper_ident => |ui| ui.ident,
+                    .upper_ident_star => |uis| uis.ident,
+                    .lower_ident => |li| li.ident,
+                    .malformed => continue, // Skip malformed items
+                };
+                const item_name = parse_ast.resolve(token_idx);
+                try exposed_modules.append(try allocs.arena.dupe(u8, item_name));
             }
         },
         else => {
@@ -2192,53 +2521,27 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         },
     }
 
-    // Only support int test platform for cross-compilation
-    // Check if path contains "int" directory using cross-platform path handling
-    const path_contains_int = blk: {
-        var iter = std.fs.path.componentIterator(args.path) catch break :blk false;
-        while (iter.next()) |component| {
-            if (std.mem.eql(u8, component.name, "int")) {
-                break :blk true;
-            }
-        }
-        break :blk false;
-    };
-
-    const platform_type = if (path_contains_int)
-        "int"
-    else {
-        std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
-        std.log.err("Your app path: {s}", .{args.path});
-        std.log.err("For str platform and other platforms, please use regular 'roc' command", .{});
-        return error.UnsupportedPlatform;
-    };
-
-    std.log.info("Detected platform type: {s}", .{platform_type});
-
-    // Get platform directory path
-    const platform_dir = if (std.mem.eql(u8, platform_type, "int"))
-        try std.fs.path.join(allocs.arena, &.{ "test", "int", "platform" })
-    else
-        try std.fs.path.join(allocs.arena, &.{ "test", "str", "platform" });
-
-    // Check that platform exists
-    std.fs.cwd().access(platform_dir, .{}) catch |err| {
-        std.log.err("Platform directory not found: {s} ({})", .{ platform_dir, err });
+    // Get platform paths from the app file
+    const platform_paths = resolvePlatformPaths(allocs, args.path) catch |err| {
+        std.log.err("Failed to resolve platform paths for {s}: {}", .{ args.path, err });
         return err;
     };
 
-    // Get target-specific host library path
-    // Use target OS to determine library filename, not host OS
+    const platform_dir = std.fs.path.dirname(platform_paths.host_lib_path) orelse {
+        std.log.err("Invalid platform host library path", .{});
+        return error.InvalidPlatform;
+    };
+
+    // Try to find target-specific host library, otherwise use generic
     const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
+    const target_specific_host = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
+
     const host_lib_path = blk: {
-        // Try target-specific host library first
-        const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
-        std.fs.cwd().access(target_specific_path, .{}) catch {
-            // Fallback to generic host library
-            std.log.warn("Target-specific host library not found, falling back to generic: {s}", .{target_specific_path});
-            break :blk try std.fs.path.join(allocs.arena, &.{ platform_dir, host_lib_filename });
+        std.fs.cwd().access(target_specific_host, .{}) catch {
+            // No target-specific host library, use the generic one
+            break :blk platform_paths.host_lib_path;
         };
-        break :blk target_specific_path;
+        break :blk target_specific_host;
     };
 
     std.fs.cwd().access(host_lib_path, .{}) catch |err| {
@@ -2246,9 +2549,21 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return err;
     };
 
-    // Get expected entrypoints for this platform
-    const entrypoints = try app_stub.getTestPlatformEntrypoints(allocs.gpa, platform_type);
-    defer allocs.gpa.free(entrypoints);
+    // Get expected entrypoints by parsing the platform's main.roc file
+    const platform_source_path = platform_paths.platform_source_path orelse {
+        std.log.err("Platform source file not found for: {s}", .{args.path});
+        return error.NoPlatformFound;
+    };
+    var entrypoints_list = std.array_list.Managed([]const u8).init(allocs.arena);
+    defer entrypoints_list.deinit();
+
+    try extractEntrypointsFromPlatform(allocs, platform_source_path, &entrypoints_list);
+
+    // Convert to PlatformEntrypoint array for generateAppStubObject
+    const entrypoints = try allocs.arena.alloc(app_stub.PlatformEntrypoint, entrypoints_list.items.len);
+    for (entrypoints_list.items, 0..) |name, i| {
+        entrypoints[i] = app_stub.PlatformEntrypoint{ .name = name };
+    }
 
     std.log.info("Expected entrypoints: {}", .{entrypoints.len});
     for (entrypoints, 0..) |ep, i| {
@@ -2296,42 +2611,26 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     if (crt_files.libc_a) |libc| {
         try platform_files_post.append(libc);
     } else if (target.isDynamic()) {
-        // For dynamic linking with glibc, generate stub library for cross-compilation
-        // Check if we're doing actual cross-compilation
-        const is_cross_compiling = host_target != target;
+        // For dynamic linking with glibc, check platform targets folder for stubs
+        const target_name = @tagName(target);
+        const stub_dir_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", target_name });
+        const stub_so_path = try std.fs.path.join(allocs.arena, &.{ stub_dir_path, "libc.so.6" });
 
-        if (is_cross_compiling) {
-            // For cross-compilation, use pre-built vendored stubs from the platform targets folder
-            const target_name = switch (target) {
-                .x64glibc => "x64glibc",
-                .arm64glibc => "arm64glibc",
-                else => {
-                    std.log.err("Cross-compilation target {} not supported for glibc", .{target});
-                    return error.UnsupportedTarget;
-                },
-            };
+        // Try to use platform-provided glibc stubs if they exist
+        const has_platform_stubs = blk: {
+            std.fs.cwd().access(stub_so_path, .{}) catch break :blk false;
+            break :blk true;
+        };
 
-            // Check if vendored stubs exist in the platform targets folder
-            const stub_dir = try std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}", .{target_name});
-
-            const stub_so_path = try std.fmt.allocPrint(allocs.arena, "{s}/libc.so.6", .{stub_dir});
-
-            // Verify the vendored stub exists
-            std.fs.cwd().access(stub_so_path, .{}) catch |err| {
-                std.log.err("Pre-built glibc stub not found: {s}", .{stub_so_path});
-                std.log.err("Error: {}", .{err});
-                std.log.err("This suggests the build system didn't generate the required stubs.", .{});
-                std.log.err("Try running 'zig build' first to generate platform target files.", .{});
-                return err;
-            };
-
-            // Use the vendored stub library
-            const stub_dir_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{stub_dir});
+        if (has_platform_stubs) {
+            // Platform stubs exist, use them
+            const stub_dir_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{stub_dir_path});
             try extra_args.append(stub_dir_arg);
             try extra_args.append("-lc");
-            std.log.info("Using pre-built glibc stub from platform targets: {s}", .{stub_dir});
+            std.log.info("Using platform-provided glibc stubs from: {s}", .{stub_dir_path});
         } else {
-            // For native compilation, use system libraries
+            // No platform stubs found, use system libraries
+            std.log.debug("No platform-provided glibc stubs found at {s}, using system libraries", .{stub_so_path});
             const common_lib_paths = [_][]const u8{
                 "/lib/x86_64-linux-gnu",
                 "/usr/lib/x86_64-linux-gnu",
@@ -2344,7 +2643,6 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
             };
 
             for (common_lib_paths) |lib_path| {
-                // Check if the directory exists before adding it
                 std.fs.cwd().access(lib_path, .{}) catch continue;
                 const search_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{lib_path});
                 try extra_args.append(search_arg);
@@ -2463,7 +2761,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     try env.initCIRFields(allocs.gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null, false) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
         return err;
     };

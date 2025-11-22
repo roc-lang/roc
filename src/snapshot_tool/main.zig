@@ -1157,7 +1157,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -1174,7 +1174,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -3072,7 +3072,7 @@ pub const SnapshotOps = struct {
                 .roc_dbg = snapshotRocDbg,
                 .roc_expect_failed = snapshotRocExpectFailed,
                 .roc_crashed = snapshotRocCrashed,
-                .host_fns = undefined, // Not used in snapshots
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
             },
         };
     }

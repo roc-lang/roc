@@ -40,14 +40,16 @@ is_initialized: bool = false,
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
-    if (self.ptr == null) {
-        return error.NullStackPointer;
-    }
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
     const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
     if (result_size == 0) {
+        // Zero-sized types can have null pointers, which is valid
         return;
+    }
+
+    if (self.ptr == null) {
+        return error.NullStackPointer;
     }
 
     if (self.layout.tag == .scalar) {
@@ -370,11 +372,16 @@ pub fn setDec(self: *StackValue, value: RocDec) void {
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
-    std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .tuple);
 
     const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
     const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+    // Zero-sized tuples can have null pointers
+    const tuple_size = layout_cache.layoutSize(self.layout);
+    if (tuple_size > 0) {
+        std.debug.assert(self.ptr != null);
+    }
 
     return TupleAccessor{
         .base_value = self,
@@ -403,6 +410,16 @@ pub const TupleAccessor = struct {
         const element_layout_info = self.element_layouts.get(index);
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
 
+        // Handle zero-sized elements (like unit type {})
+        const element_size = self.layout_cache.layoutSize(element_layout);
+        if (element_size == 0) {
+            return StackValue{
+                .layout = element_layout,
+                .ptr = null,
+                .is_initialized = true,
+            };
+        }
+
         // Get the offset for this element within the tuple
         const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(index));
 
@@ -425,6 +442,10 @@ pub const TupleAccessor = struct {
     /// Set an element by copying from a source StackValue
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
+        // Skip copying for zero-sized elements
+        if (dest_element.ptr == null) {
+            return;
+        }
         try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
     }
 
@@ -548,11 +569,16 @@ fn copyListValueToPtr(
 /// Create a RecordAccessor for safe record field access
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
     std.debug.assert(self.is_initialized); // Record must be initialized before accessing
-    // Note: ptr can be null for records with all ZST fields
     std.debug.assert(self.layout.tag == .record);
 
     const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
     const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+
+    // Zero-sized records can have null pointers
+    const record_size = layout_cache.layoutSize(self.layout);
+    if (record_size > 0) {
+        std.debug.assert(self.ptr != null);
+    }
 
     return RecordAccessor{
         .base_value = self,

@@ -782,6 +782,43 @@ pub fn build(b: *std.Build) void {
     const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
     const is_windows = target.result.os.tag == .windows;
 
+    // fx platform effectful functions test - only run when not cross-compiling
+    if (target.query.isNativeCpu() and target.query.isNativeOs() and target.query.isNativeAbi()) {
+        // Create fx test platform host static library
+        const test_platform_fx_host_lib = createTestPlatformHostLib(
+            b,
+            "test_platform_fx_host",
+            "test/fx/platform/host.zig",
+            target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy the fx test platform host library to the source directory
+        const copy_test_fx_host = b.addUpdateSourceFiles();
+        const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
+        b.getInstallStep().dependOn(&copy_test_fx_host.step);
+
+        const fx_platform_test = b.addTest(.{
+            .name = "fx_platform_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/fx_platform_test.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
+        if (run_args.len != 0) {
+            run_fx_platform_test.addArgs(run_args);
+        }
+        // Ensure host library is copied before running the test
+        run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
+        tests_summary.addRun(&run_fx_platform_test.step);
+    }
+
     var build_afl = false;
     if (!is_native) {
         std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
@@ -960,6 +997,88 @@ fn addMainExe(
         }),
     });
     configureBackend(exe, target);
+
+    // Create test platform host static library (str)
+    const test_platform_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_str_host",
+        "test/str/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Copy the test platform host library to the source directory
+    const copy_test_host = b.addUpdateSourceFiles();
+    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_host.step);
+
+    // Create test platform host static library (int) - native target
+    const test_platform_int_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_int_host",
+        "test/int/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Copy the int test platform host library to the source directory
+    const copy_test_int_host = b.addUpdateSourceFiles();
+    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_int_host.step);
+
+    // Cross-compile int platform host libraries for musl and glibc targets
+    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+    };
+
+    for (cross_compile_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Create cross-compiled int host library
+        const cross_int_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
+            "test/int/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy to target-specific directory
+        const copy_cross_int_host = b.addUpdateSourceFiles();
+        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_int_host.step);
+
+        // Create cross-compiled str host library
+        const cross_str_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_str_host_{s}", .{cross_target.name}),
+            "test/str/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy to target-specific directory
+        const copy_cross_str_host = b.addUpdateSourceFiles();
+        copy_cross_str_host.addCopyFileToSource(cross_str_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_str_host.step);
+
+        // Generate glibc stubs for gnu targets
+        if (cross_target.query.abi == .gnu) {
+            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
+            if (glibc_stub) |stub| {
+                b.getInstallStep().dependOn(&stub.step);
+            }
+        }
+    }
 
     // Create builtins static library at build time with minimal dependencies
     const builtins_obj = b.addObject(.{

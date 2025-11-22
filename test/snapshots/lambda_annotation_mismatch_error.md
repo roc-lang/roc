@@ -14,20 +14,37 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
-+ - :0:0:0:0
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:23:3:24
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:23:3:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-**MISSING METHOD**
-The value before this **+** operator has the type **Str**, which has no **plus** method:
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:3:23:3:24:**
+```roc
+string_function = |x| x + 42
+```
+                      ^
+
+It has the type:
+    _Str_
+
+But I expected it to be:
+    _Num(Frac(Float64))_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **lambda_annotation_mismatch_error.md:3:23:3:29:**
 ```roc
 string_function = |x| x + 42
 ```
                       ^^^^^^
 
+It has the type:
+    _Str_
 
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+But I expected it to be:
+    _Num(Frac(Float64))_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -121,9 +138,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error -> Error"))))
 ~~~

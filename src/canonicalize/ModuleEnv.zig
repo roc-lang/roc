@@ -52,6 +52,9 @@ types: TypeStore,
 
 /// The kind of module (type_module, app, etc.) - set during canonicalization
 module_kind: ModuleKind,
+/// Whether this module encountered any annotation-only definitions during canonicalization
+/// (used for cache key generation when building with/without platform root)
+has_anno_only_defs: bool = false,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -154,6 +157,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .common = common,
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .module_kind = .deprecated_module, // Set during canonicalization
+        .has_anno_only_defs = false,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1587,6 +1591,7 @@ pub const Serialized = struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
+    has_anno_only_defs: bool, // Whether this module encountered any annotation-only defs during canonicalization
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
     from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
@@ -1626,6 +1631,7 @@ pub const Serialized = struct {
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
+        self.has_anno_only_defs = env.has_anno_only_defs;
         self.evaluation_order_reserved = 0;
         self.from_int_digits_ident_reserved = 0;
         self.from_dec_digits_ident_reserved = 0;
@@ -1659,6 +1665,7 @@ pub const Serialized = struct {
             .common = common,
             .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
+            .has_anno_only_defs = self.has_anno_only_defs,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
@@ -1729,6 +1736,49 @@ pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
 /// Checks whether the given identifier is exposed by this module.
 pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
     return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
+}
+
+/// Checks whether the given identifier is exposed in a type module using the deterministic rule:
+/// "anything nested under MainType.* is exposed by definition"
+/// For example, in Builtin module: "Builtin", "Builtin.Bool", "Builtin.Bool.not" are all exposed.
+pub fn isExposedInTypeModule(self: *const Self, ident_idx: Ident.Idx) bool {
+    // Only applies to type modules
+    switch (self.module_kind) {
+        .type_module => {
+            // For type modules, the main type name is the same as the module name
+            // Use module_name_idx which is always properly initialized
+            const main_type_name_idx = self.module_name_idx;
+
+            // The main type itself is always exposed
+            const ident_u32: u32 = @bitCast(ident_idx);
+            const main_type_u32: u32 = @bitCast(main_type_name_idx);
+            if (ident_u32 == main_type_u32) {
+                return true;
+            }
+
+            // Check if identifier starts with "MainType."
+            const main_type_name = self.getIdent(main_type_name_idx);
+            const ident_name = self.getIdent(ident_idx);
+
+            // Must be at least "MainType.x" in length
+            if (ident_name.len <= main_type_name.len + 1) {
+                return false;
+            }
+
+            // Check prefix match
+            if (!std.mem.startsWith(u8, ident_name, main_type_name)) {
+                return false;
+            }
+
+            // Check for dot separator
+            if (ident_name[main_type_name.len] != '.') {
+                return false;
+            }
+
+            return true;
+        },
+        else => return false,
+    }
 }
 
 /// Assert that nodes and regions are in sync

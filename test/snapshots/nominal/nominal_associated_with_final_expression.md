@@ -59,7 +59,7 @@ Foo := [A, B, C].{
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "nominal_associated_with_final_expression.Foo.x"))
+		(p-assign (ident "Foo.x"))
 		(e-num (value "5")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))

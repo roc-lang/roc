@@ -23,7 +23,6 @@ const reporting = @import("reporting");
 const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
-const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");
@@ -385,7 +384,7 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
         .roc_dbg = wasmRocDbg,
         .roc_expect_failed = wasmRocExpectFailed,
         .roc_crashed = wasmRocCrashed,
-        .host_fns = undefined, // Not used in playground
+        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
     };
     return roc_ops;
 }
@@ -1029,7 +1028,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     try module_envs_map.put(str_ident, .{ .env = builtin_module.env });
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
+    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map, false);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

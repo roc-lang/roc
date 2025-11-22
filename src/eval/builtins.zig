@@ -3,6 +3,7 @@
 //! and prevents instantiation with fake/dummy values.
 
 const can = @import("can");
+const Ident = @import("base").Ident;
 
 const CIR = can.CIR;
 
@@ -20,6 +21,10 @@ pub const BuiltinTypes = struct {
     try_env: *const can.ModuleEnv,
     str_env: *const can.ModuleEnv,
 
+    // Identifier indices for Bool tags (used for direct comparison without string lookup)
+    true_ident: Ident.Idx,
+    false_ident: Ident.Idx,
+
     /// Create BuiltinTypes from deserialized builtin indices and module environments.
     /// All parameters are required - there are no optional or dummy values allowed.
     ///
@@ -34,6 +39,11 @@ pub const BuiltinTypes = struct {
         try_env: *const can.ModuleEnv,
         str_env: *const can.ModuleEnv,
     ) BuiltinTypes {
+        // Look up identifier indices for Bool tags from the Bool module
+        // These are used for direct comparison without cross-module string lookup
+        const true_ident = bool_env.common.findIdent("True") orelse @panic("Bool module missing 'True' identifier");
+        const false_ident = bool_env.common.findIdent("False") orelse @panic("Bool module missing 'False' identifier");
+
         return .{
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
@@ -41,6 +51,8 @@ pub const BuiltinTypes = struct {
             .bool_env = bool_env,
             .try_env = try_env,
             .str_env = str_env,
+            .true_ident = true_ident,
+            .false_ident = false_ident,
         };
     }
 };

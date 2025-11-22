@@ -30,6 +30,7 @@ fn stderrTraceWriter() *std.Io.Writer {
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
 var global_env_ptr: ?*ModuleEnv = null;
+var global_module_envs: ?[]const *ModuleEnv = null; // All loaded module envs
 var shm_mutex: std.Thread.Mutex = .{};
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -45,10 +46,10 @@ const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes pad
 // Header structure that matches the one in main.zig
 const Header = struct {
     parent_base_addr: u64,
-    entry_count: u32,
-    _padding: u32, // Ensure 8-byte alignment
+    module_count: u32, // Number of ModuleEnvs stored
+    entry_count: u32, // Number of entry points
     def_indices_offset: u64,
-    module_env_offset: u64,
+    module_envs_offset: u64, // Offset to array of module env offsets
 };
 
 /// Comprehensive error handling for the shim
@@ -75,9 +76,10 @@ const ShimError = error{
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const msg2 = std.fmt.allocPrint(std.heap.page_allocator, "Error evaluating from shared memory: {s} (entry_idx={})", .{ @errorName(err), entry_idx }) catch "Error evaluating from shared memory";
         ops.crash(msg2);
+        // Note: We're about to crash, so it's ok to leak this allocation
     };
 }
 
@@ -98,15 +100,16 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     }
 
     const allocator = std.heap.page_allocator;
-    var buf: [256]u8 = undefined;
 
     // Get page size
     const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
     // Create shared memory allocator from coordination info
     var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
-        const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const msg2 = std.fmt.allocPrint(allocator, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
         roc_ops.crash(msg2);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.SharedMemoryError;
     };
 
@@ -137,21 +140,24 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     // Get expression info from shared memory using entry_idx
     const base_ptr = shm.getBasePtr();
-    var buf: [256]u8 = undefined;
 
     // Read the header structure from shared memory
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
     const header_ptr: *const Header = @ptrFromInt(header_addr);
     if (entry_idx >= header_ptr.entry_count) {
-        const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const err_msg = std.fmt.allocPrint(std.heap.page_allocator, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
         roc_ops.crash(err_msg);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.InvalidEntryIndex;
     }
 
     const def_offset = header_ptr.def_indices_offset + entry_idx * @sizeOf(u32);
     const def_idx_raw = safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), shm.total_size) catch |err| {
-        const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const read_err = std.fmt.allocPrint(std.heap.page_allocator, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
         roc_ops.crash(read_err);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.MemoryLayoutInvalid;
     };
     const def_idx: CIR.Def.Idx = @enumFromInt(def_idx_raw);
@@ -161,21 +167,24 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const expr_idx = def.expr;
 
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
+        return err;
+    };
 }
 
-/// Set up ModuleEnv from shared memory with proper relocation
+/// Set up ModuleEnvs from shared memory with proper relocation
+/// Returns the primary (root) module env and stores all envs in global_module_envs
 fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*ModuleEnv {
 
     // Validate memory layout - we need at least space for the header
     const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
     if (shm.total_size < min_required_size) {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const msg = std.fmt.allocPrint(std.heap.page_allocator, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
         roc_ops.crash(msg);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.MemoryLayoutInvalid;
     }
-    var buf: [256]u8 = undefined;
 
     // Get base pointer
     const base_ptr = shm.getBasePtr();
@@ -191,45 +200,98 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 
     // Sanity check for overflow potential
     if (@abs(offset) > std.math.maxInt(isize) / 2) {
-        const err_msg = std.fmt.bufPrint(&buf, "Relocation offset too large: {}", .{offset}) catch "Relocation offset too large";
+        // Use heap allocation for error message to avoid fixed buffer size limits
+        const err_msg = std.fmt.allocPrint(std.heap.page_allocator, "Relocation offset too large: {}", .{offset}) catch "Relocation offset too large";
         roc_ops.crash(err_msg);
+        // Note: We're about to crash, so it's ok to leak this allocation
         return error.ModuleEnvSetupFailed;
     }
 
-    // Get ModuleEnv.Serialized pointer from the offset stored in the header
-    const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
-    const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
+    // Get the array of module env offsets
+    const module_envs_array_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_envs_offset));
+    const module_env_offsets: [*]const u64 = @ptrFromInt(module_envs_array_addr);
 
-    // Deserialize the ModuleEnv, which properly reconstructs runtime fields
-    // Empty strings are used for source and module_name since they're not needed in the interpreter
-    const env_ptr = serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
+    if (header_ptr.module_count == 0) {
+        roc_ops.crash("No module environments found in shared memory");
+        return error.ModuleEnvSetupFailed;
+    }
 
-    return env_ptr;
+    // Allocate array to store all deserialized module envs
+    const module_envs = std.heap.page_allocator.alloc(*ModuleEnv, header_ptr.module_count) catch {
+        roc_ops.crash("Failed to allocate module_envs array");
+        return error.ModuleEnvSetupFailed;
+    };
+
+    // Deserialize ALL module environments
+    for (0..header_ptr.module_count) |i| {
+        const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_env_offsets[i]));
+        const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
+
+        // Extract and relocate module_name from serialized data
+        const module_name_slice_parts = serialized_ptr.module_name;
+        const module_name_ptr = @as(usize, @intCast(module_name_slice_parts[0]));
+        const module_name_len = @as(usize, @intCast(module_name_slice_parts[1]));
+
+        const module_name = if (module_name_len > 0 and module_name_ptr > 0) blk: {
+            const relocated_module_name_ptr = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(@as(isize, @intCast(module_name_ptr)) + offset))));
+            break :blk relocated_module_name_ptr[0..module_name_len];
+        } else "";
+
+        // Deserialize the ModuleEnv with the relocated module_name
+        // Source text is not available because we don't put it in the shared memory.
+        module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", module_name);
+    }
+
+    // Store all module envs globally
+    global_module_envs = module_envs;
+
+    // Return the first (primary/root) module
+    return module_envs[0];
 }
 
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
-    // Extract builtin statement indices from the builtin_statements span
-    // The span contains Bool, Result, and Str statements
-    const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
-    const try_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 1);
-    const str_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 2);
-
-    // In the shim context, builtins are embedded in the main module_env
-    const builtin_types = eval.BuiltinTypes{
-        .bool_stmt = bool_stmt,
-        .try_stmt = try_stmt,
-        .str_stmt = str_stmt,
-        .bool_env = env_ptr,
-        .try_env = env_ptr,
-        .str_env = env_ptr,
+    // Load builtin modules (same as CLI does)
+    const builtin_modules = eval.BuiltinModules.init(allocator) catch {
+        roc_ops.crash("Failed to initialize builtin modules");
+        return error.InterpreterSetupFailed;
     };
+    // Note: We intentionally don't deinit builtin_modules because the interpreter needs them
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch {
+    const builtin_types = eval.BuiltinTypes.init(
+        builtin_modules.builtin_indices,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_module.env,
+    );
+
+    // Build other_envs array: [Builtin, ...platform modules]
+    // The app's imports are [Builtin, Stdout, Stderr], so other_envs must match
+    const other_envs: []const *const can.ModuleEnv = if (global_module_envs) |envs| blk: {
+        if (envs.len > 1) {
+            // Create array with Builtin first, then platform modules (excluding the app itself)
+            var envs_with_builtin = allocator.alloc(*const can.ModuleEnv, envs.len) catch {
+                roc_ops.crash("Failed to allocate other_envs");
+                return error.InterpreterSetupFailed;
+            };
+            envs_with_builtin[0] = builtin_modules.builtin_module.env;
+            // Copy platform modules (skip app at index 0, include Stdout and Stderr)
+            for (1..envs.len) |i| {
+                envs_with_builtin[i] = envs[i];
+            }
+            break :blk envs_with_builtin;
+        } else {
+            // No platform modules, just Builtin
+            break :blk &[_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
+        }
+    } else &[_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
+
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, other_envs) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
+
     return interpreter;
 }
