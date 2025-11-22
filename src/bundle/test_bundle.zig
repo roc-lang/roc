@@ -455,6 +455,7 @@ test "bundle and unbundle over socket stream" {
     var allocator = testing.allocator;
 
     // Skip on Windows as Unix sockets aren't supported
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     // Create source temp directory with test files
     var src_tmp = testing.tmpDir(.{});
