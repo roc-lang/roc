@@ -44,5 +44,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "a where [a.negate : a -> a, a.from_numeral : _arg -> _ret]"))
 ~~~

@@ -3831,17 +3831,14 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     // Get the negate identifier
     const method_name = self.cir.negate_ident;
 
-    // Create the function type: operand_type -> ret_type
+    // Create the function type: operand_type -> operand_type
+    // negate returns the same type as its input (e.g., negate : I64 -> I64)
     const args_range = try self.types.appendVars(&.{operand_var});
 
-    // The return type is unknown, so create a fresh variable
-    const ret_var = try self.fresh(env, expr_region);
-    try env.var_pool.addVarToRank(ret_var, env.rank());
-
-    // Create the constraint function type
+    // Create the constraint function type with operand_var as both arg and ret
     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
         .args = args_range,
-        .ret = ret_var,
+        .ret = operand_var,
         .needs_instantiation = false,
     } } }, env, expr_region);
     try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
@@ -3864,8 +3861,8 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 
     _ = try self.unify(constrained_var, operand_var, env);
 
-    // Set the expression to redirect to the return type
-    try self.types.setVarRedirect(expr_var, ret_var);
+    // Set the expression to redirect to the operand type (same as return type for negate)
+    try self.types.setVarRedirect(expr_var, operand_var);
 
     return does_fx;
 }
