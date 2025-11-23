@@ -16,9 +16,7 @@ const RocDbg = @import("host_abi.zig").RocDbg;
 const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
 const RocCrashed = @import("host_abi.zig").RocCrashed;
 
-const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
-const DEBUG_ALLOC = false;
 
 /// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
 pub const TestEnv = struct {
@@ -241,8 +239,6 @@ const RC_TYPE: Refcount = .atomic;
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.c) void {
     if (RC_TYPE == .none) return;
 
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {}
-
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = ptr_to_refcount.*;
     if (!rcConstant(refcount)) {
@@ -250,7 +246,6 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.c) void {
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             .normal => {
-                _ = DEBUG_INCDEC;
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
@@ -409,8 +404,6 @@ inline fn free_ptr_to_refcount(
 
     // NOTE: we don't even check whether the refcount is "infinity" here!
     roc_ops.roc_dealloc(&roc_dealloc_args, roc_ops.env);
-
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {}
 }
 
 inline fn decref_ptr_to_refcount(
@@ -421,8 +414,6 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == .none) return;
 
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {}
-
     // Due to RC alignment tmust take into account pointer size.
     const ptr_width = @sizeOf(usize);
     const alignment = @max(ptr_width, element_alignment);
@@ -432,7 +423,6 @@ inline fn decref_ptr_to_refcount(
     if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
-                _ = DEBUG_INCDEC;
                 refcount_ptr[0] = refcount -% 1;
                 if (refcount == 1) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_ops);
@@ -464,8 +454,6 @@ pub fn isUnique(
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
     const refcount = (isizes - 1)[0];
-
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {}
 
     return rcUnique(refcount);
 }
@@ -591,8 +579,6 @@ pub fn allocateWithRefcount(
     roc_ops.roc_alloc(&roc_alloc_args, roc_ops.env);
 
     const new_bytes = @as([*]u8, @ptrCast(roc_alloc_args.answer));
-
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {}
 
     const data_ptr = new_bytes + extra_bytes;
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));

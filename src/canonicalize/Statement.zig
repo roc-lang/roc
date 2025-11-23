@@ -44,9 +44,17 @@ pub const Statement = union(enum) {
     /// These bindings use let-polymorphism and can be instantiated at different types.
     ///
     /// ```roc
-    /// id = \x -> x  # Generalized - can be used at multiple types
-    /// zero = 0      # Generalized - can be Int or Dec
+    /// id = |x| x         # generalized - can be used polymorphically
+    /// number = id(0)     # works
+    /// empty_str = id("") # also works
+    ///
+    /// one = 1            # generalized - can be used polymorphically
+    /// u64_one = one + [].len()   # `one` can be a U64
+    /// two_point_one = one + 1.1  # `one` can also be Dec
     /// ```
+    ///
+    /// Other literals don't allow generalization - see
+    /// https://github.com/seanpm2001/Roc-Lang_RFCs/blob/main/0010-let-generalization-lets-not.md
     s_decl_gen: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
