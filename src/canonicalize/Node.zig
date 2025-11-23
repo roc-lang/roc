@@ -79,6 +79,7 @@ pub const Tag = enum {
     expr_block,
     expr_ellipsis,
     expr_anno_only,
+    expr_hosted_lambda,
     expr_low_level,
     expr_expect,
     expr_record_builder,

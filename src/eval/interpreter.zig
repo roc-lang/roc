@@ -210,27 +210,49 @@ pub const Interpreter = struct {
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
         if (other_envs.len > 0) {
-            try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-            try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-            try import_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-
-            // Match imports in order with other_envs
-            const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
-            for (0..import_count) |i| {
-                const module_env = other_envs[i];
-                const str_idx = env.imports.imports.items.items[i];
+            // Match imports by NAME with other_envs (not positionally)
+            // Import names may be "pf.Stdout" or "Stdout.roc", envs have module_name like "Stdout.roc" or "Builtin"
+            const import_items = env.imports.imports.items.items;
+            for (import_items, 0..) |str_idx, i| {
                 const import_name = env.common.getString(str_idx);
 
-                // Find or create the Ident.Idx for this import name
-                const ident_idx = env.common.findIdent(import_name) orelse continue;
+                // Find the corresponding env by matching names
+                const module_env: ?*const can.ModuleEnv = blk: {
+                    for (other_envs) |candidate_env| {
+                        // Direct name match (e.g., "Builtin" == "Builtin" or "Stdout.roc" == "Stdout.roc")
+                        if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+                            break :blk candidate_env;
+                        }
+                        // Check if import is "pf.Foo" and env is "Foo.roc"
+                        if (std.mem.startsWith(u8, import_name, "pf.")) {
+                            const short_name = import_name[3..]; // strip "pf."
+                            const expected_module_name = std.fmt.allocPrint(allocator, "{s}.roc", .{short_name}) catch continue;
+                            defer allocator.free(expected_module_name);
+                            if (std.mem.eql(u8, candidate_env.module_name, expected_module_name)) {
+                                break :blk candidate_env;
+                            }
+                        }
+                    }
+                    break :blk null;
+                };
 
-                // Store in all three maps
-                module_envs.putAssumeCapacity(ident_idx, module_env);
-                module_ids.putAssumeCapacity(ident_idx, next_id);
-                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-                import_envs.putAssumeCapacity(import_idx, module_env);
+                if (module_env) |mod_env| {
+                    // Find or create the Ident.Idx for this import name
+                    const ident_idx = env.common.findIdent(import_name) orelse continue;
 
-                next_id += 1;
+                    // Store in all three maps
+                    try module_envs.put(allocator, ident_idx, mod_env);
+                    try module_ids.put(allocator, ident_idx, next_id);
+                    const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+                    try import_envs.put(allocator, import_idx, mod_env);
+
+                    // Debug output
+                    if (@import("builtin").os.tag != .freestanding) {
+                        std.debug.print("DEBUG init: import[{}] '{s}' -> env '{s}'\n", .{ i, import_name, mod_env.module_name });
+                    }
+
+                    next_id += 1;
+                }
             }
         }
 
@@ -318,6 +340,10 @@ pub const Interpreter = struct {
         _ = self;
     }
 
+    const dbg_print = if (builtin.os.tag != .freestanding) std.debug.print else struct {
+        fn nop(comptime _: []const u8, _: anytype) void {}
+    }.nop;
+
     pub fn evaluateExpression(
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
@@ -325,16 +351,24 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
     ) Error!void {
+        dbg_print("DEBUG evaluateExpression: expr_idx={}, arg_ptr={?}\n", .{ @intFromEnum(expr_idx), arg_ptr });
         if (arg_ptr) |args_ptr| {
-            const func_val = try self.evalMinimal(expr_idx, roc_ops);
+            dbg_print("DEBUG evaluateExpression: evaluating func_val\n", .{});
+            const func_val = self.evalMinimal(expr_idx, roc_ops) catch |err| {
+                dbg_print("DEBUG evaluateExpression: evalMinimal failed with {}\n", .{err});
+                return err;
+            };
+            dbg_print("DEBUG evaluateExpression: func_val.layout.tag={}\n", .{@intFromEnum(func_val.layout.tag)});
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
+                dbg_print("DEBUG evaluateExpression: func_val is not a closure, returning NotImplemented\n", .{});
                 return error.NotImplemented;
             }
 
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
             const params = self.env.store.slicePatterns(header.params);
+            dbg_print("DEBUG evaluateExpression: params.len={}, body_idx={}\n", .{ params.len, @intFromEnum(header.body_idx) });
 
             try self.active_closures.append(func_val);
             defer _ = self.active_closures.pop();
@@ -393,7 +427,12 @@ pub const Interpreter = struct {
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
-            const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
+            dbg_print("DEBUG evaluateExpression: about to evaluate body\n", .{});
+            const result_value = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
+                dbg_print("DEBUG evaluateExpression: evalExprMinimal on body failed with {}\n", .{err});
+                return err;
+            };
+            dbg_print("DEBUG evaluateExpression: body evaluation succeeded\n", .{});
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
@@ -413,6 +452,7 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
+        dbg_print("DEBUG evalExprMinimal: expr_idx={}, expr_tag={}\n", .{ @intFromEnum(expr_idx), @intFromEnum(std.meta.activeTag(expr)) });
         switch (expr) {
             .e_block => |blk| {
                 // New scope for bindings
@@ -1518,6 +1558,31 @@ pub const Interpreter = struct {
                 }
                 return value;
             },
+            .e_hosted_lambda => |hosted| {
+                // Build a closure for a hosted (platform-provided) function
+                // Similar to e_low_level_lambda but for platform-hosted functions
+                // ALWAYS translate from the current module's types (self.env), not caller's type.
+                // This is necessary because the caller's type may have error content when
+                // multiple platform modules are imported (type checking limitation).
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const closure_layout = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(closure_layout, 0);
+                self.registerDefValue(expr_idx, value);
+
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = hosted.body,
+                        .params = hosted.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                        .lambda_expr_idx = expr_idx,
+                        .source_env = self.env,
+                    };
+                }
+                return value;
+            },
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
                 const lam_expr = self.env.store.getExpr(cls.lambda_idx);
@@ -1635,7 +1700,11 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                if (all.len == 0) return error.TypeMismatch;
+                dbg_print("DEBUG e_call: args.len={}, func_idx={}\n", .{ all.len, @intFromEnum(call.func) });
+                if (all.len == 0) {
+                    dbg_print("DEBUG e_call: no args, returning TypeMismatch\n", .{});
+                    return error.TypeMismatch;
+                }
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
@@ -1665,8 +1734,16 @@ pub const Interpreter = struct {
 
                 // Runtime unification for call: constrain return type from arg types
                 const func_expr = self.env.store.getExpr(func_idx);
+                dbg_print("DEBUG e_call: func_expr tag={}\n", .{@intFromEnum(std.meta.activeTag(func_expr))});
+                if (func_expr == .e_runtime_error) {
+                    const diag_idx = func_expr.e_runtime_error.diagnostic;
+                    const diag = self.env.store.getDiagnostic(diag_idx);
+                    dbg_print("DEBUG e_call: runtime_error diagnostic tag={}\n", .{@intFromEnum(std.meta.activeTag(diag))});
+                }
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
+                dbg_print("DEBUG e_call: about to translateTypeVar for func_ct_var\n", .{});
                 const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
+                dbg_print("DEBUG e_call: translateTypeVar succeeded\n", .{});
 
                 // Only instantiate if we have an actual function type (not a flex variable)
                 // This is needed for cross-module calls with rigid type parameters
@@ -1778,6 +1855,7 @@ pub const Interpreter = struct {
                     arg_values[j] = try self.evalExprMinimal(arg_indices[j], roc_ops, if (arg_rt_buf.len == 0) null else arg_rt_buf[j]);
                 }
                 // Support calling closures produced by evaluating expressions (including nested calls)
+                dbg_print("DEBUG evaluateExpression: func_val.layout.tag={}\n", .{@intFromEnum(func_val.layout.tag)});
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
 
@@ -1802,6 +1880,19 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, call_ret_rt_var);
+
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        return result;
+                    }
+
+                    // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
+                    if (lambda_expr == .e_hosted_lambda) {
+                        const hosted = lambda_expr.e_hosted_lambda;
+                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, call_ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -2253,6 +2344,85 @@ pub const Interpreter = struct {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
+    }
+
+    /// Call a hosted function via RocOps.hosted_fns array
+    /// This marshals arguments to the host, invokes the function pointer, and marshals the result back
+    fn callHostedFunction(
+        self: *Interpreter,
+        hosted_fn_index: u32,
+        args: []StackValue,
+        roc_ops: *RocOps,
+        return_rt_var: types.Var,
+    ) !StackValue {
+        // Validate index is within bounds
+        if (hosted_fn_index >= roc_ops.hosted_fns.count) {
+            self.triggerCrash("Hosted function index out of bounds", false, roc_ops);
+            return error.Crash;
+        }
+
+        // Get the hosted function pointer from RocOps
+        const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
+
+        // Allocate space for the return value
+        const return_layout = try self.getRuntimeLayout(return_rt_var);
+        _ = self.runtime_layout_store.layoutSize(return_layout);
+        const result_value = try self.pushRaw(return_layout, 0);
+
+        // Allocate stack space for marshalled arguments
+        // The host now uses the same RocStr as builtins, so no conversion needed
+        const ArgsStruct = extern struct { str: RocStr };
+        var args_struct: ArgsStruct = undefined;
+
+        // Marshal arguments into a contiguous struct matching the RocCall ABI
+        // For now, we support zero-argument and single-argument functions
+        if (args.len == 0) {
+            // Zero argument case - pass dummy pointer for args
+            const ret_ptr = if (result_value.ptr) |p| p else blk: {
+                // Zero-sized return - pass stack address
+                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
+            };
+
+            // For zero-argument functions, we still need to pass a valid args pointer
+            // Use the address of args_struct even though it won't be read
+            const arg_ptr = @as(*anyopaque, @ptrCast(&args_struct));
+
+            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
+            hosted_fn(roc_ops, ret_ptr, arg_ptr);
+        } else if (args.len == 1) {
+            // Single argument case - we need to marshal it properly
+            // For strings, we need to pass a RocStr struct wrapped in Args
+            const arg_ptr = blk: {
+                // For strings, we need to pass a RocStr struct
+                // Try to determine if this is a string by checking if it contains a RocStr
+                // For now, we assume it's a string if it has a pointer (TODO: better type checking)
+                if (args[0].ptr) |str_ptr| {
+                    const roc_str: *const RocStr = @ptrCast(@alignCast(str_ptr));
+                    // Host and builtin now use the same RocStr, so just copy it
+                    args_struct.str = roc_str.*;
+                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
+                } else {
+                    // Empty or zero-sized argument - create empty small string
+                    args_struct.str = RocStr.empty();
+                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
+                }
+            };
+
+            const ret_ptr = if (result_value.ptr) |p| p else blk: {
+                // Zero-sized return - pass stack address
+                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
+            };
+
+            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
+            hosted_fn(roc_ops, ret_ptr, arg_ptr);
+        } else {
+            // Multi-argument case - pack arguments into a struct
+            // TODO: implement multi-argument marshalling
+            self.triggerCrash("Multi-argument hosted functions not yet implemented in interpreter", false, roc_ops);
+            return error.Crash;
+        }
+
+        return result_value;
     }
 
     /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral

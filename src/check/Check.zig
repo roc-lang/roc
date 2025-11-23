@@ -3359,6 +3359,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
             }
         },
+        .e_hosted_lambda => {
+            // For hosted lambda expressions, the type comes from the annotation.
+            // This is similar to e_anno_only - the implementation is provided by the host.
+            switch (expected) {
+                .no_expectation => {
+                    // This shouldn't happen since hosted lambdas always have annotations
+                    try self.unifyWith(expr_var, .err, env);
+                },
+                .expected => |expected_type| {
+                    // Redirect expr_var to the annotation var so that lookups get the correct type
+                    try self.types.setVarRedirect(expr_var, expected_type.var_);
+                },
+            }
+        },
         .e_low_level_lambda => |ll| {
             // For low-level lambda expressions, treat like a lambda with a crash body.
             // Check the body (which will be e_runtime_error or similar)

@@ -800,10 +800,7 @@ pub fn build(b: *std.Build) void {
         copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
         b.getInstallStep().dependOn(&copy_test_fx_host.step);
 
-        // TODO: Re-enable fx_platform_test once platform hosted functions are supported
-        // The fx platform tests require Can.zig changes that are not yet integrated
-        // with the poly-numbers branch.
-        _ = b.addTest(.{
+        const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/cli/test/fx_platform_test.zig"),
@@ -813,13 +810,13 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
 
-        // const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
-        // if (run_args.len != 0) {
-        //     run_fx_platform_test.addArgs(run_args);
-        // }
-        // // Ensure host library is copied before running the test
-        // run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
-        // tests_summary.addRun(&run_fx_platform_test.step);
+        const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
+        if (run_args.len != 0) {
+            run_fx_platform_test.addArgs(run_args);
+        }
+        // Ensure host library is copied before running the test
+        run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
+        tests_summary.addRun(&run_fx_platform_test.step);
     }
 
     var build_afl = false;

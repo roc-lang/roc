@@ -139,7 +139,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 35;
+pub const MODULEENV_EXPR_NODE_COUNT = 36;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -643,6 +643,24 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_anno_only => {
             return CIR.Expr{ .e_anno_only = .{} };
+        },
+        .expr_hosted_lambda => {
+            // Retrieve hosted lambda data from node and extra_data
+            const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
+            const index = node.data_2;
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const body_idx = extra_data[2];
+
+            return CIR.Expr{ .e_hosted_lambda = .{
+                .symbol_name = symbol_name,
+                .index = index,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .body = @enumFromInt(body_idx),
+            } };
         },
         .expr_low_level => {
             // Retrieve low-level lambda data from extra_data
@@ -1518,6 +1536,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
+        },
+        .e_hosted_lambda => |hosted| {
+            node.tag = .expr_hosted_lambda;
+            // data_1 = symbol_name (Ident.Idx via @bitCast)
+            // data_2 = index (u32)
+            // extra_data: args span start, args span len, body index
+            node.data_1 = @bitCast(hosted.symbol_name);
+            node.data_2 = hosted.index;
+
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
+
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_low_level_lambda => |low_level| {
             node.tag = .expr_low_level;
