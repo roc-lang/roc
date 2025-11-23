@@ -62,10 +62,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a where [_b.from_numeral : _arg -> _ret]")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(alias (type "MyType")
 			(ty-header (name "MyType"))))
 	(expressions
-		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

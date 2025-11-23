@@ -75,9 +75,9 @@ updated = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: _field, name: Str } where [_a.from_numeral : _arg -> _ret]"))
-		(patt (type "{ age: _field, name: Str } where [_a.from_numeral : _arg -> _ret]")))
+		(patt (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "{ age: _field, name: Str } where [_a.from_numeral : _arg -> _ret]"))
-		(expr (type "{ age: _field, name: Str } where [_a.from_numeral : _arg -> _ret]"))))
+		(expr (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

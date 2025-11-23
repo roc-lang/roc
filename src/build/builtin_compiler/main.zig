@@ -64,6 +64,8 @@ const BuiltinIndices = struct {
     f32_type: CIR.Statement.Idx,
     /// Statement index of nested F64 type declaration within Builtin module
     f64_type: CIR.Statement.Idx,
+    /// Statement index of nested Numeral type declaration within Builtin module
+    numeral_type: CIR.Statement.Idx,
 };
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
@@ -449,6 +451,7 @@ pub fn main() !void {
     const dec_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Dec");
     const f32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F32");
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
+    const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
@@ -473,6 +476,7 @@ pub fn main() !void {
     const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
     const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
     const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
+    const numeral_ident = builtin_env.common.findIdent("Numeral") orelse unreachable;
 
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
@@ -494,6 +498,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -522,6 +527,7 @@ pub fn main() !void {
         .dec_type = dec_type_idx,
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
+        .numeral_type = numeral_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -562,10 +568,12 @@ fn compileModule(
 
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
+    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
+        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,

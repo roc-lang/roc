@@ -212,5 +212,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))
+(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

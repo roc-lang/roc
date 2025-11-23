@@ -148,7 +148,7 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
             // Get the dispatcher var - this is the type that has the constraint.
             // For most constraints it's the first arg (e.g., `a.plus : a, a -> a`).
             // For from_numeral the dispatcher is extracted from the return type's first type arg
-            // (the success type T in `Try(T, E)`).
+            // (the success type `a` in `Try(a, e)`).
             const dispatcher_var = blk: {
                 const fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 std.debug.assert(fn_resolved == .structure);
@@ -163,7 +163,7 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
                     },
                 };
 
-                // Check if the return type is a nominal type with type args (like Try(T, E))
+                // Check if the return type is a nominal type with type args (like Try(a, e))
                 // If so, use the first type arg as the dispatcher
                 const ret_resolved = self.types.resolveVar(func_data.ret);
                 if (ret_resolved.desc.content == .structure) {
@@ -941,6 +941,17 @@ fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
     }
 
     const name = self.idents.getText(idx);
+
+    // Strip "Builtin." prefix from builtin types for display
+    // Types like "Builtin.Try" should display as "Try", "Builtin.Num.Numeral" as "Numeral"
+    if (std.mem.startsWith(u8, name, "Builtin.")) {
+        const without_builtin = name[8..]; // Skip "Builtin."
+        // Also strip "Num." if present (e.g., "Builtin.Num.Numeral" -> "Numeral")
+        if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+            return without_builtin[4..]; // Skip "Num."
+        }
+        return without_builtin;
+    }
 
     // Strip "Num." prefix from builtin number types for display
     // Number types are stored as "Num.U8", "Num.F32", etc. but should display as "U8", "F32"

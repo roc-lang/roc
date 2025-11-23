@@ -2002,7 +2002,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> _ret where [_f.from_numeral : _arg -> _ret2]"))
+		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
@@ -2039,7 +2039,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> _ret where [_f.from_numeral : _arg -> _ret2]"))
+		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))

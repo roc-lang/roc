@@ -97,14 +97,14 @@ result = myBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a where [_b.from_numeral : _arg -> _ret]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "U64"))
 		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "U64"))
 		(expr (type "U64"))))
 ~~~

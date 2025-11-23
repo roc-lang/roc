@@ -7,7 +7,7 @@ const TestEnv = @import("./TestEnv.zig");
 test "Custom number type with from_numeral: integer literal unifies" {
     const source =
         \\  MyNum := [].{
-        \\    from_numeral : I128 -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Err(InvalidNumeral("not supported"))
         \\  }
         \\
@@ -25,7 +25,7 @@ test "Custom number type with from_numeral: integer literal unifies" {
 test "Custom number type with from_numeral: decimal literal unifies" {
     const source =
         \\  MyDecimal := [].{
-        \\    from_numeral : I128 -> Try(MyDecimal, [InvalidNumeral(Str)])
+        \\    from_numeral : Numeral -> Try(MyDecimal, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Err(InvalidNumeral("not implemented"))
         \\  }
         \\
@@ -61,7 +61,7 @@ test "Custom number type without from_numeral: integer literal does not unify" {
 test "Custom number type with negate: unary minus works" {
     const source =
         \\  MyNum := [Blah].{
-        \\    from_numeral : I128 -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Err(InvalidNumeral("not implemented"))
         \\
         \\    negate : MyNum -> MyNum
@@ -86,7 +86,7 @@ test "Custom number type with negate: unary minus works" {
 test "Custom number type without negate: unary minus fails" {
     const source =
         \\  MyNum := [].{
-        \\    from_numeral : I128 -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Err(InvalidNumeral("not implemented"))
         \\  }
         \\
@@ -112,7 +112,7 @@ test "Custom type with negate returning different type" {
 
     const source =
         \\  Positive := [].{
-        \\    from_numeral : I128 -> Try(Positive, [InvalidNumeral(Str)])
+        \\    from_numeral : Numeral -> Try(Positive, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Err(InvalidNumeral("not implemented"))
         \\
         \\    negate : Positive -> Negative

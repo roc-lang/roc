@@ -724,13 +724,13 @@ fn mkFlexWithFromNumeralConstraint(
         break :blk ident;
     };
 
-    // Create the flex var first - this represents the target type T
+    // Create the flex var first - this represents the target type `a`
     const flex_var = try self.fresh(env, num_literal_info.region);
 
-    // Create fresh variables for the function signature.
-    // For from_numeral, the actual method signature is: Numeral -> Try(T, [InvalidNumeral(Str)])
-    // We need to create a constraint signature that matches this structure.
-    const arg_var = try self.fresh(env, num_literal_info.region);
+    // Create the argument type: Numeral (from Builtin.Num.Numeral)
+    // For from_numeral, the actual method signature is: Numeral -> Try(a, [InvalidNumeral(Str)])
+    const numeral_content = try self.mkNumeralContent(env);
+    const arg_var = try self.freshFromContent(numeral_content, env, num_literal_info.region);
 
     // Create the error type: [InvalidNumeral(Str)] (closed tag union)
     const str_var = self.str_var;
@@ -838,6 +838,44 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         try_ident,
         backing_var,
         &type_args,
+        origin_module_id,
+    );
+}
+
+/// Create a nominal Numeral type (from Builtin.Num.Numeral)
+/// Numeral has no type parameters - it's a concrete record type wrapped in Self tag
+fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where Numeral is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    // Use the fully qualified name "Builtin.Num.Numeral" to match how Numeral is defined
+    const numeral_ident_idx = self.cir.common.findIdent("Builtin.Num.Numeral") orelse blk: {
+        // If not found, create it (this handles tests and edge cases)
+        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Num.Numeral"));
+    };
+    const numeral_ident = types_mod.TypeIdent{
+        .ident_idx = numeral_ident_idx,
+    };
+
+    // Create backing var - Numeral's backing is [Self({is_negative: Bool, ...})]
+    // For simplicity, we use an empty tag union since the backing isn't used for unification
+    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
+    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
+    const empty_tag_union = types_mod.TagUnion{
+        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
+        .ext = ext_var,
+    };
+    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
+    return try self.types.mkNominal(
+        numeral_ident,
+        backing_var,
+        &.{}, // No type args
         origin_module_id,
     );
 }
