@@ -246,11 +246,6 @@ pub const Interpreter = struct {
                     const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                     try import_envs.put(allocator, import_idx, mod_env);
 
-                    // Debug output
-                    if (@import("builtin").os.tag != .freestanding) {
-                        std.debug.print("DEBUG init: import[{}] '{s}' -> env '{s}'\n", .{ i, import_name, mod_env.module_name });
-                    }
-
                     next_id += 1;
                 }
             }
@@ -340,10 +335,6 @@ pub const Interpreter = struct {
         _ = self;
     }
 
-    const dbg_print = if (builtin.os.tag != .freestanding) std.debug.print else struct {
-        fn nop(comptime _: []const u8, _: anytype) void {}
-    }.nop;
-
     pub fn evaluateExpression(
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
@@ -351,24 +342,16 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
     ) Error!void {
-        dbg_print("DEBUG evaluateExpression: expr_idx={}, arg_ptr={?}\n", .{ @intFromEnum(expr_idx), arg_ptr });
         if (arg_ptr) |args_ptr| {
-            dbg_print("DEBUG evaluateExpression: evaluating func_val\n", .{});
-            const func_val = self.evalMinimal(expr_idx, roc_ops) catch |err| {
-                dbg_print("DEBUG evaluateExpression: evalMinimal failed with {}\n", .{err});
-                return err;
-            };
-            dbg_print("DEBUG evaluateExpression: func_val.layout.tag={}\n", .{@intFromEnum(func_val.layout.tag)});
+            const func_val = try self.evalMinimal(expr_idx, roc_ops);
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
-                dbg_print("DEBUG evaluateExpression: func_val is not a closure, returning NotImplemented\n", .{});
                 return error.NotImplemented;
             }
 
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
             const params = self.env.store.slicePatterns(header.params);
-            dbg_print("DEBUG evaluateExpression: params.len={}, body_idx={}\n", .{ params.len, @intFromEnum(header.body_idx) });
 
             try self.active_closures.append(func_val);
             defer _ = self.active_closures.pop();
@@ -427,12 +410,7 @@ pub const Interpreter = struct {
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
-            dbg_print("DEBUG evaluateExpression: about to evaluate body\n", .{});
-            const result_value = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
-                dbg_print("DEBUG evaluateExpression: evalExprMinimal on body failed with {}\n", .{err});
-                return err;
-            };
-            dbg_print("DEBUG evaluateExpression: body evaluation succeeded\n", .{});
+            const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
@@ -452,7 +430,6 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
-        dbg_print("DEBUG evalExprMinimal: expr_idx={}, expr_tag={}\n", .{ @intFromEnum(expr_idx), @intFromEnum(std.meta.activeTag(expr)) });
         switch (expr) {
             .e_block => |blk| {
                 // New scope for bindings
@@ -1700,9 +1677,7 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                dbg_print("DEBUG e_call: args.len={}, func_idx={}\n", .{ all.len, @intFromEnum(call.func) });
                 if (all.len == 0) {
-                    dbg_print("DEBUG e_call: no args, returning TypeMismatch\n", .{});
                     return error.TypeMismatch;
                 }
                 const func_idx = call.func;
@@ -1734,16 +1709,8 @@ pub const Interpreter = struct {
 
                 // Runtime unification for call: constrain return type from arg types
                 const func_expr = self.env.store.getExpr(func_idx);
-                dbg_print("DEBUG e_call: func_expr tag={}\n", .{@intFromEnum(std.meta.activeTag(func_expr))});
-                if (func_expr == .e_runtime_error) {
-                    const diag_idx = func_expr.e_runtime_error.diagnostic;
-                    const diag = self.env.store.getDiagnostic(diag_idx);
-                    dbg_print("DEBUG e_call: runtime_error diagnostic tag={}\n", .{@intFromEnum(std.meta.activeTag(diag))});
-                }
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
-                dbg_print("DEBUG e_call: about to translateTypeVar for func_ct_var\n", .{});
                 const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
-                dbg_print("DEBUG e_call: translateTypeVar succeeded\n", .{});
 
                 // Only instantiate if we have an actual function type (not a flex variable)
                 // This is needed for cross-module calls with rigid type parameters
@@ -1855,7 +1822,6 @@ pub const Interpreter = struct {
                     arg_values[j] = try self.evalExprMinimal(arg_indices[j], roc_ops, if (arg_rt_buf.len == 0) null else arg_rt_buf[j]);
                 }
                 // Support calling closures produced by evaluating expressions (including nested calls)
-                dbg_print("DEBUG evaluateExpression: func_val.layout.tag={}\n", .{@intFromEnum(func_val.layout.tag)});
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
 
@@ -1892,7 +1858,11 @@ pub const Interpreter = struct {
                     // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
                     if (lambda_expr == .e_hosted_lambda) {
                         const hosted = lambda_expr.e_hosted_lambda;
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, call_ret_rt_var);
+                        // Get the return type from the hosted lambda's body expression (which is in the platform module)
+                        // This is more reliable than using call_ret_rt_var which was computed in the app module context
+                        const hosted_body_ct_var = can.ModuleEnv.varFrom(hosted.body);
+                        const hosted_ret_rt_var = try self.translateTypeVar(self.env, hosted_body_ct_var);
+                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, hosted_ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -2365,8 +2335,13 @@ pub const Interpreter = struct {
         const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
 
         // Allocate space for the return value
-        const return_layout = try self.getRuntimeLayout(return_rt_var);
-        _ = self.runtime_layout_store.layoutSize(return_layout);
+        const resolved = self.runtime_types.resolveVar(return_rt_var);
+        // For hosted functions, flex types should default to empty record ({}), not Dec
+        // This is because hosted lambda body types are created as fresh vars and aren't properly constrained
+        const return_layout = if (resolved.desc.content == .flex) blk: {
+            const empty_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            break :blk self.runtime_layout_store.getLayout(empty_idx);
+        } else try self.getRuntimeLayout(return_rt_var);
         const result_value = try self.pushRaw(return_layout, 0);
 
         // Allocate stack space for marshalled arguments

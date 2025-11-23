@@ -40,14 +40,18 @@ is_initialized: bool = false,
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
-    if (self.ptr == null) {
-        return error.NullStackPointer;
-    }
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
     const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
+
+    // Zero-sized types (like unit `{}`) don't need any data copied and may have null ptr
     if (result_size == 0) {
         return;
+    }
+
+    // For non-zero-sized types, we need a valid source pointer
+    if (self.ptr == null) {
+        return error.NullStackPointer;
     }
 
     if (self.layout.tag == .scalar) {
