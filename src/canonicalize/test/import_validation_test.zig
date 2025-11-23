@@ -39,7 +39,7 @@ fn parseAndCanonicalizeSource(
     try parse_env.initCIRFields(allocator, "Test");
 
     const can = try allocator.create(Can);
-    can.* = try Can.init(parse_env, ast, module_envs, false);
+    can.* = try Can.init(parse_env, ast, module_envs);
 
     return .{
         .parse_env = parse_env,
@@ -125,7 +125,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try module_envs.put(utils_module_ident, .{ .env = utils_env });
 
     // Canonicalize with module validation
-    var can = try Can.init(parse_env, &ast, &module_envs, false);
+    var can = try Can.init(parse_env, &ast, &module_envs);
     defer can.deinit();
     _ = try can.canonicalizeFile();
     // Collect all diagnostics
@@ -200,7 +200,7 @@ test "import validation - no module_envs provided" {
     try parse_env.initCIRFields(allocator, "Test");
     // Create czer
     //  with null module_envs
-    var can = try Can.init(parse_env, &ast, null, false);
+    var can = try Can.init(parse_env, &ast, null);
     defer can.deinit();
     _ = try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();

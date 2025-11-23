@@ -34,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Some(Num(_size))]_others"))
+(expr (type "[Some(_a)]_others where [_b.from_numeral : _arg -> _ret]"))
 ~~~

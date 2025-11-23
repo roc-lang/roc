@@ -103,7 +103,7 @@ foo = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "U64")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "U64"))))
 ~~~

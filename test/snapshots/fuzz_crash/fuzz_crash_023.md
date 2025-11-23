@@ -264,6 +264,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
 DOES NOT EXIST - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
@@ -781,6 +782,11 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
@@ -915,7 +921,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num(Int(Unsigned64))_
+    _Num.U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -2380,11 +2386,7 @@ expect {
 						(p-assign (ident "bin_op_result"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-tag (name "Err")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2572,8 +2574,8 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Num(Int(Unsigned64))"))
+		(patt (type "Bool -> _ret where [_d.from_numeral : _arg -> _ret2]"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2619,8 +2621,8 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Num(Int(Unsigned64))"))
+		(expr (type "Bool -> _ret where [_d.from_numeral : _arg -> _ret2]"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Error"))

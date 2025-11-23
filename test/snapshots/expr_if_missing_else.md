@@ -9,7 +9,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - expr_if_missing_else.md:1:10:1:13
-INCOMPATIBLE IF BRANCHES - expr_if_missing_else.md:1:7:1:7
+TYPE DOES NOT HAVE METHODS - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `tru` in this scope.
@@ -22,24 +22,18 @@ foo = if tru 0
          ^^^
 
 
-**INCOMPATIBLE IF BRANCHES**
-This `if` has an `else` branch with a different type from it's `then` branch:
-**expr_if_missing_else.md:1:7:**
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_numeral` on a type that doesn't support methods:
+**expr_if_missing_else.md:1:14:1:15:**
 ```roc
 foo = if tru 0
 ```
-      ^^^^^^^^
+             ^
 
-The `else` branch has the type:
+This type doesn't support methods:
     _{}_
 
-But the `then` branch has the type:
-    _Num(_size)_
 
-All branches in an `if` must have compatible types.
-
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -78,7 +72,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "{}")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "{}"))))
 ~~~

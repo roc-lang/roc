@@ -62,10 +62,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "_a where [_b.from_numeral : _arg -> _ret]")))
 	(type_decls
 		(alias (type "MyType")
 			(ty-header (name "MyType"))))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))))
 ~~~

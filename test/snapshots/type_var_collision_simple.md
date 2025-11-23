@@ -249,19 +249,19 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Num(_size)"))
-		(patt (type "Num(_size)"))
+		(patt (type "_d where [_e.from_numeral : _arg -> _ret]"))
+		(patt (type "_d where [_e.from_numeral : _arg -> _ret]"))
+		(patt (type "_d where [_e.from_numeral : _arg -> _ret]"))
 		(patt (type "d -> d"))
 		(patt (type "d -> d"))
 		(patt (type "d, e -> (d, e)"))
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "_arg -> _ret where [_d.from_numeral : _arg2 -> _ret2]")))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Num(_size)"))
-		(expr (type "Num(_size)"))
+		(expr (type "_d where [_e.from_numeral : _arg -> _ret]"))
+		(expr (type "_d where [_e.from_numeral : _arg -> _ret]"))
+		(expr (type "_d where [_e.from_numeral : _arg -> _ret]"))
 		(expr (type "d -> d"))
 		(expr (type "d -> d"))
 		(expr (type "d, e -> (d, e)"))
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "_arg -> _ret where [_d.from_numeral : _arg2 -> _ret2]"))))
 ~~~

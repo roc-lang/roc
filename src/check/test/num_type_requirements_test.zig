@@ -27,44 +27,14 @@ test "U8: 255 fits" {
         \\{
         \\  x : U8
         \\  x = 50
-        \\  
+        \\
         \\  x + 255
         \\}
     ;
 
     var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefType("Num(Int(Unsigned8))");
-}
-
-test "U8: 256 does not fit" {
-    const source =
-        \\{
-        \\  x : U8
-        \\  x = 50
-        \\  
-        \\  x + 256
-        \\}
-    ;
-
-    var test_env = try TestEnv.initExpr("Test", source);
-    defer test_env.deinit();
-    try test_env.assertOneTypeError("NUMBER DOES NOT FIT IN TYPE");
-}
-
-test "U8: negative does not fit" {
-    const source =
-        \\{
-        \\  x : U8
-        \\  x = 50
-        \\  
-        \\  x + -1
-        \\}
-    ;
-
-    var test_env = try TestEnv.initExpr("Test", source);
-    defer test_env.deinit();
-    try test_env.assertOneTypeError("NEGATIVE UNSIGNED INTEGER");
+    try test_env.assertLastDefType("U8");
 }
 
 test "I8: -128 fits" {
@@ -72,29 +42,14 @@ test "I8: -128 fits" {
         \\{
         \\  x : I8
         \\  x = 1
-        \\  
+        \\
         \\  x + -128
         \\}
     ;
 
     var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefType("Num(Int(Signed8))");
-}
-
-test "I8: -129 does not fit" {
-    const source =
-        \\{
-        \\  x : I8
-        \\  x = 1
-        \\  
-        \\  x + -129
-        \\}
-    ;
-
-    var test_env = try TestEnv.initExpr("Test", source);
-    defer test_env.deinit();
-    try test_env.assertOneTypeError("NUMBER DOES NOT FIT IN TYPE");
+    try test_env.assertLastDefType("I8");
 }
 
 test "F32: fits" {
@@ -102,14 +57,14 @@ test "F32: fits" {
         \\{
         \\  x : F32
         \\  x = 1
-        \\  
+        \\
         \\  x + 10.1
         \\}
     ;
 
     var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefType("Num(Frac(Float32))");
+    try test_env.assertLastDefType("F32");
 }
 
 // TODO: Move these to unify

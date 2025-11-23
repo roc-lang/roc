@@ -403,9 +403,9 @@ main = |_| {
 (inferred-types
 	(defs
 		(patt (type "List(_a)"))
-		(patt (type "List(Num(_size))"))
+		(patt (type "List(_a) where [_b.from_numeral : _arg -> _ret]"))
 		(patt (type "List(Str)"))
-		(patt (type "List(Num(Frac(_size)))"))
+		(patt (type "List(_a) where [_b.from_numeral : _arg -> _ret]"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -415,9 +415,9 @@ main = |_| {
 		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "List(_a)"))
-		(expr (type "List(Num(_size))"))
+		(expr (type "List(_a) where [_b.from_numeral : _arg -> _ret]"))
 		(expr (type "List(Str)"))
-		(expr (type "List(Num(Frac(_size)))"))
+		(expr (type "List(_a) where [_b.from_numeral : _arg -> _ret]"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

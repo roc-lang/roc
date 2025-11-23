@@ -88,7 +88,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size) -> Num(_size2)")))
+		(patt (type "a -> a where [b.from_numeral : b -> c]")))
 	(expressions
-		(expr (type "Num(_size) -> Num(_size2)"))))
+		(expr (type "a -> a where [b.from_numeral : b -> c]"))))
 ~~~

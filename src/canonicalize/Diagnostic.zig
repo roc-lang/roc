@@ -252,7 +252,7 @@ pub const Diagnostic = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Helper to extract the region from any diagnostic variant
     pub fn toRegion(self: Diagnostic) Region {
@@ -359,7 +359,7 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(
+    pub fn buildInvalidNumeralReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
         literal_text: []const u8,

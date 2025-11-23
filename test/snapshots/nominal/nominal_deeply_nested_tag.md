@@ -78,7 +78,7 @@ x = Foo.Bar.Baz.X
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-nominal (nominal "Foo.Bar.Baz")
+		(e-nominal (nominal "nominal_deeply_nested_tag.Foo.Bar.Baz")
 			(e-tag (name "X")))
 		(annotation
 			(ty-lookup (name "Foo.Bar.Baz") (local))))
@@ -87,11 +87,11 @@ x = Foo.Bar.Baz.X
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "Foo.Bar"))
+		(ty-header (name "nominal_deeply_nested_tag.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "Something"))))
 	(s-nominal-decl
-		(ty-header (name "Foo.Bar.Baz"))
+		(ty-header (name "nominal_deeply_nested_tag.Foo.Bar.Baz"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
@@ -101,14 +101,14 @@ x = Foo.Bar.Baz.X
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Foo.Bar.Baz")))
+		(patt (type "nominal_deeply_nested_tag.Foo.Bar.Baz")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar")))
-		(nominal (type "Foo.Bar.Baz")
-			(ty-header (name "Foo.Bar.Baz"))))
+		(nominal (type "nominal_deeply_nested_tag.Foo.Bar")
+			(ty-header (name "nominal_deeply_nested_tag.Foo.Bar")))
+		(nominal (type "nominal_deeply_nested_tag.Foo.Bar.Baz")
+			(ty-header (name "nominal_deeply_nested_tag.Foo.Bar.Baz"))))
 	(expressions
-		(expr (type "Foo.Bar.Baz"))))
+		(expr (type "nominal_deeply_nested_tag.Foo.Bar.Baz"))))
 ~~~

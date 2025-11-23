@@ -81,14 +81,12 @@ pub const CacheManager = struct {
         compiler_version: []const u8,
         source: []const u8,
         module_name: []const u8,
-        has_anno_only_defs: bool,
-        built_with_platform: bool,
     ) CacheResult {
         if (!self.config.enabled) {
             return .not_enabled;
         }
 
-        const cache_key = generateCacheKey(source, compiler_version, has_anno_only_defs, built_with_platform);
+        const cache_key = generateCacheKey(source, compiler_version);
 
         const cache_path = self.getCacheFilePath(cache_key) catch {
             return CacheResult{ .miss = .{
@@ -205,25 +203,12 @@ pub const CacheManager = struct {
     }
 
     /// Generate a BLAKE3-based cache key from source and compiler version.
-    /// Optionally includes platform build context if the module has annotation-only defs.
-    pub fn generateCacheKey(
-        source: []const u8,
-        compiler_version: []const u8,
-        has_anno_only_defs: bool,
-        built_with_platform: bool,
-    ) [32]u8 {
+    pub fn generateCacheKey(source: []const u8, compiler_version: []const u8) [32]u8 {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update(std.mem.asBytes(&compiler_version.len));
         hasher.update(compiler_version);
         hasher.update(std.mem.asBytes(&source.len));
         hasher.update(source);
-
-        // Only include platform context if module has annotation-only defs
-        // This ensures correct caching for Type Modules that may be transformed differently
-        if (has_anno_only_defs) {
-            hasher.update(&[_]u8{@intFromBool(built_with_platform)});
-        }
-
         var hash: [32]u8 = undefined;
         hasher.final(&hash);
         return hash;

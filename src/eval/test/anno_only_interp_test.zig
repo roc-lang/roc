@@ -61,7 +61,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_module = builtin_module.env,
     };
 
-    var czer = try Can.init(module_env, &parse_ast, null, false);
+    var czer = try Can.init(module_env, &parse_ast, null);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -76,7 +76,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, null);
 
     return .{
         .module_env = module_env,

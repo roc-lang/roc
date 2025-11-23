@@ -41,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(_size) -> Num(_size2)"))
+(expr (type "a -> a where [b.from_numeral : b -> c]"))
 ~~~

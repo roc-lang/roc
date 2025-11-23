@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const can = @import("can");
@@ -439,7 +440,7 @@ pub const Repl = struct {
             .statement_idx = self.builtin_indices.set_type,
         });
 
-        var czer = Can.init(cir, &parse_ast, &module_envs_map, false) catch |err| {
+        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
@@ -477,7 +478,7 @@ pub const Repl = struct {
 
         // Create interpreter instance with BuiltinTypes containing real Builtin module
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &imported_modules) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinitAndFreeOtherEnvs();

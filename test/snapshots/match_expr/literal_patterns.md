@@ -13,52 +13,56 @@ match Answer {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
-INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
+MISSING METHOD - literal_patterns.md:2:15:2:16
+MISSING METHOD - literal_patterns.md:4:17:4:18
+TYPE DOES NOT HAVE METHODS - literal_patterns.md:5:5:5:7
+MISSING METHOD - literal_patterns.md:5:11:5:12
 # PROBLEMS
-**INCOMPATIBLE MATCH BRANCHES**
-The second branch's type in this `match` is different from the previous ones:
-**literal_patterns.md:1:1:**
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**literal_patterns.md:2:15:2:16:**
 ```roc
-match Answer {
     Answer => 1
-    Zero => "hello"
 ```
-            ^^^^^^^
+              ^
 
-The second branch has this type;
-    _Str_
 
-But the previous branch has this type:
-    _Num(_size)_
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
-All branches in an `match` must have compatible types.
-
-Note: You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**literal_patterns.md:1:1:**
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**literal_patterns.md:4:17:4:18:**
 ```roc
-match Answer {
-    Answer => 1
-    Zero => "hello"
     Greeting => 3
+```
+                ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_numeral` on a type that doesn't support methods:
+**literal_patterns.md:5:5:5:7:**
+```roc
     10 => 4
-}
 ```
     ^^
 
-The fourth pattern has this type:
-    _Num(_size)_
-
-But all the previous patterns have this type: 
+This type doesn't support methods:
     _[Answer, Zero, Greeting]_others_
 
-All patterns in an `match` must have compatible types.
 
 
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**literal_patterns.md:5:11:5:12:**
+```roc
+    10 => 4
+```
+          ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -133,5 +137,5 @@ match Answer {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

@@ -366,6 +366,21 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// A hosted function that will be provided by the platform at runtime.
+    /// This represents a lambda/function whose implementation is provided by the host application
+    /// via the RocOps.hosted_fns array.
+    ///
+    /// ```roc
+    /// # Stdout.line! is a hosted function provided by the platform
+    /// line! : Str => {}
+    /// ```
+    e_hosted_lambda: struct {
+        symbol_name: base.Ident.Idx,
+        index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
+        args: CIR.Pattern.Span,
+        body: Expr.Idx,
+    },
+
     /// A low-level builtin operation.
     /// This represents a lambda/function that will be implemented by the compiler backend.
     /// Like e_anno_only, it has no Roc implementation, but unlike e_anno_only,
@@ -378,18 +393,6 @@ pub const Expr = union(enum) {
     /// ```
     e_low_level_lambda: struct {
         op: LowLevel,
-        args: CIR.Pattern.Span,
-        body: Expr.Idx,
-    },
-
-    /// A hosted lambda that will be provided by the host application at runtime.
-    /// ```roc
-    /// # In a hosted module:
-    /// putStdout! : Str => {}
-    /// ```
-    e_hosted_lambda: struct {
-        symbol_name: base.Ident.Idx,
-        index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
         args: CIR.Pattern.Span,
         body: Expr.Idx,
     },
@@ -431,15 +434,17 @@ pub const Expr = union(enum) {
         num_minus, // All numeric types
         num_times, // All numeric types
         num_div_by, // All numeric types
+        num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
 
         // Numeric parsing operations
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
+        num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
     };
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     /// A single branch of an if expression.
     /// Contains a condition expression and the body to execute if the condition is true.
@@ -456,7 +461,7 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
     };
 
     /// A closure, which is a lambda expression that captures variables
@@ -516,12 +521,9 @@ pub const Expr = union(enum) {
             ge, // >=
             eq, // ==
             ne, // !=
-            pow, // ^
             div_trunc, // //
             @"and", // and
             @"or", // or
-            pipe_forward, // |>
-            null_coalesce, // ?
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
@@ -1081,6 +1083,25 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .e_hosted_lambda => |hosted| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-hosted-lambda");
+                const symbol_name = ir.common.getIdent(hosted.symbol_name);
+                try tree.pushStringPair("symbol", symbol_name);
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.slicePatterns(hosted.args)) |arg_idx| {
+                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .e_low_level_lambda => |low_level| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-low-level-lambda");
@@ -1100,27 +1121,6 @@ pub const Expr = union(enum) {
                 try tree.endNode(args_begin, args_attrs);
 
                 try ir.store.getExpr(low_level.body).pushToSExprTree(ir, tree, low_level.body);
-
-                try tree.endNode(begin, attrs);
-            },
-            .e_hosted_lambda => |hosted| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-hosted-lambda");
-                const symbol_name = ir.common.getIdent(hosted.symbol_name);
-                try tree.pushStringPair("symbol", symbol_name);
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (ir.store.slicePatterns(hosted.args)) |arg_idx| {
-                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                }
-                try tree.endNode(args_begin, args_attrs);
-
-                try ir.store.getExpr(hosted.body).pushToSExprTree(ir, tree, hosted.body);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1185,7 +1185,7 @@ pub const Expr = union(enum) {
         exhaustive: TypeVar,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
 
         /// A single branch within a match expression.
         /// Contains patterns to match against, an optional guard condition,
@@ -1244,7 +1244,7 @@ pub const Expr = union(enum) {
             }
 
             pub const Idx = enum(u32) { _ };
-            pub const Span = struct { span: DataSpan };
+            pub const Span = extern struct { span: DataSpan };
         };
 
         /// A pattern within a match branch, which may be part of an OR pattern.
@@ -1267,7 +1267,7 @@ pub const Expr = union(enum) {
             degenerate: bool,
 
             pub const Idx = enum(u32) { _ };
-            pub const Span = struct { span: base.DataSpan };
+            pub const Span = extern struct { span: base.DataSpan };
         };
 
         pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
@@ -1301,6 +1301,6 @@ pub const Expr = union(enum) {
         scope_depth: u32,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
     };
 };

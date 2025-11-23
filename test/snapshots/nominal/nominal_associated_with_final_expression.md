@@ -59,7 +59,7 @@ Foo := [A, B, C].{
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "Foo.x"))
+		(p-assign (ident "nominal_associated_with_final_expression.Foo.x"))
 		(e-num (value "5")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
@@ -72,10 +72,10 @@ Foo := [A, B, C].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "_a where [_b.from_numeral : _arg -> _ret]")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))))
 ~~~

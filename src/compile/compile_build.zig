@@ -211,9 +211,7 @@ const GlobalQueue = struct {
                                 };
                                 defer be.gpa.free(source);
 
-                                // When loading, we don't know has_anno_only_defs yet (haven't canonicalized)
-                                // Pass false - if module actually has anno_only_defs, we'll get a cache miss and canonicalize
-                                const cache_result = cm.loadFromCache("roc-zig-dev-v2", source, task.module_name, false, sched.root_is_platform);
+                                const cache_result = cm.loadFromCache("roc-zig-dev", source, task.module_name);
                                 switch (cache_result) {
                                     .hit => |hit| {
                                         // Cache hit! Update the module state with cached data
@@ -251,14 +249,7 @@ const GlobalQueue = struct {
                                     };
                                     defer be.gpa.free(source);
 
-                                    // Use actual has_anno_only_defs from canonicalized env and root_is_platform from sched
-                                    // Version bumped to v2 to invalidate old caches without platform context
-                                    const cache_key = CacheManager.generateCacheKey(
-                                        source,
-                                        "roc-zig-dev-v2",
-                                        module_state.env.?.has_anno_only_defs,
-                                        sched.root_is_platform,
-                                    );
+                                    const cache_key = CacheManager.generateCacheKey(source, "roc-zig-dev");
                                     // For now, just pass 0 for error and warning counts
                                     // TODO: Extract actual error/warning counts from reports
                                     const error_count: u32 = 0;
@@ -1106,7 +1097,6 @@ pub const BuildEnv = struct {
                 schedule_hook,
                 self.compiler_version,
                 self.builtin_modules,
-                pkg.kind == .platform,
             );
 
             const key = try self.gpa.dupe(u8, name);

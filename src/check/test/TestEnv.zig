@@ -73,7 +73,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .gpa = gpa,
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
+        .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -91,6 +91,20 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent("minus") orelse unreachable,
+        .times_ident = common.findIdent("times") orelse unreachable,
+        .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+        .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
+        .not_ident = common.findIdent("not") orelse unreachable,
+        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
     };
 
     return LoadedModule{
@@ -199,7 +213,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs, false);
+    can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -317,7 +331,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(gpa, module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs, false);
+    can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -471,6 +485,23 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
+/// Assert that the last definition's type contains the given substring
+pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) !void {
+    try self.assertNoErrors();
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var);
+    const type_str = self.type_writer.get();
+    if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
+        std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });
+        return error.TestExpectedEqual;
+    }
+}
+
 /// Get the inferred type descriptor of the last declaration
 ///
 /// Also assert that there were no problems processing the source code.
@@ -501,33 +532,6 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert 1 problem
     try testing.expectEqual(1, self.checker.problems.problems.items.len);
-    const problem = self.checker.problems.problems.items[0];
-
-    // Assert the rendered problem matches the expected problem
-    var report_builder = problem_mod.ReportBuilder.init(
-        self.gpa,
-        self.module_env,
-        self.module_env,
-        &self.checker.snapshots,
-        "test",
-        &.{},
-        &self.checker.import_mapping,
-    );
-    defer report_builder.deinit();
-
-    var report = try report_builder.build(problem);
-    defer report.deinit();
-
-    try testing.expectEqualStrings(expected, report.title);
-}
-
-/// Assert that at least one type error occurred and the first error's title matches.
-/// Unlike assertOneTypeError, this allows multiple errors.
-pub fn assertHasTypeError(self: *TestEnv, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-
-    // Assert at least 1 problem
-    try testing.expect(self.checker.problems.problems.items.len >= 1);
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem

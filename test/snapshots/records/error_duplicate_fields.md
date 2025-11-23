@@ -90,5 +90,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: Num(_size), email: Str, name: Str }"))
+(expr (type "{ age: _field, email: Str, name: Str } where [_a.from_numeral : _arg -> _ret]"))
 ~~~

@@ -242,15 +242,11 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, nominal.backing_expr, dependencies, allocator);
         },
 
-        // Literals have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only => {},
+        // Literals and hosted lambdas have no dependencies
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
         .e_low_level_lambda => |ll| {
             try collectExprDependencies(cir, ll.body, dependencies, allocator);
-        },
-
-        .e_hosted_lambda => |hosted| {
-            try collectExprDependencies(cir, hosted.body, dependencies, allocator);
         },
 
         // External lookups reference other modules - skip for now

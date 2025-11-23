@@ -382,7 +382,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_hosted_lambda = .{
-            .symbol_name = @bitCast(rand.random().int(u32)),
+            .symbol_name = rand_ident_idx(),
             .index = rand.random().int(u32),
             .args = CIR.Pattern.Span{ .span = rand_span() },
             .body = rand_idx(CIR.Expr.Idx),

@@ -1157,7 +1157,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -1174,7 +1174,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -3022,37 +3022,21 @@ fn searchDirectoryForBuiltin(
     }
 }
 
-test "TODO: cross-module function calls - fibonacci" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - fibonacci" {}
 
-test "TODO: cross-module function calls - nested_ifs" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - nested_ifs" {}
 
-test "TODO: cross-module function calls - repl_boolean_expressions" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - repl_boolean_expressions" {}
 
-test "TODO: cross-module function calls - string_edge_cases" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_edge_cases" {}
 
-test "TODO: cross-module function calls - string_equality_basic" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_equality_basic" {}
 
-test "TODO: cross-module function calls - string_interpolation_comparison" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_interpolation_comparison" {}
 
-test "TODO: cross-module function calls - string_multiline_comparison" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_multiline_comparison" {}
 
-test "TODO: cross-module function calls - string_ordering_unsupported" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
