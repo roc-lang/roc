@@ -382,8 +382,8 @@ pub const Interpreter = struct {
 
                 var j: usize = 0;
                 while (j < params.len) : (j += 1) {
-                    const sorted_idx = args_accessor.findElementIndexByOriginal(j) orelse j;
-                    const arg_value = try args_accessor.getElement(sorted_idx);
+                    // getElement expects original index and converts to sorted internally
+                    const arg_value = try args_accessor.getElement(j);
                     const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, @enumFromInt(0));
                     if (!matched) return error.TypeMismatch;
                 }
@@ -986,8 +986,8 @@ pub const Interpreter = struct {
                 if (values.items.len != accessor.getElementCount()) return error.TypeMismatch;
                 var i: usize = 0;
                 while (i < values.items.len) : (i += 1) {
-                    const sorted_idx = accessor.findElementIndexByOriginal(i) orelse return error.TypeMismatch;
-                    try accessor.setElement(sorted_idx, values.items[i], roc_ops);
+                    // Pass the original index - setElement->getElement will convert to sorted internally
+                    try accessor.setElement(i, values.items[i], roc_ops);
                 }
                 return dest;
             },
@@ -4203,10 +4203,9 @@ pub const Interpreter = struct {
 
         var index: usize = 0;
         while (index < elem_vars.len) : (index += 1) {
-            const lhs_sorted = lhs_acc.findElementIndexByOriginal(index) orelse index;
-            const rhs_sorted = rhs_acc.findElementIndexByOriginal(index) orelse index;
-            const lhs_elem = try lhs_acc.getElement(lhs_sorted);
-            const rhs_elem = try rhs_acc.getElement(rhs_sorted);
+            // getElement expects original index and converts to sorted internally
+            const lhs_elem = try lhs_acc.getElement(index);
+            const rhs_elem = try rhs_acc.getElement(index);
             const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_vars[index], rhs_elem, elem_vars[index]);
             if (!elems_equal) {
                 return false;
@@ -4348,10 +4347,9 @@ pub const Interpreter = struct {
 
         var idx: usize = 0;
         while (idx < arg_vars.len) : (idx += 1) {
-            const lhs_sorted = lhs_tuple.findElementIndexByOriginal(idx) orelse idx;
-            const rhs_sorted = rhs_tuple.findElementIndexByOriginal(idx) orelse idx;
-            const lhs_elem = try lhs_tuple.getElement(lhs_sorted);
-            const rhs_elem = try rhs_tuple.getElement(rhs_sorted);
+            // getElement expects original index and converts to sorted internally
+            const lhs_elem = try lhs_tuple.getElement(idx);
+            const rhs_elem = try rhs_tuple.getElement(idx);
             const args_equal = try self.valuesStructurallyEqual(lhs_elem, arg_vars[idx], rhs_elem, arg_vars[idx]);
             if (!args_equal) {
                 return false;
@@ -4827,9 +4825,9 @@ pub const Interpreter = struct {
 
                 var idx: usize = 0;
                 while (idx < pat_ids.len) : (idx += 1) {
-                    const sorted_idx = accessor.findElementIndexByOriginal(idx) orelse idx;
-                    if (sorted_idx >= accessor.getElementCount()) return false;
-                    const elem_value = try accessor.getElement(sorted_idx);
+                    if (idx >= accessor.getElementCount()) return false;
+                    // getElement expects original index and converts to sorted internally
+                    const elem_value = try accessor.getElement(idx);
                     const before = out_binds.items.len;
                     const matched = try self.patternMatchesBind(pat_ids[idx], elem_value, elem_vars[idx], roc_ops, out_binds, expr_idx);
                     if (!matched) {
@@ -5025,12 +5023,12 @@ pub const Interpreter = struct {
 
                 var j: usize = 0;
                 while (j < arg_patterns.len) : (j += 1) {
-                    const sorted_idx = payload_tuple.findElementIndexByOriginal(j) orelse j;
-                    if (sorted_idx >= payload_tuple.getElementCount()) {
+                    if (j >= payload_tuple.getElementCount()) {
                         self.trimBindingList(out_binds, start_len, roc_ops);
                         return false;
                     }
-                    const elem_val = try payload_tuple.getElement(sorted_idx);
+                    // getElement expects original index and converts to sorted internally
+                    const elem_val = try payload_tuple.getElement(j);
                     if (!try self.patternMatchesBind(arg_patterns[j], elem_val, arg_vars[j], roc_ops, out_binds, expr_idx)) {
                         self.trimBindingList(out_binds, start_len, roc_ops);
                         return false;
