@@ -402,6 +402,7 @@ pub const Repl = struct {
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+            .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = bool_stmt_in_bool_module,
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,

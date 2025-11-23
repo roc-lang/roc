@@ -1615,6 +1615,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
         .list = try app_env.insertIdent(base.Ident.for_text("List")),
         .box = try app_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try app_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1758,6 +1759,7 @@ fn compileModuleToSharedMemory(
         .module_name = try env.insertIdent(base.Ident.for_text(module_name_arg)),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -2745,6 +2747,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .try_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .str_stmt = @enumFromInt(0), // TODO: load from builtin modules

@@ -90,5 +90,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: _field, email: Str, name: Str } where [_a.from_numeral : _arg -> _ret]"))
+(expr (type "{ age: a, email: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

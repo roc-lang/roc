@@ -83,14 +83,14 @@ Foo := [Whatever].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a where [_b.from_numeral : _arg -> _ret]"))
-		(patt (type "_a where [_b.from_numeral : _arg -> _ret]")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))
-		(expr (type "_a where [_b.from_numeral : _arg -> _ret]"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

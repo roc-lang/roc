@@ -55,8 +55,10 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
     };
 

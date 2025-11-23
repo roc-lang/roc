@@ -1025,6 +1025,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,

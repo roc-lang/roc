@@ -1135,6 +1135,7 @@ fn processSnapshotContent(
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
         .list = try can_ir.insertIdent(base.Ident.for_text("List")),
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try can_ir.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,

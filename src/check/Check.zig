@@ -144,6 +144,8 @@ pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
+    /// Identifier for the Try type
+    @"try": base.Ident.Idx,
     /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Try type in the current module (injected from Builtin.bin)
@@ -699,14 +701,16 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     );
 }
 
-/// Create a StaticDispatchConstraint for from_numeral
+/// Create a flex variable with a from_numeral constraint for numeric literals.
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.
-fn mkFromNumeralConstraint(
+/// Returns the flex var which has the constraint attached, and the dispatcher var
+/// (first arg of from_numeral) is unified with the flex var so they share the same name.
+fn mkFlexWithFromNumeralConstraint(
     self: *Self,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
-) !types_mod.StaticDispatchConstraint.SafeList.Range {
+) !Var {
     // Get or create the from_numeral identifier
     const from_numeral_ident = blk: {
         if (self.common_idents.from_numeral) |ident| {
@@ -720,12 +724,32 @@ fn mkFromNumeralConstraint(
         break :blk ident;
     };
 
-    // Create a placeholder function type var for from_numeral
-    // The actual from_numeral function type will be looked up and unified
-    // during constraint checking, but we need a function type structure here
-    // so that unwrapFunc() doesn't fail
-    const arg_var = try self.fresh(env, num_literal_info.region);
-    const ret_var = try self.fresh(env, num_literal_info.region);
+    // Create the flex var first - this represents the target type `a`
+    const flex_var = try self.fresh(env, num_literal_info.region);
+
+    // Create the argument type: Numeral (from Builtin.Num.Numeral)
+    // For from_numeral, the actual method signature is: Numeral -> Try(a, [InvalidNumeral(Str)])
+    const numeral_content = try self.mkNumeralContent(env);
+    const arg_var = try self.freshFromContent(numeral_content, env, num_literal_info.region);
+
+    // Create the error type: [InvalidNumeral(Str)] (closed tag union)
+    const str_var = self.str_var;
+    const invalid_numeral_tag_ident = try @constCast(self.cir).insertIdent(
+        base.Ident.for_text("InvalidNumeral"),
+    );
+    const invalid_numeral_tag = try self.types.mkTag(
+        invalid_numeral_tag_ident,
+        &.{str_var},
+    );
+    // Use empty_tag_union as extension to create a closed tag union [InvalidNumeral(Str)]
+    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, num_literal_info.region);
+    const err_type = try self.types.mkTagUnion(&.{invalid_numeral_tag}, err_ext_var);
+    const err_var = try self.freshFromContent(err_type, env, num_literal_info.region);
+
+    // Create Try(flex_var, err_var) as the return type
+    // Try is a nominal type with two type args: the success type and the error type
+    const try_type_content = try self.mkTryContent(flex_var, err_var);
+    const ret_var = try self.freshFromContent(try_type_content, env, num_literal_info.region);
 
     const func_content = types_mod.Content{
         .structure = types_mod.FlatType{
@@ -747,7 +771,18 @@ fn mkFromNumeralConstraint(
     };
 
     // Store it in the types store
-    return try self.types.appendStaticDispatchConstraints(&.{constraint});
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    // Update the flex var to have the constraint attached
+    const flex_content = types_mod.Content{
+        .flex = types_mod.Flex{
+            .name = null,
+            .constraints = constraint_range,
+        },
+    };
+    try self.types.setVarContent(flex_var, flex_content);
+
+    return flex_var;
 }
 
 /// Create a nominal Box type with the given element type
@@ -771,6 +806,78 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         box_ident,
         backing_var,
         &type_args,
+        origin_module_id,
+    );
+}
+
+/// Create a nominal Try type with the given success and error types
+fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where Try is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    // Use the fully qualified name "Builtin.Try" to match how Try is defined in the Builtin module
+    // This ensures our Try type unifies correctly with the Try type from actual method signatures
+    const try_ident_idx = self.cir.common.findIdent("Builtin.Try") orelse blk: {
+        // If not found, create it (this handles tests and edge cases)
+        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Try"));
+    };
+    const try_ident = types_mod.TypeIdent{
+        .ident_idx = try_ident_idx,
+    };
+
+    // The backing var doesn't matter here. Nominal types unify based on their ident
+    // and type args only - the backing is never examined during unification.
+    // Creating the real backing type ([Ok(ok), Err(err)]) would be a waste of time.
+    const backing_var = ok_var;
+    const type_args = [_]Var{ ok_var, err_var };
+
+    return try self.types.mkNominal(
+        try_ident,
+        backing_var,
+        &type_args,
+        origin_module_id,
+    );
+}
+
+/// Create a nominal Numeral type (from Builtin.Num.Numeral)
+/// Numeral has no type parameters - it's a concrete record type wrapped in Self tag
+fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where Numeral is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    // Use the fully qualified name "Builtin.Num.Numeral" to match how Numeral is defined
+    const numeral_ident_idx = self.cir.common.findIdent("Builtin.Num.Numeral") orelse blk: {
+        // If not found, create it (this handles tests and edge cases)
+        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Num.Numeral"));
+    };
+    const numeral_ident = types_mod.TypeIdent{
+        .ident_idx = numeral_ident_idx,
+    };
+
+    // The backing var doesn't matter here. Nominal types unify based on their ident
+    // and type args only - the backing is never examined during unification.
+    // Creating the real backing type ([Self({is_negative: Bool, ...})]) would be a waste of time.
+    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
+    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
+    const empty_tag_union = types_mod.TagUnion{
+        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
+        .ext = ext_var,
+    };
+    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
+    return try self.types.mkNominal(
+        numeral_ident,
+        backing_var,
+        &.{}, // No type args
         origin_module_id,
     );
 }
@@ -2205,17 +2312,8 @@ fn checkPatternHelp(
                         .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, pattern_region),
                     };
 
-                    // Create from_numeral constraint
-                    const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-
-                    // Create flex var with the constraint
-                    const flex_content = types_mod.Content{
-                        .flex = types_mod.Flex{
-                            .name = null,
-                            .constraints = constraint_range,
-                        },
-                    };
-                    const flex_var = try self.freshFromContent(flex_content, env, pattern_region);
+                    // Create flex var with from_numeral constraint
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
@@ -2255,14 +2353,7 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                const flex_content = types_mod.Content{
-                    .flex = types_mod.Flex{
-                        .name = null,
-                        .constraints = constraint_range,
-                    },
-                };
-                const flex_var = try self.freshFromContent(flex_content, env, pattern_region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
             }
         },
@@ -2282,14 +2373,7 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                const flex_content = types_mod.Content{
-                    .flex = types_mod.Flex{
-                        .name = null,
-                        .constraints = constraint_range,
-                    },
-                };
-                const flex_var = try self.freshFromContent(flex_content, env, pattern_region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
             }
         },
@@ -2370,19 +2454,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, expr_region),
                     };
 
-                    // Create from_numeral constraint
-                    const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                    const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
-
-                    // Create flex var with the constraint
-                    const flex_content = types_mod.Content{
-                        .flex = types_mod.Flex{
-                            .name = null,
-                            .constraints = constraint_range,
-                        },
-                    };
-                    const flex_var = try self.freshFromContent(flex_content, env, expr_region);
+                    // Create flex var with from_numeral constraint
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                     _ = try self.unify(expr_var, flex_var, env);
+
+                    const resolved = self.types.resolveVar(flex_var);
+                    const constraint_range = resolved.desc.content.flex.constraints;
+                    const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
                     // Record this literal for deferred validation during comptime eval
                     _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
@@ -2418,16 +2496,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
-                const flex_content = types_mod.Content{
-                    .flex = types_mod.Flex{
-                        .name = null,
-                        .constraints = constraint_range,
-                    },
-                };
-                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
+
+                const resolved = self.types.resolveVar(flex_var);
+                const constraint_range = resolved.desc.content.flex.constraints;
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
                 _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
@@ -2447,16 +2522,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
-                const flex_content = types_mod.Content{
-                    .flex = types_mod.Flex{
-                        .name = null,
-                        .constraints = constraint_range,
-                    },
-                };
-                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
+
+                const resolved = self.types.resolveVar(flex_var);
+                const constraint_range = resolved.desc.content.flex.constraints;
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
                 _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
@@ -2476,16 +2548,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
-                const flex_content = types_mod.Content{
-                    .flex = types_mod.Flex{
-                        .name = null,
-                        .constraints = constraint_range,
-                    },
-                };
-                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
+
+                const resolved = self.types.resolveVar(flex_var);
+                const constraint_range = resolved.desc.content.flex.constraints;
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
                 _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
@@ -2507,16 +2576,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const constraint_range = try self.mkFromNumeralConstraint(num_literal_info, env);
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
-                const flex_content = types_mod.Content{
-                    .flex = types_mod.Flex{
-                        .name = null,
-                        .constraints = constraint_range,
-                    },
-                };
-                const flex_var = try self.freshFromContent(flex_content, env, expr_region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
+
+                const resolved = self.types.resolveVar(flex_var);
+                const constraint_range = resolved.desc.content.flex.constraints;
+                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
                 _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
