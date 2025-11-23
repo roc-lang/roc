@@ -30,12 +30,16 @@ const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const layout_mod = @import("layout");
 
+// Use C allocator when libc is linked (preferred), otherwise fall back to page allocator
+// This is needed for cross-compilation to musl targets without libc
+const roc_allocator = if (@import("builtin").link_libc) std.heap.c_allocator else std.heap.page_allocator;
+
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
 
-    // Use C allocator for Roc's allocations to bypass GPA canary checks
-    const c_alloc = std.heap.c_allocator;
+    // Use roc_allocator for Roc's allocations to bypass GPA canary checks
+    const c_alloc = roc_allocator;
 
     // Add padding in debug builds to detect buffer overflows
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
@@ -101,8 +105,8 @@ fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) v
     // Remove from tracking map
     _ = evaluator.roc_allocations.remove(ptr_addr);
 
-    // Free the memory using c_allocator (including padding in debug builds)
-    const c_alloc = std.heap.c_allocator;
+    // Free the memory using roc_allocator (including padding in debug builds)
+    const c_alloc = roc_allocator;
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
     const ptr: [*]u8 = @ptrFromInt(ptr_addr);
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
@@ -114,7 +118,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
 
     const old_ptr_addr = @intFromPtr(realloc_args.answer);
-    const c_alloc = std.heap.c_allocator;
+    const c_alloc = roc_allocator;
     const debug_padding = if (std.debug.runtime_safety) 16 else 0;
 
     // Look up the old allocation size
@@ -155,7 +159,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         }
     }
 
-    // Realloc using c_allocator (include padding in both old and new sizes)
+    // Realloc using roc_allocator (include padding in both old and new sizes)
     const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
     const old_slice = old_ptr[0 .. old_size + debug_padding];
     const new_slice = c_alloc.realloc(old_slice, realloc_args.new_length + debug_padding) catch {
