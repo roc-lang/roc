@@ -132,6 +132,28 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
+    if (self.layout.tag == .list) {
+        // Copy the list header and incref the underlying data
+        std.debug.assert(self.ptr != null);
+        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
+        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        dest_list.* = src_list.*;
+        // Incref the list data if it's not empty
+        if (src_list.bytes) |bytes| {
+            builtins.utils.increfDataPtrC(bytes, 1);
+        }
+        return;
+    }
+
+    if (self.layout.tag == .list_of_zst) {
+        // Copy the list header for ZST lists - no refcounting needed for ZSTs
+        std.debug.assert(self.ptr != null);
+        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
+        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        dest_list.* = src_list.*;
+        return;
+    }
+
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];

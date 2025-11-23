@@ -86,7 +86,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     }
                 }
                 if (have_tag and tag_index < tags.len) {
-                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                    // Use layout_store.env for tag names since that's where runtime type idents are stored
+                    const tag_name = ctx.layout_store.env.getIdent(tags.items(.name)[tag_index]);
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
@@ -94,7 +95,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
-                if (acc.findFieldIndex(ctx.env, "tag")) |idx| {
+                if (acc.findFieldIndex(ctx.layout_store.env, "tag")) |idx| {
                     const tag_field = try acc.getFieldByIndex(idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
@@ -128,6 +129,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
                                 defer gpa.free(rendered);
                                 try out.appendSlice(rendered);
+                                try out.append(')');
                             } else {
                                 var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
                                 defer ctx.allocator.free(elem_layouts);
@@ -172,8 +174,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                         if (j + 1 < arg_vars.len) try out.appendSlice(", ");
                                     }
                                 }
+                                try out.append(')');
                             }
-                            try out.append(')');
                         }
                     }
                     return out.toOwnedSlice();
@@ -181,9 +183,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             } else if (value.layout.tag == .tuple) {
                 // Tag unions are now represented as tuples (payload, tag)
                 var acc = try value.asTuple(ctx.layout_store);
-                // Element 1 is the tag discriminant
-                const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
-                const tag_field = try acc.getElement(tag_idx_in_tuple);
+                // Element 1 is the tag discriminant - getElement takes original index directly
+                const tag_field = try acc.getElement(1);
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                     const tag_i128 = tmp_sv.asI128();
@@ -194,13 +195,13 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     }
                 }
                 if (have_tag and tag_index < tags.len) {
-                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                    const tag_ident_idx = tags.items(.name)[tag_index];
+                    const tag_name = ctx.env.getIdent(tag_ident_idx);
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
-                    // Element 0 is the payload
-                    const payload_idx: usize = acc.findElementIndexByOriginal(0) orelse 0;
-                    const payload = try acc.getElement(payload_idx);
+                    // Element 0 is the payload - getElement takes original index directly
+                    const payload = try acc.getElement(0);
                     const args_range = tags.items(.args)[tag_index];
                     const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
                     if (arg_vars.len > 0) {
@@ -209,6 +210,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             const arg_var = arg_vars[0];
                             const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
                             const arg_layout = ctx.layout_store.getLayout(layout_idx);
+                            // Use arg_layout from the type - this is the correct layout for the payload
+                            // The payload.layout from the tuple might be wrong if the tuple layout wasn't computed correctly
                             const payload_value = StackValue{
                                 .layout = arg_layout,
                                 .ptr = payload.ptr,
@@ -217,6 +220,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
                             defer gpa.free(rendered);
                             try out.appendSlice(rendered);
+                            try out.append(')');
                         } else {
                             var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
                             defer ctx.allocator.free(elem_layouts);
@@ -261,8 +265,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     if (j + 1 < arg_vars.len) try out.appendSlice(", ");
                                 }
                             }
+                            try out.append(')');
                         }
-                        try out.append(')');
                     }
                     return out.toOwnedSlice();
                 }

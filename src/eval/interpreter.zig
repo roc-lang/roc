@@ -145,7 +145,14 @@ pub const Interpreter = struct {
             return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
         }
     };
-    const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue, expr_idx: can.CIR.Expr.Idx };
+    const Binding = struct {
+        pattern_idx: can.CIR.Pattern.Idx,
+        value: StackValue,
+        expr_idx: can.CIR.Expr.Idx,
+        /// The source module environment where this binding was created.
+        /// Used to distinguish bindings from different modules with the same pattern_idx.
+        source_env: *const can.ModuleEnv,
+    };
     const DefInProgress = struct {
         pattern_idx: can.CIR.Pattern.Idx,
         expr_idx: can.CIR.Expr.Idx,
@@ -463,7 +470,7 @@ pub const Interpreter = struct {
                                     .source_env = self_interp.env,
                                 };
                             }
-                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr });
+                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr, .source_env = self_interp.env });
                         }
                     };
                     switch (stmt) {
@@ -1248,7 +1255,10 @@ pub const Interpreter = struct {
                 const name_text = self.env.getIdent(zero.name);
                 var i: usize = 0;
                 while (i < tags.len) : (i += 1) {
-                    if (std.mem.eql(u8, self.env.getIdent(tags.items(.name)[i]), name_text)) {
+                    // Use runtime_layout_store.env to look up tag names since that's where
+                    // the runtime type tag idents are stored (after translation)
+                    const tag_name_in_rt = self.runtime_layout_store.env.getIdent(tags.items(.name)[i]);
+                    if (std.mem.eql(u8, tag_name_in_rt, name_text)) {
                         tag_index = i;
                         found = true;
                         break;
@@ -1287,9 +1297,8 @@ pub const Interpreter = struct {
                     // Tuple (payload, tag) - tag unions are now represented as tuples
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asTuple(&self.runtime_layout_store);
-                    // Element 1 is the tag discriminant
-                    const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
-                    const tag_field = try acc.getElement(tag_idx_in_tuple);
+                    // Element 1 is the tag discriminant - getElement takes original index directly
+                    const tag_field = try acc.getElement(1);
                     // write tag as int
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
@@ -1409,8 +1418,8 @@ pub const Interpreter = struct {
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                             j = 0;
                             while (j < elem_values.len) : (j += 1) {
-                                const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                try tup_acc.setElement(sorted_idx, elem_values[j], roc_ops);
+                                // setElement takes original index directly
+                                try tup_acc.setElement(j, elem_values[j], roc_ops);
                             }
                         }
 
@@ -1422,11 +1431,10 @@ pub const Interpreter = struct {
                     var acc = try dest.asTuple(&self.runtime_layout_store);
 
                     // Element 0 is payload, Element 1 is tag discriminant
-                    const payload_idx: usize = acc.findElementIndexByOriginal(0) orelse 0;
-                    const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
+                    // getElement takes original index directly - it does the mapping internally
 
-                    // Write tag discriminant
-                    const tag_field = try acc.getElement(tag_idx_in_tuple);
+                    // Write tag discriminant (element 1)
+                    const tag_field = try acc.getElement(1);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
@@ -1437,7 +1445,7 @@ pub const Interpreter = struct {
                     const arg_vars_range = tag_list.items[tag_index].args;
                     const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
                     if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
-                    const payload_field = try acc.getElement(payload_idx);
+                    const payload_field = try acc.getElement(0);
 
                     if (payload_field.ptr) |payload_ptr| {
                         const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
@@ -1453,6 +1461,39 @@ pub const Interpreter = struct {
                         const arg_rt_var = arg_rt_vars[0];
                         const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
                         defer arg_val.decref(&self.runtime_layout_store, roc_ops);
+
+                        // The tuple layout may be wrong (too small) for the actual argument.
+                        // Create a properly-sized result using the argument's actual layout.
+                        const arg_size = self.runtime_layout_store.layoutSize(arg_val.layout);
+                        const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+
+                        if (arg_size > payload_size) {
+                            // The tuple layout is too small - create a new properly-sized tuple
+                            // with (payload, tag) elements
+                            var elem_layouts_fixed = [2]Layout{ arg_val.layout, tag_field.layout };
+                            const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
+                            const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
+                            var proper_dest = try self.pushRaw(proper_tuple_layout, 0);
+                            var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                            // Write tag discriminant to the proper location (element 1)
+                            const proper_tag_field = try proper_acc.getElement(1);
+                            if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                var tmp = proper_tag_field;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(@intCast(tag_index));
+                            }
+
+                            // Write payload to the proper location (element 0)
+                            const proper_payload_field = try proper_acc.getElement(0);
+                            if (proper_payload_field.ptr) |payload_ptr| {
+                                try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            }
+
+                            return proper_dest;
+                        }
+
+                        // Normal case: sizes match, use original destination
                         if (payload_field.ptr) |payload_ptr| {
                             try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
@@ -1485,8 +1526,8 @@ pub const Interpreter = struct {
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                             j = 0;
                             while (j < elem_values.len) : (j += 1) {
-                                const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                try tup_acc.setElement(sorted_idx, elem_values[j], roc_ops);
+                                // setElement takes original index directly
+                                try tup_acc.setElement(j, elem_values[j], roc_ops);
                             }
                         }
 
@@ -1951,7 +1992,7 @@ pub const Interpreter = struct {
                     defer _ = self.active_closures.pop();
                     var bind_count: usize = 0;
                     while (bind_count < params.len) : (bind_count += 1) {
-                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0) });
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0), .source_env = self.env });
                     }
                     defer {
                         var k = params.len;
@@ -1973,7 +2014,7 @@ pub const Interpreter = struct {
                     if (params.len != arg_indices.len) return error.TypeMismatch;
                     var bind_count: usize = 0;
                     while (bind_count < params.len) : (bind_count += 1) {
-                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0) });
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0), .source_env = self.env });
                     }
                     defer {
                         var k = params.len;
@@ -2190,7 +2231,7 @@ pub const Interpreter = struct {
 
                 var bind_count: usize = 0;
                 while (bind_count < params.len) : (bind_count += 1) {
-                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count], .expr_idx = @enumFromInt(0) });
+                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count], .expr_idx = @enumFromInt(0), .source_env = self.env });
                 }
                 defer {
                     var k = params.len;
@@ -2210,7 +2251,10 @@ pub const Interpreter = struct {
                 while (i > 0) {
                     i -= 1;
                     const b = self.bindings.items[i];
-                    if (b.pattern_idx == lookup.pattern_idx) {
+                    // Check both pattern_idx AND source_env to avoid cross-module collisions
+                    // Pattern indices are module-local, so the same pattern_idx can exist in
+                    // multiple modules. We must match the binding from the correct module.
+                    if (b.pattern_idx == lookup.pattern_idx and b.source_env == self.env) {
                         // Check if this binding came from an e_anno_only expression
                         // Skip check for expr_idx == 0 (sentinel for non-def bindings like parameters)
                         const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
@@ -2223,7 +2267,8 @@ pub const Interpreter = struct {
                             }
                             // e_low_level_lambda is always a closure, so no special check needed
                         }
-                        return try self.pushCopy(b.value, roc_ops);
+                        const copy_result = try self.pushCopy(b.value, roc_ops);
+                        return copy_result;
                     }
                 }
                 // If not found, try active closure captures by variable name
@@ -2276,6 +2321,7 @@ pub const Interpreter = struct {
                             .pattern_idx = def.pattern,
                             .value = result,
                             .expr_idx = def.expr,
+                            .source_env = self.env,
                         });
                         return result;
                     }
@@ -2428,6 +2474,7 @@ pub const Interpreter = struct {
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const len_usize = builtins.list.listLen(roc_list.*);
+
                 const len_u64: u64 = @intCast(len_usize);
 
                 const result_layout = layout.Layout.int(.u64);
@@ -3533,11 +3580,10 @@ pub const Interpreter = struct {
                     var result_acc = try dest.asTuple(&self.runtime_layout_store);
 
                     // Element 0 is payload, Element 1 is tag discriminant
-                    const payload_idx: usize = result_acc.findElementIndexByOriginal(0) orelse 0;
-                    const tag_idx_in_tuple: usize = result_acc.findElementIndexByOriginal(1) orelse 1;
+                    // getElement takes original index directly
 
-                    // Write tag discriminant
-                    const tag_field = try result_acc.getElement(tag_idx_in_tuple);
+                    // Write tag discriminant (element 1)
+                    const tag_field = try result_acc.getElement(1);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
@@ -3545,8 +3591,8 @@ pub const Interpreter = struct {
                         try tmp.setInt(@intCast(tag_idx));
                     } else return error.NotImplemented;
 
-                    // Clear payload area
-                    const payload_field = try result_acc.getElement(payload_idx);
+                    // Clear payload area (element 0)
+                    const payload_field = try result_acc.getElement(0);
                     if (payload_field.ptr) |payload_ptr| {
                         const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
                         if (payload_bytes_len > 0) {
@@ -4492,19 +4538,17 @@ pub const Interpreter = struct {
                 // Tag unions are now represented as tuples (payload, tag)
                 var acc = try value.asTuple(&self.runtime_layout_store);
 
-                // Element 1 is the tag discriminant
-                const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
-                const tag_field = try acc.getElement(tag_idx_in_tuple);
+                // Element 1 is the tag discriminant - getElement takes original index directly
+                const tag_field = try acc.getElement(1);
                 var tag_index: usize = undefined;
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
                     tag_index = @intCast(tmp.asI128());
                 } else return error.TypeMismatch;
 
-                // Element 0 is the payload
-                const payload_idx: usize = acc.findElementIndexByOriginal(0) orelse 0;
+                // Element 0 is the payload - getElement takes original index directly
                 var payload_value: ?StackValue = null;
-                const payload_field = acc.getElement(payload_idx) catch null;
+                const payload_field = acc.getElement(0) catch null;
                 if (payload_field) |field_value| {
                     var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                     defer tag_list.deinit();
@@ -4722,7 +4766,7 @@ pub const Interpreter = struct {
             .assign => |_| {
                 // Bind entire value to this pattern
                 const copied = try self.pushCopy(value, roc_ops);
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx });
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
             .as => |as_pat| {
@@ -4733,7 +4777,7 @@ pub const Interpreter = struct {
                 }
 
                 const alias_value = try self.pushCopy(value, roc_ops);
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx });
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
             .underscore => return true,
@@ -5195,6 +5239,7 @@ pub const Interpreter = struct {
                 .pattern_idx = param,
                 .value = args[i],
                 .expr_idx = @enumFromInt(0),
+                .source_env = self.env,
             });
         }
 
@@ -5302,6 +5347,7 @@ pub const Interpreter = struct {
                 .pattern_idx = param,
                 .value = args[i],
                 .expr_idx = @enumFromInt(0),
+                .source_env = self.env,
             });
         }
 

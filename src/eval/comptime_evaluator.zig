@@ -625,9 +625,8 @@ pub const ComptimeEvaluator = struct {
         // Tag unions are now represented as tuples (payload, tag)
         var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
 
-        // Element 1 is the tag discriminant
-        const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
-        const tag_field = try acc.getElement(tag_idx_in_tuple);
+        // Element 1 is the tag discriminant - getElement takes original index directly
+        const tag_field = try acc.getElement(1);
 
         // Extract tag index
         if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
@@ -1215,6 +1214,7 @@ pub const ComptimeEvaluator = struct {
                 .pattern_idx = params[0],
                 .value = num_literal_record,
                 .expr_idx = @enumFromInt(0),
+                .source_env = origin_env,
             });
             defer _ = self.interpreter.bindings.pop();
 
@@ -1432,9 +1432,8 @@ pub const ComptimeEvaluator = struct {
             // If we get here, we just need to check if it was an Err and return false.
             var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
 
-            // Element 1 is tag discriminant
-            const tag_idx_in_tuple: usize = accessor.findElementIndexByOriginal(1) orelse 1;
-            const tag_field = accessor.getElement(tag_idx_in_tuple) catch return true;
+            // Element 1 is tag discriminant - getElement takes original index directly
+            const tag_field = accessor.getElement(1) catch return true;
 
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 const tag_value = tag_field.asI128();
@@ -1581,6 +1580,7 @@ pub const ComptimeEvaluator = struct {
                                 .pattern_idx = def_info.pattern,
                                 .value = value,
                                 .expr_idx = def_info.expr,
+                                .source_env = self.env,
                             });
                         }
                     },

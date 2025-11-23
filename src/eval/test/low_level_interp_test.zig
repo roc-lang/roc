@@ -158,6 +158,7 @@ fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
             .pattern_idx = def.pattern,
             .value = stack_value,
             .expr_idx = def.expr,
+            .source_env = result.module_env,
         });
 
         // Return the value if this is the declaration we want
@@ -194,6 +195,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
             .pattern_idx = def.pattern,
             .value = stack_value,
             .expr_idx = def.expr,
+            .source_env = result.module_env,
         });
 
         // Return the rendered value if this is the declaration we want
@@ -304,7 +306,19 @@ test "e_low_level_lambda - List.get directly" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok 10", first_value);
+    try testing.expectEqualStrings("Ok(10)", first_value);
+}
+
+test "e_low_level_lambda - debug List.len inside custom lambda" {
+    // Test if List.len works when called inside a custom lambda
+    const src =
+        \\x = [10, 20, 30]
+        \\my_len = |lst| List.len(lst)
+        \\len = my_len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 3), len_value);
 }
 
 test "e_low_level_lambda - List.concat preserves order" {
@@ -315,7 +329,7 @@ test "e_low_level_lambda - List.concat preserves order" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok 10", first_value);
+    try testing.expectEqualStrings("Ok(10)", first_value);
 }
 
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
