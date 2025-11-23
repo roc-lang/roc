@@ -829,8 +829,9 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         .ident_idx = try_ident_idx,
     };
 
-    // Create a backing var for Try - it's [Ok(ok), Err(err)]
-    // For simplicity, just use ok_var as the backing var
+    // The backing var doesn't matter here. Nominal types unify based on their ident
+    // and type args only - the backing is never examined during unification.
+    // Creating the real backing type ([Ok(ok), Err(err)]) would be a waste of time.
     const backing_var = ok_var;
     const type_args = [_]Var{ ok_var, err_var };
 
@@ -861,8 +862,9 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
         .ident_idx = numeral_ident_idx,
     };
 
-    // Create backing var - Numeral's backing is [Self({is_negative: Bool, ...})]
-    // For simplicity, we use an empty tag union since the backing isn't used for unification
+    // The backing var doesn't matter here. Nominal types unify based on their ident
+    // and type args only - the backing is never examined during unification.
+    // Creating the real backing type ([Self({is_negative: Bool, ...})]) would be a waste of time.
     const empty_tag_union_content = Content{ .structure = .empty_tag_union };
     const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
     const empty_tag_union = types_mod.TagUnion{
