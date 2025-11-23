@@ -18,6 +18,7 @@ pub const CliArgs = union(enum) {
     repl,
     version,
     docs: DocsArgs,
+    experimental_lsp: ExperimentalLspArgs,
     help: []const u8,
     licenses,
     problem: CliProblem,
@@ -126,6 +127,11 @@ pub const DocsArgs = struct {
     serve: bool = false, // start an HTTP server after generating docs
 };
 
+/// Arguments for `roc experimental-lsp`
+pub const ExperimentalLspArgs = struct {
+    debug_io: bool = false, // log the LSP messages to a temporary log file
+};
+
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
@@ -139,6 +145,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
+    if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
 
@@ -162,6 +169,7 @@ const main_help =
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
+    \\  experimental-lsp Start the experimental language server (LSP) implementation
     \\  help             Print this message
     \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
     \\
@@ -626,6 +634,31 @@ fn parseDocs(args: []const []const u8) CliArgs {
     }
 
     return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve } };
+}
+
+fn parseExperimentalLsp(args: []const []const u8) CliArgs {
+    var debug_io = false;
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help = 
+            \\Start the experimental Roc language server (LSP)
+            \\
+            \\Usage: roc experimental-lsp [OPTIONS]
+            \\
+            \\Options:
+            \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
+            \\  -h, --help            Print help
+            \\
+        };
+        } else if (mem.eql(u8, arg, "--debug-transport")) {
+            debug_io = true;
+        } else {
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "experimental-lsp", .arg = arg } } };
+        }
+    }
+
+    return CliArgs{ .experimental_lsp = .{ .debug_io = debug_io } };
 }
 
 fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
