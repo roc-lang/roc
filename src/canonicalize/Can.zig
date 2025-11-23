@@ -591,14 +591,18 @@ fn introduceTypeNameOnly(
     // Create a placeholder statement with a zero annotation index
     // This will be updated in Phase 1.7 with the real annotation
     const placeholder_stmt = switch (type_decl.kind) {
-        .alias => Statement{ .s_alias_decl = .{
-            .header = header_idx,
-            .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
-        } },
-        .nominal => Statement{ .s_nominal_decl = .{
-            .header = header_idx,
-            .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
-        } },
+        .alias => Statement{
+            .s_alias_decl = .{
+                .header = header_idx,
+                .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+            },
+        },
+        .nominal => Statement{
+            .s_nominal_decl = .{
+                .header = header_idx,
+                .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+            },
+        },
     };
 
     const stmt_idx = try self.env.addStatement(placeholder_stmt, region);
