@@ -7831,7 +7831,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             }, region);
                             try self.env.store.addScratchDef(def_idx);
 
-                            // Create the statement (annotation-only, no generalization)
+                            // Create the statement
                             const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                                 .pattern = pattern_idx,
                                 .expr = anno_only_expr,
@@ -7901,7 +7901,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         }, region);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Create the statement (annotation-only, no generalization)
+                        // Create the statement
                         const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                             .pattern = pattern_idx,
                             .expr = anno_only_expr,
@@ -7971,7 +7971,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 }, region);
                 try self.env.store.addScratchDef(def_idx);
 
-                // Create the statement (annotation-only, no generalization)
+                // Create the statement
                 const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                     .pattern = pattern_idx,
                     .expr = anno_only_expr,
