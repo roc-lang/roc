@@ -156,5 +156,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_c where [_d.from_numeral : _arg -> _ret]"))
+(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 ~~~

@@ -141,40 +141,37 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "used_var")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "unused_var"))
-						(e-num (value "42")))
-					(s-let
-						(p-assign (ident "used_var"))
-						(e-num (value "100")))
-					(s-let
-						(p-assign (ident "another_unused"))
-						(e-string
-							(e-literal (string "hello"))))
-					(s-let
-						(p-assign (ident "_ignored"))
-						(e-num (value "999")))
-					(s-let
-						(p-assign (ident "result"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "used_var")))
-							(e-num (value "10"))))
-					(e-lookup-local
-						(p-assign (ident "result"))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "unused_var"))
+					(e-num (value "42")))
+				(s-let
+					(p-assign (ident "used_var"))
+					(e-num (value "100")))
+				(s-let
+					(p-assign (ident "another_unused"))
+					(e-string
+						(e-literal (string "hello"))))
+				(s-let
+					(p-assign (ident "_ignored"))
+					(e-num (value "999")))
+				(s-let
+					(p-assign (ident "result"))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "used_var")))
+						(e-num (value "10"))))
+				(e-lookup-local
+					(p-assign (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _ret where [_a.from_numeral : _arg2 -> _ret2]")))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "_arg -> _ret where [_a.from_numeral : _arg2 -> _ret2]"))))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

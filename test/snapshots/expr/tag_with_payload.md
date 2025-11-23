@@ -34,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Some(_a)]_others where [_b.from_numeral : _arg -> _ret]"))
+(expr (type "[Some(a)]_others where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

@@ -68,6 +68,8 @@ pub const BuiltinIndices = struct {
     f32_type: Statement.Idx,
     /// Statement index of nested F64 type declaration within Builtin module
     f64_type: Statement.Idx,
+    /// Statement index of nested Numeral type declaration within Builtin module
+    numeral_type: Statement.Idx,
 };
 
 // Type definitions for module compilation

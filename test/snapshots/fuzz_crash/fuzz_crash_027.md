@@ -1761,31 +1761,28 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-closure
-			(captures
-				(capture (ident "other")))
-			(e-lambda
-				(args
-					(p-assign (ident "num")))
-				(e-block
-					(s-let
-						(p-assign (ident "other"))
-						(e-num (value "1")))
-					(e-if
-						(if-branches
-							(if-branch
-								(e-lookup-local
-									(p-assign (ident "num")))
-								(e-block
-									(s-dbg
-										(e-runtime-error (tag "empty_tuple")))
-									(e-num (value "0")))))
-						(if-else
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-let
+					(p-assign (ident "other"))
+					(e-num (value "1")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-lookup-local
+								(p-assign (ident "num")))
 							(e-block
 								(s-dbg
-									(e-num (value "123")))
-								(e-lookup-local
-									(p-assign (ident "other")))))))))
+									(e-runtime-error (tag "empty_tuple")))
+								(e-num (value "0")))))
+					(if-else
+						(e-block
+							(s-dbg
+								(e-num (value "123")))
+							(e-lookup-local
+								(p-assign (ident "other"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -2255,7 +2252,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> _ret where [_d.from_numeral : _arg -> _ret2]"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2292,7 +2289,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> _ret where [_d.from_numeral : _arg -> _ret2]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

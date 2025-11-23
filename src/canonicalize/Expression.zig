@@ -366,6 +366,21 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// A hosted function that will be provided by the platform at runtime.
+    /// This represents a lambda/function whose implementation is provided by the host application
+    /// via the RocOps.hosted_fns array.
+    ///
+    /// ```roc
+    /// # Stdout.line! is a hosted function provided by the platform
+    /// line! : Str => {}
+    /// ```
+    e_hosted_lambda: struct {
+        symbol_name: base.Ident.Idx,
+        index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
+        args: CIR.Pattern.Span,
+        body: Expr.Idx,
+    },
+
     /// A low-level builtin operation.
     /// This represents a lambda/function that will be implemented by the compiler backend.
     /// Like e_anno_only, it has no Roc implementation, but unlike e_anno_only,
@@ -1066,6 +1081,25 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_hosted_lambda => |hosted| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-hosted-lambda");
+                const symbol_name = ir.common.getIdent(hosted.symbol_name);
+                try tree.pushStringPair("symbol", symbol_name);
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.slicePatterns(hosted.args)) |arg_idx| {
+                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
                 try tree.endNode(begin, attrs);
             },
             .e_low_level_lambda => |low_level| {

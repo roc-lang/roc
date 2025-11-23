@@ -947,51 +947,48 @@ main = {
 								(ty-rigid-var-lookup (ty-rigid-var (name "c"))))))))))
 	(d-let
 		(p-assign (ident "process_with_method"))
-		(e-closure
-			(captures
-				(capture (ident "id")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "value")))
-				(e-block
-					(s-let
-						(p-assign (ident "id"))
-						(e-lambda
-							(args
-								(p-assign (ident "x")))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "value")))
+			(e-block
+				(s-let
+					(p-assign (ident "id"))
+					(e-lambda
+						(args
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "x")))))
+				(s-let
+					(p-assign (ident "_test1"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "id")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "_test2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "id")))
+						(e-string
+							(e-literal (string "test")))))
+				(s-let
+					(p-assign (ident "result"))
+					(e-dot-access (field "map")
+						(receiver
 							(e-lookup-local
-								(p-assign (ident "x")))))
-					(s-let
-						(p-assign (ident "_test1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "id")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "_test2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "id")))
-							(e-string
-								(e-literal (string "test")))))
-					(s-let
-						(p-assign (ident "result"))
-						(e-dot-access (field "map")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(args
-								(e-closure
-									(captures
-										(capture (ident "value")))
-									(e-lambda
-										(args
-											(p-underscore))
-										(e-lookup-local
-											(p-assign (ident "value"))))))))
-					(e-lookup-local
-						(p-assign (ident "result"))))))
+								(p-assign (ident "container"))))
+						(args
+							(e-closure
+								(captures
+									(capture (ident "value")))
+								(e-lambda
+									(args
+										(p-underscore))
+									(e-lookup-local
+										(p-assign (ident "value"))))))))
+				(e-lookup-local
+					(p-assign (ident "result")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -1227,7 +1224,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a } where [_e.from_numeral : _arg -> _ret, _h.from_numeral : _arg2 -> _ret2, _i.from_numeral : _arg3 -> _ret3, _j.from_numeral : _arg4 -> _ret4, _k.from_numeral : _arg5 -> _ret5]")))
+		(patt (type "{ chained: a, final: a, id_results: (e, Str, [True]_others), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1241,5 +1238,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: a, final: a, id_results: (_field, Str, [True]_others), processed: c, transformed: a } where [_e.from_numeral : _arg -> _ret, _h.from_numeral : _arg2 -> _ret2, _i.from_numeral : _arg3 -> _ret3, _j.from_numeral : _arg4 -> _ret4, _k.from_numeral : _arg5 -> _ret5]"))))
+		(expr (type "{ chained: a, final: a, id_results: (e, Str, [True]_others), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

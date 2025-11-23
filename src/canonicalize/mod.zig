@@ -12,6 +12,8 @@ pub const ModuleEnv = @import("ModuleEnv.zig");
 pub const Scope = @import("Scope.zig");
 /// Dependency graph and SCC (Strongly Connected Components) analysis
 pub const DependencyGraph = @import("DependencyGraph.zig");
+/// Hosted function compiler - replaces annotation-only with hosted lambdas
+pub const HostedCompiler = @import("HostedCompiler.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());

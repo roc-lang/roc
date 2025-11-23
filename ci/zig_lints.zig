@@ -227,13 +227,7 @@ fn getNewZigFiles(allocator: Allocator) !PathList {
 }
 
 fn fileHasTopLevelComment(allocator: Allocator, file_path: []const u8) !bool {
-    const source = readSourceFile(allocator, file_path) catch |err| {
-        if (err == error.FileNotFound) {
-            // File was added in branch history but has since been deleted - skip it
-            return true;
-        }
-        return err;
-    };
+    const source = try readSourceFile(allocator, file_path);
     defer allocator.free(source);
 
     return std.mem.indexOf(u8, source, "//!") != null;

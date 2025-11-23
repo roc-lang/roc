@@ -139,7 +139,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 35;
+pub const MODULEENV_EXPR_NODE_COUNT = 36;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -660,6 +660,24 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_anno_only => {
             return CIR.Expr{ .e_anno_only = .{} };
         },
+        .expr_hosted_lambda => {
+            // Retrieve hosted lambda data from node and extra_data
+            const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
+            const index = node.data_2;
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const body_idx = extra_data[2];
+
+            return CIR.Expr{ .e_hosted_lambda = .{
+                .symbol_name = symbol_name,
+                .index = index,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .body = @enumFromInt(body_idx),
+            } };
+        },
         .expr_low_level => {
             // Retrieve low-level lambda data from extra_data
             const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
@@ -746,35 +764,6 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
         .data_1 = @intFromEnum(num_kind),
         .data_2 = @intFromEnum(value.kind),
         .data_3 = @intCast(extra_data_start),
-    });
-}
-
-/// Replace an expression with a zero-argument tag (like True or False).
-/// This is used by the compile-time evaluator to fold boolean results.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithZeroArgumentTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    closure_name: Ident.Idx,
-    variant_var: types.Var,
-    ext_var: types.Var,
-    name: Ident.Idx,
-) !void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-
-    // Store zero argument tag data in extra_data
-    const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
-    _ = try store.extra_data.append(store.gpa, @bitCast(name));
-
-    store.nodes.set(node_idx, .{
-        .tag = .expr_zero_argument_tag,
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = 0,
-        .data_3 = 0,
     });
 }
 
@@ -1578,6 +1567,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
         },
+        .e_hosted_lambda => |hosted| {
+            node.tag = .expr_hosted_lambda;
+            // data_1 = symbol_name (Ident.Idx via @bitCast)
+            // data_2 = index (u32)
+            // extra_data: args span start, args span len, body index
+            node.data_1 = @bitCast(hosted.symbol_name);
+            node.data_2 = hosted.index;
+
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
+
+            node.data_3 = @intCast(extra_data_start);
+        },
         .e_low_level_lambda => |low_level| {
             node.tag = .expr_low_level;
             node.data_1 = @intFromEnum(low_level.op);
@@ -2367,6 +2371,14 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
     };
+}
+
+/// Check if a raw node index refers to a definition node.
+/// This is useful when exposed items might be either definitions or type declarations.
+pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+    const nid: Node.Idx = @enumFromInt(node_idx);
+    const node = store.nodes.get(nid);
+    return node.tag == .def;
 }
 
 /// Generic function to get the top of any scratch buffer

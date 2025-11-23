@@ -64,6 +64,8 @@ const BuiltinIndices = struct {
     f32_type: CIR.Statement.Idx,
     /// Statement index of nested F64 type declaration within Builtin module
     f64_type: CIR.Statement.Idx,
+    /// Statement index of nested Numeral type declaration within Builtin module
+    numeral_type: CIR.Statement.Idx,
 };
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
@@ -330,13 +332,15 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // We need to modify the def's expr field in extra_data
-                    // The expr is stored at extra_data[extra_start + 1] (see getDef/addDef)
+                    // Def structure is stored in extra_data:
+                    // extra_data[0] = pattern, extra_data[1] = expr, ...
+                    // node.data_1 points to the start index in extra_data
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
                     const def_node = env.store.nodes.get(def_node_idx);
                     const extra_start = def_node.data_1;
-                    const expr_extra_idx: @TypeOf(env.store.extra_data).Idx = @enumFromInt(extra_start + 1);
-                    env.store.extra_data.set(expr_extra_idx, @intFromEnum(expr_idx));
+
+                    // Update the expr field (at extra_start + 1)
+                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -447,6 +451,7 @@ pub fn main() !void {
     const dec_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Dec");
     const f32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F32");
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
+    const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
@@ -471,6 +476,7 @@ pub fn main() !void {
     const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
     const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
     const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
+    const numeral_ident = builtin_env.common.findIdent("Numeral") orelse unreachable;
 
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
@@ -492,6 +498,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -520,6 +527,7 @@ pub fn main() !void {
         .dec_type = dec_type_idx,
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
+        .numeral_type = numeral_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -560,10 +568,12 @@ fn compileModule(
 
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
+    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
+        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,
@@ -592,12 +602,7 @@ fn compileModule(
             std.debug.print("  Tokenize error: {any}\n", .{diag});
         }
         for (parse_ast.parse_diagnostics.items) |diag| {
-            const start = diag.region.start;
-            const end = diag.region.end;
-            const context_start = if (start > 50) start - 50 else 0;
-            const context_end = if (end + 50 < source.len) end + 50 else source.len;
-            std.debug.print("  Parse error at bytes {d}-{d}: {s}\n", .{ start, end, @tagName(diag.tag) });
-            std.debug.print("    Context: {s}\n", .{source[context_start..context_end]});
+            std.debug.print("  Parse error: {any}\n", .{diag});
         }
 
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});

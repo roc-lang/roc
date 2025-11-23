@@ -277,6 +277,7 @@ pub fn populateModuleEnvs(
         .{ "Dec", builtin_indices.dec_type },
         .{ "F32", builtin_indices.f32_type },
         .{ "F64", builtin_indices.f64_type },
+        .{ "Numeral", builtin_indices.numeral_type },
     };
 
     inline for (types_to_add) |type_info| {
@@ -314,7 +315,7 @@ pub fn setupAutoImportedBuiltinTypes(
             "Builtin",
         );
 
-        const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+        const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
@@ -413,27 +414,74 @@ fn processTypeDeclFirstPass(
         break :blk try self.env.addTypeHeader(qualified_header, region);
     } else header_idx;
 
-    // Create a placeholder type declaration statement to introduce the type name into scope
-    // This allows recursive type references to work during annotation canonicalization
-    const placeholder_cir_type_decl = switch (type_decl.kind) {
-        .alias => Statement{
-            .s_alias_decl = .{
-                .header = final_header_idx,
-                .anno = @enumFromInt(0), // placeholder - will be replaced
+    // Check if this type was already introduced in Phase 1.5.8 (for forward reference support)
+    // If so, reuse the existing statement index instead of creating a new one
+    const type_decl_stmt_idx = if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| blk: {
+        // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
+        const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
+        const is_placeholder = switch (existing_stmt) {
+            .s_alias_decl => |alias| @intFromEnum(alias.anno) == 0,
+            .s_nominal_decl => |nominal| @intFromEnum(nominal.anno) == 0,
+            else => false,
+        };
+
+        if (is_placeholder) {
+            // It's a placeholder from Phase 1.5.8 - we'll update it
+            break :blk existing_stmt_idx;
+        } else {
+            // It's a real declaration - this is a redeclaration error
+            // Still create a new statement and report the error
+            const original_region = self.env.store.getStatementRegion(existing_stmt_idx);
+            try self.env.pushDiagnostic(Diagnostic{
+                .type_redeclared = .{
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                    .name = qualified_name_idx,
+                },
+            });
+
+            // Create a new statement for the redeclared type (so both declarations exist in the IR)
+            const new_stmt = switch (type_decl.kind) {
+                .alias => Statement{
+                    .s_alias_decl = .{
+                        .header = final_header_idx,
+                        .anno = @enumFromInt(0), // placeholder - will be replaced below
+                    },
+                },
+                .nominal => Statement{
+                    .s_nominal_decl = .{
+                        .header = final_header_idx,
+                        .anno = @enumFromInt(0), // placeholder - will be replaced below
+                    },
+                },
+            };
+
+            break :blk try self.env.addStatement(new_stmt, region);
+        }
+    } else blk: {
+        // Type was not introduced yet - create a placeholder statement
+        const placeholder_cir_type_decl = switch (type_decl.kind) {
+            .alias => Statement{
+                .s_alias_decl = .{
+                    .header = final_header_idx,
+                    .anno = @enumFromInt(0), // placeholder - will be replaced
+                },
             },
-        },
-        .nominal => Statement{
-            .s_nominal_decl = .{
-                .header = final_header_idx,
-                .anno = @enumFromInt(0), // placeholder - will be replaced
+            .nominal => Statement{
+                .s_nominal_decl = .{
+                    .header = final_header_idx,
+                    .anno = @enumFromInt(0), // placeholder - will be replaced
+                },
             },
-        },
+        };
+
+        const stmt_idx = try self.env.addStatement(placeholder_cir_type_decl, region);
+
+        // Introduce the type name into scope early to support recursive references
+        try self.introduceType(qualified_name_idx, stmt_idx, region);
+
+        break :blk stmt_idx;
     };
-
-    const type_decl_stmt_idx = try self.env.addStatement(placeholder_cir_type_decl, region);
-
-    // Introduce the type name into scope early to support recursive references
-    try self.introduceType(qualified_name_idx, type_decl_stmt_idx, region);
 
     // For nested types, also add an unqualified alias so child scopes can find it
     // E.g., when introducing "Builtin.Bool", also add "Bool" -> "Builtin.Bool"
@@ -511,6 +559,62 @@ fn processTypeDeclFirstPass(
             try self.processAssociatedBlock(qualified_name_idx, type_header.name, assoc);
         }
     }
+}
+
+/// Introduce just the type name into scope without processing the full annotation.
+/// This is used in Phase 1.5.8 to make type names available for forward references
+/// in associated item signatures before the associated blocks are processed.
+/// We create a real placeholder statement (with zero annotation) that will be updated in Phase 1.7.
+fn introduceTypeNameOnly(
+    self: *Self,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+) std.mem.Allocator.Error!void {
+    // Canonicalize the type header to get the name in the env's identifier space
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+    const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+    // Check if the header is malformed
+    const node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+    if (node.tag == .malformed) {
+        return;
+    }
+
+    // Extract the type name from the header
+    const type_header = self.env.store.getTypeHeader(header_idx);
+    const name_ident = type_header.name;
+
+    // Check if already introduced (shouldn't happen, but be safe)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    if (current_scope.type_bindings.get(name_ident) != null) {
+        return; // Already in scope
+    }
+
+    // Create a placeholder statement with a zero annotation index
+    // This will be updated in Phase 1.7 with the real annotation
+    const placeholder_stmt = switch (type_decl.kind) {
+        .alias => Statement{
+            .s_alias_decl = .{
+                .header = header_idx,
+                .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+            },
+        },
+        .nominal => Statement{
+            .s_nominal_decl = .{
+                .header = header_idx,
+                .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+            },
+        },
+    };
+
+    const stmt_idx = try self.env.addStatement(placeholder_stmt, region);
+
+    // Introduce the type into scope with the real (placeholder) statement index
+    try self.introduceType(name_ident, stmt_idx, region);
+
+    // Mark this statement as needing update in Phase 1.7
+    // We use exposed_type_texts to track which types need their annotations processed
+    const type_text = self.env.getIdent(name_ident);
+    try self.exposed_type_texts.put(self.env.gpa, type_text, region);
 }
 
 /// Process an associated block: introduce all items, set up scope with aliases, and canonicalize
@@ -1409,6 +1513,22 @@ pub fn canonicalizeFile(
             }
         },
         else => {},
+    }
+
+    // Phase 1.5.8: Introduce type names for NOMINAL types WITHOUT associated blocks
+    // This allows associated blocks (processed in Phase 1.6) to reference sibling types
+    // that are declared without associated blocks (e.g., Positive's negate -> Negative)
+    // We only introduce the name here; full processing happens in Phase 1.7
+    // Note: We only do this for nominals, not aliases, because aliases may reference
+    // nested types that are only introduced in Phase 1.6
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.associated == null and type_decl.kind == .nominal) {
+                try self.introduceTypeNameOnly(type_decl);
+            }
+        }
     }
 
     // Phase 1.6: Now process all deferred type declaration associated blocks

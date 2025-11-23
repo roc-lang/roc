@@ -1,0 +1,159 @@
+//! Integration tests for the fx platform with effectful functions.
+//!
+//! Tests that platform-provided hosted functions (like Stdout.line! and Stderr.line!)
+//! can be properly invoked from Roc applications.
+
+const std = @import("std");
+const testing = std.testing;
+
+fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_input: []const u8) !std.process.Child.RunResult {
+    var child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/roc", roc_file }, allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    // Write stdin and close
+    if (child.stdin) |stdin| {
+        try stdin.writeAll(stdin_input);
+        stdin.close();
+        child.stdin = null;
+    }
+
+    // Collect stdout
+    const stdout = if (child.stdout) |stdout_pipe|
+        try stdout_pipe.readToEndAlloc(allocator, std.math.maxInt(usize))
+    else
+        try allocator.dupe(u8, "");
+
+    // Collect stderr
+    const stderr = if (child.stderr) |stderr_pipe|
+        try stderr_pipe.readToEndAlloc(allocator, std.math.maxInt(usize))
+    else
+        try allocator.dupe(u8, "");
+
+    const term = try child.wait();
+
+    return .{
+        .term = term,
+        .stdout = stdout,
+        .stderr = stderr,
+    };
+}
+
+test "fx platform effectful functions" {
+    const allocator = testing.allocator;
+
+    // Run the app directly with the roc CLI (not build, just run)
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/app.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify stdout contains expected messages
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 1 to stdout") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 3 to stdout") != null);
+
+    // Verify stderr contains expected messages
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Error from stderr!") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 2 to stderr") != null);
+
+    // Verify stderr messages are NOT in stdout
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Error from stderr!") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 2 to stderr") == null);
+
+    // Verify stdout messages are NOT in stderr
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Hello from stdout!") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 1 to stdout") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
+}
+
+test "fx platform stdin to stdout" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_to_stdout.roc", "test input\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "test input") != null);
+}
+
+test "fx platform stdin echo" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_echo.roc", "hello world\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "hello world") != null);
+}
+
+test "fx platform stdin test with output" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_test.roc", "user input\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Before stdin") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "After stdin") != null);
+}
+
+test "fx platform stdin simple" {
+    const allocator = testing.allocator;
+
+    const result = try runRocWithStdin(allocator, "test/fx/stdin_simple.roc", "simple test\n");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Test failed with term: {}\n", .{result.term});
+        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
+        return error.TestFailed;
+    }
+    // stdin_simple reads from stdin and prints to stderr
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "simple test") != null);
+}

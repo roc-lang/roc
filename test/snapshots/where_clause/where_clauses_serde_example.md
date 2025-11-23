@@ -90,7 +90,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(U8) -> Try(a, [DecodeErr]) where [List(U8).decode : List(U8) -> Try(a, [DecodeErr])]")))
+		(patt (type "List(U8) -> Try(a, [DecodeErr]) where [a.decode : List(U8) -> Try(a, [DecodeErr])]")))
 	(expressions
-		(expr (type "List(U8) -> Try(a, [DecodeErr]) where [List(U8).decode : List(U8) -> Try(a, [DecodeErr])]"))))
+		(expr (type "List(U8) -> Try(a, [DecodeErr]) where [a.decode : List(U8) -> Try(a, [DecodeErr])]"))))
 ~~~

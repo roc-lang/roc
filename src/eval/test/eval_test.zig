@@ -719,6 +719,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
         .list = try original_env.insertIdent(base.Ident.for_text("List")),
         .box = try original_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try original_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,

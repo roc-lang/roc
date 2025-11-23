@@ -166,11 +166,11 @@ NO CHANGE
 	(defs
 		(patt (type "a, a -> a"))
 		(patt (type "_arg -> Error"))
-		(patt (type "_arg -> Error where [_a.from_numeral : _arg2 -> _ret]"))
+		(patt (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a, a -> a"))
 		(expr (type "_arg -> Error"))
-		(expr (type "_arg -> Error where [_a.from_numeral : _arg2 -> _ret]"))
+		(expr (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))))
 ~~~
