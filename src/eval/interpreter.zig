@@ -1664,23 +1664,29 @@ pub const Interpreter = struct {
                             const b = self_interp.bindings.items[i];
                             if (b.pattern_idx == cap.pattern_idx) return b.value;
                         }
-                        // Next try active closure captures (top-most only) by name
+                        // Next try ALL active closure captures in reverse order (innermost to outermost)
+                        // This is critical for deeply nested lambdas where inner closures need to
+                        // capture values from outer closures
                         if (self_interp.active_closures.items.len > 0) {
-                            const top = self_interp.active_closures.items[self_interp.active_closures.items.len - 1];
-                            if (top.layout.tag == .closure and top.ptr != null) {
-                                const captures_layout = self_interp.runtime_layout_store.getLayout(top.layout.data.closure.captures_layout_idx);
-                                const header_sz = @sizeOf(layout.Closure);
-                                const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
-                                const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                                const base: [*]u8 = @ptrCast(@alignCast(top.ptr.?));
-                                const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                                const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                                var accessor = self_interp.runtime_layout_store; // just for type
-                                _ = &accessor;
-                                var rec_acc = (try rec_val.asRecord(&self_interp.runtime_layout_store));
-                                const name_text = self_interp.env.getIdent(cap.name);
-                                if (rec_acc.findFieldIndex(self_interp.env, name_text)) |fidx| {
-                                    return rec_acc.getFieldByIndex(fidx) catch null;
+                            var closure_idx: usize = self_interp.active_closures.items.len;
+                            while (closure_idx > 0) {
+                                closure_idx -= 1;
+                                const cls_val = self_interp.active_closures.items[closure_idx];
+                                if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                                    const captures_layout = self_interp.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                                    const header_sz = @sizeOf(layout.Closure);
+                                    const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
+                                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                                    var rec_acc = (rec_val.asRecord(&self_interp.runtime_layout_store)) catch continue;
+                                    const name_text = self_interp.env.getIdent(cap.name);
+                                    if (rec_acc.findFieldIndex(self_interp.env, name_text)) |fidx| {
+                                        if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
+                                            return field_val;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1739,7 +1745,8 @@ pub const Interpreter = struct {
                         .params = lam.args,
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
                         .captures_layout_idx = captures_layout_idx,
-                        .lambda_expr_idx = cls.lambda_idx,
+                        // Store e_closure expr_idx (not inner e_lambda) so has_real_captures check works in e_lookup_local
+                        .lambda_expr_idx = expr_idx,
                         .source_env = self.env,
                     };
                     // Copy captures into record area following header (aligned)
@@ -2222,30 +2229,36 @@ pub const Interpreter = struct {
                 // If not found, try active closure captures by variable name
                 // IMPORTANT: Only check captures if the closure header indicates it actually has captures
                 // The captures layout from the type system might not match what's actually captured
+                // Search ALL active closures in reverse order (innermost to outermost) for nested lambdas
                 if (self.active_closures.items.len > 0) {
                     const pat = self.env.store.getPattern(lookup.pattern_idx);
                     if (pat == .assign) {
                         const var_name = self.env.getIdent(pat.assign.ident);
-                        const cls_val = self.active_closures.items[self.active_closures.items.len - 1];
-                        if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                            const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
-                            // Check if this closure was created with actual captures (e_closure)
-                            // vs. a plain lambda (e_lambda) or low-level lambda (e_low_level_lambda)
-                            // Only e_closure creates real capture values; others have uninitialized captures area
-                            const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
-                            const has_real_captures = (lambda_expr == .e_closure);
-                            if (has_real_captures) {
-                                const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
-                                const header_sz = @sizeOf(layout.Closure);
-                                const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
-                                const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                                const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
-                                const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                                const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                                var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                                if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
-                                    const field_val = try accessor.getFieldByIndex(fidx);
-                                    return try self.pushCopy(field_val, roc_ops);
+                        // Search from innermost to outermost closure
+                        var closure_idx: usize = self.active_closures.items.len;
+                        while (closure_idx > 0) {
+                            closure_idx -= 1;
+                            const cls_val = self.active_closures.items[closure_idx];
+                            if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                                const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
+                                // Check if this closure was created with actual captures (e_closure)
+                                // vs. a plain lambda (e_lambda) or low-level lambda (e_low_level_lambda)
+                                // Only e_closure creates real capture values; others have uninitialized captures area
+                                const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
+                                const has_real_captures = (lambda_expr == .e_closure);
+                                if (has_real_captures) {
+                                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                                    const header_sz = @sizeOf(layout.Closure);
+                                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                                    var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                                    if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
+                                        const field_val = try accessor.getFieldByIndex(fidx);
+                                        return try self.pushCopy(field_val, roc_ops);
+                                    }
                                 }
                             }
                         }
@@ -3121,7 +3134,8 @@ pub const Interpreter = struct {
                 var err_payload_var: ?types.Var = null;
 
                 for (tag_list.items, 0..) |tag_info, i| {
-                    const tag_name = self.env.getIdent(tag_info.name);
+                    // Use runtime_layout_store.env for tag names since appendUnionTags uses runtime types
+                    const tag_name = self.runtime_layout_store.env.getIdent(tag_info.name);
                     if (std.mem.eql(u8, tag_name, "Ok")) {
                         ok_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);

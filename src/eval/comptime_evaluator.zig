@@ -1425,6 +1425,43 @@ pub const ComptimeEvaluator = struct {
                 return true; // Ok
             }
             return true; // Unknown format, optimistically allow
+        } else if (result.layout.tag == .tuple) {
+            // Tuple layout (payload, tag) - newer representation for tag unions
+            // For tuple layouts, the interpreter stores error messages in last_error_message
+            // (which was already checked at the start of this function).
+            // If we get here, we just need to check if it was an Err and return false.
+            var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
+
+            // Element 1 is tag discriminant
+            const tag_idx_in_tuple: usize = accessor.findElementIndexByOriginal(1) orelse 1;
+            const tag_field = accessor.getElement(tag_idx_in_tuple) catch return true;
+
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                const tag_value = tag_field.asI128();
+                // Tag indices: Ok and Err are ordered alphabetically, so Err=0 and Ok=1
+                // The interpreter writes ok_index for in_range, err_index for !in_range
+                // Looking at appendUnionTags sorting, "Err" < "Ok" alphabetically
+                if (tag_value == 0) {
+                    // This is an Err - the detailed message should have been in last_error_message
+                    // If we get here, something went wrong but we know it's an error
+                    const error_msg = try std.fmt.allocPrint(
+                        self.allocator,
+                        "Numeric literal validation failed",
+                        .{},
+                    );
+                    try self.error_names.append(error_msg);
+                    const problem = Problem{
+                        .comptime_eval_error = .{
+                            .error_name = error_msg,
+                            .region = region,
+                        },
+                    };
+                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    return false;
+                }
+                return true; // Ok
+            }
+            return true; // Unknown format, optimistically allow
         }
 
         return true; // Unknown format, optimistically allow
