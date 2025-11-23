@@ -1677,9 +1677,6 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                if (all.len == 0) {
-                    return error.TypeMismatch;
-                }
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
@@ -1858,11 +1855,19 @@ pub const Interpreter = struct {
                     // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
                     if (lambda_expr == .e_hosted_lambda) {
                         const hosted = lambda_expr.e_hosted_lambda;
-                        // Get the return type from the hosted lambda's body expression (which is in the platform module)
-                        // This is more reliable than using call_ret_rt_var which was computed in the app module context
-                        const hosted_body_ct_var = can.ModuleEnv.varFrom(hosted.body);
-                        const hosted_ret_rt_var = try self.translateTypeVar(self.env, hosted_body_ct_var);
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, hosted_ret_rt_var);
+                        // Get the return type from the hosted function's type annotation
+                        // The function type should be stored in the lambda expression's type variable
+                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+
+                        // Extract the return type from the function type
+                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| blk: {
+                            // Function type has a return type
+                            break :blk func.ret;
+                        } else call_ret_rt_var;
+
+                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -5137,21 +5142,14 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-            // Fallback: search all definitions for the method
-            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = origin_env.store.getDef(def_idx);
-                const pat = origin_env.store.getPattern(def.pattern);
-                if (pat == .assign and pat.assign.ident == method_ident) {
-                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
-                }
-            }
-            return error.MethodLookupFailed;
-        };
+        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse return error.MethodLookupFailed;
 
-        // The node should be a Def
         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+
+        // Assert that the exposed node is actually a def node, not a type declaration.
+        // If this fails, the method lookup returned the wrong node index.
+        std.debug.assert(origin_env.store.isDefNode(node_idx));
+
         const target_def = origin_env.store.getDef(target_def_idx);
 
         // Save current environment and bindings

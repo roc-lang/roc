@@ -127,24 +127,6 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     // Get builtin modules
     const builtin_modules = &global_builtin_modules.?;
 
-    // Debug: print import count and imported_envs count
-    const import_count = env_ptr.imports.imports.items.items.len;
-    const imported_count = if (global_imported_envs) |envs| envs.len else 0;
-    std.debug.print("DEBUG: app has {} imports, we have {} imported_envs\n", .{ import_count, imported_count });
-
-    // Debug: print the import names
-    for (env_ptr.imports.imports.items.items, 0..) |str_idx, i| {
-        const import_name = env_ptr.common.getString(str_idx);
-        std.debug.print("DEBUG: import[{}] = '{s}'\n", .{ i, import_name });
-    }
-
-    // Debug: print platform env module names
-    if (global_imported_envs) |envs| {
-        for (envs, 0..) |env, i| {
-            std.debug.print("DEBUG: platform_env[{}] module_name = '{s}'\n", .{ i, env.module_name });
-        }
-    }
-
     // Set up interpreter infrastructure (per-call, as it's lightweight)
     var interpreter = try createInterpreter(env_ptr, builtin_modules, roc_ops);
     defer interpreter.deinit();
@@ -173,11 +155,6 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     // Get the definition and extract its expression
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
-
-    // Debug: print the expression we're about to evaluate
-    const expr = env_ptr.store.getExpr(expr_idx);
-    std.debug.print("DEBUG: evaluating expression type: {}\n", .{@intFromEnum(std.meta.activeTag(expr))});
-    std.debug.print("DEBUG: expr_idx raw: {}\n", .{@intFromEnum(expr_idx)});
 
     // Evaluate the expression (with optional arguments)
     try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
@@ -292,15 +269,10 @@ fn createInterpreter(env_ptr: *ModuleEnv, builtin_modules: *const eval.BuiltinMo
         return error.OutOfMemory;
     };
 
-    // Debug: print what we're actually passing to interpreter
-    std.debug.print("DEBUG: Passing {} envs to interpreter init:\n", .{imported_envs.len});
-    for (imported_envs, 0..) |env, i| {
-        std.debug.print("DEBUG:   env[{}] = '{s}'\n", .{ i, env.module_name });
-    }
-
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
+
     return interpreter;
 }

@@ -3,6 +3,13 @@
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
+
+/// Configure std library logging to suppress debug messages in production.
+/// This prevents debug logs from polluting stderr which should only contain
+/// actual program output (like Stderr.line! calls).
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+};
 const build_options = @import("build_options");
 const builtin = @import("builtin");
 const base = @import("base");
@@ -1427,8 +1434,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
                 // Add to exposed_items with the same node_idx value
                 try module_env_ptr.common.exposed_items.setNodeIndexById(shm_allocator, @bitCast(aliased_ident), entry.value);
-
-                std.debug.print("DEBUG: Added exposed alias '{s}' -> node_idx={} for '{s}'\n", .{ aliased_name, entry.value, key_text });
             }
         }
 
@@ -1562,22 +1567,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
             .statement_idx = @enumFromInt(0), // Non-null triggers qualified name building
         };
 
-        // Debug: test if we can find the exposed item in the platform module
-        const test_lookup_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}.line!", .{ platform_env.module_name, module_name });
-        defer allocs.gpa.free(test_lookup_name);
-        const found_ident = platform_env.common.findIdent(test_lookup_name);
-        std.debug.print("DEBUG: Testing lookup '{s}' in {s}: found={}\n", .{ test_lookup_name, platform_env.module_name, found_ident != null });
-
-        // Debug: print the Ident.Idx we're adding to the map
-        const module_ident_dbg = try app_env.insertIdent(base.Ident.for_text(module_name));
-        std.debug.print("DEBUG: Adding '{s}' to map with Ident.Idx: idx={}, attrs=({},{},{})\n", .{
-            module_name,
-            module_ident_dbg.idx,
-            @as(u1, @intFromBool(module_ident_dbg.attributes.effectful)),
-            @as(u1, @intFromBool(module_ident_dbg.attributes.ignored)),
-            @as(u1, @intFromBool(module_ident_dbg.attributes.reassignable)),
-        });
-
         // Add with qualified name key (for import validation: "pf.Stdout")
         const qualified_name = try std.fmt.allocPrint(allocs.gpa, "pf.{s}", .{module_name});
         defer allocs.gpa.free(qualified_name);
@@ -1595,18 +1584,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         defer allocs.gpa.free(module_name_with_roc);
         const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
         try app_module_envs_map.put(resolved_ident, auto_type);
-    }
-
-    // Debug: print all keys in the module envs map
-    std.debug.print("DEBUG: app_module_envs_map keys:\n", .{});
-    var iter = app_module_envs_map.iterator();
-    while (iter.next()) |entry| {
-        const key_text = app_env.getIdent(entry.key_ptr.*);
-        std.debug.print("  key: '{s}' (idx={}, attrs={})\n", .{
-            key_text,
-            entry.key_ptr.idx,
-            @as(u3, @bitCast(entry.key_ptr.attributes)),
-        });
     }
 
     var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
@@ -1792,15 +1769,6 @@ fn compileModuleToSharedMemory(
     defer checker.deinit();
 
     try checker.checkFile();
-
-    // Debug: print exposed items for this platform module
-    std.debug.print("DEBUG compileModule: module_name_arg='{s}', env.module_name='{s}', exposed_items:\n", .{ module_name_arg, env.module_name });
-    env.common.exposed_items.ensureSorted(env.gpa);
-    const entries = env.common.exposed_items.items.entries.items;
-    for (entries, 0..) |entry, idx| {
-        const ident_text = env.getIdent(@bitCast(entry.key));
-        std.debug.print("  exposed[{}]: '{s}' -> node_idx={}\n", .{ idx, ident_text, entry.value });
-    }
 
     // Allocate and return
     const env_ptr = try shm_allocator.create(ModuleEnv);

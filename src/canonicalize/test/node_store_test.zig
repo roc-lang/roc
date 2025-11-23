@@ -380,6 +380,14 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_anno_only = .{},
     });
+    try expressions.append(gpa, CIR.Expr{
+        .e_hosted_lambda = .{
+            .symbol_name = rand_ident_idx(),
+            .index = rand.random().int(u32),
+            .args = CIR.Pattern.Span{ .span = rand_span() },
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
 
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
