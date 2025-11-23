@@ -1127,10 +1127,10 @@ pub fn listConcat(
         const source_a = resized_list_a.bytes orelse unreachable;
         const source_b = list_b.bytes orelse unreachable;
 
-        // Use std.mem.copyForwards instead of @memcpy to handle potential aliasing
+        // Use @memmove instead of @memcpy to handle potential aliasing
         const dest_slice = source_a[(list_a.len() * element_width)..(total_length * element_width)];
         const src_slice = source_b[0..(list_b.len() * element_width)];
-        std.mem.copyForwards(u8, dest_slice, src_slice);
+        @memmove(dest_slice, src_slice);
 
         // Increment refcount of all cloned elements.
         if (elements_refcounted) {
