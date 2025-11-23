@@ -297,6 +297,7 @@ pub const ModuleType = enum {
     bundle,
     unbundle,
     base58,
+    lsp,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -323,6 +324,7 @@ pub const ModuleType = enum {
             .bundle => &.{ .base, .collections, .base58 },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
+            .lsp => &.{},
         };
     }
 };
@@ -351,6 +353,7 @@ pub const RocModules = struct {
     bundle: *Module,
     unbundle: *Module,
     base58: *Module,
+    lsp: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -382,6 +385,7 @@ pub const RocModules = struct {
             .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
+            .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -419,6 +423,7 @@ pub const RocModules = struct {
             .bundle,
             .unbundle,
             .base58,
+            .lsp,
         };
 
         // Setup dependencies for each module
@@ -452,6 +457,7 @@ pub const RocModules = struct {
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
         step.root_module.addImport("watch", self.watch);
+        step.root_module.addImport("lsp", self.lsp);
 
         // Don't add bundle module for WASM targets (zstd C library not available)
         if (step.rootModuleTarget().cpu.arch != .wasm32) {
@@ -491,6 +497,7 @@ pub const RocModules = struct {
             .bundle => self.bundle,
             .unbundle => self.unbundle,
             .base58 => self.base58,
+            .lsp => self.lsp,
         };
     }
 
