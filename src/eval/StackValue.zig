@@ -36,6 +36,8 @@ layout: Layout,
 ptr: ?*anyopaque,
 /// Flag to track whether the memory has been initialized
 is_initialized: bool = false,
+/// Optional runtime type variable for type information (used in constant folding)
+rt_var: ?types.Var = null,
 
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {

@@ -475,6 +475,14 @@ pub const Interpreter = struct {
                                 try Placeholder.add(self, d.pattern, d.expr);
                             }
                         },
+                        .s_decl_gen => |d| {
+                            const patt = self.env.store.getPattern(d.pattern);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(d.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
+                                try Placeholder.add(self, d.pattern, d.expr);
+                            }
+                        },
                         .s_var => |v| {
                             const patt = self.env.store.getPattern(v.pattern_idx);
                             if (patt != .assign) continue;
@@ -492,6 +500,27 @@ pub const Interpreter = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |d| {
+                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
+                            }
+
+                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
+                                return error.TypeMismatch;
+                            }
+
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
+                        },
+                        .s_decl_gen => |d| {
                             const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                             const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
@@ -1253,6 +1282,20 @@ pub const Interpreter = struct {
                         try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
                     return dest;
+                } else if (layout_val.tag == .tuple) {
+                    // Tuple (payload, tag) - tag unions are now represented as tuples
+                    var dest = try self.pushRaw(layout_val, 0);
+                    var acc = try dest.asTuple(&self.runtime_layout_store);
+                    // Element 1 is the tag discriminant
+                    const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
+                    const tag_field = try acc.getElement(tag_idx_in_tuple);
+                    // write tag as int
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        try tmp.setInt(@intCast(tag_index));
+                    } else return error.NotImplemented;
+                    return dest;
                 }
                 return error.NotImplemented;
             },
@@ -1315,6 +1358,82 @@ pub const Interpreter = struct {
                     const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
                     if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
                     const payload_field = try acc.getFieldByIndex(payload_field_idx);
+
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    if (args_exprs.len == 0) {
+                        return dest;
+                    } else if (args_exprs.len == 1) {
+                        const arg_rt_var = arg_rt_vars[0];
+                        const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
+                        defer arg_val.decref(&self.runtime_layout_store, roc_ops);
+                        if (payload_field.ptr) |payload_ptr| {
+                            try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                        }
+                        return dest;
+                    } else {
+                        const arg_count = args_exprs.len;
+                        var elem_layouts = try self.allocator.alloc(Layout, arg_count);
+                        defer self.allocator.free(elem_layouts);
+                        var elem_values = try self.allocator.alloc(StackValue, arg_count);
+                        defer {
+                            for (elem_values[0..arg_count]) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            self.allocator.free(elem_values);
+                        }
+
+                        var j: usize = 0;
+                        while (j < arg_count) : (j += 1) {
+                            const arg_rt_var = arg_rt_vars[j];
+                            const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
+                            elem_values[j] = val;
+                            elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
+                        }
+
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                        if (payload_field.ptr) |payload_ptr| {
+                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                            j = 0;
+                            while (j < elem_values.len) : (j += 1) {
+                                const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
+                                try tup_acc.setElement(sorted_idx, elem_values[j], roc_ops);
+                            }
+                        }
+
+                        return dest;
+                    }
+                } else if (layout_val.tag == .tuple) {
+                    // Tuple (payload, tag) - tag unions now represented as tuples
+                    var dest = try self.pushRaw(layout_val, 0);
+                    var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                    // Element 0 is payload, Element 1 is tag discriminant
+                    const payload_idx: usize = acc.findElementIndexByOriginal(0) orelse 0;
+                    const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
+
+                    // Write tag discriminant
+                    const tag_field = try acc.getElement(tag_idx_in_tuple);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        try tmp.setInt(@intCast(tag_index));
+                    } else return error.NotImplemented;
+
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+                    const arg_vars_range = tag_list.items[tag_index].args;
+                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+                    if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
+                    const payload_field = try acc.getElement(payload_idx);
 
                     if (payload_field.ptr) |payload_ptr| {
                         const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
@@ -2248,7 +2367,8 @@ pub const Interpreter = struct {
             alignment = alignment.max(captures_layout.alignment(target_usize));
         }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
-        const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true };
+        // Preserve rt_var for constant folding
+        const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
         if (size > 0 and src.ptr != null and ptr != null) {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
@@ -3388,6 +3508,173 @@ pub const Interpreter = struct {
                     }
 
                     return dest;
+                } else if (result_layout.tag == .tuple) {
+                    // Tuple (payload, tag) - tag unions are now represented as tuples
+                    var dest = try self.pushRaw(result_layout, 0);
+                    var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+                    // Element 0 is payload, Element 1 is tag discriminant
+                    const payload_idx: usize = result_acc.findElementIndexByOriginal(0) orelse 0;
+                    const tag_idx_in_tuple: usize = result_acc.findElementIndexByOriginal(1) orelse 1;
+
+                    // Write tag discriminant
+                    const tag_field = try result_acc.getElement(tag_idx_in_tuple);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        try tmp.setInt(@intCast(tag_idx));
+                    } else return error.NotImplemented;
+
+                    // Clear payload area
+                    const payload_field = try result_acc.getElement(payload_idx);
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    // Write payload for Ok case
+                    if (in_range and ok_payload_var != null) {
+                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                                const int_type = num_layout.data.scalar.data.int;
+                                if (is_negative) {
+                                    // Write negative value
+                                    switch (int_type) {
+                                        .i8 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i16 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i32 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i64 => {
+                                            const neg_value: i128 = -@as(i128, @intCast(value));
+                                            @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        },
+                                        .i128 => {
+                                            const as_signed: i128 = @bitCast(value);
+                                            const neg_value: i128 = -%as_signed;
+                                            @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                        },
+                                        else => {}, // Unsigned types already rejected above
+                                    }
+                                } else {
+                                    // Write positive value
+                                    switch (int_type) {
+                                        .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
+                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    }
+                                }
+                            } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
+                                // Floating-point and Dec types
+                                const frac_precision = num_layout.data.scalar.data.frac;
+                                const float_value: f64 = if (is_negative)
+                                    -@as(f64, @floatFromInt(value))
+                                else
+                                    @as(f64, @floatFromInt(value));
+
+                                // Handle fractional part for floats
+                                var frac_part: f64 = 0;
+                                if (digits_after.len > 0) {
+                                    var mult: f64 = 1.0 / 256.0;
+                                    for (digits_after) |digit| {
+                                        frac_part += @as(f64, @floatFromInt(digit)) * mult;
+                                        mult /= 256.0;
+                                    }
+                                }
+                                const full_value = if (is_negative) float_value - frac_part else float_value + frac_part;
+
+                                switch (frac_precision) {
+                                    .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(full_value),
+                                    .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = full_value,
+                                    .dec => {
+                                        const dec_value: i128 = if (is_negative)
+                                            -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
+                                        else
+                                            @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
+                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                    },
+                                }
+                            }
+                        }
+                    } else if (!in_range and err_payload_var != null) {
+                        // For Err case, construct InvalidNumeral(Str) with descriptive message
+                        var num_str_buf: [128]u8 = undefined;
+                        const num_str = blk: {
+                            var writer = std.io.fixedBufferStream(&num_str_buf);
+                            if (is_negative) writer.writer().writeAll("-") catch {};
+                            writer.writer().print("{d}", .{value}) catch {};
+                            if (digits_after.len > 0) {
+                                var has_nonzero = false;
+                                for (digits_after) |d| {
+                                    if (d != 0) {
+                                        has_nonzero = true;
+                                        break;
+                                    }
+                                }
+                                if (has_nonzero) {
+                                    writer.writer().writeAll(".") catch {};
+                                    var frac: f64 = 0;
+                                    var mult: f64 = 1.0 / 256.0;
+                                    for (digits_after) |digit| {
+                                        frac += @as(f64, @floatFromInt(digit)) * mult;
+                                        mult /= 256.0;
+                                    }
+                                    var frac_buf: [32]u8 = undefined;
+                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
+                                        writer.writer().writeAll(frac_str[2..]) catch {};
+                                    }
+                                }
+                            }
+                            break :blk num_str_buf[0..writer.pos];
+                        };
+
+                        const error_msg = switch (rejection_reason) {
+                            .negative_unsigned => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .fractional_integer => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .out_of_range, .overflow => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                                .{ num_str, type_name, type_name, min_value_str, max_value_str },
+                            ) catch null,
+                            .none => null,
+                        };
+
+                        if (error_msg) |msg| {
+                            // Store error message for retrieval by caller
+                            // Note: Do NOT free msg here - it will be used and freed by the caller
+                            self.last_error_message = msg;
+                        }
+                    }
+
+                    return dest;
                 }
 
                 self.triggerCrash("num_from_numeral: unsupported result layout", false, roc_ops);
@@ -3403,6 +3690,8 @@ pub const Interpreter = struct {
         bool_value.is_initialized = false;
         try bool_value.setInt(@intFromBool(value));
         bool_value.is_initialized = true;
+        // Store the Bool runtime type variable for constant folding
+        bool_value.rt_var = try self.getCanonicalBoolRuntimeVar();
         return bool_value;
     }
 
@@ -4007,7 +4296,7 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
+    pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
         const bool_decl_idx = self.builtins.bool_stmt;
@@ -4069,7 +4358,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn appendUnionTags(self: *Interpreter, runtime_var: types.Var, list: *std.array_list.AlignedManaged(types.Tag, null)) !void {
+    pub fn appendUnionTags(self: *Interpreter, runtime_var: types.Var, list: *std.array_list.AlignedManaged(types.Tag, null)) !void {
         var var_stack = try std.array_list.AlignedManaged(types.Var, null).initCapacity(self.allocator, 4);
         defer var_stack.deinit();
         try var_stack.append(runtime_var);
@@ -4170,6 +4459,58 @@ pub const Interpreter = struct {
                                 .is_initialized = field_value.is_initialized,
                             };
                         }
+                    }
+                }
+
+                return .{ .index = tag_index, .payload = payload_value };
+            },
+            .tuple => {
+                // Tag unions are now represented as tuples (payload, tag)
+                var acc = try value.asTuple(&self.runtime_layout_store);
+
+                // Element 1 is the tag discriminant
+                const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
+                const tag_field = try acc.getElement(tag_idx_in_tuple);
+                var tag_index: usize = undefined;
+                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                    tag_index = @intCast(tmp.asI128());
+                } else return error.TypeMismatch;
+
+                // Element 0 is the payload
+                const payload_idx: usize = acc.findElementIndexByOriginal(0) orelse 0;
+                var payload_value: ?StackValue = null;
+                const payload_field = acc.getElement(payload_idx) catch null;
+                if (payload_field) |field_value| {
+                    var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                    defer tag_list.deinit();
+                    try self.appendUnionTags(union_rt_var, &tag_list);
+                    if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+                    const tag_info = tag_list.items[tag_index];
+                    const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+
+                    if (arg_vars.len == 0) {
+                        payload_value = null;
+                    } else if (arg_vars.len == 1) {
+                        const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
+                        payload_value = StackValue{
+                            .layout = arg_layout,
+                            .ptr = field_value.ptr,
+                            .is_initialized = field_value.is_initialized,
+                        };
+                    } else {
+                        var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
+                        defer self.allocator.free(elem_layouts);
+                        for (arg_vars, 0..) |arg_var, i| {
+                            elem_layouts[i] = try self.getRuntimeLayout(arg_var);
+                        }
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                        payload_value = StackValue{
+                            .layout = tuple_layout,
+                            .ptr = field_value.ptr,
+                            .is_initialized = field_value.is_initialized,
+                        };
                     }
                 }
 

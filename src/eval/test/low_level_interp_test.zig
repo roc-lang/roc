@@ -1,8 +1,8 @@
-//! Tests for e_low_level_lambda expression evaluation in the interpreter
+//! Tests for e_low_level_lambda runtime evaluation in the interpreter
 //!
-//! These tests verify that low-level operations (like Str.is_empty) that are defined
-//! as type annotations transformed into e_low_level_lambda nodes dispatch to their
-//! actual builtin implementations when called.
+//! These tests verify that low-level operations (like Str.is_empty, List.concat) that are defined
+//! as e_low_level_lambda nodes correctly dispatch to their builtin implementations
+//! when called at compile-time, producing the correct runtime values.
 
 const std = @import("std");
 const parse = @import("parse");
@@ -100,7 +100,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try czer.canonicalizeFile();
 
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -109,7 +109,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, null);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, builtin_module.env);
 
     return .{
         .module_env = module_env,
@@ -133,52 +133,96 @@ fn cleanupEvalModule(result: anytype) void {
     builtin_module_mut.deinit();
 }
 
+/// Helper to evaluate multi-declaration modules and get the integer value of a specific declaration
+fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // Get all declarations
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    if (decl_index >= defs.len) {
+        return error.DeclarationIndexOutOfBounds;
+    }
+
+    const ops = result.evaluator.get_ops();
+
+    // Evaluate all declarations up to and including the one we want, in order
+    // This ensures earlier declarations (like x = ...) are available when evaluating later ones (like len = List.len(x))
+    var i: usize = 0;
+    while (i <= decl_index) : (i += 1) {
+        const def = result.module_env.store.getDef(defs[i]);
+        const stack_value = try result.evaluator.interpreter.evalMinimal(def.expr, ops);
+
+        // Store the value in bindings so later declarations can reference it
+        try result.evaluator.interpreter.bindings.append(.{
+            .pattern_idx = def.pattern,
+            .value = stack_value,
+            .expr_idx = def.expr,
+        });
+
+        // Return the value if this is the declaration we want
+        if (i == decl_index) {
+            defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
+            return stack_value.asI128();
+        }
+    }
+
+    unreachable;
+}
+
+/// Helper to evaluate multi-declaration modules and get the string representation of a specific declaration
+fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocator) ![]u8 {
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // Get all declarations
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    if (decl_index >= defs.len) {
+        return error.DeclarationIndexOutOfBounds;
+    }
+
+    const ops = result.evaluator.get_ops();
+
+    // Evaluate all declarations up to and including the one we want, in order
+    var i: usize = 0;
+    while (i <= decl_index) : (i += 1) {
+        const def = result.module_env.store.getDef(defs[i]);
+        const stack_value = try result.evaluator.interpreter.evalMinimal(def.expr, ops);
+
+        // Store the value in bindings so later declarations can reference it
+        try result.evaluator.interpreter.bindings.append(.{
+            .pattern_idx = def.pattern,
+            .value = stack_value,
+            .expr_idx = def.expr,
+        });
+
+        // Return the rendered value if this is the declaration we want
+        if (i == decl_index) {
+            defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
+            const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, can.ModuleEnv.varFrom(def.expr));
+            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var);
+        }
+    }
+
+    unreachable;
+}
+
 test "e_low_level_lambda - Str.is_empty returns True for empty string" {
     const src =
         \\x = Str.is_empty("")
     ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 1 declaration with 0 crashes (Str.is_empty actually works)
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the result is True
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    try testing.expect(expr == .e_zero_argument_tag);
-    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
-    try testing.expectEqualStrings("True", tag_name);
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
 }
 
 test "e_low_level_lambda - Str.is_empty returns False for non-empty string" {
     const src =
         \\x = Str.is_empty("hello")
     ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 1 declaration with 0 crashes (Str.is_empty actually works)
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the result is False
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    try testing.expect(expr == .e_zero_argument_tag);
-    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
-    try testing.expectEqualStrings("False", tag_name);
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
 }
 
 test "e_low_level_lambda - Str.is_empty in conditional" {
@@ -189,24 +233,9 @@ test "e_low_level_lambda - Str.is_empty in conditional" {
         \\    False
         \\}
     ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 1 declaration with 0 crashes (Str.is_empty actually works)
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the result is True (True branch taken, Str.is_empty("") returns True)
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    try testing.expect(expr == .e_zero_argument_tag);
-    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.name);
-    try testing.expectEqualStrings("True", tag_name);
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
 }
 
 test "e_low_level_lambda - List.concat with two non-empty lists" {
@@ -215,22 +244,9 @@ test "e_low_level_lambda - List.concat with two non-empty lists" {
         \\len = List.len(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the length is 4
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const len_def = result.module_env.store.getDef(defs[1]);
-    const len_expr = result.module_env.store.getExpr(len_def.expr);
-
-    try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 4), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+    // Get the value of the second declaration (len), which should be 4
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4), len_value);
 }
 
 test "e_low_level_lambda - List.concat with empty and non-empty list" {
@@ -239,22 +255,8 @@ test "e_low_level_lambda - List.concat with empty and non-empty list" {
         \\len = List.len(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the length is 3
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const len_def = result.module_env.store.getDef(defs[1]);
-    const len_expr = result.module_env.store.getExpr(len_def.expr);
-
-    try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 3), len_value);
 }
 
 test "e_low_level_lambda - List.concat with two empty lists" {
@@ -264,22 +266,8 @@ test "e_low_level_lambda - List.concat with two empty lists" {
         \\len = List.len(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the length is 0
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const len_def = result.module_env.store.getDef(defs[1]);
-    const len_expr = result.module_env.store.getExpr(len_def.expr);
-
-    try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 0), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
 }
 
 test "e_low_level_lambda - List.concat preserves order" {
@@ -288,24 +276,9 @@ test "e_low_level_lambda - List.concat preserves order" {
         \\first = List.first(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the first element is 10 (wrapped in Try.Ok)
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const first_def = result.module_env.store.getDef(defs[1]);
-    const first_expr = result.module_env.store.getExpr(first_def.expr);
-
-    // Should be a Try.Ok tag with value 10
-    try testing.expect(first_expr == .e_tag);
-    const tag_name = result.module_env.getIdent(first_expr.e_tag.name);
-    try testing.expectEqualStrings("Ok", tag_name);
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok 10", first_value);
 }
 
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
@@ -314,22 +287,8 @@ test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
         \\len = List.len(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the length is 4
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const len_def = result.module_env.store.getDef(defs[1]);
-    const len_expr = result.module_env.store.getExpr(len_def.expr);
-
-    try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 4), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4), len_value);
 }
 
 test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" {
@@ -338,22 +297,8 @@ test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" 
         \\len = List.len(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the length is 3 (outer list has 3 elements)
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const len_def = result.module_env.store.getDef(defs[1]);
-    const len_expr = result.module_env.store.getExpr(len_def.expr);
-
-    try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 3), len_value);
 }
 
 test "e_low_level_lambda - List.concat with empty string list" {
@@ -362,20 +307,6 @@ test "e_low_level_lambda - List.concat with empty string list" {
         \\len = List.len(x)
     ;
 
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the length is 3
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const len_def = result.module_env.store.getDef(defs[1]);
-    const len_expr = result.module_env.store.getExpr(len_def.expr);
-
-    try testing.expect(len_expr == .e_num);
-    try testing.expectEqual(@as(u64, 3), @as(u64, @intCast(@as(u128, @bitCast(len_expr.e_num.value.bytes)))));
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 3), len_value);
 }

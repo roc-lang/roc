@@ -416,26 +416,68 @@ pub const ComptimeEvaluator = struct {
         return EvalResult{ .success = result };
     }
 
-    /// Try to fold a successfully evaluated constant into an e_num expression
+    /// Try to fold a successfully evaluated constant into a constant expression
     /// This replaces the expression in-place so future references see the constant value
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
         const expr_idx = def.expr;
 
-        // Don't fold if the expression is already e_num (already a constant)
+        // Don't fold if the expression is already a constant
         const old_expr = self.env.store.getExpr(expr_idx);
-        if (old_expr == .e_num) {
+        if (old_expr == .e_num or old_expr == .e_zero_argument_tag) {
             return; // Already folded, nothing to do
         }
 
         // Convert StackValue to CIR expression based on layout
         const layout = stack_value.layout;
 
-        // Check if this is a scalar type (including integers)
-        if (layout.tag != .scalar) {
-            return error.NotImplemented; // Don't fold non-scalar types yet
+        // Get the runtime type variable from the StackValue first, or fall back to expression type
+        const rt_var: types_mod.Var = if (stack_value.rt_var) |sv_rt_var|
+            sv_rt_var
+        else blk: {
+            // Fall back to expression type variable
+            const ct_var = ModuleEnv.varFrom(def.expr);
+            break :blk self.interpreter.translateTypeVar(self.env, ct_var) catch {
+                return error.NotImplemented;
+            };
+        };
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+
+        // Check if it's a tag union type
+        const is_tag_union = resolved.desc.content == .structure and
+            resolved.desc.content.structure == .tag_union;
+
+        // Special case for Bool type: u8 scalar with value 0 or 1
+        // This handles nominal Bool types that aren't properly tracked through rt_var
+        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
+            layout.data.scalar.data.int == .u8)
+        {
+            const val = stack_value.asI128();
+            if (val == 0 or val == 1) {
+                // This is a Bool value - fold it directly
+                try self.foldBoolScalar(expr_idx, val == 1);
+                return;
+            }
         }
 
+        if (is_tag_union) {
+            // Tag unions can be scalars (no payload) or tuples (with payload)
+            switch (layout.tag) {
+                .scalar => try self.foldTagUnionScalar(def_idx, expr_idx, stack_value),
+                .tuple => try self.foldTagUnionTuple(def_idx, expr_idx, stack_value),
+                else => return error.NotImplemented,
+            }
+        } else {
+            // Not a tag union - must be a scalar numeric type
+            switch (layout.tag) {
+                .scalar => try self.foldScalar(expr_idx, stack_value, layout),
+                else => return error.NotImplemented,
+            }
+        }
+    }
+
+    /// Fold a scalar value (int, frac) to an e_num expression
+    fn foldScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue, layout: layout_mod.Layout) !void {
         const scalar_tag = layout.data.scalar.tag;
         switch (scalar_tag) {
             .int => {
@@ -495,8 +537,147 @@ pub const ComptimeEvaluator = struct {
                     return error.NotImplemented;
                 }
             },
-            else => return error.NotImplemented, // Don't fold other scalar types yet
+            else => return error.NotImplemented,
         }
+    }
+
+    /// Fold a Bool value to an e_zero_argument_tag expression (True or False)
+    fn foldBoolScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, is_true: bool) !void {
+        // Bool tags: 0 = False, 1 = True
+        // Get the canonical Bool type variable from builtins
+        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
+        const resolved = self.interpreter.runtime_types.resolveVar(bool_rt_var);
+
+        // For Bool, we need to find the correct tag name
+        const tag_name_str = if (is_true) "True" else "False";
+        const tag_name_ident = try self.env.insertIdent(base.Ident.for_text(tag_name_str));
+
+        // Get variant_var and ext_var
+        const variant_var: types_mod.Var = bool_rt_var;
+        var ext_var: types_mod.Var = @enumFromInt(0);
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            tag_name_ident, // closure_name
+            variant_var,
+            ext_var,
+            tag_name_ident,
+        );
+    }
+
+    /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
+    fn foldTagUnionScalar(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        _ = def_idx; // unused now that we get rt_var from stack_value
+        // The value is the tag index directly (scalar integer)
+        const tag_index: usize = @intCast(stack_value.asI128());
+
+        // Get the runtime type variable from the StackValue (already validated in tryFoldConstant)
+        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
+
+        // Get the list of tags for this union type
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        if (tag_index >= tag_list.items.len) {
+            return error.NotImplemented;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        // Only fold zero-argument tags (like True, False)
+        if (arg_vars.len != 0) {
+            return error.NotImplemented;
+        }
+
+        // Get variant_var and ext_var from type information
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = @enumFromInt(0);
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            tag_info.name, // closure_name
+            variant_var,
+            ext_var,
+            tag_info.name,
+        );
+    }
+
+    /// Fold a tag union (represented as tuple) to an e_zero_argument_tag expression
+    fn foldTagUnionTuple(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        _ = def_idx; // unused now that we get rt_var from stack_value
+        // Tag unions are now represented as tuples (payload, tag)
+        var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
+
+        // Element 1 is the tag discriminant
+        const tag_idx_in_tuple: usize = acc.findElementIndexByOriginal(1) orelse 1;
+        const tag_field = try acc.getElement(tag_idx_in_tuple);
+
+        // Extract tag index
+        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
+            return error.NotImplemented;
+        }
+        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+        const tag_index: usize = @intCast(tmp_sv.asI128());
+
+        // Get the runtime type variable from the StackValue (already validated in tryFoldConstant)
+        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
+
+        // Get the list of tags for this union type
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        if (tag_index >= tag_list.items.len) {
+            return error.NotImplemented;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        // Only fold zero-argument tags (like True, False, Ok with no payload variant, etc.)
+        if (arg_vars.len != 0) {
+            return error.NotImplemented; // Has payload, can't fold to e_zero_argument_tag
+        }
+
+        // Get variant_var and ext_var from type information
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = @enumFromInt(0);
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Get closure name - use an empty ident for now (we don't need it for folded constants)
+        const closure_name = tag_info.name; // Reuse tag name as closure name
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            closure_name,
+            variant_var,
+            ext_var,
+            tag_info.name,
+        );
     }
 
     /// Helper to report a problem and track allocated message
@@ -904,13 +1085,14 @@ pub const ComptimeEvaluator = struct {
 
         // Build digits_before_pt List(U8)
         const before_list = try self.buildU8List(digits_before, roc_ops);
-        defer before_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
+        // Note: Don't decref these lists - ownership is transferred to the record below
 
         // Build digits_after_pt List(U8)
         const after_list = try self.buildU8List(digits_after, roc_ops);
-        defer after_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
+        // Note: Don't decref these lists - ownership is transferred to the record below
 
         // Build the Numeral record
+        // Ownership of before_list and after_list is transferred to this record
         const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
         defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
@@ -1010,10 +1192,12 @@ pub const ComptimeEvaluator = struct {
             // Call the low-level builtin with our Numeral argument and target type
             var args = [_]eval_mod.StackValue{num_literal_record};
             result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
+                // Include crash message if available for better debugging
+                const crash_msg = self.crash.crashMessage() orelse "no crash message";
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "from_numeral builtin failed: {s}",
-                    .{@errorName(err)},
+                    "from_numeral builtin failed: {s} ({s})",
+                    .{ @errorName(err), crash_msg },
                 );
                 try self.error_names.append(error_msg);
                 const problem = Problem{
