@@ -1523,6 +1523,8 @@ pub const Interpreter = struct {
                         const arg_count = args_exprs.len;
                         var elem_layouts = try self.allocator.alloc(Layout, arg_count);
                         defer self.allocator.free(elem_layouts);
+                        var actual_elem_layouts = try self.allocator.alloc(Layout, arg_count);
+                        defer self.allocator.free(actual_elem_layouts);
                         var elem_values = try self.allocator.alloc(StackValue, arg_count);
                         defer {
                             for (elem_values[0..arg_count]) |val| {
@@ -1532,13 +1534,53 @@ pub const Interpreter = struct {
                         }
 
                         var j: usize = 0;
+                        var any_layout_differs = false;
                         while (j < arg_count) : (j += 1) {
                             const arg_rt_var = arg_rt_vars[j];
                             const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
                             elem_values[j] = val;
                             elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
+                            actual_elem_layouts[j] = val.layout;
+                            if (!layoutsEqual(elem_layouts[j], val.layout)) {
+                                any_layout_differs = true;
+                            }
                         }
 
+                        if (any_layout_differs) {
+                            // Build payload tuple with ACTUAL layouts from evaluated values
+                            const actual_tuple_idx = try self.runtime_layout_store.putTuple(actual_elem_layouts);
+                            const actual_tuple_layout = self.runtime_layout_store.getLayout(actual_tuple_idx);
+
+                            // Create new outer tuple: (actual_payload_tuple, tag_discriminant)
+                            var outer_elem_layouts = [2]Layout{ actual_tuple_layout, tag_field.layout };
+                            const proper_outer_idx = try self.runtime_layout_store.putTuple(&outer_elem_layouts);
+                            const proper_outer_layout = self.runtime_layout_store.getLayout(proper_outer_idx);
+                            var proper_dest = try self.pushRaw(proper_outer_layout, 0);
+                            var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                            // Write tag discriminant
+                            const proper_tag_field = try proper_acc.getElement(1);
+                            if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                var tmp = proper_tag_field;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(@intCast(tag_index));
+                            }
+
+                            // Write payload tuple
+                            const proper_payload_field = try proper_acc.getElement(0);
+                            if (proper_payload_field.ptr) |payload_ptr| {
+                                var payload_dest = StackValue{ .layout = actual_tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                                var payload_acc = try payload_dest.asTuple(&self.runtime_layout_store);
+                                j = 0;
+                                while (j < elem_values.len) : (j += 1) {
+                                    try payload_acc.setElement(j, elem_values[j], roc_ops);
+                                }
+                            }
+
+                            return proper_dest;
+                        }
+
+                        // Normal case: type system layouts match actual layouts
                         const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                         const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
 
