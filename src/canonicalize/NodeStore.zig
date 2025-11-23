@@ -767,6 +767,34 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
     });
 }
 
+/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
+/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithZeroArgumentTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    closure_name: Ident.Idx,
+    variant_var: types.Var,
+    ext_var: types.Var,
+    name: Ident.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    const extra_data_start = store.extra_data.len();
+    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
+    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_zero_argument_tag,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = 0,
+        .data_3 = 0,
+    });
+}
+
 /// Get the more-specific expr index. Used to make error messages nicer.
 ///
 /// For example, if the provided expr is a `block`, then this will return the

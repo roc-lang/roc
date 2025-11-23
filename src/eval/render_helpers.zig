@@ -92,6 +92,61 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     try out.appendSlice(tag_name);
                     return out.toOwnedSlice();
                 }
+            } else if (value.layout.tag == .tuple) {
+                // Tag union stored as tuple: (payload, tag_index) or (payload_tuple, tag_index)
+                // The last element of the tuple is the tag discriminant
+                var tup_acc = try value.asTuple(ctx.layout_store);
+                const count = tup_acc.getElementCount();
+                if (count > 0) {
+                    // Get tag index from the last element
+                    const tag_elem = try tup_acc.getElement(count - 1);
+                    if (tag_elem.layout.tag == .scalar and tag_elem.layout.data.scalar.tag == .int) {
+                        if (std.math.cast(usize, tag_elem.asI128())) |tag_idx| {
+                            tag_index = tag_idx;
+                            have_tag = true;
+                        }
+                    }
+                }
+                if (have_tag and tag_index < tags.len) {
+                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                    errdefer out.deinit();
+                    try out.appendSlice(tag_name);
+                    const args_range = tags.items(.args)[tag_index];
+                    const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
+                    if (arg_vars.len > 0) {
+                        try out.append('(');
+                        if (arg_vars.len == 1) {
+                            // Single payload: first element
+                            const payload_elem = try tup_acc.getElement(0);
+                            const arg_var = arg_vars[0];
+                            const rendered = try renderValueRocWithType(ctx, payload_elem, arg_var);
+                            defer gpa.free(rendered);
+                            try out.appendSlice(rendered);
+                        } else {
+                            // Multiple payloads: first element is a nested tuple containing all payload args
+                            const payload_elem = try tup_acc.getElement(0);
+                            if (payload_elem.layout.tag == .tuple) {
+                                var payload_tup = try payload_elem.asTuple(ctx.layout_store);
+                                var j: usize = 0;
+                                while (j < arg_vars.len) : (j += 1) {
+                                    const elem_value = try payload_tup.getElement(j);
+                                    const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
+                                    defer gpa.free(rendered);
+                                    try out.appendSlice(rendered);
+                                    if (j + 1 < arg_vars.len) try out.appendSlice(", ");
+                                }
+                            } else {
+                                // Fallback: render the raw payload
+                                const rendered = try renderValueRoc(ctx, payload_elem);
+                                defer gpa.free(rendered);
+                                try out.appendSlice(rendered);
+                            }
+                        }
+                        try out.append(')');
+                    }
+                    return out.toOwnedSlice();
+                }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
                 if (acc.findFieldIndex(ctx.env, "tag")) |idx| {

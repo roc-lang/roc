@@ -33,10 +33,14 @@ const layout_mod = @import("layout");
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-    const result = evaluator.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-    const base_ptr = result orelse {
+
+    // Use C allocator for Roc's allocations to bypass GPA canary checks
+    const c_alloc = std.heap.c_allocator;
+
+    // Add padding in debug builds to detect buffer overflows
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+    const allocation = c_alloc.rawAlloc(alloc_args.length + debug_padding, align_enum, @returnAddress());
+    const base_ptr = allocation orelse {
         const msg = "Out of memory during compile-time evaluation (alloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -44,36 +48,117 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
-        // Return an invalid pointer - the evaluator is already halted
-        // The value doesn't matter since evaluation will stop
         return;
     };
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+
+    const ptr_addr = @intFromPtr(base_ptr);
+
+    // Track this allocation (track the actual requested size, not with padding)
+    evaluator.roc_allocations.put(ptr_addr, alloc_args.length) catch {};
+
+    // In debug builds, write a canary pattern in the padding
+    if (std.debug.runtime_safety) {
+        const padding_start = base_ptr + alloc_args.length;
+        @memset(padding_start[0..debug_padding], 0xAA);
+
+        // Log allocations to help debug
+        if (alloc_args.length == 48) {}
+    }
+
+    // Return the allocation start
+    alloc_args.answer = @ptrFromInt(ptr_addr);
 }
 
 fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    evaluator.allocator.rawFree(slice, align_enum, @returnAddress());
+
+    const ptr_addr = @intFromPtr(dealloc_args.ptr);
+
+    // Look up the allocation size from our tracking map
+    const size = evaluator.roc_allocations.get(ptr_addr) orelse return;
+
+    // In debug builds, check the canary before freeing
+    if (std.debug.runtime_safety) {
+        const debug_padding: usize = 16;
+        const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+        const padding_start = ptr + size;
+
+        // Check if canary was overwritten
+        var i: usize = 0;
+        var overflow_detected = false;
+        while (i < debug_padding) : (i += 1) {
+            if (padding_start[i] != 0xAA) {
+                if (!overflow_detected) {
+                    overflow_detected = true;
+                }
+            }
+        }
+        if (overflow_detected) {
+            @panic("Buffer overflow detected in Roc allocation");
+        }
+    }
+
+    // Remove from tracking map
+    _ = evaluator.roc_allocations.remove(ptr_addr);
+
+    // Free the memory using c_allocator (including padding in debug builds)
+    const c_alloc = std.heap.c_allocator;
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
+    const ptr: [*]u8 = @ptrFromInt(ptr_addr);
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+    const slice = ptr[0 .. size + debug_padding];
+    c_alloc.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-    const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = evaluator.allocator.realloc(old_slice, new_total_size) catch {
+
+    const old_ptr_addr = @intFromPtr(realloc_args.answer);
+    const c_alloc = std.heap.c_allocator;
+    const debug_padding = if (std.debug.runtime_safety) 16 else 0;
+
+    // Look up the old allocation size
+    const old_size = evaluator.roc_allocations.get(old_ptr_addr) orelse {
+        const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+        const new_ptr = c_alloc.rawAlloc(realloc_args.new_length + debug_padding, align_enum, @returnAddress()) orelse {
+            const msg = "Out of memory during compile-time evaluation (realloc)";
+            const crashed = RocCrashed{
+                .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+                .len = msg.len,
+            };
+            comptimeRocCrashed(&crashed, env);
+            evaluator.halted = true;
+            return;
+        };
+        const new_ptr_addr = @intFromPtr(new_ptr);
+        evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+
+        // Set canary in debug builds
+        if (std.debug.runtime_safety) {
+            const padding_start = new_ptr + realloc_args.new_length;
+            @memset(padding_start[0..debug_padding], 0xAA);
+        }
+
+        realloc_args.answer = @ptrFromInt(new_ptr_addr);
+        return;
+    };
+
+    // Check canary before realloc in debug builds
+    if (std.debug.runtime_safety) {
+        const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+        const padding_start = old_ptr + old_size;
+        var i: usize = 0;
+        while (i < debug_padding) : (i += 1) {
+            if (padding_start[i] != 0xAA) {
+                @panic("Buffer overflow detected in Roc allocation");
+            }
+        }
+    }
+
+    // Realloc using c_allocator (include padding in both old and new sizes)
+    const old_ptr: [*]u8 = @ptrFromInt(old_ptr_addr);
+    const old_slice = old_ptr[0 .. old_size + debug_padding];
+    const new_slice = c_alloc.realloc(old_slice, realloc_args.new_length + debug_padding) catch {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
             .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
@@ -81,12 +166,22 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
         };
         comptimeRocCrashed(&crashed, env);
         evaluator.halted = true;
-        // Leave answer unchanged - the interpreter will catch this as error.Crash
         return;
     };
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+
+    // Update tracking map with new pointer and size
+    _ = evaluator.roc_allocations.remove(old_ptr_addr);
+    const new_ptr_addr = @intFromPtr(new_slice.ptr);
+    evaluator.roc_allocations.put(new_ptr_addr, realloc_args.new_length) catch {};
+
+    // Set canary in the new allocation's padding
+    if (std.debug.runtime_safety) {
+        const new_ptr = new_slice.ptr;
+        const padding_start = new_ptr + realloc_args.new_length;
+        @memset(padding_start[0..debug_padding], 0xAA);
+    }
+
+    realloc_args.answer = @ptrFromInt(new_ptr_addr);
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -164,6 +259,8 @@ pub const ComptimeEvaluator = struct {
     halted: bool,
     /// Track the current expression being evaluated (for stack traces)
     current_expr_region: ?base.Region,
+    /// Track Roc allocations for proper dealloc/realloc (maps ptr -> size)
+    roc_allocations: std.AutoHashMap(usize, usize),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -189,6 +286,7 @@ pub const ComptimeEvaluator = struct {
             .failed_literal_exprs = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator),
             .halted = false,
             .current_expr_region = null,
+            .roc_allocations = std.AutoHashMap(usize, usize).init(allocator),
         };
     }
 
@@ -212,12 +310,15 @@ pub const ComptimeEvaluator = struct {
         self.error_names.deinit();
         self.failed_literal_exprs.deinit();
 
+        // Clean up allocation tracking map
+        self.roc_allocations.deinit();
+
         self.interpreter.deinit();
         self.crash.deinit();
         self.expect.deinit();
     }
 
-    fn get_ops(self: *ComptimeEvaluator) *RocOps {
+    pub fn get_ops(self: *ComptimeEvaluator) *RocOps {
         if (self.roc_ops == null) {
             self.roc_ops = RocOps{
                 .env = @ptrCast(self),
@@ -227,7 +328,7 @@ pub const ComptimeEvaluator = struct {
                 .roc_dbg = comptimeRocDbg,
                 .roc_expect_failed = comptimeRocExpectFailed,
                 .roc_crashed = comptimeRocCrashed,
-                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in compile-time eval
+                .hosted_fns = undefined, // Not used in compile-time eval
             };
         }
         self.crash.reset();
@@ -315,26 +416,68 @@ pub const ComptimeEvaluator = struct {
         return EvalResult{ .success = result };
     }
 
-    /// Try to fold a successfully evaluated constant into an e_num expression
+    /// Try to fold a successfully evaluated constant into a constant expression
     /// This replaces the expression in-place so future references see the constant value
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
         const expr_idx = def.expr;
 
-        // Don't fold if the expression is already e_num (already a constant)
+        // Don't fold if the expression is already a constant
         const old_expr = self.env.store.getExpr(expr_idx);
-        if (old_expr == .e_num) {
+        if (old_expr == .e_num or old_expr == .e_zero_argument_tag) {
             return; // Already folded, nothing to do
         }
 
         // Convert StackValue to CIR expression based on layout
         const layout = stack_value.layout;
 
-        // Check if this is a scalar type (including integers)
-        if (layout.tag != .scalar) {
-            return error.NotImplemented; // Don't fold non-scalar types yet
+        // Get the runtime type variable from the StackValue first, or fall back to expression type
+        const rt_var: types_mod.Var = if (stack_value.rt_var) |sv_rt_var|
+            sv_rt_var
+        else blk: {
+            // Fall back to expression type variable
+            const ct_var = ModuleEnv.varFrom(def.expr);
+            break :blk self.interpreter.translateTypeVar(self.env, ct_var) catch {
+                return error.NotImplemented;
+            };
+        };
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+
+        // Check if it's a tag union type
+        const is_tag_union = resolved.desc.content == .structure and
+            resolved.desc.content.structure == .tag_union;
+
+        // Special case for Bool type: u8 scalar with value 0 or 1
+        // This handles nominal Bool types that aren't properly tracked through rt_var
+        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
+            layout.data.scalar.data.int == .u8)
+        {
+            const val = stack_value.asI128();
+            if (val == 0 or val == 1) {
+                // This is a Bool value - fold it directly
+                try self.foldBoolScalar(expr_idx, val == 1);
+                return;
+            }
         }
 
+        if (is_tag_union) {
+            // Tag unions can be scalars (no payload) or tuples (with payload)
+            switch (layout.tag) {
+                .scalar => try self.foldTagUnionScalar(def_idx, expr_idx, stack_value),
+                .tuple => try self.foldTagUnionTuple(def_idx, expr_idx, stack_value),
+                else => return error.NotImplemented,
+            }
+        } else {
+            // Not a tag union - must be a scalar numeric type
+            switch (layout.tag) {
+                .scalar => try self.foldScalar(expr_idx, stack_value, layout),
+                else => return error.NotImplemented,
+            }
+        }
+    }
+
+    /// Fold a scalar value (int, frac) to an e_num expression
+    fn foldScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue, layout: layout_mod.Layout) !void {
         const scalar_tag = layout.data.scalar.tag;
         switch (scalar_tag) {
             .int => {
@@ -394,8 +537,146 @@ pub const ComptimeEvaluator = struct {
                     return error.NotImplemented;
                 }
             },
-            else => return error.NotImplemented, // Don't fold other scalar types yet
+            else => return error.NotImplemented,
         }
+    }
+
+    /// Fold a Bool value to an e_zero_argument_tag expression (True or False)
+    fn foldBoolScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, is_true: bool) !void {
+        // Bool tags: 0 = False, 1 = True
+        // Get the canonical Bool type variable from builtins
+        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
+        const resolved = self.interpreter.runtime_types.resolveVar(bool_rt_var);
+
+        // For Bool, we need to find the correct tag name
+        const tag_name_str = if (is_true) "True" else "False";
+        const tag_name_ident = try self.env.insertIdent(base.Ident.for_text(tag_name_str));
+
+        // Get variant_var and ext_var
+        const variant_var: types_mod.Var = bool_rt_var;
+        var ext_var: types_mod.Var = @enumFromInt(0);
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            tag_name_ident, // closure_name
+            variant_var,
+            ext_var,
+            tag_name_ident,
+        );
+    }
+
+    /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
+    fn foldTagUnionScalar(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        _ = def_idx; // unused now that we get rt_var from stack_value
+        // The value is the tag index directly (scalar integer)
+        const tag_index: usize = @intCast(stack_value.asI128());
+
+        // Get the runtime type variable from the StackValue (already validated in tryFoldConstant)
+        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
+
+        // Get the list of tags for this union type
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        if (tag_index >= tag_list.items.len) {
+            return error.NotImplemented;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        // Only fold zero-argument tags (like True, False)
+        if (arg_vars.len != 0) {
+            return error.NotImplemented;
+        }
+
+        // Get variant_var and ext_var from type information
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = @enumFromInt(0);
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            tag_info.name, // closure_name
+            variant_var,
+            ext_var,
+            tag_info.name,
+        );
+    }
+
+    /// Fold a tag union (represented as tuple) to an e_zero_argument_tag expression
+    fn foldTagUnionTuple(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        _ = def_idx; // unused now that we get rt_var from stack_value
+        // Tag unions are now represented as tuples (payload, tag)
+        var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
+
+        // Element 1 is the tag discriminant - getElement takes original index directly
+        const tag_field = try acc.getElement(1);
+
+        // Extract tag index
+        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
+            return error.NotImplemented;
+        }
+        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+        const tag_index: usize = @intCast(tmp_sv.asI128());
+
+        // Get the runtime type variable from the StackValue (already validated in tryFoldConstant)
+        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
+
+        // Get the list of tags for this union type
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        if (tag_index >= tag_list.items.len) {
+            return error.NotImplemented;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        // Only fold zero-argument tags (like True, False, Ok with no payload variant, etc.)
+        if (arg_vars.len != 0) {
+            return error.NotImplemented; // Has payload, can't fold to e_zero_argument_tag
+        }
+
+        // Get variant_var and ext_var from type information
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = @enumFromInt(0);
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Get closure name - use an empty ident for now (we don't need it for folded constants)
+        const closure_name = tag_info.name; // Reuse tag name as closure name
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            closure_name,
+            variant_var,
+            ext_var,
+            tag_info.name,
+        );
     }
 
     /// Helper to report a problem and track allocated message
@@ -803,13 +1084,14 @@ pub const ComptimeEvaluator = struct {
 
         // Build digits_before_pt List(U8)
         const before_list = try self.buildU8List(digits_before, roc_ops);
-        defer before_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
+        // Note: Don't decref these lists - ownership is transferred to the record below
 
         // Build digits_after_pt List(U8)
         const after_list = try self.buildU8List(digits_after, roc_ops);
-        defer after_list.decref(&self.interpreter.runtime_layout_store, roc_ops);
+        // Note: Don't decref these lists - ownership is transferred to the record below
 
         // Build the Numeral record
+        // Ownership of before_list and after_list is transferred to this record
         const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
         defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
@@ -909,10 +1191,12 @@ pub const ComptimeEvaluator = struct {
             // Call the low-level builtin with our Numeral argument and target type
             var args = [_]eval_mod.StackValue{num_literal_record};
             result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
+                // Include crash message if available for better debugging
+                const crash_msg = self.crash.crashMessage() orelse "no crash message";
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "from_numeral builtin failed: {s}",
-                    .{@errorName(err)},
+                    "from_numeral builtin failed: {s} ({s})",
+                    .{ @errorName(err), crash_msg },
                 );
                 try self.error_names.append(error_msg);
                 const problem = Problem{
@@ -930,7 +1214,7 @@ pub const ComptimeEvaluator = struct {
                 .pattern_idx = params[0],
                 .value = num_literal_record,
                 .expr_idx = @enumFromInt(0),
-                .source_env = self.env,
+                .source_env = origin_env,
             });
             defer _ = self.interpreter.bindings.pop();
 
@@ -1128,6 +1412,42 @@ pub const ComptimeEvaluator = struct {
                 if (tag_value == 0) {
                     // This is an Err - try to extract InvalidNumeral(Str) message
                     const error_msg = try self.extractInvalidNumeralMessage(accessor, region);
+                    try self.error_names.append(error_msg);
+                    const problem = Problem{
+                        .comptime_eval_error = .{
+                            .error_name = error_msg,
+                            .region = region,
+                        },
+                    };
+                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    return false;
+                }
+                return true; // Ok
+            }
+            return true; // Unknown format, optimistically allow
+        } else if (result.layout.tag == .tuple) {
+            // Tuple layout (payload, tag) - newer representation for tag unions
+            // For tuple layouts, the interpreter stores error messages in last_error_message
+            // (which was already checked at the start of this function).
+            // If we get here, we just need to check if it was an Err and return false.
+            var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
+
+            // Element 1 is tag discriminant - getElement takes original index directly
+            const tag_field = accessor.getElement(1) catch return true;
+
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                const tag_value = tag_field.asI128();
+                // Tag indices: Ok and Err are ordered alphabetically, so Err=0 and Ok=1
+                // The interpreter writes ok_index for in_range, err_index for !in_range
+                // Looking at appendUnionTags sorting, "Err" < "Ok" alphabetically
+                if (tag_value == 0) {
+                    // This is an Err - the detailed message should have been in last_error_message
+                    // If we get here, something went wrong but we know it's an error
+                    const error_msg = try std.fmt.allocPrint(
+                        self.allocator,
+                        "Numeric literal validation failed",
+                        .{},
+                    );
                     try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
