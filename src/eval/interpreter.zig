@@ -234,28 +234,89 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
-        if (other_envs.len > 0) {
+        // Safely access import count
+        const import_count = if (env.imports.imports.items.items.len > 0)
+            env.imports.imports.items.items.len
+        else
+            0;
+
+        if (other_envs.len > 0 and import_count > 0) {
+            // Allocate capacity for all imports (even if some are duplicates)
             try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-            try import_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+            try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
 
-            // Match imports in order with other_envs
-            const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
+            // Process ALL imports, matching each to the appropriate module from other_envs
             for (0..import_count) |i| {
-                const module_env = other_envs[i];
                 const str_idx = env.imports.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // Find or create the Ident.Idx for this import name
-                const ident_idx = env.common.findIdent(import_name) orelse continue;
+                // Find matching module in other_envs
+                // Since modules loaded from shared memory may have empty names, we match based on:
+                // 1. "Builtin" imports match the module with module_name="Builtin"
+                // 2. Imports containing "Stdout" match other_env[1] (first platform module)
+                // 3. Imports containing "Stderr" match other_env[2] (second platform module)
+                var matched_module: ?*const can.ModuleEnv = null;
 
-                // Store in all three maps
-                module_envs.putAssumeCapacity(ident_idx, module_env);
-                module_ids.putAssumeCapacity(ident_idx, next_id);
+                if (std.mem.indexOf(u8, import_name, "Builtin") != null) {
+                    // Match Builtin
+                    for (other_envs) |module_env| {
+                        if (std.mem.indexOf(u8, module_env.module_name, "Builtin") != null) {
+                            matched_module = module_env;
+                            break;
+                        }
+                    }
+                } else {
+                    // Dynamically match any platform module
+                    // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
+                    const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
+                        import_name[0 .. import_name.len - 4]
+                    else
+                        import_name;
+
+                    // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
+                    const module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
+                        without_ext[dot_idx + 1 ..]
+                    else
+                        without_ext;
+
+                    // Find matching platform module by searching through all other_envs
+                    for (other_envs) |platform_env| {
+                        const platform_module_name = platform_env.module_name;
+
+                        // Strip .roc extension if present for exact matching
+                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
+                            platform_module_name[0 .. platform_module_name.len - 4]
+                        else
+                            platform_module_name;
+
+                        // Match "Stdout" to "Stdout.roc" via exact match, not substring
+                        if (std.mem.eql(u8, name_without_ext, module_name)) {
+                            matched_module = platform_env;
+                            break;
+                        }
+                    }
+                }
+
+                const module_env = matched_module orelse {
+                    continue; // Skip if no match found
+                };
+
+                // Store in import_envs (always, for every import)
+                // This is the critical mapping that e_lookup_external needs!
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
-                next_id += 1;
+                // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
+                const ident_idx = env.common.findIdent(import_name);
+                if (ident_idx) |idx| {
+                    // Only add to module_envs/module_ids if not already present (to avoid duplicates)
+                    if (!module_envs.contains(idx)) {
+                        module_envs.putAssumeCapacity(idx, module_env);
+                        module_ids.putAssumeCapacity(idx, next_id);
+                        next_id += 1;
+                    }
+                }
             }
         }
 
@@ -1747,6 +1808,36 @@ pub const Interpreter = struct {
                 }
                 return value;
             },
+            .e_hosted_lambda => |hosted| {
+                // Build a closure for a hosted function that will dispatch to the host via RocOps
+                // We MUST create a closure layout manually since the type might be flex/unknown
+
+                // Manually create a closure layout instead of using getRuntimeLayout
+                // because hosted functions might have flex types
+                const closure_layout = Layout{
+                    .tag = .closure,
+                    .data = .{
+                        .closure = .{
+                            .captures_layout_idx = @enumFromInt(0), // No captures for hosted functions
+                        },
+                    },
+                };
+                const value = try self.pushRaw(closure_layout, 0);
+                self.registerDefValue(expr_idx, value);
+
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = hosted.body,
+                        .params = hosted.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                        .lambda_expr_idx = expr_idx,
+                        .source_env = self.env,
+                    };
+                }
+                return value;
+            },
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
                 const lam_expr = self.env.store.getExpr(cls.lambda_idx);
@@ -1874,7 +1965,6 @@ pub const Interpreter = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                if (all.len == 0) return error.TypeMismatch;
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 

@@ -120,6 +120,7 @@ outerFunc = |_| {
 		(p-assign (ident "outerFunc"))
 		(e-closure
 			(captures
+				(capture (ident "x"))
 				(capture (ident "y")))
 			(e-lambda
 				(args
