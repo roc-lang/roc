@@ -1343,23 +1343,24 @@ pub const Store = struct {
                         continue :outer;
                     }
 
-                    // Flex vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.len > 0) {
-                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                        if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.opaquePtr();
-                        }
-                    }
-
                     // If the flex var has no constraints, it represents a phantom type parameter
                     // or unused tag branch that doesn't exist at runtime.
                     if (flex.constraints.isEmpty()) {
+                        // Flex vars can only be sent to the host if boxed.
+                        // Only return opaque_ptr for truly unconstrained flex vars inside containers.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
                         break :blk Layout.zst();
                     }
 
                     // Flex vars with constraints appear in REPL/eval contexts where type constraints
                     // haven't been fully solved. This is a known issue that needs proper constraint
                     // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
+                    // This includes flex vars inside lists - they should default to Dec, not opaque_ptr.
                     break :blk Layout.default_num();
                 },
                 .rigid => |rigid| blk: {

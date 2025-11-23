@@ -1425,7 +1425,8 @@ pub const Interpreter = struct {
                             const arg_rt_var = arg_rt_vars[j];
                             const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
                             elem_values[j] = val;
-                            elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
+                            // Use actual value layout, not type system layout, to avoid mismatch
+                            elem_layouts[j] = val.layout;
                         }
 
                         const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
@@ -1536,7 +1537,9 @@ pub const Interpreter = struct {
                             const arg_rt_var = arg_rt_vars[j];
                             const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
                             elem_values[j] = val;
-                            elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
+                            // Use actual value layout, not type system layout, to avoid mismatch
+                            // (e.g., List(Dec) actual vs List(generic_num) from type system)
+                            elem_layouts[j] = val.layout;
                         }
 
                         const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
@@ -1549,6 +1552,38 @@ pub const Interpreter = struct {
                             while (j < elem_values.len) : (j += 1) {
                                 try tup_acc.setElement(j, elem_values[j], roc_ops);
                             }
+                        }
+
+                        // Check if the payload layout differs from what dest expects
+                        // If so, create a new outer tuple with the correct layout
+                        const layouts_differ = !layoutsEqual(tuple_layout, payload_field.layout);
+                        if (layouts_differ) {
+                            // Create properly-typed outer tuple (payload, tag)
+                            var outer_elem_layouts = [2]Layout{ tuple_layout, tag_field.layout };
+                            const proper_outer_idx = try self.runtime_layout_store.putTuple(&outer_elem_layouts);
+                            const proper_outer_layout = self.runtime_layout_store.getLayout(proper_outer_idx);
+                            var proper_dest = try self.pushRaw(proper_outer_layout, 0);
+                            var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                            // Write tag discriminant
+                            const proper_tag_field = try proper_acc.getElement(1);
+                            if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                var tmp = proper_tag_field;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(@intCast(tag_index));
+                            }
+
+                            // Copy payload tuple data
+                            const proper_payload_field = try proper_acc.getElement(0);
+                            if (proper_payload_field.ptr) |proper_payload_ptr| {
+                                // Copy the tuple data we already wrote
+                                const payload_size = self.runtime_layout_store.layoutSize(tuple_layout);
+                                const src_bytes = @as([*]const u8, @ptrCast(payload_field.ptr.?))[0..payload_size];
+                                const dst_bytes = @as([*]u8, @ptrCast(proper_payload_ptr))[0..payload_size];
+                                @memcpy(dst_bytes, src_bytes);
+                            }
+
+                            return proper_dest;
                         }
 
                         return dest;
