@@ -827,6 +827,7 @@ pub const Interpreter = struct {
                     else => return error.TypeMismatch,
                 }
                 value.is_initialized = true;
+                value.rt_var = rt_var;
                 return value;
             },
             .e_unary_minus => |unary_minus| {
@@ -1363,6 +1364,7 @@ pub const Interpreter = struct {
                         out.is_initialized = false;
                         try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
+                        out.rt_var = rt_var;
                         return out;
                     }
                     return error.NotImplemented;
@@ -1378,6 +1380,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
+                    dest.rt_var = rt_var;
                     return dest;
                 } else if (layout_val.tag == .tuple) {
                     // Tuple (payload, tag) - tag unions are now represented as tuples
@@ -1391,6 +1394,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
+                    dest.rt_var = rt_var;
                     return dest;
                 }
                 return error.NotImplemented;
@@ -5545,7 +5549,9 @@ pub const Interpreter = struct {
             const low_level = lambda_expr.e_low_level_lambda;
             // Dispatch to actual low-level builtin implementation
             // Binary ops don't need return type info (not num_from_int_digits etc)
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            var ll_result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            ll_result.rt_var = lhs_rt_var;
+            return ll_result;
         }
 
         // Bind parameters
@@ -5559,7 +5565,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        var result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
 
         // Clean up bindings
         var k = params.len;
@@ -5568,6 +5574,8 @@ pub const Interpreter = struct {
             _ = self.bindings.pop();
         }
 
+        // Set rt_var on result for constant folding (binary ops return same type as lhs)
+        result.rt_var = lhs_rt_var;
         return result;
     }
 
@@ -5652,8 +5660,9 @@ pub const Interpreter = struct {
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
             // Dispatch to actual low-level builtin implementation
-            // Binary ops don't need return type info (not num_from_int_digits etc)
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            var ll_result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            ll_result.rt_var = operand_rt_var;
+            return ll_result;
         }
 
         // Bind parameters
@@ -5667,7 +5676,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        var result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
 
         // Clean up bindings
         var k = params.len;
@@ -5676,6 +5685,8 @@ pub const Interpreter = struct {
             _ = self.bindings.pop();
         }
 
+        // Set rt_var on result for constant folding (unary ops return same type as operand)
+        result.rt_var = operand_rt_var;
         return result;
     }
 

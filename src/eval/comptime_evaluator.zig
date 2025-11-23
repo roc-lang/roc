@@ -343,34 +343,13 @@ pub const ComptimeEvaluator = struct {
         // Convert StackValue to CIR expression based on layout
         const layout = stack_value.layout;
 
-        // Get the runtime type variable from the StackValue first, or fall back to expression type
-        const rt_var: types_mod.Var = if (stack_value.rt_var) |sv_rt_var|
-            sv_rt_var
-        else blk: {
-            // Fall back to expression type variable
-            const ct_var = ModuleEnv.varFrom(def.expr);
-            break :blk self.interpreter.translateTypeVar(self.env, ct_var) catch {
-                return error.NotImplemented;
-            };
-        };
+        // Get the runtime type variable from the StackValue - should always be set
+        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
 
         // Check if it's a tag union type
         const is_tag_union = resolved.desc.content == .structure and
             resolved.desc.content.structure == .tag_union;
-
-        // Special case for Bool type: u8 scalar with value 0 or 1
-        // This handles nominal Bool types that aren't properly tracked through rt_var
-        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
-            layout.data.scalar.data.int == .u8)
-        {
-            const val = stack_value.asI128();
-            if (val == 0 or val == 1) {
-                // This is a Bool value - fold it directly
-                try self.foldBoolScalar(expr_idx, val == 1);
-                return;
-            }
-        }
 
         if (is_tag_union) {
             // Tag unions can be scalars (no payload) or tuples (with payload)
