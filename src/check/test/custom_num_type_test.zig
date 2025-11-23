@@ -105,12 +105,10 @@ test "Custom number type without negate: unary minus fails" {
 }
 
 test "Custom type with negate returning different type" {
-    // This test documents a forward reference limitation: Negative is used in Positive's
-    // method signature before it's declared. Type checking processes associated items
-    // before all top-level types are in scope, causing "UNDECLARED TYPE" error.
-    // TODO: Implement two-pass type checking (collect types first, then check bodies)
-    // or support forward references in associated item type signatures.
-    // Once that's implemented, this test should expect no errors and y should have type Negative.
+    // Tests that forward references between sibling types work.
+    // Positive's negate method returns Negative, which is declared after Positive.
+    // This requires all type declarations to be introduced into scope before
+    // processing associated item signatures.
 
     const source =
         \\  Positive := [].{
@@ -129,12 +127,11 @@ test "Custom type with negate returning different type" {
         \\  y = -x
     ;
 
-    var test_env = try TestEnv.init("CustomNegate", source);
+    var test_env = try TestEnv.init("Positive", source);
     defer test_env.deinit();
 
-    // Currently fails with UNDECLARED TYPE because forward references aren't supported yet
-    // Just verify there are canonicalization errors
-    const diagnostics = try test_env.module_env.getDiagnostics();
-    defer test_env.gpa.free(diagnostics);
-    try testing.expect(diagnostics.len > 0);
+    // Should type-check successfully - Positive can reference Negative in its
+    // negate method signature even though Negative is declared after Positive.
+    // The result y should have type Negative.
+    try test_env.assertNoErrors();
 }

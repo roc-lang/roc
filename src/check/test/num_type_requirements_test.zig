@@ -37,9 +37,6 @@ test "U8: 255 fits" {
     try test_env.assertLastDefType("U8");
 }
 
-// U8: 256 does not fit - moved to comptime_eval_test.zig
-// U8: negative does not fit - moved to comptime_eval_test.zig
-
 test "I8: -128 fits" {
     const source =
         \\{
@@ -54,8 +51,6 @@ test "I8: -128 fits" {
     defer test_env.deinit();
     try test_env.assertLastDefType("I8");
 }
-
-// I8: -129 does not fit - moved to comptime_eval_test.zig
 
 test "F32: fits" {
     const source =
