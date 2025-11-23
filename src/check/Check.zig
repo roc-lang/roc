@@ -2456,7 +2456,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                     _ = try self.unify(expr_var, flex_var, env);
 
-                    // Get the constraint from the flex var for deferred validation
                     const resolved = self.types.resolveVar(flex_var);
                     const constraint_range = resolved.desc.content.flex.constraints;
                     const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
@@ -2498,7 +2497,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
 
-                // Get the constraint from the flex var for deferred validation
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
@@ -2525,7 +2523,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
 
-                // Get the constraint from the flex var for deferred validation
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
@@ -2552,7 +2549,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
 
-                // Get the constraint from the flex var for deferred validation
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
@@ -2581,7 +2577,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
 
-                // Get the constraint from the flex var for deferred validation
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
