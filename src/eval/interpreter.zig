@@ -60,6 +60,24 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
     elem_value.decref(context.layout_store, context.roc_ops);
 }
 
+/// Compare two layouts for equality
+/// For lists, this compares the element layout index, so two lists with
+/// different element types (e.g., List(Dec) vs List(generic_num)) will be different.
+fn layoutsEqual(a: Layout, b: Layout) bool {
+    if (a.tag != b.tag) return false;
+    return switch (a.tag) {
+        .scalar => std.meta.eql(a.data.scalar, b.data.scalar),
+        .list => a.data.list == b.data.list,
+        .list_of_zst => true,
+        .box => a.data.box == b.data.box,
+        .box_of_zst => true,
+        .record => std.meta.eql(a.data.record, b.data.record),
+        .tuple => std.meta.eql(a.data.tuple, b.data.tuple),
+        .closure => std.meta.eql(a.data.closure, b.data.closure),
+        .zst => true,
+    };
+}
+
 fn interpreterLookupModuleEnv(
     ctx: ?*const anyopaque,
     module_ident: base_pkg.Ident.Idx,
@@ -1418,7 +1436,6 @@ pub const Interpreter = struct {
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                             j = 0;
                             while (j < elem_values.len) : (j += 1) {
-                                // setElement takes original index directly
                                 try tup_acc.setElement(j, elem_values[j], roc_ops);
                             }
                         }
@@ -1467,9 +1484,13 @@ pub const Interpreter = struct {
                         const arg_size = self.runtime_layout_store.layoutSize(arg_val.layout);
                         const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
 
-                        if (arg_size > payload_size) {
-                            // The tuple layout is too small - create a new properly-sized tuple
-                            // with (payload, tag) elements
+                        // Check if layout differs (size or list element type mismatch)
+                        // For lists, the size is the same but element layout may differ
+                        const layouts_differ = arg_size > payload_size or !layoutsEqual(arg_val.layout, payload_field.layout);
+
+                        if (layouts_differ) {
+                            // The tuple layout differs - create a new properly-typed tuple
+                            // with (payload, tag) elements using the actual argument layout
                             var elem_layouts_fixed = [2]Layout{ arg_val.layout, tag_field.layout };
                             const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
                             const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
@@ -1493,7 +1514,7 @@ pub const Interpreter = struct {
                             return proper_dest;
                         }
 
-                        // Normal case: sizes match, use original destination
+                        // Normal case: sizes and layouts match, use original destination
                         if (payload_field.ptr) |payload_ptr| {
                             try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
@@ -1526,7 +1547,6 @@ pub const Interpreter = struct {
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                             j = 0;
                             while (j < elem_values.len) : (j += 1) {
-                                // setElement takes original index directly
                                 try tup_acc.setElement(j, elem_values[j], roc_ops);
                             }
                         }
@@ -1977,9 +1997,13 @@ pub const Interpreter = struct {
                         const low_level = lambda_expr.e_low_level_lambda;
                         const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, call_ret_rt_var);
 
-                        // Decref all args
-                        for (arg_values) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        // Decref args that aren't consumed by the builtin.
+                        // list_concat consumes its input lists (handles refcounting internally),
+                        // so we must not decref them again here to avoid double-free.
+                        if (low_level.op != .list_concat) {
+                            for (arg_values) |arg| {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         }
 
                         return result;
@@ -2221,9 +2245,12 @@ pub const Interpreter = struct {
                     // Dispatch to actual low-level builtin implementation
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, method_call_ret_rt_var);
 
-                    // Decref all args
-                    for (all_args) |arg| {
-                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    // Decref args that aren't consumed by the builtin.
+                    // list_concat consumes its input lists (handles refcounting internally).
+                    if (low_level.op != .list_concat) {
+                        for (all_args) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
                     }
 
                     return result;
@@ -4507,22 +4534,18 @@ pub const Interpreter = struct {
                         if (arg_vars.len == 0) {
                             payload_value = null;
                         } else if (arg_vars.len == 1) {
-                            const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
+                            // Use the layout from the record's stored field, not from the type system.
+                            // This ensures we preserve the actual element layout (e.g., List(Dec))
+                            // rather than the type system's generic layout.
                             payload_value = StackValue{
-                                .layout = arg_layout,
+                                .layout = field_value.layout,
                                 .ptr = field_value.ptr,
                                 .is_initialized = field_value.is_initialized,
                             };
                         } else {
-                            var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
-                            defer self.allocator.free(elem_layouts);
-                            for (arg_vars, 0..) |arg_var, i| {
-                                elem_layouts[i] = try self.getRuntimeLayout(arg_var);
-                            }
-                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                            // For multiple args, use the layout from the stored field
                             payload_value = StackValue{
-                                .layout = tuple_layout,
+                                .layout = field_value.layout,
                                 .ptr = field_value.ptr,
                                 .is_initialized = field_value.is_initialized,
                             };
@@ -4558,22 +4581,19 @@ pub const Interpreter = struct {
                     if (arg_vars.len == 0) {
                         payload_value = null;
                     } else if (arg_vars.len == 1) {
-                        const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
+                        // Use the layout from the tuple's stored field, not from the type system.
+                        // This ensures we preserve the actual element layout (e.g., List(Dec))
+                        // rather than the type system's generic layout (e.g., List(opaque_ptr)).
                         payload_value = StackValue{
-                            .layout = arg_layout,
+                            .layout = field_value.layout,
                             .ptr = field_value.ptr,
                             .is_initialized = field_value.is_initialized,
                         };
                     } else {
-                        var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
-                        defer self.allocator.free(elem_layouts);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            elem_layouts[i] = try self.getRuntimeLayout(arg_var);
-                        }
-                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                        // For multiple args, use the layout from the stored field
+                        // which already has the correct tuple layout
                         payload_value = StackValue{
-                            .layout = tuple_layout,
+                            .layout = field_value.layout,
                             .ptr = field_value.ptr,
                             .is_initialized = field_value.is_initialized,
                         };
