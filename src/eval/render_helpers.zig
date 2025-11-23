@@ -186,8 +186,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 const tag_field = try acc.getElement(tag_idx_in_tuple);
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                     const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                    const tag_i128 = tmp_sv.asI128();
                     // Only treat as tag if value fits in usize (valid tag discriminants are small)
-                    if (std.math.cast(usize, tmp_sv.asI128())) |tag_idx| {
+                    if (std.math.cast(usize, tag_i128)) |tag_idx| {
                         tag_index = tag_idx;
                         have_tag = true;
                     }

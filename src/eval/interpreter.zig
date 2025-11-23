@@ -832,11 +832,17 @@ pub const Interpreter = struct {
                 while (i < branches.len) : (i += 1) {
                     const br = self.env.store.getIfBranch(branches[i]);
                     const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
-                    if (boolValueEquals(true, cond_val)) {
+                    const cond_is_true = boolValueEquals(true, cond_val);
+                    std.debug.print("DEBUG e_if branch[{d}]: cond_val.ptr={?}, cond_is_true={}\n", .{ i, cond_val.ptr, cond_is_true });
+                    if (cond_val.ptr != null) {
+                        std.debug.print("DEBUG e_if: raw u8 value = {d}\n", .{getRuntimeU8(cond_val)});
+                    }
+                    if (cond_is_true) {
                         return try self.evalExprMinimal(br.body, roc_ops, null);
                     }
                 }
                 // No condition matched; evaluate final else
+                std.debug.print("DEBUG e_if: no branch matched, evaluating final_else\n", .{});
                 return try self.evalExprMinimal(if_expr.final_else, roc_ops, null);
             },
             .e_str => |str_expr| {
@@ -1315,7 +1321,10 @@ pub const Interpreter = struct {
                 var tag_index: usize = 0;
                 var found = false;
                 for (tag_list.items, 0..) |tag_info, i| {
-                    if (std.mem.eql(u8, self.env.getIdent(tag_info.name), name_text)) {
+                    // Use runtime_layout_store.env to look up tag names since that's where
+                    // the runtime type tag idents are stored (after translation)
+                    const tag_name_in_rt = self.runtime_layout_store.env.getIdent(tag_info.name);
+                    if (std.mem.eql(u8, tag_name_in_rt, name_text)) {
                         tag_index = i;
                         found = true;
                         break;
@@ -1712,13 +1721,16 @@ pub const Interpreter = struct {
 
                 for (caps, 0..) |cap_idx, i| {
                     const cap = self.env.store.getCapture(cap_idx);
-                    field_names[i] = cap.name;
+                    // Translate ident from current env to runtime layout store's env
+                    // This is necessary for cross-module closures (e.g., builtin functions)
+                    const name_text = self.env.getIdent(cap.name);
+                    field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
                     const cap_ct_var = can.ModuleEnv.varFrom(cap.pattern_idx);
                     const cap_rt_var = try self.translateTypeVar(self.env, cap_ct_var);
                     field_layouts[i] = try self.getRuntimeLayout(cap_rt_var);
                 }
 
-                const captures_layout_idx = try self.runtime_layout_store.putRecord(self.env, field_layouts, field_names);
+                const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
                 const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
                 const closure_layout = Layout.closure(captures_layout_idx);
                 const value = try self.pushRaw(closure_layout, 0);
@@ -2191,6 +2203,14 @@ pub const Interpreter = struct {
                 return try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
             },
             .e_lookup_local => |lookup| {
+                // DEBUG: trace lookup
+                const debug_lookup = true;
+                if (debug_lookup) {
+                    std.debug.print("DEBUG e_lookup_local: looking for pattern_idx={} in {d} bindings, env={s}\n", .{ lookup.pattern_idx, self.bindings.items.len, self.env.module_name });
+                    for (self.bindings.items, 0..) |b, idx| {
+                        std.debug.print("  binding[{d}]: pattern_idx={}\n", .{ idx, b.pattern_idx });
+                    }
+                }
                 // Search bindings in reverse
                 var i: usize = self.bindings.items.len;
                 while (i > 0) {
@@ -2213,23 +2233,50 @@ pub const Interpreter = struct {
                     }
                 }
                 // If not found, try active closure captures by variable name
+                // IMPORTANT: Only check captures if the closure header indicates it actually has captures
+                // The captures layout from the type system might not match what's actually captured
                 if (self.active_closures.items.len > 0) {
                     const pat = self.env.store.getPattern(lookup.pattern_idx);
                     if (pat == .assign) {
                         const var_name = self.env.getIdent(pat.assign.ident);
+                        if (debug_lookup) {
+                            std.debug.print("DEBUG: checking active_closures for '{s}'\n", .{var_name});
+                        }
                         const cls_val = self.active_closures.items[self.active_closures.items.len - 1];
                         if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
-                            const header_sz = @sizeOf(layout.Closure);
-                            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
-                            const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                            const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
-                            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                            if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
-                                const field_val = try accessor.getFieldByIndex(fidx);
-                                return try self.pushCopy(field_val, roc_ops);
+                            const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
+                            // Check if this closure was created with actual captures (e_closure)
+                            // vs. a plain lambda (e_lambda) or low-level lambda (e_low_level_lambda)
+                            // Only e_closure creates real capture values; others have uninitialized captures area
+                            const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
+                            const has_real_captures = (lambda_expr == .e_closure);
+                            if (debug_lookup) {
+                                std.debug.print("DEBUG: lambda_expr type={s}, has_real_captures={}\n", .{ @tagName(lambda_expr), has_real_captures });
+                            }
+                            if (has_real_captures) {
+                                const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                                const header_sz = @sizeOf(layout.Closure);
+                                const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                                const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                                const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                                const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                                const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                                var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                                if (debug_lookup) {
+                                    std.debug.print("DEBUG: captures_layout.tag={}, field_count={d}\n", .{ captures_layout.tag, accessor.field_layouts.len });
+                                    for (0..accessor.field_layouts.len) |fidx| {
+                                        const field = accessor.field_layouts.get(fidx);
+                                        const field_name = self.runtime_layout_store.env.getIdent(field.name);
+                                        std.debug.print("DEBUG:   field[{d}] name='{s}'\n", .{ fidx, field_name });
+                                    }
+                                }
+                                if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
+                                    if (debug_lookup) {
+                                        std.debug.print("DEBUG: found in captures at index {d}\n", .{fidx});
+                                    }
+                                    const field_val = try accessor.getFieldByIndex(fidx);
+                                    return try self.pushCopy(field_val, roc_ops);
+                                }
                             }
                         }
                     }
@@ -2237,29 +2284,23 @@ pub const Interpreter = struct {
 
                 // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
                 const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                if (debug_lookup) {
+                    std.debug.print("DEBUG: searching {d} top-level defs for pattern_idx={}\n", .{ all_defs.len, lookup.pattern_idx });
+                }
                 for (all_defs) |def_idx| {
                     const def = self.env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        const def_expr = self.env.store.getExpr(def.expr);
-                        if (def_expr == .e_anno_only) {
-                            // This is an anno-only def being accessed - evaluate it now
-                            // For functions, this creates a closure that crashes when called
-                            // For non-functions, this crashes immediately
-                            return try self.evalExprMinimal(def.expr, roc_ops, null);
+                        if (debug_lookup) {
+                            std.debug.print("DEBUG: found matching def, evaluating...\n", .{});
                         }
-
-                        // In debug builds, panic if this def should have been in bindings but wasn't
-                        if (builtin.mode == .Debug) {
-                            const pat = self.env.store.getPattern(lookup.pattern_idx);
-                            const var_name = switch (pat) {
-                                .assign => |a| self.env.getIdent(a.ident),
-                                else => "(non-assign pattern)",
-                            };
-                            std.debug.panic(
-                                "Bug in compiler: top-level definition '{s}' (pattern_idx={}) should have been added to bindings but wasn't found there",
-                                .{ var_name, lookup.pattern_idx },
-                            );
-                        }
+                        // Evaluate the definition on demand and cache the result in bindings
+                        const result = try self.evalExprMinimal(def.expr, roc_ops, null);
+                        try self.bindings.append(.{
+                            .pattern_idx = def.pattern,
+                            .value = result,
+                            .expr_idx = def.expr,
+                        });
+                        return result;
                     }
                 }
 
@@ -2411,6 +2452,8 @@ pub const Interpreter = struct {
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const len_usize = builtins.list.listLen(roc_list.*);
                 const len_u64: u64 = @intCast(len_usize);
+
+                std.debug.print("DEBUG list_len: roc_list.ptr={*}, len_usize={d}, len_u64={d}\n", .{ roc_list.bytes, len_usize, len_u64 });
 
                 const result_layout = layout.Layout.int(.u64);
                 var out = try self.pushRaw(result_layout, 0);
@@ -2664,12 +2707,14 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_lt expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
+                std.debug.print("DEBUG num_is_lt: lhs={}, rhs={}\n", .{ lhs, rhs });
                 const result = switch (lhs) {
                     .int => |l| l < rhs.int,
                     .f32 => |l| l < rhs.f32,
                     .f64 => |l| l < rhs.f64,
                     .dec => |l| l.num < rhs.dec.num,
                 };
+                std.debug.print("DEBUG num_is_lt result={}\n", .{result});
                 return try self.makeBoolValue(result);
             },
             .num_is_lte => {
@@ -4400,6 +4445,11 @@ pub const Interpreter = struct {
                 break :expand;
             }
         }
+
+        // Sort the tags alphabetically to match gatherTags and layout store ordering
+        // This ensures tag discriminants are consistent between evaluation and rendering
+        // Use runtime_layout_store.env since runtime type tag names are translated to that env
+        std.mem.sort(types.Tag, list.items, self.runtime_layout_store.env.common.getIdentStore(), comptime types.Tag.sortByNameAsc);
     }
 
     const TagValue = struct {
@@ -5562,9 +5612,10 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
-                                // Translate the tag name identifier from the source module to the current module
+                                // Translate the tag name identifier from the source module to the runtime layout store env
+                                // This ensures tag names are consistent when looked up during e_tag evaluation
                                 const name_str = module.getIdent(tag.name);
-                                const translated_name = try self.env.insertIdent(base_pkg.Ident.for_text(name_str));
+                                const translated_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_str));
                                 tag.* = .{
                                     .name = translated_name,
                                     .args = rt_args_range,
@@ -5918,28 +5969,30 @@ pub const Interpreter = struct {
         while (true) {
             const resolved_ext = module.types.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
-                .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
-                    .empty_record => break,
-                    .tag_union => |ext_tag_union| {
-                        if (ext_tag_union.tags.len() > 0) {
-                            const ext_tag_slice = module.types.getTagsSlice(ext_tag_union.tags);
-                            for (ext_tag_slice.items(.name), ext_tag_slice.items(.args)) |name, args| {
-                                _ = try scratch_tags.append(ctx.allocator, .{ .name = name, .args = args });
+                .structure => |ext_flat_type| {
+                    switch (ext_flat_type) {
+                        .empty_tag_union => break,
+                        .empty_record => break,
+                        .tag_union => |ext_tag_union| {
+                            if (ext_tag_union.tags.len() > 0) {
+                                const ext_tag_slice = module.types.getTagsSlice(ext_tag_union.tags);
+                                for (ext_tag_slice.items(.name), ext_tag_slice.items(.args)) |name, args| {
+                                    _ = try scratch_tags.append(ctx.allocator, .{ .name = name, .args = args });
+                                }
+                                current_ext = ext_tag_union.ext;
+                            } else {
+                                break;
                             }
-                            current_ext = ext_tag_union.ext;
-                        } else {
-                            break;
-                        }
-                    },
-                    .nominal_type => |nom| {
-                        // Nominal types (like numeric types) act as their backing type
-                        current_ext = module.types.getNominalBackingVar(nom);
-                    },
-                    else => {
-                        // TODO: Don't use unreachable here
-                        unreachable;
-                    },
+                        },
+                        .nominal_type => |nom| {
+                            // Nominal types (like numeric types) act as their backing type
+                            current_ext = module.types.getNominalBackingVar(nom);
+                        },
+                        else => {
+                            // TODO: Don't use unreachable here
+                            unreachable;
+                        },
+                    }
                 },
                 .alias => |alias| {
                     current_ext = module.types.getAliasBackingVar(alias);
