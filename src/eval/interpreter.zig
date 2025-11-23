@@ -1432,7 +1432,8 @@ pub const Interpreter = struct {
                             const arg_rt_var = arg_rt_vars[j];
                             const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
                             elem_values[j] = val;
-                            elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
+                            // Use actual value layout, not type system layout, to avoid mismatch
+                            elem_layouts[j] = val.layout;
                         }
 
                         const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
@@ -1530,8 +1531,6 @@ pub const Interpreter = struct {
                         const arg_count = args_exprs.len;
                         var elem_layouts = try self.allocator.alloc(Layout, arg_count);
                         defer self.allocator.free(elem_layouts);
-                        var actual_elem_layouts = try self.allocator.alloc(Layout, arg_count);
-                        defer self.allocator.free(actual_elem_layouts);
                         var elem_values = try self.allocator.alloc(StackValue, arg_count);
                         defer {
                             for (elem_values[0..arg_count]) |val| {
@@ -1541,25 +1540,33 @@ pub const Interpreter = struct {
                         }
 
                         var j: usize = 0;
-                        var any_layout_differs = false;
                         while (j < arg_count) : (j += 1) {
                             const arg_rt_var = arg_rt_vars[j];
                             const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
                             elem_values[j] = val;
-                            elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
-                            actual_elem_layouts[j] = val.layout;
-                            if (!layoutsEqual(elem_layouts[j], val.layout)) {
-                                any_layout_differs = true;
+                            // Use actual value layout, not type system layout, to avoid mismatch
+                            // (e.g., List(Dec) actual vs List(generic_num) from type system)
+                            elem_layouts[j] = val.layout;
+                        }
+
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                        if (payload_field.ptr) |payload_ptr| {
+                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                            j = 0;
+                            while (j < elem_values.len) : (j += 1) {
+                                try tup_acc.setElement(j, elem_values[j], roc_ops);
                             }
                         }
 
-                        if (any_layout_differs) {
-                            // Build payload tuple with ACTUAL layouts from evaluated values
-                            const actual_tuple_idx = try self.runtime_layout_store.putTuple(actual_elem_layouts);
-                            const actual_tuple_layout = self.runtime_layout_store.getLayout(actual_tuple_idx);
-
-                            // Create new outer tuple: (actual_payload_tuple, tag_discriminant)
-                            var outer_elem_layouts = [2]Layout{ actual_tuple_layout, tag_field.layout };
+                        // Check if the payload layout differs from what dest expects
+                        // If so, create a new outer tuple with the correct layout
+                        const layouts_differ = !layoutsEqual(tuple_layout, payload_field.layout);
+                        if (layouts_differ) {
+                            // Create properly-typed outer tuple (payload, tag)
+                            var outer_elem_layouts = [2]Layout{ tuple_layout, tag_field.layout };
                             const proper_outer_idx = try self.runtime_layout_store.putTuple(&outer_elem_layouts);
                             const proper_outer_layout = self.runtime_layout_store.getLayout(proper_outer_idx);
                             var proper_dest = try self.pushRaw(proper_outer_layout, 0);
@@ -1573,31 +1580,17 @@ pub const Interpreter = struct {
                                 try tmp.setInt(@intCast(tag_index));
                             }
 
-                            // Write payload tuple
+                            // Copy payload tuple data
                             const proper_payload_field = try proper_acc.getElement(0);
-                            if (proper_payload_field.ptr) |payload_ptr| {
-                                var payload_dest = StackValue{ .layout = actual_tuple_layout, .ptr = payload_ptr, .is_initialized = true };
-                                var payload_acc = try payload_dest.asTuple(&self.runtime_layout_store);
-                                j = 0;
-                                while (j < elem_values.len) : (j += 1) {
-                                    try payload_acc.setElement(j, elem_values[j], roc_ops);
-                                }
+                            if (proper_payload_field.ptr) |proper_payload_ptr| {
+                                // Copy the tuple data we already wrote
+                                const payload_size = self.runtime_layout_store.layoutSize(tuple_layout);
+                                const src_bytes = @as([*]const u8, @ptrCast(payload_field.ptr.?))[0..payload_size];
+                                const dst_bytes = @as([*]u8, @ptrCast(proper_payload_ptr))[0..payload_size];
+                                @memcpy(dst_bytes, src_bytes);
                             }
 
                             return proper_dest;
-                        }
-
-                        // Normal case: type system layouts match actual layouts
-                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-
-                        if (payload_field.ptr) |payload_ptr| {
-                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
-                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
-                            j = 0;
-                            while (j < elem_values.len) : (j += 1) {
-                                try tup_acc.setElement(j, elem_values[j], roc_ops);
-                            }
                         }
 
                         return dest;
