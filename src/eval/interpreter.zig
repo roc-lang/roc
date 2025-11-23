@@ -4912,10 +4912,13 @@ pub const Interpreter = struct {
                 if (tag_data.index >= tag_list.items.len) return false;
 
                 // Find the expected tag's index in the tag list by matching the name
-                const expected_name = self.env.getIdent(tag_pat.name);
+                // Pattern tag names are from self.env, tag_list names are in runtime_layout_store.env
+                // Translate pattern's tag ident to runtime env for direct comparison
+                const expected_name_str = self.env.getIdent(tag_pat.name);
+                const expected_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(expected_name_str));
                 var expected_index: ?usize = null;
                 for (tag_list.items, 0..) |tag_info, i| {
-                    if (std.mem.eql(u8, self.env.getIdent(tag_info.name), expected_name)) {
+                    if (tag_info.name == expected_ident) {
                         expected_index = i;
                         break;
                     }
