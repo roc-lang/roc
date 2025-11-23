@@ -1078,6 +1078,34 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 
             return;
         },
+        .closure => {
+            if (self.ptr == null) return;
+            // Get the closure header to find the captures layout
+            const closure = self.asClosure();
+            const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+
+            // Only decref if there are actual captures (record with fields)
+            if (captures_layout.tag == .record) {
+                const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+                if (record_data.fields.count > 0) {
+                    // Calculate the offset to the captures record (after header, with alignment)
+                    const header_size = @sizeOf(layout_mod.Closure);
+                    const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                    const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                    const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+
+                    // Create a StackValue for the captures record and decref it
+                    const captures_value = StackValue{
+                        .layout = captures_layout,
+                        .ptr = rec_ptr,
+                        .is_initialized = true,
+                    };
+                    captures_value.decref(layout_cache, ops);
+                }
+            }
+            return;
+        },
         else => {},
     }
 
