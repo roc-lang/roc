@@ -145,8 +145,10 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
                 _ = try self.buf.writer().write(", ");
             }
 
-            // Get the dispatcher var - for most constraints it's the first arg,
-            // but for from_numeral it's the return type (since from_numeral : Numeral -> T)
+            // Get the dispatcher var - this is the type that has the constraint.
+            // For most constraints it's the first arg (e.g., `a.plus : a, a -> a`).
+            // For from_numeral the dispatcher is extracted from the return type's first type arg
+            // (the success type T in `Try(T, E)`).
             const dispatcher_var = blk: {
                 const fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 std.debug.assert(fn_resolved == .structure);
@@ -161,13 +163,20 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
                     },
                 };
 
-                // For from_numeral, the dispatcher is the return type, not the first arg
-                // because from_numeral's signature is: Numeral -> TargetType
-                // where TargetType is the type that has the constraint
-                if (constraint.origin == .from_numeral) {
-                    break :blk func_data.ret;
+                // Check if the return type is a nominal type with type args (like Try(T, E))
+                // If so, use the first type arg as the dispatcher
+                const ret_resolved = self.types.resolveVar(func_data.ret);
+                if (ret_resolved.desc.content == .structure) {
+                    if (ret_resolved.desc.content.structure == .nominal_type) {
+                        const ret_nominal = ret_resolved.desc.content.structure.nominal_type;
+                        var args_iter = self.types.iterNominalArgs(ret_nominal);
+                        if (args_iter.next()) |first_type_arg| {
+                            break :blk first_type_arg;
+                        }
+                    }
                 }
 
+                // Otherwise, use the first argument as dispatcher
                 std.debug.assert(func_data.args.len() > 0);
                 break :blk self.types.sliceVars(func_data.args)[0];
             };

@@ -144,6 +144,8 @@ pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
+    /// Identifier for the Try type
+    @"try": base.Ident.Idx,
     /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Try type in the current module (injected from Builtin.bin)
@@ -722,13 +724,32 @@ fn mkFlexWithFromNumeralConstraint(
         break :blk ident;
     };
 
+    // Create the flex var first - this represents the target type T
+    const flex_var = try self.fresh(env, num_literal_info.region);
+
     // Create fresh variables for the function signature.
-    // For from_numeral, the signature is: Numeral -> TargetType
-    // where TargetType is the type being constrained (the flex var).
-    // The arg_var represents the Numeral input (independent of the target).
-    // The ret_var represents the return type (same as the target type).
+    // For from_numeral, the actual method signature is: Numeral -> Try(T, [InvalidNumeral(Str)])
+    // We need to create a constraint signature that matches this structure.
     const arg_var = try self.fresh(env, num_literal_info.region);
-    const ret_var = try self.fresh(env, num_literal_info.region);
+
+    // Create the error type: [InvalidNumeral(Str)] (closed tag union)
+    const str_var = self.str_var;
+    const invalid_numeral_tag_ident = try @constCast(self.cir).insertIdent(
+        base.Ident.for_text("InvalidNumeral"),
+    );
+    const invalid_numeral_tag = try self.types.mkTag(
+        invalid_numeral_tag_ident,
+        &.{str_var},
+    );
+    // Use empty_tag_union as extension to create a closed tag union [InvalidNumeral(Str)]
+    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, num_literal_info.region);
+    const err_type = try self.types.mkTagUnion(&.{invalid_numeral_tag}, err_ext_var);
+    const err_var = try self.freshFromContent(err_type, env, num_literal_info.region);
+
+    // Create Try(flex_var, err_var) as the return type
+    // Try is a nominal type with two type args: the success type and the error type
+    const try_type_content = try self.mkTryContent(flex_var, err_var);
+    const ret_var = try self.freshFromContent(try_type_content, env, num_literal_info.region);
 
     const func_content = types_mod.Content{
         .structure = types_mod.FlatType{
@@ -752,20 +773,14 @@ fn mkFlexWithFromNumeralConstraint(
     // Store it in the types store
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-    // Create the flex var with the constraint
+    // Update the flex var to have the constraint attached
     const flex_content = types_mod.Content{
         .flex = types_mod.Flex{
             .name = null,
             .constraints = constraint_range,
         },
     };
-    const flex_var = try self.freshFromContent(flex_content, env, num_literal_info.region);
-
-    // Set up redirect so that ret_var resolves to flex_var.
-    // This ensures that when printing types, the return type of from_numeral
-    // (which is used as the "dispatcher" in TypeWriter for from_numeral) shows
-    // the same variable name as the flex var (the constrained type).
-    try self.types.setVarRedirect(ret_var, flex_var);
+    try self.types.setVarContent(flex_var, flex_content);
 
     return flex_var;
 }
@@ -789,6 +804,38 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 
     return try self.types.mkNominal(
         box_ident,
+        backing_var,
+        &type_args,
+        origin_module_id,
+    );
+}
+
+/// Create a nominal Try type with the given success and error types
+fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where Try is defined.
+    const origin_module_id = if (self.common_idents.builtin_module) |_|
+        self.cir.builtin_module_ident
+    else
+        self.common_idents.module_name; // We're compiling Builtin module itself
+
+    // Use the fully qualified name "Builtin.Try" to match how Try is defined in the Builtin module
+    // This ensures our Try type unifies correctly with the Try type from actual method signatures
+    const try_ident_idx = self.cir.common.findIdent("Builtin.Try") orelse blk: {
+        // If not found, create it (this handles tests and edge cases)
+        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Try"));
+    };
+    const try_ident = types_mod.TypeIdent{
+        .ident_idx = try_ident_idx,
+    };
+
+    // Create a backing var for Try - it's [Ok(ok), Err(err)]
+    // For simplicity, just use ok_var as the backing var
+    const backing_var = ok_var;
+    const type_args = [_]Var{ ok_var, err_var };
+
+    return try self.types.mkNominal(
+        try_ident,
         backing_var,
         &type_args,
         origin_module_id,
