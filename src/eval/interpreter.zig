@@ -833,16 +833,11 @@ pub const Interpreter = struct {
                     const br = self.env.store.getIfBranch(branches[i]);
                     const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
                     const cond_is_true = boolValueEquals(true, cond_val);
-                    std.debug.print("DEBUG e_if branch[{d}]: cond_val.ptr={?}, cond_is_true={}\n", .{ i, cond_val.ptr, cond_is_true });
-                    if (cond_val.ptr != null) {
-                        std.debug.print("DEBUG e_if: raw u8 value = {d}\n", .{getRuntimeU8(cond_val)});
-                    }
                     if (cond_is_true) {
                         return try self.evalExprMinimal(br.body, roc_ops, null);
                     }
                 }
                 // No condition matched; evaluate final else
-                std.debug.print("DEBUG e_if: no branch matched, evaluating final_else\n", .{});
                 return try self.evalExprMinimal(if_expr.final_else, roc_ops, null);
             },
             .e_str => |str_expr| {
@@ -2203,14 +2198,6 @@ pub const Interpreter = struct {
                 return try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
             },
             .e_lookup_local => |lookup| {
-                // DEBUG: trace lookup
-                const debug_lookup = true;
-                if (debug_lookup) {
-                    std.debug.print("DEBUG e_lookup_local: looking for pattern_idx={} in {d} bindings, env={s}\n", .{ lookup.pattern_idx, self.bindings.items.len, self.env.module_name });
-                    for (self.bindings.items, 0..) |b, idx| {
-                        std.debug.print("  binding[{d}]: pattern_idx={}\n", .{ idx, b.pattern_idx });
-                    }
-                }
                 // Search bindings in reverse
                 var i: usize = self.bindings.items.len;
                 while (i > 0) {
@@ -2239,9 +2226,6 @@ pub const Interpreter = struct {
                     const pat = self.env.store.getPattern(lookup.pattern_idx);
                     if (pat == .assign) {
                         const var_name = self.env.getIdent(pat.assign.ident);
-                        if (debug_lookup) {
-                            std.debug.print("DEBUG: checking active_closures for '{s}'\n", .{var_name});
-                        }
                         const cls_val = self.active_closures.items[self.active_closures.items.len - 1];
                         if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
                             const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
@@ -2250,9 +2234,6 @@ pub const Interpreter = struct {
                             // Only e_closure creates real capture values; others have uninitialized captures area
                             const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
                             const has_real_captures = (lambda_expr == .e_closure);
-                            if (debug_lookup) {
-                                std.debug.print("DEBUG: lambda_expr type={s}, has_real_captures={}\n", .{ @tagName(lambda_expr), has_real_captures });
-                            }
                             if (has_real_captures) {
                                 const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
                                 const header_sz = @sizeOf(layout.Closure);
@@ -2262,18 +2243,7 @@ pub const Interpreter = struct {
                                 const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                                 const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                                 var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                                if (debug_lookup) {
-                                    std.debug.print("DEBUG: captures_layout.tag={}, field_count={d}\n", .{ captures_layout.tag, accessor.field_layouts.len });
-                                    for (0..accessor.field_layouts.len) |fidx| {
-                                        const field = accessor.field_layouts.get(fidx);
-                                        const field_name = self.runtime_layout_store.env.getIdent(field.name);
-                                        std.debug.print("DEBUG:   field[{d}] name='{s}'\n", .{ fidx, field_name });
-                                    }
-                                }
                                 if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
-                                    if (debug_lookup) {
-                                        std.debug.print("DEBUG: found in captures at index {d}\n", .{fidx});
-                                    }
                                     const field_val = try accessor.getFieldByIndex(fidx);
                                     return try self.pushCopy(field_val, roc_ops);
                                 }
@@ -2284,15 +2254,9 @@ pub const Interpreter = struct {
 
                 // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
                 const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                if (debug_lookup) {
-                    std.debug.print("DEBUG: searching {d} top-level defs for pattern_idx={}\n", .{ all_defs.len, lookup.pattern_idx });
-                }
                 for (all_defs) |def_idx| {
                     const def = self.env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        if (debug_lookup) {
-                            std.debug.print("DEBUG: found matching def, evaluating...\n", .{});
-                        }
                         // Evaluate the definition on demand and cache the result in bindings
                         const result = try self.evalExprMinimal(def.expr, roc_ops, null);
                         try self.bindings.append(.{
@@ -2452,8 +2416,6 @@ pub const Interpreter = struct {
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const len_usize = builtins.list.listLen(roc_list.*);
                 const len_u64: u64 = @intCast(len_usize);
-
-                std.debug.print("DEBUG list_len: roc_list.ptr={*}, len_usize={d}, len_u64={d}\n", .{ roc_list.bytes, len_usize, len_u64 });
 
                 const result_layout = layout.Layout.int(.u64);
                 var out = try self.pushRaw(result_layout, 0);
@@ -2707,14 +2669,12 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_lt expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
-                std.debug.print("DEBUG num_is_lt: lhs={}, rhs={}\n", .{ lhs, rhs });
                 const result = switch (lhs) {
                     .int => |l| l < rhs.int,
                     .f32 => |l| l < rhs.f32,
                     .f64 => |l| l < rhs.f64,
                     .dec => |l| l.num < rhs.dec.num,
                 };
-                std.debug.print("DEBUG num_is_lt result={}\n", .{result});
                 return try self.makeBoolValue(result);
             },
             .num_is_lte => {
