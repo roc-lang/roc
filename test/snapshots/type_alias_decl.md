@@ -276,27 +276,30 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "userId"))
-					(e-num (value "123")))
-				(s-let
-					(p-assign (ident "person"))
-					(e-record
-						(fields
-							(field (name "name")
-								(e-string
-									(e-literal (string "Alice"))))
-							(field (name "age")
-								(e-num (value "30"))))))
-				(s-let
-					(p-assign (ident "color"))
-					(e-tag (name "Red")))
-				(e-lookup-local
-					(p-assign (ident "userId"))))))
+		(e-closure
+			(captures
+				(capture (ident "userId")))
+			(e-lambda
+				(args
+					(p-underscore))
+				(e-block
+					(s-let
+						(p-assign (ident "userId"))
+						(e-num (value "123")))
+					(s-let
+						(p-assign (ident "person"))
+						(e-record
+							(fields
+								(field (name "name")
+									(e-string
+										(e-literal (string "Alice"))))
+								(field (name "age")
+									(e-num (value "30"))))))
+					(s-let
+						(p-assign (ident "color"))
+						(e-tag (name "Red")))
+					(e-lookup-local
+						(p-assign (ident "userId")))))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin)))

@@ -226,6 +226,7 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
+        env: *ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
@@ -259,10 +260,15 @@ pub const Store = struct {
             }
         };
 
+        // Handle empty records specially to avoid NonEmptyRange with count=0
+        if (temp_fields.items.len == 0) {
+            return self.getEmptyRecordLayout();
+        }
+
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -556,7 +562,9 @@ pub const Store = struct {
             const resolved_ext = self.types_store.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
+                    .empty_tag_union => {
+                        break;
+                    },
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             num_tags += ext_tag_union.tags.len();
@@ -907,6 +915,8 @@ pub const Store = struct {
                 @panic("Layout computation exceeded iteration limit - possible infinite loop");
             }
 
+            if (current.desc.content == .structure) {}
+
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
                     .nominal_type => |nominal_type| {
@@ -1209,7 +1219,8 @@ pub const Store = struct {
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
 
-                        for (tags_slice.items(.args)) |tag_args| {
+                        for (tags_slice.items(.args), 0..) |tag_args, tag_idx| {
+                            _ = tag_idx;
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
                                 // No payload arguments
@@ -1234,35 +1245,36 @@ pub const Store = struct {
                             }
                         }
 
-                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
-                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
-
+                        // Use a tuple instead of a record to avoid needing field name identifiers
+                        // Tag unions are represented as (payload, tag) where:
+                        //   - payload is the largest payload layout (or empty record if no payloads)
+                        //   - tag is the discriminant
                         const payload_layout = max_payload_layout orelse blk: {
                             const empty_idx = try self.ensureEmptyRecordLayout();
                             break :blk self.getLayout(empty_idx);
                         };
 
-                        var field_layouts = [_]Layout{
+                        var element_layouts = [_]Layout{
                             payload_layout,
                             discriminant_layout,
                         };
 
-                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
+                        const tuple_idx = try self.putTuple(&element_layouts);
 
-                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        // Apply maximum payload alignment if needed
                         if (max_payload_alignment_any.toByteUnits() > 1) {
                             const desired_alignment = max_payload_alignment_any;
-                            var rec_layout = self.getLayout(rec_idx);
-                            const current_alignment = rec_layout.alignment(self.targetUsize());
+                            var tuple_layout = self.getLayout(tuple_idx);
+                            const current_alignment = tuple_layout.alignment(self.targetUsize());
                             if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
-                                std.debug.assert(rec_layout.tag == .record);
-                                const record_idx = rec_layout.data.record.idx;
-                                const new_layout = Layout.record(desired_alignment, record_idx);
-                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
+                                std.debug.assert(tuple_layout.tag == .tuple);
+                                const tuple_data_idx = tuple_layout.data.tuple.idx;
+                                const new_layout = Layout.tuple(desired_alignment, tuple_data_idx);
+                                self.layouts.set(@enumFromInt(@intFromEnum(tuple_idx)), new_layout);
                             }
                         }
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
-                        return rec_idx;
+                        // Break to fall through to pending container processing instead of returning directly
+                        break :flat_type self.getLayout(tuple_idx);
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1331,23 +1343,24 @@ pub const Store = struct {
                         continue :outer;
                     }
 
-                    // Flex vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.len > 0) {
-                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                        if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.opaquePtr();
-                        }
-                    }
-
                     // If the flex var has no constraints, it represents a phantom type parameter
                     // or unused tag branch that doesn't exist at runtime.
                     if (flex.constraints.isEmpty()) {
+                        // Flex vars can only be sent to the host if boxed.
+                        // Only return opaque_ptr for truly unconstrained flex vars inside containers.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
                         break :blk Layout.zst();
                     }
 
                     // Flex vars with constraints appear in REPL/eval contexts where type constraints
                     // haven't been fully solved. This is a known issue that needs proper constraint
                     // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
+                    // This includes flex vars inside lists - they should default to Dec, not opaque_ptr.
                     break :blk Layout.default_num();
                 },
                 .rigid => |rigid| blk: {

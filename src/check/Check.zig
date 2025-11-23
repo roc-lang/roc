@@ -3538,6 +3538,49 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
             },
+            .s_decl_gen => |decl_stmt| {
+                // Generalized declarations (let-polymorphism) - handled same as s_decl for type checking
+                // Check the pattern
+                try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
+                const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
+
+                // Evaluate the rhs of the expression
+                const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
+                {
+                    // Check the annotation, if it exists
+                    const expectation = blk: {
+                        if (decl_stmt.anno) |annotation_idx| {
+                            // Generate the annotation type var in-place
+                            try self.generateAnnotationType(annotation_idx, env);
+                            const annotation_var = ModuleEnv.varFrom(annotation_idx);
+
+                            // Return the expectation
+                            break :blk Expected{
+                                .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                            };
+                        } else {
+                            break :blk Expected.no_expectation;
+                        }
+                    };
+
+                    // Enter a new rank
+                    try env.var_pool.pushRank();
+                    defer env.var_pool.popRank();
+
+                    does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
+
+                    // Now that we are existing the scope, we must generalize then pop this rank
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+
+                    // Check any accumulated static dispatch constraints
+                    try self.checkDeferredStaticDispatchConstraints(env);
+                }
+
+                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
+
+                // Unify the pattern with the expression
+                _ = try self.unify(stmt_var, decl_pattern_var, env);
+            },
             .s_var => |var_stmt| {
                 // Check the pattern
                 try self.checkPattern(var_stmt.pattern_idx, env, .no_expectation);

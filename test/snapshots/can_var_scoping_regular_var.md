@@ -129,56 +129,59 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "processItems"))
-		(e-lambda
-			(args
-				(p-assign (ident "items")))
-			(e-block
-				(s-var
-					(p-assign (ident "count_"))
-					(e-num (value "0")))
-				(s-var
-					(p-assign (ident "total_"))
-					(e-num (value "0")))
-				(s-reassign
-					(p-assign (ident "count_"))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "count_")))
-						(e-num (value "1"))))
-				(s-reassign
-					(p-assign (ident "total_"))
+		(e-closure
+			(captures
+				(capture (ident "nestedFunc")))
+			(e-lambda
+				(args
+					(p-assign (ident "items")))
+				(e-block
+					(s-var
+						(p-assign (ident "count_"))
+						(e-num (value "0")))
+					(s-var
+						(p-assign (ident "total_"))
+						(e-num (value "0")))
+					(s-reassign
+						(p-assign (ident "count_"))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "count_")))
+							(e-num (value "1"))))
+					(s-reassign
+						(p-assign (ident "total_"))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "total_")))
+							(e-num (value "10"))))
+					(s-let
+						(p-assign (ident "nestedFunc"))
+						(e-closure
+							(captures
+								(capture (ident "count_")))
+							(e-lambda
+								(args
+									(p-underscore))
+								(e-block
+									(s-reassign
+										(p-assign (ident "count_"))
+										(e-runtime-error (tag "var_across_function_boundary")))
+									(s-reassign
+										(p-assign (ident "total_"))
+										(e-runtime-error (tag "var_across_function_boundary")))
+									(e-lookup-local
+										(p-assign (ident "count_")))))))
+					(s-let
+						(p-assign (ident "result"))
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "nestedFunc")))
+							(e-empty_record)))
 					(e-binop (op "add")
 						(e-lookup-local
 							(p-assign (ident "total_")))
-						(e-num (value "10"))))
-				(s-let
-					(p-assign (ident "nestedFunc"))
-					(e-closure
-						(captures
-							(capture (ident "count_")))
-						(e-lambda
-							(args
-								(p-underscore))
-							(e-block
-								(s-reassign
-									(p-assign (ident "count_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(s-reassign
-									(p-assign (ident "total_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(e-lookup-local
-									(p-assign (ident "count_")))))))
-				(s-let
-					(p-assign (ident "result"))
-					(e-call
 						(e-lookup-local
-							(p-assign (ident "nestedFunc")))
-						(e-empty_record)))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "total_")))
-					(e-lookup-local
-						(p-assign (ident "result"))))))))
+							(p-assign (ident "result")))))))))
 ~~~
 # TYPES
 ~~~clojure

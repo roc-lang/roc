@@ -36,6 +36,8 @@ layout: Layout,
 ptr: ?*anyopaque,
 /// Flag to track whether the memory has been initialized
 is_initialized: bool = false,
+/// Optional runtime type variable for type information (used in constant folding)
+rt_var: ?types.Var = null,
 
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
@@ -43,13 +45,11 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
     const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
-
-    // Zero-sized types (like unit `{}`) don't need any data copied and may have null ptr
     if (result_size == 0) {
+        // Zero-sized types can have null pointers, which is valid
         return;
     }
 
-    // For non-zero-sized types, we need a valid source pointer
     if (self.ptr == null) {
         return error.NullStackPointer;
     }
@@ -134,9 +134,62 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
+    if (self.layout.tag == .list) {
+        // Copy the list header and incref the underlying data
+        std.debug.assert(self.ptr != null);
+        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
+        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        dest_list.* = src_list.*;
+        // Incref the list data if it's not empty
+        if (src_list.bytes) |bytes| {
+            builtins.utils.increfDataPtrC(bytes, 1);
+        }
+        return;
+    }
+
+    if (self.layout.tag == .list_of_zst) {
+        // Copy the list header for ZST lists - no refcounting needed for ZSTs
+        std.debug.assert(self.ptr != null);
+        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
+        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        dest_list.* = src_list.*;
+        return;
+    }
+
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+
+    // Skip memcpy if source and destination overlap to avoid aliasing error
+    const src_start = @intFromPtr(src.ptr);
+    const src_end = src_start + result_size;
+    const dst_start = @intFromPtr(dst.ptr);
+    const dst_end = dst_start + result_size;
+
+    // Check if ranges overlap
+    if ((src_start < dst_end) and (dst_start < src_end)) {
+        // Overlapping regions - skip if they're identical, otherwise use memmove
+        if (src.ptr == dst.ptr) {
+            return;
+        }
+        // Use manual copy for overlapping but non-identical regions
+        if (dst_start < src_start) {
+            // Copy forward
+            var i: usize = 0;
+            while (i < result_size) : (i += 1) {
+                dst[i] = src[i];
+            }
+        } else {
+            // Copy backward
+            var i: usize = result_size;
+            while (i > 0) {
+                i -= 1;
+                dst[i] = src[i];
+            }
+        }
+        return;
+    }
+
     @memcpy(dst, src);
 }
 
@@ -449,20 +502,19 @@ pub const TupleAccessor = struct {
     tuple_layout: Layout,
     element_layouts: layout_mod.TupleField.SafeMultiList.Slice,
 
-    /// Get a StackValue for the element at the given index
-    pub fn getElement(self: TupleAccessor, index: usize) !StackValue {
-        if (index >= self.element_layouts.len) {
-            return error.TupleIndexOutOfBounds;
-        }
+    /// Get a StackValue for the element at the given original index (before sorting)
+    pub fn getElement(self: TupleAccessor, original_index: usize) !StackValue {
+        // Find the sorted index corresponding to this original index
+        const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
 
         std.debug.assert(self.base_value.is_initialized);
         std.debug.assert(self.base_value.ptr != null);
 
-        const element_layout_info = self.element_layouts.get(index);
+        const element_layout_info = self.element_layouts.get(sorted_index);
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
 
-        // Get the offset for this element within the tuple
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(index));
+        // Get the offset for this element within the tuple (using sorted index)
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(sorted_index));
 
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
@@ -718,10 +770,12 @@ pub const RecordAccessor = struct {
     }
 
     /// Find field index by comparing field names (requires env access for name comparison)
-    pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
+    pub fn findFieldIndex(self: RecordAccessor, _: anytype, field_name: []const u8) ?usize {
+        // Use the environment from the layout cache, not the passed env parameter
+        // This ensures we use the same environment that was used to create the layout
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, env.getIdent(field.name), field_name)) {
+            if (std.mem.eql(u8, self.layout_cache.env.getIdent(field.name), field_name)) {
                 return idx;
             }
         }
@@ -1024,6 +1078,34 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 elem_value.decref(layout_cache, ops);
             }
 
+            return;
+        },
+        .closure => {
+            if (self.ptr == null) return;
+            // Get the closure header to find the captures layout
+            const closure = self.asClosure();
+            const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+
+            // Only decref if there are actual captures (record with fields)
+            if (captures_layout.tag == .record) {
+                const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+                if (record_data.fields.count > 0) {
+                    // Calculate the offset to the captures record (after header, with alignment)
+                    const header_size = @sizeOf(layout_mod.Closure);
+                    const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                    const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                    const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+
+                    // Create a StackValue for the captures record and decref it
+                    const captures_value = StackValue{
+                        .layout = captures_layout,
+                        .ptr = rec_ptr,
+                        .is_initialized = true,
+                    };
+                    captures_value.decref(layout_cache, ops);
+                }
+            }
             return;
         },
         else => {},

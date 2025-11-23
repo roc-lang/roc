@@ -141,7 +141,7 @@ pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 36;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 15;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -226,6 +226,22 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
     switch (node.tag) {
         .statement_decl => {
             return CIR.Statement{ .s_decl = .{
+                .pattern = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const has_anno = extra_data[0] != 0;
+                    if (has_anno) {
+                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
+        .statement_decl_gen => {
+            return CIR.Statement{ .s_decl_gen = .{
                 .pattern = @enumFromInt(node.data_1),
                 .expr = @enumFromInt(node.data_2),
                 .anno = blk: {
@@ -751,6 +767,34 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
     });
 }
 
+/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
+/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithZeroArgumentTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    closure_name: Ident.Idx,
+    variant_var: types.Var,
+    ext_var: types.Var,
+    name: Ident.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    const extra_data_start = store.extra_data.len();
+    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
+    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_zero_argument_tag,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = 0,
+        .data_3 = 0,
+    });
+}
+
 /// Get the more-specific expr index. Used to make error messages nicer.
 ///
 /// For example, if the provided expr is a `block`, then this will return the
@@ -1264,6 +1308,20 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             node.tag = .statement_decl;
+            node.data_1 = @intFromEnum(s.pattern);
+            node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
+        },
+        .s_decl_gen => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
+            node.tag = .statement_decl_gen;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = extra_data_start;
