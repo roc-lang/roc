@@ -145,23 +145,31 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
                 _ = try self.buf.writer().write(", ");
             }
 
-            // TODO: Find a better way to do this
+            // Get the dispatcher var - for most constraints it's the first arg,
+            // but for from_numeral it's the return type (since from_numeral : Numeral -> T)
             const dispatcher_var = blk: {
                 const fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 std.debug.assert(fn_resolved == .structure);
 
-                const fn_args = switch (fn_resolved.structure) {
-                    .fn_effectful => |func| func.args,
-                    .fn_pure => |func| func.args,
-                    .fn_unbound => |func| func.args,
+                const func_data = switch (fn_resolved.structure) {
+                    .fn_effectful => |func| func,
+                    .fn_pure => |func| func,
+                    .fn_unbound => |func| func,
                     else => {
                         std.debug.assert(false);
                         continue;
                     },
                 };
-                std.debug.assert(fn_args.len() > 0);
 
-                break :blk self.types.sliceVars(fn_args)[0];
+                // For from_numeral, the dispatcher is the return type, not the first arg
+                // because from_numeral's signature is: Numeral -> TargetType
+                // where TargetType is the type that has the constraint
+                if (constraint.origin == .from_numeral) {
+                    break :blk func_data.ret;
+                }
+
+                std.debug.assert(func_data.args.len() > 0);
+                break :blk self.types.sliceVars(func_data.args)[0];
             };
 
             try self.writeVar(dispatcher_var, var_);

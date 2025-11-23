@@ -22,7 +22,7 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try checkTypesExpr(source, .pass, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - num - int suffix 1" {
@@ -55,7 +55,7 @@ test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try checkTypesExpr(source, .pass, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - num - float suffix 1" {
@@ -149,7 +149,7 @@ test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try checkTypesExpr(source, .pass, "List(_a) where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "List(a) where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
@@ -193,7 +193,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass, "{ hello: Str, world: _field } where [_a.from_numeral : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "{ hello: Str, world: a } where [a.from_numeral : _arg -> a]");
 }
 
 // tags //
@@ -209,7 +209,7 @@ test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, _a)]_others where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, a)]_others where [a.from_numeral : _arg -> a]");
 }
 
 // blocks //
@@ -256,7 +256,7 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> _ret where [_a.from_numeral : _arg2 -> _ret2]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> a where [a.from_numeral : _arg2 -> a]");
 }
 
 test "check type - def - id without annotation" {
@@ -299,7 +299,7 @@ test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_d where [_e.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "d where [d.from_numeral : _arg -> d]");
 }
 
 test "check type - def - forward ref" {
@@ -354,7 +354,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "x where [_a.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x where [x.from_numeral : _arg -> x]");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -364,7 +364,7 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "(x, Str) where [_a.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(x, Str) where [x.from_numeral : _arg -> x]");
 }
 
 test "check type - def - out of order" {
@@ -399,7 +399,7 @@ test "check type - top level polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_b where [_c.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "b where [b.from_numeral : _arg -> b]");
 }
 
 test "check type - let-def polymorphic function is generalized" {
@@ -411,7 +411,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_b where [_c.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "b where [b.from_numeral : _arg -> b]");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -605,7 +605,7 @@ test "check type - nominal w/ polymorphic function" {
         \\
         \\test = swapPair((1, "test"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, a) where [_c.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, a) where [a.from_numeral : _arg -> a]");
 }
 
 // bool
@@ -752,7 +752,7 @@ test "check type - unary minus" {
     const source =
         \\x = -10
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - unary minus mismatch" {
@@ -777,7 +777,7 @@ test "check type - binops math sub" {
     const source =
         \\x = 1 - 0.2
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - binops ord" {
@@ -872,7 +872,7 @@ test "check type - record - update 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "final" } },
-        "({ data: _field }, { data: _field2, other: Str }, { data: Str }) where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]",
+        "({ data: a }, { data: b, other: Str }, { data: Str }) where [a.from_numeral : _arg -> a, b.from_numeral : _arg2 -> b]",
     );
 }
 
@@ -1065,7 +1065,7 @@ test "check type - patterns record 2" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesExpr(source, .pass, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - patterns record field mismatch" {
@@ -1092,7 +1092,7 @@ test "check type - var ressignment" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : _arg -> a]");
 }
 
 // expect //
@@ -1105,7 +1105,7 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_a where [_b.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "check type - expect not bool" {
@@ -1176,7 +1176,7 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "_a where [_b.from_numeral : _arg -> _ret]",
+        "a where [a.from_numeral : _arg -> a]",
     );
 }
 
@@ -1492,7 +1492,7 @@ test "check type - comprehensive - multiple layers of let-polymorphism" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "(a, Str, Bool) where [_b.from_numeral : _arg -> _ret]",
+        "(a, Str, Bool) where [a.from_numeral : _arg -> a]",
     );
 }
 
@@ -1512,7 +1512,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "a where [a.add : a, a -> a, _e.from_numeral : _arg -> _ret]",
+        "a where [a.add : a, a -> a, a.from_numeral : _arg -> a]",
     );
 }
 
@@ -1563,7 +1563,7 @@ test "check type - comprehensive - static dispatch with multiple methods" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "a where [_c.from_numeral : _arg -> _ret]",
+        "a where [a.from_numeral : _arg -> a]",
     );
 }
 
@@ -1617,7 +1617,7 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Container(b) where [_c.from_numeral : _arg -> _ret]",
+        "Container(b) where [b.from_numeral : _arg -> b]",
     );
 }
 
@@ -1937,7 +1937,7 @@ test "List.fold works as builtin associated item" {
         \\
         \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "item where [_a.from_numeral : _arg -> _ret]");
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "item where [item.from_numeral : _arg -> item]");
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
@@ -1963,7 +1963,7 @@ test "associated item: type annotation followed by body should not create duplic
 
     // Verify the types
     try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
-    try test_env.assertDefType("result", "b where [_c.from_numeral : _arg -> _ret]");
+    try test_env.assertDefType("result", "b where [b.from_numeral : _arg -> b]");
 }
 
 // TODO: Move this test to can

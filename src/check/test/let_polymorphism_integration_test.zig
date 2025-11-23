@@ -23,7 +23,9 @@ test "direct polymorphic identity usage" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: _field, b: Str } where [_c.from_numeral : _arg -> _ret]");
+    // The field 'a' has the same type as the dispatcher for from_numeral, so they should share the same name
+    // Note: 'c' is used because 'a' and 'b' are already identifiers in the code
+    try typeCheck(source, "{ a: c, b: Str } where [c.from_numeral : _arg -> c]");
 }
 
 test "higher-order function with polymorphic identity" {
@@ -36,7 +38,7 @@ test "higher-order function with polymorphic identity" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: _field, b: Str } where [_c.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ a: c, b: Str } where [c.from_numeral : _arg -> c]");
 }
 
 test "let-polymorphism with function composition" {
@@ -50,7 +52,7 @@ test "let-polymorphism with function composition" {
         \\    { result1 }
         \\}
     ;
-    try typeCheck(source, "_a where [_b.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "a where [a.from_numeral : _arg -> a]");
 }
 
 test "polymorphic empty list" {
@@ -62,7 +64,7 @@ test "polymorphic empty list" {
         \\    { empty, nums, strs }
         \\}
     ;
-    try typeCheck(source, "{ empty: List(_a), nums: List(_b), strs: List(Str) } where [_c.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ empty: List(_a), nums: List(b), strs: List(Str) } where [b.from_numeral : _arg -> b]");
 }
 
 test "polymorphic cons function" {
@@ -74,7 +76,7 @@ test "polymorphic cons function" {
         \\    { list1, list2 }
         \\}
     ;
-    try typeCheck(source, "{ list1: List(item), list2: List(Str) } where [_a.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ list1: List(item), list2: List(Str) } where [item.from_numeral : _arg -> item]");
 }
 
 test "polymorphic record constructor" {
@@ -87,7 +89,7 @@ test "polymorphic record constructor" {
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: _field, second: Str }, pair2: { first: Str, second: _field2 }, pair3: { first: [True]_others, second: [False]_others2 } } where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]");
+    try typeCheck(source, "{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]_others, second: [False]_others2 } } where [a.from_numeral : _arg -> a, b.from_numeral : _arg2 -> b]");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -100,7 +102,7 @@ test "polymorphic identity with various numeric types" {
         \\    { int_val, float_val, bool_val }
         \\}
     ;
-    try typeCheck(source, "{ bool_val: [True]_others, float_val: _field, int_val: _field2 } where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]");
+    try typeCheck(source, "{ bool_val: [True]_others, float_val: a, int_val: b } where [a.from_numeral : _arg -> a, b.from_numeral : _arg2 -> b]");
 }
 
 test "nested polymorphic data structures" {
@@ -113,7 +115,7 @@ test "nested polymorphic data structures" {
         \\    { box1, box2, nested }
         \\}
     ;
-    try typeCheck(source, "{ box1: { value: _field }, box2: { value: Str }, nested: { value: { value: _field2 } } } where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]");
+    try typeCheck(source, "{ box1: { value: a }, box2: { value: Str }, nested: { value: { value: b } } } where [a.from_numeral : _arg -> a, b.from_numeral : _arg2 -> b]");
 }
 
 test "polymorphic function in let binding" {
@@ -128,7 +130,7 @@ test "polymorphic function in let binding" {
         \\    result
         \\}
     ;
-    try typeCheck(source, "{ a: _field, b: Str } where [_c.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ a: c, b: Str } where [c.from_numeral : _arg -> c]");
 }
 
 test "polymorphic swap function" {
@@ -142,7 +144,7 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: _field }, swapped2: { first: _field2, second: [True]_others } } where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]");
+    try typeCheck(source, "{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True]_others } } where [a.from_numeral : _arg -> a, b.from_numeral : _arg2 -> b]");
 }
 
 test "polymorphic option type simulation" {
@@ -156,7 +158,7 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try typeCheck(source, "{ opt1: { tag: Str, value: _field }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } } where [_a.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ opt1: { tag: Str, value: a }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } } where [a.from_numeral : _arg -> a]");
 }
 
 test "polymorphic const function" {
@@ -170,7 +172,7 @@ test "polymorphic const function" {
         \\    { num, str }
         \\}
     ;
-    try typeCheck(source, "{ num: _field, str: Str } where [_a.from_numeral : _arg -> _ret]");
+    try typeCheck(source, "{ num: a, str: Str } where [a.from_numeral : _arg -> a]");
 }
 
 test "polymorphic pipe function" {
@@ -184,7 +186,7 @@ test "polymorphic pipe function" {
         \\    { num_result, str_result }
         \\}
     ;
-    try typeCheck(source, "{ num_result: _field, str_result: _field2 } where [_a.from_numeral : _arg -> _ret, _b.from_numeral : _arg2 -> _ret2]");
+    try typeCheck(source, "{ num_result: a, str_result: b } where [a.from_numeral : _arg -> a, b.from_numeral : _arg2 -> b]");
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
