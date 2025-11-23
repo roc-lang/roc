@@ -58,7 +58,7 @@ Builtin :: [].{
 
 	Box(item) :: [ProvidedByCompiler].{}
 
-	Try(ok, err) := [Ok(ok), Err(err)].{
+	Try(ok, err) := [Err(err), Ok(ok)].{
 		is_ok : Try(_ok, _err) -> Bool
 		is_ok = |try| match try {
 			Ok(_) => True
