@@ -1025,7 +1025,14 @@ pub const Interpreter = struct {
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
 
                 var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
-                defer values.deinit();
+                defer {
+                    // Decref temporary element values after they've been copied into the list.
+                    // copyToPtr increfs refcounted values, so we need to release the temporary references.
+                    for (values.items) |val| {
+                        val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    values.deinit();
+                }
 
                 for (elem_indices) |elem_idx| {
                     const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
@@ -1562,6 +1569,9 @@ pub const Interpreter = struct {
                 // preventing it from being corrupted by pattern match bindings
                 const scrutinee_temp = try self.evalExprMinimal(m.cond, roc_ops, null);
                 const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
+                // Decref the original since pushCopy increfd the underlying data.
+                // The copy now owns the reference, and we're transferring ownership.
+                scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
                 defer scrutinee.decref(&self.runtime_layout_store, roc_ops);
 
                 const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
