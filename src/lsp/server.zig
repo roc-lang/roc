@@ -69,8 +69,10 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
             const root = parsed.value;
             const obj = switch (root) {
-                .object => |o| o,
-                else => return,
+                else => {
+                    log.err("received non-object JSON-RPC message", .{});
+                    return;
+                },
             };
 
             const method_value = obj.get("method") orelse return;
@@ -140,9 +142,11 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             self.state = .waiting_for_initialized;
 
             const response = protocol.InitializeResult{
+                // New capabilities have to be added here for the editor to know they exist
+                .capabilities = .{},
                 .serverInfo = .{
                     .name = server_name,
-                    .version = null,
+                    .version = "0.1",
                 },
             };
 
