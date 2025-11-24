@@ -286,7 +286,7 @@ test "check type - (a == b) desugars to exactly a.is_eq(b)" {
         \\|a, b| a.is_eq(b)
     ;
 
-    const expected: []u8 = "c, d -> e where [c.is_eq : c, d -> e]";
+    const expected: []const u8 = "c, d -> e where [c.is_eq : c, d -> e]";
 
     try checkTypesExpr(src_direct, .pass, expected);
     try checkTypesExpr(src_binop, .pass, expected);
@@ -301,7 +301,7 @@ test "check type - (a != b) desugars to exactly a.is_eq(b).not()" {
         \\|a, b| a.is_eq(b).not()
     ;
 
-    const expected: []u8 = "c, d -> f where [c.is_eq : c, d -> e, e.not : e -> f]";
+    const expected: []const u8 = "c, d -> e where [c.is_eq : c, d -> f, f.not : f -> e]";
 
     try checkTypesExpr(src_direct, .pass, expected);
     try checkTypesExpr(src_binop, .pass, expected);

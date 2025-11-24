@@ -4170,122 +4170,112 @@ fn checkBinopExpr(
         },
         .eq => {
             // `a == b` desugars to `a.is_eq(b)`
-            // Constraint: a.is_eq : a, a -> ret_type (ret_type is NOT hardcoded to Bool)
+            // Constraint: a.is_eq : a, b -> ret_type (ret_type is NOT hardcoded to Bool)
+            // Note: a and b are NOT unified - the is_eq method signature determines if they must be the same
 
-            // Ensure the operands are the same type
-            const lhs_rhs_result = try self.unify(lhs_var, rhs_var, env);
-            if (lhs_rhs_result.isProblem()) {
-                try self.unifyWith(expr_var, .err, env);
-            } else {
-                // Create the function type: lhs_type, lhs_type -> ret_type (fresh flex var)
-                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
-                const is_eq_ret_var = try self.fresh(env, expr_region);
+            // Create the function type: lhs_type, rhs_type -> ret_type (fresh flex var)
+            const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+            const is_eq_ret_var = try self.fresh(env, expr_region);
 
-                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                    .args = args_range,
-                    .ret = is_eq_ret_var,
-                    .needs_instantiation = false,
-                } } }, env, expr_region);
-                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
+            const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                .args = args_range,
+                .ret = is_eq_ret_var,
+                .needs_instantiation = false,
+            } } }, env, expr_region);
+            try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
-                // Create the is_eq constraint
-                const is_eq_constraint = StaticDispatchConstraint{
-                    .fn_name = self.cir.is_eq_ident,
-                    .fn_var = constraint_fn_var,
-                    .origin = .desugared_binop,
-                };
-                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{is_eq_constraint});
+            // Create the is_eq constraint
+            const is_eq_constraint = StaticDispatchConstraint{
+                .fn_name = self.cir.is_eq_ident,
+                .fn_var = constraint_fn_var,
+                .origin = .desugared_binop,
+            };
+            const constraint_range = try self.types.appendStaticDispatchConstraints(&.{is_eq_constraint});
 
-                // Create a constrained flex and unify it with the lhs (receiver)
-                const constrained_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                    env,
-                    expr_region,
-                );
-                try env.var_pool.addVarToRank(constrained_var, env.rank());
+            // Create a constrained flex and unify it with the lhs (receiver)
+            const constrained_var = try self.freshFromContent(
+                .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                env,
+                expr_region,
+            );
+            try env.var_pool.addVarToRank(constrained_var, env.rank());
 
-                _ = try self.unify(constrained_var, lhs_var, env);
+            _ = try self.unify(constrained_var, lhs_var, env);
 
-                // The expression type is whatever is_eq returns
-                _ = try self.unify(expr_var, is_eq_ret_var, env);
-            }
+            // The expression type is whatever is_eq returns
+            _ = try self.unify(expr_var, is_eq_ret_var, env);
         },
         .ne => {
             // `a != b` desugars to `a.is_eq(b).not()`
-            // Constraint 1: a.is_eq : a, a -> is_eq_ret
+            // Constraint 1: a.is_eq : a, b -> is_eq_ret
             // Constraint 2: is_eq_ret.not : is_eq_ret -> final_ret
+            // Note: a and b are NOT unified - the is_eq method signature determines if they must be the same
 
-            // Ensure the operands are the same type
-            const lhs_rhs_result = try self.unify(lhs_var, rhs_var, env);
-            if (lhs_rhs_result.isProblem()) {
-                try self.unifyWith(expr_var, .err, env);
-            } else {
-                // Create fresh var for the final return type (result of not)
-                const not_ret_var = try self.fresh(env, expr_region);
+            // Create fresh var for the final return type (result of not)
+            const not_ret_var = try self.fresh(env, expr_region);
 
-                // Create is_eq_ret_var as a constrained flex WITH the not constraint
-                // We need to create the not constraint first, but it references is_eq_ret_var...
-                // Solution: create a plain flex first for the not fn arg, then create the
-                // constrained is_eq_ret_var and use it in the is_eq function type
+            // Create is_eq_ret_var as a constrained flex WITH the not constraint
+            // We need to create the not constraint first, but it references is_eq_ret_var...
+            // Solution: create a plain flex first for the not fn arg, then create the
+            // constrained is_eq_ret_var and use it in the is_eq function type
 
-                // Create a placeholder for is_eq_ret that we'll use in the not constraint
-                const is_eq_ret_placeholder = try self.fresh(env, expr_region);
+            // Create a placeholder for is_eq_ret that we'll use in the not constraint
+            const is_eq_ret_placeholder = try self.fresh(env, expr_region);
 
-                // Create the not constraint referencing the placeholder
-                const not_args_range = try self.types.appendVars(&.{is_eq_ret_placeholder});
-                const not_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                    .args = not_args_range,
-                    .ret = not_ret_var,
-                    .needs_instantiation = false,
-                } } }, env, expr_region);
-                try env.var_pool.addVarToRank(not_fn_var, env.rank());
+            // Create the not constraint referencing the placeholder
+            const not_args_range = try self.types.appendVars(&.{is_eq_ret_placeholder});
+            const not_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                .args = not_args_range,
+                .ret = not_ret_var,
+                .needs_instantiation = false,
+            } } }, env, expr_region);
+            try env.var_pool.addVarToRank(not_fn_var, env.rank());
 
-                const not_constraint = StaticDispatchConstraint{
-                    .fn_name = self.cir.not_ident,
-                    .fn_var = not_fn_var,
-                    .origin = .desugared_binop,
-                };
+            const not_constraint = StaticDispatchConstraint{
+                .fn_name = self.cir.not_ident,
+                .fn_var = not_fn_var,
+                .origin = .desugared_binop,
+            };
 
-                // Create is_eq_ret_var WITH the not constraint attached
-                const not_constraint_range = try self.types.appendStaticDispatchConstraints(&.{not_constraint});
-                const is_eq_ret_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = not_constraint_range } },
-                    env,
-                    expr_region,
-                );
-                try env.var_pool.addVarToRank(is_eq_ret_var, env.rank());
+            // Create is_eq_ret_var WITH the not constraint attached
+            const not_constraint_range = try self.types.appendStaticDispatchConstraints(&.{not_constraint});
+            const is_eq_ret_var = try self.freshFromContent(
+                .{ .flex = Flex{ .name = null, .constraints = not_constraint_range } },
+                env,
+                expr_region,
+            );
+            try env.var_pool.addVarToRank(is_eq_ret_var, env.rank());
 
-                // Unify placeholder with the real constrained var so they're the same
-                _ = try self.unify(is_eq_ret_placeholder, is_eq_ret_var, env);
+            // Unify placeholder with the real constrained var so they're the same
+            _ = try self.unify(is_eq_ret_placeholder, is_eq_ret_var, env);
 
-                // Constraint 1: is_eq method on lhs type (returns the constrained is_eq_ret_var)
-                const is_eq_args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
-                const is_eq_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                    .args = is_eq_args_range,
-                    .ret = is_eq_ret_var,
-                    .needs_instantiation = false,
-                } } }, env, expr_region);
-                try env.var_pool.addVarToRank(is_eq_fn_var, env.rank());
+            // Constraint 1: is_eq method on lhs type (returns the constrained is_eq_ret_var)
+            const is_eq_args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+            const is_eq_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                .args = is_eq_args_range,
+                .ret = is_eq_ret_var,
+                .needs_instantiation = false,
+            } } }, env, expr_region);
+            try env.var_pool.addVarToRank(is_eq_fn_var, env.rank());
 
-                const is_eq_constraint = StaticDispatchConstraint{
-                    .fn_name = self.cir.is_eq_ident,
-                    .fn_var = is_eq_fn_var,
-                    .origin = .desugared_binop,
-                };
+            const is_eq_constraint = StaticDispatchConstraint{
+                .fn_name = self.cir.is_eq_ident,
+                .fn_var = is_eq_fn_var,
+                .origin = .desugared_binop,
+            };
 
-                // Add is_eq constraint to lhs
-                const is_eq_constraint_range = try self.types.appendStaticDispatchConstraints(&.{is_eq_constraint});
-                const lhs_constrained_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = is_eq_constraint_range } },
-                    env,
-                    expr_region,
-                );
-                try env.var_pool.addVarToRank(lhs_constrained_var, env.rank());
-                _ = try self.unify(lhs_constrained_var, lhs_var, env);
+            // Add is_eq constraint to lhs
+            const is_eq_constraint_range = try self.types.appendStaticDispatchConstraints(&.{is_eq_constraint});
+            const lhs_constrained_var = try self.freshFromContent(
+                .{ .flex = Flex{ .name = null, .constraints = is_eq_constraint_range } },
+                env,
+                expr_region,
+            );
+            try env.var_pool.addVarToRank(lhs_constrained_var, env.rank());
+            _ = try self.unify(lhs_constrained_var, lhs_var, env);
 
-                // The expression type is the return type of not
-                _ = try self.unify(expr_var, not_ret_var, env);
-            }
+            // The expression type is the return type of not
+            _ = try self.unify(expr_var, not_ret_var, env);
         },
         .@"and" => {
             const lhs_fresh_bool = try self.freshBool(env, expr_region);
