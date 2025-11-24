@@ -98,6 +98,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
     }
+    if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
+        try low_level_map.put(str_is_eq_ident, .str_is_eq);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
@@ -301,7 +304,11 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits => 1,
+                        // Unary numeric operations
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits,
+                        // Unary collection operations
+                        .list_len, .list_is_empty, .str_is_empty, .set_is_empty,
+                        => 1,
                         else => 2, // Most numeric operations are binary
                     };
 

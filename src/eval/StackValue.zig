@@ -1082,9 +1082,11 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .closure => {
             if (self.ptr == null) return;
-            // Get the closure header to find the captures layout
-            const closure = self.asClosure();
-            const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+            // Use the captures_layout_idx from our layout, not from the closure header.
+            // The closure header may have stale/garbage data if the memory was reused.
+            // The StackValue.layout always has the correct captures_layout_idx.
+            const captures_layout_idx = self.layout.data.closure.captures_layout_idx;
+            const captures_layout = layout_cache.getLayout(captures_layout_idx);
 
             // Only decref if there are actual captures (record with fields)
             if (captures_layout.tag == .record) {

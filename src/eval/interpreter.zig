@@ -884,8 +884,13 @@ pub const Interpreter = struct {
                         return try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ne => {
-                        // Desugar `a != b` to `a.is_ne(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_ne_ident, binop.lhs, binop.rhs, roc_ops);
+                        // Desugar `a != b` to `a.is_eq(b).not()`
+                        // First call is_eq(a, b) to get a Bool
+                        var eq_result = try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
+                        defer eq_result.decref(&self.runtime_layout_store, roc_ops);
+                        // Then negate the Bool result
+                        const is_true = boolValueEquals(true, eq_result);
+                        return try self.makeBoolValue(!is_true);
                     },
                     .@"or" => {
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
@@ -2247,9 +2252,9 @@ pub const Interpreter = struct {
                 defer if (arg_values.len > 0) self.allocator.free(arg_values);
 
                 if (method_args) |span| {
-                    var i: usize = 0;
-                    while (i < arg_values.len) : (i += 1) {
-                        const arg_expr_idx: can.CIR.Expr.Idx = @enumFromInt(span.span.start + i);
+                    // Use sliceExpr to get actual expression indices from extra_data
+                    const arg_indices = self.env.store.sliceExpr(span);
+                    for (arg_indices, 0..) |arg_expr_idx, i| {
                         const arg_ct_var = can.ModuleEnv.varFrom(arg_expr_idx);
                         const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
                         arg_values[i] = try self.evalExprMinimal(arg_expr_idx, roc_ops, arg_rt_var);
@@ -2321,21 +2326,30 @@ pub const Interpreter = struct {
 
                 // Find the nominal type's origin module from the receiver type
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-                const nominal_info = blk: {
+                const nominal_info: NominalInfo = blk: {
                     switch (receiver_resolved.desc.content) {
                         .structure => |s| switch (s) {
-                            .nominal_type => |nom| break :blk .{
+                            .nominal_type => |nom| break :blk NominalInfo{
                                 .origin = nom.origin_module,
                                 .ident = nom.ident.ident_idx,
                             },
-                            else => return error.InvalidMethodReceiver,
+                            else => {
+                                // Try to infer from layout
+                                if (try self.inferNominalFromLayout(receiver_value.layout)) |info| break :blk info;
+                                return error.InvalidMethodReceiver;
+                            },
                         },
                         // Flex/rigid vars should have been specialized to nominal types before runtime
+                        // Try to infer the nominal type from the value's layout instead
                         .flex, .rigid => {
-                            // If we reach here, the receiver wasn't properly monomorphized
+                            if (try self.inferNominalFromLayout(receiver_value.layout)) |info| break :blk info;
                             return error.InvalidMethodReceiver;
                         },
-                        else => return error.InvalidMethodReceiver,
+                        else => {
+                            // Try to infer from layout as fallback
+                            if (try self.inferNominalFromLayout(receiver_value.layout)) |info| break :blk info;
+                            return error.InvalidMethodReceiver;
+                        },
                     }
                 };
 
@@ -2733,6 +2747,20 @@ pub const Interpreter = struct {
                 const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
 
                 return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
+            },
+            .str_is_eq => {
+                // Str.is_eq : Str, Str -> Bool
+                std.debug.assert(args.len == 2); // low-level .str_is_eq expects 2 arguments
+
+                const lhs_arg = args[0];
+                const rhs_arg = args[1];
+                std.debug.assert(lhs_arg.ptr != null); // low-level .str_is_eq expects non-null string pointer
+                std.debug.assert(rhs_arg.ptr != null); // low-level .str_is_eq expects non-null string pointer
+
+                const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs_arg.ptr.?));
+                const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.strEqual(lhs_str.*, rhs_str.*));
             },
             .list_len => {
                 // List.len : List(a) -> U64
@@ -5626,6 +5654,57 @@ pub const Interpreter = struct {
         return result;
     }
 
+    const NominalInfo = struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx };
+
+    /// Infer nominal type information from a value's layout.
+    /// This is used as a fallback when type variables are flex/rigid and not properly specialized.
+    /// Returns the origin module ident and type ident, or null if not inferrable.
+    fn inferNominalFromLayout(self: *Interpreter, lay: layout.Layout) Error!?NominalInfo {
+        // Get the "Builtin" ident - all builtin types use this as origin
+        const builtin_ident = self.env.common.findIdent("Builtin") orelse return null;
+
+        switch (lay.tag) {
+            .scalar => {
+                const scalar = lay.data.scalar;
+                // Map scalar types to fully-qualified Num.Type names
+                const qualified_type_name: []const u8 = switch (scalar.tag) {
+                    .int => switch (scalar.data.int) {
+                        .u8 => "Num.U8",
+                        .i8 => "Num.I8",
+                        .u16 => "Num.U16",
+                        .i16 => "Num.I16",
+                        .u32 => "Num.U32",
+                        .i32 => "Num.I32",
+                        .u64 => "Num.U64",
+                        .i64 => "Num.I64",
+                        .u128 => "Num.U128",
+                        .i128 => "Num.I128",
+                    },
+                    .frac => switch (scalar.data.frac) {
+                        .f32 => "Num.F32",
+                        .f64 => "Num.F64",
+                        .dec => "Num.Dec",
+                    },
+                    else => return null,
+                };
+                // For numeric types, use Builtin as origin and Num.Type as nominal
+                const type_ident = self.env.common.findIdent(qualified_type_name) orelse return null;
+                return NominalInfo{ .origin = builtin_ident, .ident = type_ident };
+            },
+            .list => {
+                // List is from Builtin module with nominal "List"
+                const list_ident = self.env.common.findIdent("List") orelse return null;
+                return NominalInfo{ .origin = builtin_ident, .ident = list_ident };
+            },
+            .list_of_zst => {
+                // Same as list
+                const list_ident = self.env.common.findIdent("List") orelse return null;
+                return NominalInfo{ .origin = builtin_ident, .ident = list_ident };
+            },
+            else => return null,
+        }
+    }
+
     /// Resolve and evaluate a method function from its origin module.
     /// Returns a StackValue representing the method function.
     /// The caller is responsible for decref'ing the returned value.
@@ -5648,16 +5727,20 @@ pub const Interpreter = struct {
         const method_name_str = self.env.common.getIdentStore().getText(method_name);
 
         // Try to find the method in the origin module's exposed items
+        // NOTE: Associated items in the Builtin module store their pattern idents with
+        // the full "Builtin.Type.method" name (e.g., "Builtin.List.is_eq"), so we must
+        // try the fully qualified name FIRST to get the correct ident for pattern matching.
         const method_ident = blk: {
-            if (origin_env.common.findIdent(qualified_name)) |ident| {
-                break :blk ident;
-            }
-
-            // Try with "Builtin." prefix for builtin module methods
+            // Try with "Builtin." prefix FIRST for builtin module methods
             // (Associated items in builtin module are stored with full "Builtin.Type.method" names)
             var builtin_buf: [256]u8 = undefined;
             const builtin_qualified = try std.fmt.bufPrint(&builtin_buf, "Builtin.{s}", .{qualified_name});
             if (origin_env.common.findIdent(builtin_qualified)) |ident| {
+                break :blk ident;
+            }
+
+            // Try the type-qualified name (e.g., "List.is_eq")
+            if (origin_env.common.findIdent(qualified_name)) |ident| {
                 break :blk ident;
             }
 
@@ -5695,12 +5778,73 @@ pub const Interpreter = struct {
             self.bindings.items.len = saved_bindings_len;
         }
 
-        // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        // Check if this is a low-level lambda - if so, construct the closure directly
+        // This is necessary because polymorphic methods (like List.len) have type parameters
+        // that can't be resolved to concrete layouts from the Builtin module alone.
+        const target_expr = origin_env.store.getExpr(target_def.expr);
 
-        // Evaluate the method's expression
-        const method_value = try self.evalExprMinimal(target_def.expr, roc_ops, rt_def_var);
+        // Also handle e_lambda for Roc-implemented methods (like List.is_eq)
+        if (target_expr == .e_low_level_lambda or target_expr == .e_lambda) {
+            const is_low_level = (target_expr == .e_low_level_lambda);
+            const args_span = if (is_low_level) target_expr.e_low_level_lambda.args else target_expr.e_lambda.args;
+            const body_idx = if (is_low_level) target_expr.e_low_level_lambda.body else target_expr.e_lambda.body;
+
+            // Create a minimal closure with empty captures
+            const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            const closure_layout = layout.Layout.closure(empty_captures_idx);
+            const value = try self.pushRaw(closure_layout, 0);
+
+            if (value.ptr) |ptr| {
+                const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                header.* = .{
+                    .body_idx = body_idx,
+                    .params = args_span,
+                    .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                    .captures_layout_idx = empty_captures_idx,
+                    .lambda_expr_idx = target_def.expr,
+                    .source_env = @constCast(origin_env),
+                };
+            }
+            return value;
+        }
+
+        // Handle e_anno_only - this should not happen if builtin_compiler replaced it
+        if (target_expr == .e_anno_only) {
+            // This means the builtin_compiler didn't replace this annotation-only def
+            // with a low-level lambda. This is a bug in the builtin compilation process.
+            return error.MethodLookupFailed;
+        }
+
+        // Handle e_closure for closures with captures
+        if (target_expr == .e_closure) {
+            const closure = target_expr.e_closure;
+            const inner_expr = origin_env.store.getExpr(closure.lambda_idx);
+
+            // The inner expression should be e_lambda
+            if (inner_expr == .e_lambda) {
+                const lam = inner_expr.e_lambda;
+                // Create a closure - for now without captures for simplicity
+                const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+                const closure_layout = layout.Layout.closure(empty_captures_idx);
+                const value = try self.pushRaw(closure_layout, 0);
+
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = lam.body,
+                        .params = lam.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // Captures pattern not applicable here
+                        .captures_layout_idx = empty_captures_idx,
+                        .lambda_expr_idx = closure.lambda_idx,
+                        .source_env = @constCast(origin_env),
+                    };
+                }
+                return value;
+            }
+        }
+
+        // For non-low-level methods, evaluate the expression normally
+        const method_value = try self.evalExprMinimal(target_def.expr, roc_ops, null);
 
         return method_value;
     }

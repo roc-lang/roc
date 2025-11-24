@@ -2045,6 +2045,113 @@ test "check type - equirecursive static dispatch with type annotation" {
     );
 }
 
+// comparison operator constraints //
+
+test "check type - equals operator generates is_eq constraint" {
+    // The == operator desugars to a.is_eq(b), which requires an is_eq constraint
+    const source =
+        \\equals : a, a -> Bool where [a.is_eq : a, a -> Bool]
+        \\equals = |x, y| x == y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "equals" } },
+        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
+    );
+}
+
+test "check type - not equals operator generates is_eq constraint and calls not on Bool" {
+    // The != operator desugars to a.is_eq(b).not()
+    // - is_eq constraint is on type 'a' (appears in where clause)
+    // - not is called on Bool (concrete type, so immediately satisfied)
+    const source =
+        \\not_equals : a, a -> Bool where [a.is_eq : a, a -> Bool]
+        \\not_equals = |x, y| x != y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "not_equals" } },
+        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
+    );
+}
+
+test "check type - less than operator generates is_lt constraint" {
+    // The < operator desugars to a.is_lt(b), which requires an is_lt constraint
+    const source =
+        \\less_than : a, a -> Bool where [a.is_lt : a, a -> Bool]
+        \\less_than = |x, y| x < y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "less_than" } },
+        "a, a -> Bool where [a.is_lt : a, a -> Bool]",
+    );
+}
+
+test "check type - greater than operator generates is_gt constraint" {
+    // The > operator desugars to a.is_gt(b), which requires an is_gt constraint
+    const source =
+        \\greater_than : a, a -> Bool where [a.is_gt : a, a -> Bool]
+        \\greater_than = |x, y| x > y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "greater_than" } },
+        "a, a -> Bool where [a.is_gt : a, a -> Bool]",
+    );
+}
+
+test "check type - less than or equal operator generates is_lte constraint" {
+    // The <= operator desugars to a.is_lte(b), which requires an is_lte constraint
+    const source =
+        \\less_than_or_eq : a, a -> Bool where [a.is_lte : a, a -> Bool]
+        \\less_than_or_eq = |x, y| x <= y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "less_than_or_eq" } },
+        "a, a -> Bool where [a.is_lte : a, a -> Bool]",
+    );
+}
+
+test "check type - greater than or equal operator generates is_gte constraint" {
+    // The >= operator desugars to a.is_gte(b), which requires an is_gte constraint
+    const source =
+        \\greater_than_or_eq : a, a -> Bool where [a.is_gte : a, a -> Bool]
+        \\greater_than_or_eq = |x, y| x >= y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "greater_than_or_eq" } },
+        "a, a -> Bool where [a.is_gte : a, a -> Bool]",
+    );
+}
+
+test "check type - inferred equals constraint on polymorphic function" {
+    // Without explicit annotation, the is_eq constraint should be inferred
+    const source =
+        \\equals = |x, y| x == y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
+    );
+}
+
+test "check type - inferred not equals constraint on polymorphic function" {
+    // Without explicit annotation, is_eq constraint should be inferred
+    // (not is called on Bool, which is a concrete type with not defined)
+    const source =
+        \\not_equals = |x, y| x != y
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
+    );
+}
+
 // helpers - module //
 
 const ModuleExpectation = union(enum) {
