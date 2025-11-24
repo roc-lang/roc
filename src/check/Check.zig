@@ -524,6 +524,16 @@ fn instantiateVarHelp(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    // Guard against corrupted vars from malformed code (e.g., uninitialized memory)
+    const var_idx: u64 = @intFromEnum(var_to_instantiate);
+    const type_store_len = self.types.len();
+    if (var_idx >= type_store_len) {
+        // Return a fresh error var for corrupted input - this properly maintains sync
+        const fresh_error_var = try self.types.freshFromContentWithRank(.err, env.rank());
+        try self.fillInRegionsThrough(fresh_error_var);
+        return fresh_error_var;
+    }
+
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
 
@@ -1939,11 +1949,28 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         },
         .tuple => |tuple| {
             const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
+
+            // Validate all element indices before using them
+            // This guards against corrupted data from severely malformed code
+            const type_store_len = self.types.len();
+            var all_valid = true;
             for (elems_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                if (@intFromEnum(arg_anno_idx) >= type_store_len) {
+                    all_valid = false;
+                    break;
+                }
             }
-            const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
-            try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
+
+            if (!all_valid) {
+                // Corrupted tuple element indices - treat as error type
+                try self.unifyWith(anno_var, .err, env);
+            } else {
+                for (elems_anno_slice) |arg_anno_idx| {
+                    try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                }
+                const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+                try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
+            }
         },
         .parens => |parens| {
             try self.generateAnnoTypeInPlace(parens.anno, env, ctx);
