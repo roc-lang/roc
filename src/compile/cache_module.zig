@@ -95,9 +95,9 @@ pub const CacheModule = struct {
         // Create CompactWriter
         var writer = CompactWriter.init();
 
-        // Allocate space for ModuleEnv.Serialized
-        const env_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv);
-        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
+        // Allocate space for ModuleEnv.Serialized and serialize into it
+        comptime std.debug.assert(@sizeOf(ModuleEnv.Serialized) >= @sizeOf(ModuleEnv));
+        const serialized_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv.Serialized);
 
         // Serialize the ModuleEnv
         try serialized_ptr.serialize(module_env, arena_allocator, &writer);

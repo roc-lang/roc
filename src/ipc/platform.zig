@@ -84,6 +84,8 @@ pub const windows = if (is_windows) struct {
 
 /// POSIX shared memory functions
 pub const posix = if (!is_windows) struct {
+    // NOTE: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL!
+    // We use usize to properly detect this sentinel value.
     pub extern "c" fn mmap(
         addr: ?*anyopaque,
         len: usize,
@@ -91,7 +93,10 @@ pub const posix = if (!is_windows) struct {
         flags: c_int,
         fd: c_int,
         offset: std.c.off_t,
-    ) ?*anyopaque;
+    ) usize;
+
+    /// MAP_FAILED is (void*)-1, which is maxInt(usize)
+    pub const MAP_FAILED: usize = std.math.maxInt(usize);
 
     pub extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     pub extern "c" fn close(fd: c_int) c_int;
@@ -303,18 +308,20 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
             return ptr.?;
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            const ptr = posix.mmap(
+            const result = posix.mmap(
                 base_addr,
                 size,
                 posix.PROT_READ | posix.PROT_WRITE,
                 posix.MAP_SHARED,
                 handle,
                 0,
-            ) orelse {
-                std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
+            );
+            // Check for MAP_FAILED (-1), NOT null!
+            if (result == posix.MAP_FAILED) {
+                std.log.err("POSIX: Failed to map shared memory (size: {}, fd: {})", .{ size, handle });
                 return error.MmapFailed;
-            };
-            return ptr;
+            }
+            return @ptrFromInt(result);
         },
         else => return error.UnsupportedPlatform,
     }

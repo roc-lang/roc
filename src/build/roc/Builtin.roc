@@ -59,7 +59,7 @@ Builtin :: [].{
 
 	Box(item) :: [ProvidedByCompiler].{}
 
-	Try(ok, err) := [Ok(ok), Err(err)].{
+	Try(ok, err) := [Err(err), Ok(ok)].{
 		is_ok : Try(_ok, _err) -> Bool
 		is_ok = |try| match try {
 			Ok(_) => True
@@ -155,7 +155,6 @@ Builtin :: [].{
 			div_trunc_by : U8, U8 -> U8
 			rem_by : U8, U8 -> U8
 
-			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
 		}
 
@@ -178,7 +177,6 @@ Builtin :: [].{
 			div_trunc_by : I8, I8 -> I8
 			rem_by : I8, I8 -> I8
 
-			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
 		}
 
@@ -198,7 +196,6 @@ Builtin :: [].{
 			div_trunc_by : U16, U16 -> U16
 			rem_by : U16, U16 -> U16
 
-			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
 		}
 
@@ -221,7 +218,6 @@ Builtin :: [].{
 			div_trunc_by : I16, I16 -> I16
 			rem_by : I16, I16 -> I16
 
-			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
 		}
 
@@ -241,7 +237,6 @@ Builtin :: [].{
 			div_trunc_by : U32, U32 -> U32
 			rem_by : U32, U32 -> U32
 
-			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
 		}
 
@@ -264,7 +259,6 @@ Builtin :: [].{
 			div_trunc_by : I32, I32 -> I32
 			rem_by : I32, I32 -> I32
 
-			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
 		}
 
@@ -284,7 +278,6 @@ Builtin :: [].{
 			div_trunc_by : U64, U64 -> U64
 			rem_by : U64, U64 -> U64
 
-			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
 		}
 
@@ -307,7 +300,6 @@ Builtin :: [].{
 			div_trunc_by : I64, I64 -> I64
 			rem_by : I64, I64 -> I64
 
-			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
 		}
 
@@ -327,7 +319,6 @@ Builtin :: [].{
 			div_trunc_by : U128, U128 -> U128
 			rem_by : U128, U128 -> U128
 
-			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
 		}
 
@@ -350,7 +341,6 @@ Builtin :: [].{
 			div_trunc_by : I128, I128 -> I128
 			rem_by : I128, I128 -> I128
 
-			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
 		}
 
@@ -374,8 +364,6 @@ Builtin :: [].{
 			div_trunc_by : Dec, Dec -> Dec
 			rem_by : Dec, Dec -> Dec
 
-			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
 		}
 
@@ -397,8 +385,6 @@ Builtin :: [].{
 			div_trunc_by : F32, F32 -> F32
 			rem_by : F32, F32 -> F32
 
-			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
 		}
 
@@ -420,8 +406,6 @@ Builtin :: [].{
 			div_trunc_by : F64, F64 -> F64
 			rem_by : F64, F64 -> F64
 
-			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
 		}
 	}

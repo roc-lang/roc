@@ -110,6 +110,31 @@ pub const c = struct {
     pub const link = std.c.link;
     pub const ftruncate = std.c.ftruncate;
     pub const _errno = std.c._errno;
+
+    // POSIX wait status macros
+    pub fn WIFEXITED(status: c_int) bool {
+        return WTERMSIG(status) == 0;
+    }
+
+    pub fn WEXITSTATUS(status: c_int) u8 {
+        return @intCast((status >> 8) & 0xff);
+    }
+
+    pub fn WIFSIGNALED(status: c_int) bool {
+        return ((status & 0x7f) + 1) >> 1 > 0;
+    }
+
+    pub fn WTERMSIG(status: c_int) u8 {
+        return @intCast(status & 0x7f);
+    }
+
+    pub fn WIFSTOPPED(status: c_int) bool {
+        return (status & 0xff) == 0x7f;
+    }
+
+    pub fn WSTOPSIG(status: c_int) u8 {
+        return WEXITSTATUS(status);
+    }
 };
 
 // Platform-specific shared memory implementation
@@ -170,10 +195,13 @@ fn stderrWriter() *std.Io.Writer {
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
+    // NOTE: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL!
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) usize;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
+    /// MAP_FAILED is (void*)-1, which is maxInt(usize)
+    const MAP_FAILED: usize = std.math.maxInt(usize);
     // fcntl constants
     const F_GETFD = 1;
     const F_SETFD = 2;
@@ -1086,7 +1114,15 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     std.log.debug("Interpreter execution completed", .{});
 }
 
-/// Run child process using Windows handle inheritance (idiomatic Windows approach)
+/// Run child process using Windows handle inheritance.
+///
+/// We use direct Win32 APIs (CreateProcessW) rather than library abstractions
+/// to ensure no interference with our handle inheritance. The handle value is
+/// passed to the child via command line arguments, so we don't depend on any
+/// specific handle number - the child receives the value and uses it directly.
+///
+/// This mirrors the POSIX implementation which uses direct fork/exec for the
+/// same reason.
 fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
@@ -1173,7 +1209,19 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     std.log.debug("Child process completed successfully", .{});
 }
 
-/// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
+/// Run child process using POSIX file descriptor inheritance.
+///
+/// We use direct fork/exec syscalls rather than std.process.Child to ensure
+/// no interference with our fd inheritance. Library abstractions may manipulate
+/// fds between fork and exec (e.g. for progress reporting), which can clobber
+/// our shared memory fd if it happens to use the same fd number.
+///
+/// The fd number is communicated to the child via a coordination file, so we
+/// don't depend on any specific fd number - whatever fd the kernel assigned
+/// for the shared memory will be inherited and used correctly.
+///
+/// This mirrors the Windows implementation which uses direct Win32 APIs for
+/// the same reason.
 fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(allocs.arena) catch |err| {
@@ -1198,7 +1246,7 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     };
     std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
-    // Configure fd inheritance
+    // Configure fd inheritance - clear FD_CLOEXEC so child inherits the fd
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
         std.log.err("Failed to get fd flags: {}", .{c._errno().*});
@@ -1212,61 +1260,79 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         return error.FdConfigFailed;
     }
 
-    // Run the interpreter as a child process from the temp directory
-    var child = std.process.Child.init(&.{temp_exe_path}, allocs.gpa);
-    child.cwd = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |err| {
-        std.log.err("Failed to get current directory: {}", .{err});
-        return err;
-    };
+    // We use direct fork/exec instead of std.process.Child here.
+    //
+    // std.process.Child can perform internal fd manipulations between fork and exec
+    // (e.g. setting up pipes for progress reporting on specific fd numbers).
+    // If our shared memory happens to be on one of those fd numbers, it gets
+    // clobbered before the child can use it.
+    //
+    // By using raw fork/exec, we guarantee that NO code runs between fork and
+    // exec that could interfere with our fd table. The child inherits exactly
+    // the fds we configured, regardless of what fd numbers they happen to have.
+    //
+    // This mirrors the Windows implementation which also uses direct OS APIs
+    // (CreateProcessW) rather than library abstractions.
+    std.log.debug("Spawning child process via fork/exec: {s}", .{temp_exe_path});
 
-    // Forward stdout and stderr
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
+    const pid = std.c.fork();
+    if (pid < 0) {
+        std.log.err("fork() failed: {}", .{c._errno().*});
+        return error.ForkFailed;
+    }
 
-    // Spawn the child process
-    std.log.debug("Spawning child process: {s}", .{temp_exe_path});
-    std.log.debug("Child process working directory: {s}", .{child.cwd.?});
-    child.spawn() catch |err| {
-        std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
-        return err;
-    };
-    std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
+    if (pid == 0) {
+        // Child process - exec the interpreter
+        // Create null-terminated path for execve
+        const path_z = allocs.arena.dupeZ(u8, temp_exe_path) catch {
+            std.c._exit(127);
+        };
+        const argv = [_:null]?[*:0]const u8{path_z};
+        const envp = [_:null]?[*:0]const u8{};
 
-    // Wait for child to complete
-    const term = child.wait() catch |err| {
-        std.log.err("Failed waiting for child process: {}", .{err});
-        return err;
-    };
+        _ = std.c.execve(path_z, &argv, &envp);
 
-    // Check the termination status
-    switch (term) {
-        .Exited => |exit_code| {
-            if (exit_code == 0) {
-                std.log.debug("Child process completed successfully", .{});
-            } else {
-                std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
-                return error.ProcessExitedWithError;
-            }
-        },
-        .Signal => |signal| {
-            std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
-            if (signal == 11) { // SIGSEGV
-                std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
-            } else if (signal == 6) { // SIGABRT
-                std.log.err("Child process aborted (SIGABRT)", .{});
-            } else if (signal == 9) { // SIGKILL
-                std.log.err("Child process was killed (SIGKILL)", .{});
-            }
-            return error.ProcessKilledBySignal;
-        },
-        .Stopped => |signal| {
-            std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
-            return error.ProcessStopped;
-        },
-        .Unknown => |status| {
-            std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
-            return error.ProcessUnknownTermination;
-        },
+        // If execve returns, it failed
+        std.c._exit(127);
+    }
+
+    // Parent process - wait for child
+    std.log.debug("Child process spawned (PID: {})", .{pid});
+
+    var status: c_int = 0;
+    const wait_result = std.c.waitpid(pid, &status, 0);
+    if (wait_result < 0) {
+        std.log.err("waitpid() failed: {}", .{c._errno().*});
+        return error.WaitFailed;
+    }
+
+    // Check termination status using POSIX macros
+    if (c.WIFEXITED(status)) {
+        const exit_code = c.WEXITSTATUS(status);
+        if (exit_code == 0) {
+            std.log.debug("Child process completed successfully", .{});
+        } else {
+            std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+            return error.ProcessExitedWithError;
+        }
+    } else if (c.WIFSIGNALED(status)) {
+        const signal = c.WTERMSIG(status);
+        std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
+        if (signal == 11) { // SIGSEGV
+            std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
+        } else if (signal == 6) { // SIGABRT
+            std.log.err("Child process aborted (SIGABRT)", .{});
+        } else if (signal == 9) { // SIGKILL
+            std.log.err("Child process was killed (SIGKILL)", .{});
+        }
+        return error.ProcessKilledBySignal;
+    } else if (c.WIFSTOPPED(status)) {
+        const signal = c.WSTOPSIG(status);
+        std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
+        return error.ProcessStopped;
+    } else {
+        std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
+        return error.ProcessUnknownTermination;
     }
 }
 
@@ -1797,17 +1863,20 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     }
 
     // Map the shared memory
-    const mapped_ptr = posix.mmap(
+    const mmap_result = posix.mmap(
         null,
         total_size,
         0x01 | 0x02, // PROT_READ | PROT_WRITE
         0x0001, // MAP_SHARED
         shm_fd,
         0,
-    ) orelse {
+    );
+    // Check for MAP_FAILED (-1), NOT null!
+    if (mmap_result == posix.MAP_FAILED) {
         _ = c.close(shm_fd);
         return error.SharedMemoryMapFailed;
-    };
+    }
+    const mapped_ptr: *anyopaque = @ptrFromInt(mmap_result);
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
 
     // Write length at the beginning

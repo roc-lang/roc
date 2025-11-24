@@ -827,6 +827,7 @@ pub const Interpreter = struct {
                     else => return error.TypeMismatch,
                 }
                 value.is_initialized = true;
+                value.rt_var = rt_var;
                 return value;
             },
             .e_unary_minus => |unary_minus| {
@@ -1363,6 +1364,7 @@ pub const Interpreter = struct {
                         out.is_initialized = false;
                         try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
+                        out.rt_var = rt_var;
                         return out;
                     }
                     return error.NotImplemented;
@@ -1378,6 +1380,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
+                    dest.rt_var = rt_var;
                     return dest;
                 } else if (layout_val.tag == .tuple) {
                     // Tuple (payload, tag) - tag unions are now represented as tuples
@@ -1391,6 +1394,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
                     } else return error.NotImplemented;
+                    dest.rt_var = rt_var;
                     return dest;
                 }
                 return error.NotImplemented;
@@ -3235,166 +3239,6 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-
-            // Numeric parsing operations
-            .num_from_int_digits => {
-                // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])
-                std.debug.assert(args.len == 1); // expects 1 argument: List(U8)
-
-                const result_rt_var = return_rt_var orelse {
-                    self.triggerCrash("num_from_int_digits requires return type info", false, roc_ops);
-                    return error.Crash;
-                };
-
-                // Get the result layout (Try tag union)
-                const result_layout = try self.getRuntimeLayout(result_rt_var);
-
-                // Extract base-256 digits from List(U8)
-                const list_arg = args[0];
-                std.debug.assert(list_arg.ptr != null);
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                const list_len = roc_list.len();
-                const digits_ptr = roc_list.elements(u8);
-                const digits: []const u8 = if (digits_ptr) |ptr| ptr[0..list_len] else &[_]u8{};
-
-                // Convert base-256 digits to u128 (max intermediate precision)
-                var value: u128 = 0;
-                var overflow = false;
-                for (digits) |digit| {
-                    const new_value = @mulWithOverflow(value, 256);
-                    if (new_value[1] != 0) {
-                        overflow = true;
-                        break;
-                    }
-                    const add_result = @addWithOverflow(new_value[0], digit);
-                    if (add_result[1] != 0) {
-                        overflow = true;
-                        break;
-                    }
-                    value = add_result[0];
-                }
-
-                // Resolve the Try type to get Ok's payload type (the numeric type)
-                const resolved = self.resolveBaseVar(result_rt_var);
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    self.triggerCrash("num_from_int_digits: expected Try tag union result type", false, roc_ops);
-                    return error.Crash;
-                }
-
-                // Find tag indices for Ok and Err
-                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                defer tag_list.deinit();
-                try self.appendUnionTags(result_rt_var, &tag_list);
-
-                var ok_index: ?usize = null;
-                var err_index: ?usize = null;
-                var ok_payload_var: ?types.Var = null;
-
-                for (tag_list.items, 0..) |tag_info, i| {
-                    const tag_name = self.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name, "Ok")) {
-                        ok_index = i;
-                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-                        if (arg_vars.len >= 1) {
-                            ok_payload_var = arg_vars[0];
-                        }
-                    } else if (std.mem.eql(u8, tag_name, "Err")) {
-                        err_index = i;
-                    }
-                }
-
-                // Determine target numeric type and check range
-                var in_range = !overflow;
-                if (in_range and ok_payload_var != null) {
-                    const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
-                    if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                        // Check if value fits in target integer type
-                        const int_type = num_layout.data.scalar.data.int;
-                        in_range = switch (int_type) {
-                            .u8 => value <= std.math.maxInt(u8),
-                            .i8 => value <= std.math.maxInt(i8),
-                            .u16 => value <= std.math.maxInt(u16),
-                            .i16 => value <= std.math.maxInt(i16),
-                            .u32 => value <= std.math.maxInt(u32),
-                            .i32 => value <= std.math.maxInt(i32),
-                            .u64 => value <= std.math.maxInt(u64),
-                            .i64 => value <= std.math.maxInt(i64),
-                            .u128, .i128 => true, // u128 fits, i128 needs sign check
-                        };
-                    }
-                }
-
-                // Construct the result tag union
-                if (result_layout.tag == .scalar) {
-                    // Simple tag with no payload (shouldn't happen for Try)
-                    var out = try self.pushRaw(result_layout, 0);
-                    out.is_initialized = false;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    try out.setInt(@intCast(tag_idx));
-                    out.is_initialized = true;
-                    return out;
-                } else if (result_layout.tag == .record) {
-                    // Record { tag, payload }
-                    var dest = try self.pushRaw(result_layout, 0);
-                    var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
-
-                    // Write tag discriminant
-                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        var tmp = tag_field;
-                        tmp.is_initialized = false;
-                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                        try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
-
-                    // Clear payload area
-                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
-                    if (payload_field.ptr) |payload_ptr| {
-                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                        if (payload_bytes_len > 0) {
-                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                            @memset(bytes, 0);
-                        }
-                    }
-
-                    // Write payload
-                    if (in_range and ok_payload_var != null) {
-                        // Write the numeric value as Ok payload
-                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
-                        if (payload_field.ptr) |payload_ptr| {
-                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                                // Write integer value directly to payload
-                                const int_type = num_layout.data.scalar.data.int;
-                                switch (int_type) {
-                                    .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
-                                    .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                }
-                            }
-                        }
-                    }
-                    // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
-
-                    return dest;
-                }
-
-                self.triggerCrash("num_from_int_digits: unsupported result layout", false, roc_ops);
-                return error.Crash;
-            },
-            .num_from_dec_digits => {
-                // num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])
-                self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
-                return error.Crash;
-            },
             .num_from_numeral => {
                 // num.from_numeral : Numeral -> Try(num, [InvalidNumeral(Str)])
                 // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
@@ -3489,31 +3333,25 @@ pub const Interpreter = struct {
                     return error.Crash;
                 }
 
-                // Find tag indices for Ok and Err
+                // Get tag info - tags are sorted alphabetically, so for a 2-tag success/failure union:
+                // Index 0 = failure (alphabetically first), Index 1 = success (alphabetically second)
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
                 try self.appendUnionTags(result_rt_var, &tag_list);
 
-                var ok_index: ?usize = null;
-                var err_index: ?usize = null;
-                var ok_payload_var: ?types.Var = null;
-                var err_payload_var: ?types.Var = null;
-
-                for (tag_list.items, 0..) |tag_info, i| {
-                    // Use runtime_layout_store.env for tag names since appendUnionTags uses runtime types
-                    const tag_name = self.runtime_layout_store.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name, "Ok")) {
-                        ok_index = i;
-                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-                        if (arg_vars.len >= 1) {
-                            ok_payload_var = arg_vars[0];
-                        }
-                    } else if (std.mem.eql(u8, tag_name, "Err")) {
-                        err_index = i;
-                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-                        if (arg_vars.len >= 1) {
-                            err_payload_var = arg_vars[0];
-                        }
+                // Get payload types for success (index 1) and failure (index 0) tags
+                var success_payload_var: ?types.Var = null;
+                var failure_payload_var: ?types.Var = null;
+                if (tag_list.items.len > 1) {
+                    const success_tag = tag_list.items[1];
+                    const success_args = self.runtime_types.sliceVars(success_tag.args);
+                    if (success_args.len >= 1) {
+                        success_payload_var = success_args[0];
+                    }
+                    const failure_tag = tag_list.items[0];
+                    const failure_args = self.runtime_types.sliceVars(failure_tag.args);
+                    if (failure_args.len >= 1) {
+                        failure_payload_var = failure_args[0];
                     }
                 }
 
@@ -3527,8 +3365,8 @@ pub const Interpreter = struct {
                 var min_value_str: []const u8 = "";
                 var max_value_str: []const u8 = "";
 
-                // Use the explicit target type if provided, otherwise fall back to ok_payload_var
-                const target_type_var = self.num_literal_target_type orelse ok_payload_var;
+                // Use the explicit target type if provided, otherwise fall back to success_payload_var
+                const target_type_var = self.num_literal_target_type orelse success_payload_var;
 
                 if (in_range and target_type_var != null) {
                     // Use the target type var directly - getRuntimeLayout handles nominal types properly
@@ -3654,7 +3492,7 @@ pub const Interpreter = struct {
                     // Simple tag with no payload
                     var out = try self.pushRaw(result_layout, 0);
                     out.is_initialized = false;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                    const tag_idx: usize = if (in_range) 1 else 0;
                     try out.setInt(@intCast(tag_idx));
                     out.is_initialized = true;
                     return out;
@@ -3671,7 +3509,7 @@ pub const Interpreter = struct {
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
-                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        const tag_idx: usize = if (in_range) 1 else 0;
                         try tmp.setInt(@intCast(tag_idx));
                     } else return error.NotImplemented;
 
@@ -3686,8 +3524,8 @@ pub const Interpreter = struct {
                     }
 
                     // Write payload for Ok case
-                    if (in_range and ok_payload_var != null) {
-                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                    if (in_range and success_payload_var != null) {
+                        const num_layout = try self.getRuntimeLayout(success_payload_var.?);
                         if (payload_field.ptr) |payload_ptr| {
                             if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
                                 const int_type = num_layout.data.scalar.data.int;
@@ -3776,7 +3614,7 @@ pub const Interpreter = struct {
                                 }
                             }
                         }
-                    } else if (!in_range and err_payload_var != null) {
+                    } else if (!in_range and failure_payload_var != null) {
                         // For Err case, construct InvalidNumeral(Str) with descriptive message
                         // Format the number that was rejected
                         var num_str_buf: [128]u8 = undefined;
@@ -3836,7 +3674,7 @@ pub const Interpreter = struct {
 
                         if (error_msg) |msg| {
                             // Get the Err payload layout (which is [InvalidNumeral(Str)])
-                            const err_payload_layout = try self.getRuntimeLayout(err_payload_var.?);
+                            const err_payload_layout = try self.getRuntimeLayout(failure_payload_var.?);
                             const payload_field_size = self.runtime_layout_store.layoutSize(payload_field.layout);
 
                             // Check if payload area has enough space for RocStr (24 bytes on 64-bit)
@@ -3906,7 +3744,7 @@ pub const Interpreter = struct {
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
-                        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                        const tag_idx: usize = if (in_range) 1 else 0;
                         try tmp.setInt(@intCast(tag_idx));
                     } else return error.NotImplemented;
 
@@ -3921,8 +3759,8 @@ pub const Interpreter = struct {
                     }
 
                     // Write payload for Ok case
-                    if (in_range and ok_payload_var != null) {
-                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                    if (in_range and success_payload_var != null) {
+                        const num_layout = try self.getRuntimeLayout(success_payload_var.?);
                         if (payload_field.ptr) |payload_ptr| {
                             if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
                                 const int_type = num_layout.data.scalar.data.int;
@@ -3999,7 +3837,7 @@ pub const Interpreter = struct {
                                 }
                             }
                         }
-                    } else if (!in_range and err_payload_var != null) {
+                    } else if (!in_range and failure_payload_var != null) {
                         // For Err case, construct InvalidNumeral(Str) with descriptive message
                         var num_str_buf: [128]u8 = undefined;
                         const num_str = blk: {
@@ -5664,8 +5502,9 @@ pub const Interpreter = struct {
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
             // Dispatch to actual low-level builtin implementation
-            // Binary ops don't need return type info (not num_from_int_digits etc)
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            var ll_result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            ll_result.rt_var = lhs_rt_var;
+            return ll_result;
         }
 
         // Bind parameters
@@ -5679,7 +5518,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        var result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
 
         // Clean up bindings
         var k = params.len;
@@ -5688,6 +5527,8 @@ pub const Interpreter = struct {
             _ = self.bindings.pop();
         }
 
+        // Set rt_var on result for constant folding (binary ops return same type as lhs)
+        result.rt_var = lhs_rt_var;
         return result;
     }
 
@@ -5772,8 +5613,9 @@ pub const Interpreter = struct {
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
             // Dispatch to actual low-level builtin implementation
-            // Binary ops don't need return type info (not num_from_int_digits etc)
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            var ll_result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            ll_result.rt_var = operand_rt_var;
+            return ll_result;
         }
 
         // Bind parameters
@@ -5787,7 +5629,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        var result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
 
         // Clean up bindings
         var k = params.len;
@@ -5796,6 +5638,8 @@ pub const Interpreter = struct {
             _ = self.bindings.pop();
         }
 
+        // Set rt_var on result for constant folding (unary ops return same type as operand)
+        result.rt_var = operand_rt_var;
         return result;
     }
 

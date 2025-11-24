@@ -16,10 +16,6 @@ const CompactWriter = collections.CompactWriter;
 
 const Ident = @This();
 
-/// Method name for parsing integers from digit lists - used by numeric literal type checking
-pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
-/// Method name for parsing decimals from digit lists - used by numeric literal type checking
-pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
 /// Method name for negation - used by unary - operator desugaring
@@ -124,15 +120,25 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
+        pub noinline fn deserialize(self: *Serialized, offset: i64) *Store {
+            // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
+            // output struct. This is because Store is a regular struct (not extern), so Zig may
+            // reorder its fields differently than Serialized (which is extern). If we read from self
+            // while writing to store (which aliases self), we may read corrupted data in Release mode
+            // when field orderings differ.
+
+            // Step 1: Deserialize all fields into local variables first
+            const deserialized_interner = self.interner.deserialize(offset).*;
+            const deserialized_attributes = self.attributes.deserialize(offset).*;
+            const deserialized_next_unique_name = self.next_unique_name;
+
+            // Step 2: Overwrite ourself with the deserialized version
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
-                .interner = self.interner.deserialize(offset).*,
-                .attributes = self.attributes.deserialize(offset).*,
-                .next_unique_name = self.next_unique_name,
+                .interner = deserialized_interner,
+                .attributes = deserialized_attributes,
+                .next_unique_name = deserialized_next_unique_name,
             };
 
             return store;

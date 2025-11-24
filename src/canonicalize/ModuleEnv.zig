@@ -132,10 +132,9 @@ evaluation_order: ?*DependencyGraph.EvaluationOrder,
 // Cached well-known identifiers for type checking
 // (These are interned once during init to avoid repeated string comparisons during type checking)
 
-/// Interned identifier for "from_int_digits" - used for numeric literal type checking
-from_int_digits_ident: Ident.Idx,
-/// Interned identifier for "from_dec_digits" - used for decimal literal type checking
-from_dec_digits_ident: Ident.Idx,
+/// Padding for removed from_dec_digits_ident field (maintains struct layout for serialization)
+_padding_removed_from_dec_digits: u32 = 0,
+
 /// Interned identifier for "Try" - used for numeric literal type checking
 try_ident: Ident.Idx,
 /// Interned identifier for "OutOfRange" - used for numeric literal type checking
@@ -233,8 +232,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     var common = try CommonEnv.init(gpa, source);
 
     // Intern well-known identifiers once during initialization for fast type checking
-    const from_int_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME));
-    const from_dec_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME));
     const try_ident = try common.insertIdent(gpa, Ident.for_text("Try"));
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
@@ -284,8 +281,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
-        .from_int_digits_ident = from_int_digits_ident,
-        .from_dec_digits_ident = from_dec_digits_ident,
         .try_ident = try_ident,
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
@@ -1722,8 +1717,7 @@ pub const Serialized = extern struct {
     store: NodeStore.Serialized,
     module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
-    from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
-    from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
+    _padding_removed_from_dec_digits: u32 = 0, // Padding for removed from_dec_digits_ident field (maintains struct layout)
     try_ident_reserved: u32, // Reserved space for try_ident field (interned during deserialization)
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
@@ -1777,8 +1771,6 @@ pub const Serialized = extern struct {
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
-        self.from_int_digits_ident_reserved = 0;
-        self.from_dec_digits_ident_reserved = 0;
         self.try_ident_reserved = 0;
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
@@ -1799,7 +1791,7 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
-    pub fn deserialize(
+    pub noinline fn deserialize(
         self: *Serialized,
         offset: i64,
         gpa: std.mem.Allocator,
@@ -1811,49 +1803,66 @@ pub const Serialized = extern struct {
         // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
         comptime std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
 
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
+        // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
+        // output struct. This is because ModuleEnv is a regular struct (not extern), so Zig may
+        // reorder its fields differently than Serialized (which is extern). If we read from self
+        // while writing to env (which aliases self), we may read corrupted data in Release mode
+        // when field orderings differ.
+        //
+        // Following the same pattern as NodeStore.deserialize to avoid aliasing issues.
 
-        // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(offset, source).*;
+        // Step 1: Deserialize all complex fields into local variables first
+        const deserialized_common = self.common.deserialize(offset, source).*;
+        const deserialized_types = self.types.deserialize(offset, gpa).*;
+        const deserialized_module_kind = self.module_kind.decode();
+        const deserialized_all_defs = self.all_defs;
+        const deserialized_all_statements = self.all_statements;
+        const deserialized_exports = self.exports;
+        const deserialized_builtin_statements = self.builtin_statements;
+        const deserialized_external_decls = self.external_decls.deserialize(offset).*;
+        const deserialized_imports = (try self.imports.deserialize(offset, gpa)).*;
+        const deserialized_diagnostics = self.diagnostics;
+        const deserialized_store = self.store.deserialize(offset, gpa).*;
+        const deserialized_deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*;
+
+        // Step 2: Overwrite ourself with the deserialized version
+        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
         env.* = Self{
             .gpa = gpa,
-            .common = common,
-            .types = self.types.deserialize(offset, gpa).*,
-            .module_kind = self.module_kind.decode(),
-            .all_defs = self.all_defs,
-            .all_statements = self.all_statements,
-            .exports = self.exports,
-            .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = (try self.imports.deserialize(offset, gpa)).*,
+            .common = deserialized_common,
+            .types = deserialized_types,
+            .module_kind = deserialized_module_kind,
+            .all_defs = deserialized_all_defs,
+            .all_statements = deserialized_all_statements,
+            .exports = deserialized_exports,
+            .builtin_statements = deserialized_builtin_statements,
+            .external_decls = deserialized_external_decls,
+            .imports = deserialized_imports,
             .module_name = module_name,
             .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-            .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .diagnostics = deserialized_diagnostics,
+            .store = deserialized_store,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             // Well-known identifiers for type checking - look them up in the deserialized common env
-            .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-            .try_ident = common.findIdent("Try") orelse unreachable,
-            .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-            .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-            .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
-            .minus_ident = common.findIdent("minus") orelse unreachable,
-            .times_ident = common.findIdent("times") orelse unreachable,
-            .div_by_ident = common.findIdent("div_by") orelse unreachable,
-            .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
-            .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
-            .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
-            .not_ident = common.findIdent("not") orelse unreachable,
-            .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
-            .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
-            .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
-            .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
-            .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-            .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
+            .try_ident = deserialized_common.findIdent("Try") orelse unreachable,
+            .out_of_range_ident = deserialized_common.findIdent("OutOfRange") orelse unreachable,
+            .builtin_module_ident = deserialized_common.findIdent("Builtin") orelse unreachable,
+            .plus_ident = deserialized_common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .minus_ident = deserialized_common.findIdent("minus") orelse unreachable,
+            .times_ident = deserialized_common.findIdent("times") orelse unreachable,
+            .div_by_ident = deserialized_common.findIdent("div_by") orelse unreachable,
+            .div_trunc_by_ident = deserialized_common.findIdent("div_trunc_by") orelse unreachable,
+            .rem_by_ident = deserialized_common.findIdent("rem_by") orelse unreachable,
+            .negate_ident = deserialized_common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+            .not_ident = deserialized_common.findIdent("not") orelse unreachable,
+            .is_lt_ident = deserialized_common.findIdent("is_lt") orelse unreachable,
+            .is_lte_ident = deserialized_common.findIdent("is_lte") orelse unreachable,
+            .is_gt_ident = deserialized_common.findIdent("is_gt") orelse unreachable,
+            .is_gte_ident = deserialized_common.findIdent("is_gte") orelse unreachable,
+            .is_eq_ident = deserialized_common.findIdent("is_eq") orelse unreachable,
+            .is_ne_ident = deserialized_common.findIdent("is_ne") orelse unreachable,
+            .deferred_numeric_literals = deserialized_deferred_numeric_literals,
         };
 
         return env;

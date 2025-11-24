@@ -226,14 +226,25 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize this Serialized struct into a SmallStringInterner
-    pub fn deserialize(self: *Serialized, offset: i64) *SmallStringInterner {
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+    pub noinline fn deserialize(self: *Serialized, offset: i64) *SmallStringInterner {
+        // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
+        // output struct. This is because SmallStringInterner is a regular struct (not extern), so Zig may
+        // reorder its fields differently than Serialized (which is extern). If we read from self
+        // while writing to interner (which aliases self), we may read corrupted data in Release mode
+        // when field orderings differ.
+
+        // Step 1: Deserialize all fields into local variables first
+        const deserialized_bytes = self.bytes.deserialize(offset).*;
+        const deserialized_hash_table = self.hash_table.deserialize(offset).*;
+        const deserialized_entry_count = self.entry_count;
+
+        // Step 2: Overwrite ourself with the deserialized version
         const interner = @as(*SmallStringInterner, @ptrCast(self));
 
         interner.* = .{
-            .bytes = self.bytes.deserialize(offset).*,
-            .hash_table = self.hash_table.deserialize(offset).*,
-            .entry_count = self.entry_count,
+            .bytes = deserialized_bytes,
+            .hash_table = deserialized_hash_table,
+            .entry_count = deserialized_entry_count,
         };
 
         return interner;

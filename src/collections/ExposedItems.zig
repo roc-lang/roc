@@ -121,13 +121,17 @@ pub const ExposedItems = struct {
         }
 
         /// Deserialize this Serialized struct into an ExposedItems
-        pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
+        pub noinline fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
+            // CRITICAL: Deserialize nested struct BEFORE casting and writing to exposed_items.
+            // Since exposed_items aliases self (they point to the same memory), we must complete
+            // all reads before any writes to avoid corruption in Release mode.
+            const deserialized_items = self.items.deserialize(offset).*;
+
+            // Now we can cast and write to the destination
             const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
 
             exposed_items.* = ExposedItems{
-                .items = self.items.deserialize(offset).*,
+                .items = deserialized_items,
             };
 
             return exposed_items;

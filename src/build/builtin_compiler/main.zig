@@ -239,29 +239,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // Numeric parsing operations (all numeric types have from_int_digits)
-    for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // from_int_digits
-        const from_int_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_int_digits", .{num_type});
-        if (env.common.findIdent(from_int_digits)) |ident| {
-            try low_level_map.put(ident, .num_from_int_digits);
-        }
-    }
-
-    // from_dec_digits (Dec, F32, F64 only)
-    const dec_types = [_][]const u8{ "Dec", "F32", "F64" };
-    for (dec_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // from_dec_digits
-        const from_dec_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_dec_digits", .{num_type});
-        if (env.common.findIdent(from_dec_digits)) |ident| {
-            try low_level_map.put(ident, .num_from_dec_digits);
-        }
-    }
-
     // from_numeral (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -344,7 +321,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
                         else => 2, // Most numeric operations are binary
                     };
 

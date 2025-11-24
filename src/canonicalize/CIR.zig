@@ -704,13 +704,17 @@ pub const Import = struct {
             }
 
             /// Deserialize this Serialized struct into a Store
-            pub fn deserialize(self: *Serialized, offset: i64, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
+            pub noinline fn deserialize(self: *Serialized, offset: i64, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
+                // CRITICAL: Deserialize nested struct BEFORE casting and writing to store
+                // to avoid aliasing issues in Release mode.
+                const deserialized_imports = self.imports.deserialize(offset).*;
+
+                // Now we can cast and write to the destination
                 const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
                 store.* = .{
                     .map = .{}, // Will be repopulated below
-                    .imports = self.imports.deserialize(offset).*,
+                    .imports = deserialized_imports,
                 };
 
                 // Pre-allocate the exact capacity needed for the map
