@@ -2895,58 +2895,6 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .list_is_eq => {
-                // List.is_eq : List(item), List(item) -> Bool
-                std.debug.assert(args.len == 2);
-
-                const list_a_arg = args[0];
-                const list_b_arg = args[1];
-
-                std.debug.assert(list_a_arg.ptr != null);
-                std.debug.assert(list_b_arg.ptr != null);
-
-                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
-                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
-
-                // Check lengths first
-                const len_a = builtins.list.listLen(list_a.*);
-                const len_b = builtins.list.listLen(list_b.*);
-
-                if (len_a != len_b) {
-                    return try self.makeBoolValue(false);
-                }
-
-                // Get element layout
-                std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
-                const elem_layout_idx = list_a_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-
-                // For primitive types, we can use memory comparison
-                if (elem_size == 0) {
-                    // ZST elements - all equal
-                    return try self.makeBoolValue(true);
-                }
-
-                // Compare element by element using memory comparison
-                // This works for primitive types (integers, bools, etc.)
-                const bytes_a = list_a.bytes;
-                const bytes_b = list_b.bytes;
-
-                if (bytes_a == null and bytes_b == null) {
-                    return try self.makeBoolValue(true);
-                }
-
-                if (bytes_a == null or bytes_b == null) {
-                    return try self.makeBoolValue(false);
-                }
-
-                const total_bytes = len_a * elem_size;
-                const slice_a = bytes_a.?[0..total_bytes];
-                const slice_b = bytes_b.?[0..total_bytes];
-
-                return try self.makeBoolValue(std.mem.eql(u8, slice_a, slice_b));
-            },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);

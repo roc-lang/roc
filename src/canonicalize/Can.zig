@@ -7354,6 +7354,13 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
     defer self.scopeExit(self.env.gpa) catch {};
 
+    // Statements inside a block are in statement position.
+    // This is important for constructs like `if` without `else`, which are only
+    // valid in statement position (where their value is not used).
+    const saved_stmt_pos = self.in_statement_position;
+    self.in_statement_position = true;
+    defer self.in_statement_position = saved_stmt_pos;
+
     // Keep track of the start position for statements
     const stmt_start = self.env.store.scratch.?.statements.top();
 
@@ -7398,7 +7405,20 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
                 },
                 .@"return" => |return_stmt| {
-                    last_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+                    // A return statement exits the function, so the block's "value" is unit.
+                    // We still need to canonicalize the return and add it as a statement.
+                    const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
+                    const returned_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+
+                    // Create the return statement
+                    const return_stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
+                        .expr = returned_expr.idx,
+                    } }, return_region);
+                    try self.env.store.addScratchStatement(return_stmt_idx);
+
+                    // The block's result is unit (empty record) since return exits the function
+                    const unit_idx = try self.env.addExpr(Expr{ .e_empty_record = .{} }, return_region);
+                    last_expr = CanonicalizedExpr{ .idx = unit_idx, .free_vars = returned_expr.free_vars };
                 },
                 .crash => |crash_stmt| {
                     // For final debug statements, canonicalize as debug expression
