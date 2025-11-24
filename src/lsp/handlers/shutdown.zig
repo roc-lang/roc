@@ -1,6 +1,7 @@
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 
+/// Returns the `shutdown` method handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, _: ?std.json.Value) !void {

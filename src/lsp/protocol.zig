@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// LSP error codes mirrored from the specification.
 pub const ErrorCode = enum(i32) {
     parse_error = -32700,
     invalid_request = -32600,
@@ -17,12 +18,14 @@ pub const ErrorCode = enum(i32) {
     }
 };
 
+/// Standard JSON-RPC error envelope used in Roc responses.
 pub const ResponseError = struct {
     code: ErrorCode,
     message: []const u8,
     data: ?[]const u8 = null,
 };
 
+/// JSON-RPC identifier that can be an integer or string.
 pub const JsonId = union(enum) {
     integer: i64,
     string: []u8,
@@ -59,6 +62,7 @@ pub const JsonId = union(enum) {
     }
 };
 
+/// Client metadata reported during initialization.
 pub const ClientInfo = struct {
     name: []u8,
     version: ?[]u8 = null,
@@ -77,6 +81,7 @@ pub const ClientInfo = struct {
     }
 };
 
+/// Parsed arguments from the client's `initialize` request.
 pub const InitializeParams = struct {
     process_id: ?i64 = null,
     root_uri: ?[]u8 = null,
@@ -164,6 +169,7 @@ pub const InitializeParams = struct {
     }
 };
 
+/// Snapshot of the last `initialize` data retained by the server.
 pub const ClientState = struct {
     process_id: ?i64 = null,
     root_uri: ?[]u8 = null,
@@ -178,15 +184,18 @@ pub const ClientState = struct {
     }
 };
 
+/// Metadata describing the Roc language server.
 pub const ServerInfo = struct {
     name: []const u8,
     version: ?[]const u8 = null,
 };
 
+/// Capabilities advertised back to the editor.
 pub const ServerCapabilities = struct {
     positionEncoding: []const u8 = "utf-16",
 };
 
+/// Response body returned after a successful initialization.
 pub const InitializeResult = struct {
     capabilities: ServerCapabilities = .{},
     serverInfo: ServerInfo,

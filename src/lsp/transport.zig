@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// Builds a JSON-RPC transport to decode requests and encode response for the LSP.
 pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
         const Self = @This();

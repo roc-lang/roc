@@ -7,6 +7,7 @@ const shutdown_handler_mod = @import("handlers/shutdown.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
+/// Factory for the Roc LSP server. Handles the state and request handlers.
 pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
         const Self = @This();
@@ -168,6 +169,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
     };
 }
 
+/// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
 pub fn runWithStdIo(allocator: std.mem.Allocator, enable_logging: bool) !void {
     var stdin_file = std.fs.File.stdin();
     var stdout_file = std.fs.File.stdout();
