@@ -105,20 +105,23 @@ EndOfFile,
 	(s-let
 		(p-assign (ident "y"))
 		(e-call
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "x"))
-						(e-num (value "10")))
-					(e-lookup-local
-						(p-assign (ident "x")))))
+			(e-closure
+				(captures
+					(capture (ident "x")))
+				(e-lambda
+					(args
+						(p-underscore))
+					(e-block
+						(s-let
+							(p-assign (ident "x"))
+							(e-num (value "10")))
+						(e-lookup-local
+							(p-assign (ident "x"))))))
 			(e-empty_record)))
 	(e-lookup-local
 		(p-assign (ident "y"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(_size)"))
+(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

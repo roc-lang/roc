@@ -55,13 +55,14 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
     };
 
-    var czer = try Can.init(module_env, &parse_ast, null, false);
+    var czer = try Can.init(module_env, &parse_ast, null);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -76,7 +77,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, null);
 
     return .{
         .module_env = module_env,

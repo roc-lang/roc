@@ -260,7 +260,6 @@ test "roc fmt --stdin formats unformatted input" {
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     // Run roc fmt --stdin with input piped in
@@ -315,7 +314,6 @@ test "roc fmt --stdin does not change well-formatted input" {
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     // Run roc fmt --stdin with input piped in

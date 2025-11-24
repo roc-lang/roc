@@ -70,6 +70,14 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
+        .s_decl_gen = .{
+            .pattern = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .anno = rand_idx(CIR.Annotation.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
         .s_var = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
@@ -166,17 +174,11 @@ test "NodeStore round trip - Statements" {
         const idx = try store.addStatement(stmt, region);
         const retrieved = store.getStatement(idx);
 
-        testing.expectEqualDeep(stmt, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{stmt});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(stmt, retrieved);
     }
 
     const actual_test_count = statements.items.len;
     if (actual_test_count < NodeStore.MODULEENV_STATEMENT_NODE_COUNT) {
-        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_STATEMENT_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing statement variants.\n", .{});
         return error.IncompleteStatementTestCoverage;
     }
 }
@@ -382,7 +384,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_hosted_lambda = .{
-            .symbol_name = @bitCast(rand.random().int(u32)),
+            .symbol_name = rand_ident_idx(),
             .index = rand.random().int(u32),
             .args = CIR.Pattern.Span{ .span = rand_span() },
             .body = rand_idx(CIR.Expr.Idx),
@@ -394,17 +396,11 @@ test "NodeStore round trip - Expressions" {
         const idx = try store.addExpr(expr, region);
         const retrieved = store.getExpr(idx);
 
-        testing.expectEqualDeep(expr, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{expr});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(expr, retrieved);
     }
 
     const actual_test_count = expressions.items.len;
     if (actual_test_count < NodeStore.MODULEENV_EXPR_NODE_COUNT) {
-        std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_EXPR_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing expression variants.\n", .{});
         return error.IncompleteExpressionTestCoverage;
     }
 }
@@ -837,17 +833,11 @@ test "NodeStore round trip - Diagnostics" {
         const idx = try store.addDiagnostic(diagnostic);
         const retrieved = store.getDiagnostic(idx);
 
-        testing.expectEqualDeep(diagnostic, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{diagnostic});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(diagnostic, retrieved);
     }
 
     const actual_test_count = diagnostics.items.len;
     if (actual_test_count < NodeStore.MODULEENV_DIAGNOSTIC_NODE_COUNT) {
-        std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_DIAGNOSTIC_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing diagnostic variants.\n", .{});
         return error.IncompleteDiagnosticTestCoverage;
     }
 }
@@ -976,11 +966,7 @@ test "NodeStore round trip - TypeAnno" {
         const idx = try store.addTypeAnno(type_anno, region);
         const retrieved = store.getTypeAnno(idx);
 
-        testing.expectEqualDeep(type_anno, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{type_anno});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(type_anno, retrieved);
     }
 
     // We have extra tests for:
@@ -990,8 +976,6 @@ test "NodeStore round trip - TypeAnno" {
 
     const actual_test_count = type_annos.items.len;
     if (actual_test_count - extra_test_count < NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT) {
-        std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
         return error.IncompleteTypeAnnoTestCoverage;
     }
 }
@@ -1110,25 +1094,15 @@ test "NodeStore round trip - Pattern" {
         const idx = try store.addPattern(pattern, region);
         const retrieved = store.getPattern(idx);
 
-        testing.expectEqualDeep(pattern, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(pattern, retrieved);
 
         // Also verify the region was stored correctly
         const stored_region = store.getRegionAt(@enumFromInt(@intFromEnum(idx)));
-        testing.expectEqualDeep(region, stored_region) catch |err| {
-            std.debug.print("\n\nExpected region: {any}\n\n", .{region});
-            std.debug.print("Stored region: {any}\n\n", .{stored_region});
-            return err;
-        };
+        try testing.expectEqualDeep(region, stored_region);
     }
 
     const actual_test_count = patterns.items.len;
     if (actual_test_count < NodeStore.MODULEENV_PATTERN_NODE_COUNT) {
-        std.debug.print("CIR.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_PATTERN_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing pattern variants.\n", .{});
         return error.IncompletePatternTestCoverage;
     }
 }

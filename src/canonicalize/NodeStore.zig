@@ -24,6 +24,11 @@ const Ident = base.Ident;
 const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
 
+/// When storing optional indices/values where 0 is a valid value, we add this offset
+/// to distinguish "value is 0" from "value is null". This is a common pattern when
+/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
+const OPTIONAL_VALUE_OFFSET: u32 = 1;
+
 const NodeStore = @This();
 
 gpa: Allocator,
@@ -124,6 +129,15 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// This is used when loading a NodeStore from shared memory at a different address.
+pub fn relocate(store: *NodeStore, offset: isize) void {
+    store.nodes.relocate(offset);
+    store.regions.relocate(offset);
+    store.extra_data.relocate(offset);
+    // scratch is null for deserialized NodeStores, no need to relocate
+}
+
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
@@ -132,7 +146,7 @@ pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 36;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 15;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -217,6 +231,22 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
     switch (node.tag) {
         .statement_decl => {
             return CIR.Statement{ .s_decl = .{
+                .pattern = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const has_anno = extra_data[0] != 0;
+                    if (has_anno) {
+                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
+        .statement_decl_gen => {
+            return CIR.Statement{ .s_decl_gen = .{
                 .pattern = @enumFromInt(node.data_1),
                 .expr = @enumFromInt(node.data_2),
                 .anno = blk: {
@@ -635,24 +665,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_anno_only => {
             return CIR.Expr{ .e_anno_only = .{} };
         },
-        .expr_low_level => {
-            // Retrieve low-level lambda data from extra_data
-            const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
-            const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const args_start = extra_data[0];
-            const args_len = extra_data[1];
-            const body_idx = extra_data[2];
-
-            return CIR.Expr{ .e_low_level_lambda = .{
-                .op = op,
-                .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                .body = @enumFromInt(body_idx),
-            } };
-        },
-        .expr_hosted => {
-            // Retrieve hosted lambda data
+        .expr_hosted_lambda => {
+            // Retrieve hosted lambda data from node and extra_data
             const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
             const index = node.data_2;
             const extra_start = node.data_3;
@@ -665,6 +679,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_hosted_lambda = .{
                 .symbol_name = symbol_name,
                 .index = index,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .body = @enumFromInt(body_idx),
+            } };
+        },
+        .expr_low_level => {
+            // Retrieve low-level lambda data from extra_data
+            const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
+            const extra_start = node.data_2;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const body_idx = extra_data[2];
+
+            return CIR.Expr{ .e_low_level_lambda = .{
+                .op = op,
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
                 .body = @enumFromInt(body_idx),
             } };
@@ -695,7 +725,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(node.data_3);
+                const packed_span = FunctionArgs.fromU32(node.data_3 - OPTIONAL_VALUE_OFFSET);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -739,6 +769,34 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
         .data_1 = @intFromEnum(num_kind),
         .data_2 = @intFromEnum(value.kind),
         .data_3 = @intCast(extra_data_start),
+    });
+}
+
+/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
+/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithZeroArgumentTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    closure_name: Ident.Idx,
+    variant_var: types.Var,
+    ext_var: types.Var,
+    name: Ident.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    const extra_data_start = store.extra_data.len();
+    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
+    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_zero_argument_tag,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = 0,
+        .data_3 = 0,
     });
 }
 
@@ -1107,7 +1165,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
+            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
         } },
         .ty_tag => return CIR.TypeAnno{ .tag = .{
             .name = @bitCast(node.data_1),
@@ -1255,6 +1313,20 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             node.tag = .statement_decl;
+            node.data_1 = @intFromEnum(s.pattern);
+            node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
+        },
+        .s_decl_gen => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
+            node.tag = .statement_decl_gen;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = extra_data_start;
@@ -1502,12 +1574,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @intFromEnum(e.receiver);
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
-                // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
                 std.debug.assert(FunctionArgs.canFit(args.span));
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                node.data_3 = packed_span.toU32();
+                node.data_3 = packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
             } else {
-                node.data_3 = 0; // No args
+                node.data_3 = 0;
             }
         },
         .e_runtime_error => |e| {
@@ -1528,6 +1599,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
         },
+        .e_hosted_lambda => |hosted| {
+            node.tag = .expr_hosted_lambda;
+            // data_1 = symbol_name (Ident.Idx via @bitCast)
+            // data_2 = index (u32)
+            // extra_data: args span start, args span len, body index
+            node.data_1 = @bitCast(hosted.symbol_name);
+            node.data_2 = hosted.index;
+
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
+
+            node.data_3 = @intCast(extra_data_start);
+        },
         .e_low_level_lambda => |low_level| {
             node.tag = .expr_low_level;
             node.data_1 = @intFromEnum(low_level.op);
@@ -1543,19 +1629,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.extra_data.append(store.gpa, @intFromEnum(low_level.body));
 
             node.data_2 = @intCast(extra_data_start);
-        },
-        .e_hosted_lambda => |hosted| {
-            node.tag = .expr_hosted;
-            node.data_1 = @bitCast(hosted.symbol_name);
-            node.data_2 = hosted.index;
-
-            // Store args and body in extra_data
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
-            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
-
-            node.data_3 = @intCast(extra_data_start);
         },
         .e_match => |e| {
             node.tag = .expr_match;
@@ -2067,7 +2140,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .tag_union => |tu| {
             node.data_1 = tu.tags.span.start;
             node.data_2 = tu.tags.span.len;
-            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) else 0;
+            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0;
             node.tag = .ty_tag_union;
         },
         .tag => |t| {
@@ -2230,13 +2303,6 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// Checks if a node index points to a def node.
-pub fn isDefNode(store: *const NodeStore, idx: u16) bool {
-    const nid: Node.Idx = @enumFromInt(idx);
-    const node = store.nodes.get(nid);
-    return node.tag == .def;
-}
-
 /// Retrieves a definition from the store.
 pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
@@ -2337,6 +2403,14 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
     };
+}
+
+/// Check if a raw node index refers to a definition node.
+/// This is useful when exposed items might be either definitions or type declarations.
+pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+    const nid: Node.Idx = @enumFromInt(node_idx);
+    const node = store.nodes.get(nid);
+    return node.tag == .def;
 }
 
 /// Generic function to get the top of any scratch buffer
@@ -3428,7 +3502,8 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error
 }
 
 /// Serialized representation of NodeStore
-pub const Serialized = struct {
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,

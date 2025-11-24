@@ -159,8 +159,6 @@ pub const PackageEnv = struct {
     compiler_version: []const u8,
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
-    /// Whether the root module is a platform (determines if Type Module transformation should be applied)
-    root_is_platform: bool = false,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -215,7 +213,6 @@ pub const PackageEnv = struct {
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
         builtin_modules: *const BuiltinModules,
-        is_platform: bool,
     ) PackageEnv {
         return .{
             .gpa = gpa,
@@ -228,7 +225,6 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .root_is_platform = is_platform,
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -600,7 +596,6 @@ pub const PackageEnv = struct {
             &parse_ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            self.root_is_platform,
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -797,7 +792,7 @@ pub const PackageEnv = struct {
         );
 
         // Canonicalize
-        var czer = try Can.init(env, parse_ast, module_envs_out, false);
+        var czer = try Can.init(env, parse_ast, module_envs_out);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -807,6 +802,7 @@ pub const PackageEnv = struct {
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
             .list = try env.insertIdent(base.Ident.for_text("List")),
             .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -837,7 +833,6 @@ pub const PackageEnv = struct {
         parse_ast: *AST,
         builtin_module_env: *const ModuleEnv,
         builtin_indices: can.CIR.BuiltinIndices,
-        root_is_platform: bool,
     ) !void {
         // Create module_envs map for auto-importing builtin types
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
@@ -852,7 +847,7 @@ pub const PackageEnv = struct {
             builtin_indices,
         );
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map, root_is_platform);
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
     }
@@ -872,6 +867,7 @@ pub const PackageEnv = struct {
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
             .list = try env.insertIdent(base.Ident.for_text("List")),
             .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -905,7 +901,7 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env);
         _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();

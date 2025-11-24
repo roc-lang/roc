@@ -130,5 +130,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(Int(Unsigned64))"))
+(expr (type "U64"))
 ~~~

@@ -40,6 +40,26 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         anno: ?Annotation.Idx,
     },
+    /// A generalized declaration (for lambdas and number literals only).
+    /// These bindings use let-polymorphism and can be instantiated at different types.
+    ///
+    /// ```roc
+    /// id = |x| x         # generalized - can be used polymorphically
+    /// number = id(0)     # works
+    /// empty_str = id("") # also works
+    ///
+    /// one = 1            # generalized - can be used polymorphically
+    /// u64_one = one + [].len()   # `one` can be a U64
+    /// two_point_one = one + 1.1  # `one` can also be Dec
+    /// ```
+    ///
+    /// Other literals don't allow generalization - see
+    /// https://github.com/seanpm2001/Roc-Lang_RFCs/blob/main/0010-let-generalization-lets-not.md
+    s_decl_gen: struct {
+        pattern: Pattern.Idx,
+        expr: Expr.Idx,
+        anno: ?Annotation.Idx,
+    },
     /// A rebindable declaration using the "var" keyword.
     ///
     /// Not valid at the top level of a module.
@@ -178,11 +198,23 @@ pub const Statement = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .s_decl => |d| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-let");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getPattern(d.pattern).pushToSExprTree(env, tree, d.pattern);
+                try env.store.getExpr(d.expr).pushToSExprTree(env, tree, d.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_decl_gen => |d| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-let");
                 const region = env.store.getStatementRegion(stmt_idx);

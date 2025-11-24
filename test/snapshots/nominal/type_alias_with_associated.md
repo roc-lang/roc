@@ -68,10 +68,10 @@ Foo : [A, B, C].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(alias (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

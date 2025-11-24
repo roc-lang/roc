@@ -23,21 +23,18 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_mismatch.md:11:34:11:38
+MISSING METHOD - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_mismatch.md:11:34:11:38:**
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **item**, which has no method with that name:
+**type_var_mismatch.md:7:9:7:11:**
 ```roc
-	result = List.first(list).ok_or(item)
+	item = 42
 ```
-	                                ^^^^
+	       ^^
 
-It has the type:
-    _Num(_size)_
 
-But I expected it to be:
-    _item_
+**Hint: ** Did you forget to specify **from_numeral** in the type annotation?
 
 # TOKENS
 ~~~zig
@@ -148,9 +145,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(item) -> item"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(item) -> item"))
 		(expr (type "_arg -> {}"))))
 ~~~

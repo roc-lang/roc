@@ -97,7 +97,8 @@ pub const Store = struct {
     }
 
     /// Serialized representation of a Store
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         buffer: collections.SafeList(u8).Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer

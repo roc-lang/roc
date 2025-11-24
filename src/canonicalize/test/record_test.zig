@@ -26,7 +26,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null, false);
+        var can = try Can.init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -57,7 +57,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null, false);
+        var can = try Can.init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -88,7 +88,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null, false);
+        var can = try Can.init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -129,7 +129,7 @@ test "record_unbound basic functionality" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null, false);
+    var can = try Can.init(&env, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -171,7 +171,7 @@ test "record_unbound with multiple fields" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null, false);
+    var can = try Can.init(&env, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -198,78 +198,5 @@ test "record_unbound with multiple fields" {
             try std.testing.expectEqualStrings("c", env.getIdent(cir_field_2.name));
         },
         else => return error.ExpectedRecord,
-    }
-}
-
-test "record with extension variable" {
-    const gpa = std.testing.allocator;
-
-    var env = try ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    try env.initCIRFields(gpa, "test");
-
-    // Test that regular records have extension variables
-    // Create { x: 42, y: "hi" }* (open record)
-    const num_var = try env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    const str_var = try env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    const fields = [_]types.RecordField{
-        .{ .name = try env.insertIdent(Ident.for_text("x")), .var_ = num_var },
-        .{ .name = try env.insertIdent(Ident.for_text("y")), .var_ = str_var },
-    };
-    const fields_range = try env.types.appendRecordFields(&fields);
-    const ext_var = try env.types.fresh(); // Open extension
-    const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
-    const record_var = try env.types.freshFromContent(record_content);
-
-    // Verify the record has an extension variable
-    const resolved = env.types.resolveVar(record_var);
-    switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .record => |record| {
-                try std.testing.expect(record.fields.len() == 2);
-
-                // Check that extension is a flex var (open record)
-                const ext_resolved = env.types.resolveVar(record.ext);
-                switch (ext_resolved.desc.content) {
-                    .flex => {
-                        // Success! The record has an open extension
-                    },
-                    else => return error.ExpectedFlexVar,
-                }
-            },
-            else => return error.ExpectedRecord,
-        },
-        else => return error.ExpectedStructure,
-    }
-
-    // Now test a closed record
-    const closed_ext_var = try env.types.freshFromContent(Content{ .structure = .empty_record });
-    const closed_record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = closed_ext_var } } };
-    const closed_record_var = try env.types.freshFromContent(closed_record_content);
-
-    // Verify the closed record has empty_record as extension
-    const closed_resolved = env.types.resolveVar(closed_record_var);
-    switch (closed_resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .record => |record| {
-                try std.testing.expect(record.fields.len() == 2);
-
-                // Check that extension is empty_record (closed record)
-                const ext_resolved = env.types.resolveVar(record.ext);
-                switch (ext_resolved.desc.content) {
-                    .structure => |ext_structure| switch (ext_structure) {
-                        .empty_record => {
-                            // Success! The record is closed
-                        },
-                        else => return error.ExpectedEmptyRecord,
-                    },
-                    else => return error.ExpectedStructure,
-                }
-            },
-            else => return error.ExpectedRecord,
-        },
-        else => return error.ExpectedStructure,
     }
 }

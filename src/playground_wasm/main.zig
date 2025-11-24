@@ -23,6 +23,7 @@ const reporting = @import("reporting");
 const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
+const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");
@@ -948,7 +949,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .gpa = gpa,
                 .common = common,
                 .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-                .module_kind = serialized_ptr.module_kind,
+                .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
@@ -966,6 +967,20 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
                 .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
                 .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+                .minus_ident = common.findIdent("minus") orelse unreachable,
+                .times_ident = common.findIdent("times") orelse unreachable,
+                .div_by_ident = common.findIdent("div_by") orelse unreachable,
+                .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+                .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+                .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
+                .not_ident = common.findIdent("not") orelse unreachable,
+                .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+                .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+                .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+                .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+                .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+                .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+                .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
@@ -1010,6 +1025,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -1028,7 +1044,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     try module_envs_map.put(str_ident, .{ .env = builtin_module.env });
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map, false);
+    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

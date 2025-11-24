@@ -1019,7 +1019,7 @@ pub fn main() !void {
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE MISMATCH"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
 
     // Empty Source Test
     const empty_source_code = try allocator.dupe(u8, "");
@@ -1125,7 +1125,7 @@ pub fn main() !void {
     get_hover_info_steps[2] = .{
         .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
         .expected_status = "SUCCESS",
-        .expected_hover_info_contains = "Num(Int(Signed32))",
+        .expected_hover_info_contains = "I32",
     };
     try test_cases.append(allocator, .{
         .name = "GET_HOVER_INFO - Specific Type Query",

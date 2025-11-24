@@ -24,9 +24,13 @@ type=expr
 )
 ~~~
 # EXPECTED
-NIL
+NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
-NIL
+**NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 # TOKENS
 ~~~zig
 OpenRound,
@@ -171,11 +175,9 @@ EndOfFile,
 			(e-nominal-external
 				(builtin)
 				(e-tag (name "True"))))
-		(e-binop (op "null_coalesce")
-			(e-tag (name "None"))
-			(e-num (value "0")))))
+		(e-runtime-error (tag "not_implemented"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Bool, Bool, _field)"))
+(expr (type "(a, b, c, d, e, Bool, Bool, Bool, Bool, Bool, Bool, f, Bool, Bool, Error) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 ~~~

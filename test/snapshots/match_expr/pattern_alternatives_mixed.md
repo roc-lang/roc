@@ -16,9 +16,10 @@ match ... {
 ~~~
 # EXPECTED
 INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
+MISSING METHOD - pattern_alternatives_mixed.md:2:10:2:11
 # PROBLEMS
 **INCOMPATIBLE MATCH PATTERNS**
-The pattern first pattern in this second`match` differs from previous ones:
+The pattern first pattern in this third`match` differs from previous ones:
 **pattern_alternatives_mixed.md:1:1:**
 ```roc
 match ... {
@@ -30,17 +31,28 @@ match ... {
 	_ => "other"
 }
 ```
- ^^^^^^^
+ ^^^^^
 
-The second pattern has this type:
-    _Str_
+The third pattern has this type:
+    _[Ok(_a)][ProvidedByCompiler]_
 
 But all the previous patterns have this type: 
-    _Num(_size)_
+    _Str_
 
 All patterns in an `match` must have compatible types.
 
 
+
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**pattern_alternatives_mixed.md:2:10:2:11:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	        ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

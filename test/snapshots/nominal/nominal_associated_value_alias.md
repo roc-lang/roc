@@ -74,12 +74,12 @@ result = myBar
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "Foo.bar"))
+		(p-assign (ident "nominal_associated_value_alias.Foo.bar"))
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "myBar"))
 		(e-lookup-local
-			(p-assign (ident "Foo.bar")))
+			(p-assign (ident "nominal_associated_value_alias.Foo.bar")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
@@ -97,14 +97,14 @@ result = myBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
-		(patt (type "Num(Int(Unsigned64))"))
-		(patt (type "Num(Int(Unsigned64))")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "U64"))
+		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "Num(_size)"))
-		(expr (type "Num(Int(Unsigned64))"))
-		(expr (type "Num(Int(Unsigned64))"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "U64"))
+		(expr (type "U64"))))
 ~~~

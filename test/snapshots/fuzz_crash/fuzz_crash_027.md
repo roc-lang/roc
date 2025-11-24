@@ -215,6 +215,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
@@ -743,6 +744,11 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
@@ -859,7 +865,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num(Int(Unsigned64))_
+    _Num.U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -964,7 +970,7 @@ It has the type:
     _[Stdoline!(Error)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
-    _Try({  }, _d)_
+    _Try(_d)_
 
 # TOKENS
 ~~~zig
@@ -1755,28 +1761,31 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
-			(args
-				(p-assign (ident "num")))
-			(e-block
-				(s-let
-					(p-assign (ident "other"))
-					(e-num (value "1")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+		(e-closure
+			(captures
+				(capture (ident "other")))
+			(e-lambda
+				(args
+					(p-assign (ident "num")))
+				(e-block
+					(s-let
+						(p-assign (ident "other"))
+						(e-num (value "1")))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-lookup-local
+									(p-assign (ident "num")))
+								(e-block
+									(s-dbg
+										(e-runtime-error (tag "empty_tuple")))
+									(e-num (value "0")))))
+						(if-else
 							(e-block
 								(s-dbg
-									(e-runtime-error (tag "empty_tuple")))
-								(e-num (value "0")))))
-					(if-else
-						(e-block
-							(s-dbg
-								(e-num (value "123")))
-							(e-lookup-local
-								(p-assign (ident "other"))))))))
+									(e-num (value "123")))
+								(e-lookup-local
+									(p-assign (ident "other")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -2090,11 +2099,7 @@ expect {
 						(p-assign (ident "bsult"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-tag (name "Err")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2250,8 +2255,8 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Num(Int(Unsigned64))"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2287,8 +2292,8 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Num(Int(Unsigned64))"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

@@ -76,7 +76,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .gpa = gpa,
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
+        .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -94,6 +94,20 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent("minus") orelse unreachable,
+        .times_ident = common.findIdent("times") orelse unreachable,
+        .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+        .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
+        .not_ident = common.findIdent("not") orelse unreachable,
+        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
     };
 
     return LoadedModule{
@@ -320,6 +334,7 @@ test "Repl - minimal interpreter integration" {
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
         .list = try cir.insertIdent(base.Ident.for_text("List")),
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try cir.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -327,7 +342,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 4: Canonicalize
-    var can = try Canon.init(cir, &parse_ast, null, false);
+    var can = try Canon.init(cir, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -344,7 +359,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &[_]*const ModuleEnv{});
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

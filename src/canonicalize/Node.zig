@@ -25,6 +25,7 @@ pub const Idx = List.Idx;
 pub const Tag = enum {
     // Statements
     statement_decl,
+    statement_decl_gen,
     statement_var,
     statement_reassign,
     statement_crash,
@@ -79,8 +80,8 @@ pub const Tag = enum {
     expr_block,
     expr_ellipsis,
     expr_anno_only,
+    expr_hosted_lambda,
     expr_low_level,
-    expr_hosted,
     expr_expect,
     expr_record_builder,
     match_branch,

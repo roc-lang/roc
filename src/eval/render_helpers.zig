@@ -32,7 +32,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
     var resolved = ctx.runtime_types.resolveVar(rt_var);
 
     // Check layout first for special rendering cases
-    // Str has .str layout, Bool has .bool layout
+    // Str has .str layout, Bool has .int .u8 layout
     if (value.layout.tag == .scalar) {
         const scalar = value.layout.data.scalar;
         if (scalar.tag == .str) {
@@ -51,15 +51,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
             try buf.append('"');
             return buf.toOwnedSlice();
-        } else if (scalar.tag == .bool) {
-            // Check if this is a nominal Bool type (not just any bool)
-            if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
-                const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
-                return if (b.* != 0)
-                    try gpa.dupe(u8, "True")
-                else
-                    try gpa.dupe(u8, "False");
-            }
         }
     }
 
@@ -87,39 +78,74 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             var tag_index: usize = 0;
             var have_tag = false;
             if (value.layout.tag == .scalar) {
-                if (value.layout.data.scalar.tag == .bool) {
-                    const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
-                    tag_index = if (b.* != 0) 1 else 0;
-                    have_tag = true;
-                } else if (value.layout.data.scalar.tag == .int) {
-                    tag_index = @intCast(value.asI128());
-                    have_tag = true;
+                if (value.layout.data.scalar.tag == .int) {
+                    // Only treat as tag if value fits in usize (valid tag discriminants are small)
+                    if (std.math.cast(usize, value.asI128())) |idx| {
+                        tag_index = idx;
+                        have_tag = true;
+                    }
                 }
-                if (have_tag) {
-                    // Special case: Bool values are always stored with canonical indices (False=0, True=1)
-                    // but anonymous tag unions like [True]_others may have different tag orders.
-                    // Check if this is a Bool value by looking for True/False tag names.
-                    if ((tag_index == 0 or tag_index == 1) and tags.len <= 2) {
-                        var has_true = false;
-                        var has_false = false;
-                        for (tags.items(.name)) |tag_name_idx| {
-                            const tag_name = ctx.env.getIdent(tag_name_idx);
-                            if (std.mem.eql(u8, tag_name, "True")) has_true = true;
-                            if (std.mem.eql(u8, tag_name, "False")) has_false = true;
-                        }
-                        // If we have True and/or False tags, this is a Bool value
-                        if (has_true or has_false) {
-                            return try gpa.dupe(u8, if (tag_index != 0) "True" else "False");
+                if (have_tag and tag_index < tags.len) {
+                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                    errdefer out.deinit();
+                    try out.appendSlice(tag_name);
+                    return out.toOwnedSlice();
+                }
+            } else if (value.layout.tag == .tuple) {
+                // Tag union stored as tuple: (payload, tag_index) or (payload_tuple, tag_index)
+                // The last element of the tuple is the tag discriminant
+                var tup_acc = try value.asTuple(ctx.layout_store);
+                const count = tup_acc.getElementCount();
+                if (count > 0) {
+                    // Get tag index from the last element
+                    const tag_elem = try tup_acc.getElement(count - 1);
+                    if (tag_elem.layout.tag == .scalar and tag_elem.layout.data.scalar.tag == .int) {
+                        if (std.math.cast(usize, tag_elem.asI128())) |tag_idx| {
+                            tag_index = tag_idx;
+                            have_tag = true;
                         }
                     }
-                    // Generic tag union: use tag_index to look up the tag name
-                    if (tag_index < tags.len) {
-                        const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
-                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-                        errdefer out.deinit();
-                        try out.appendSlice(tag_name);
-                        return out.toOwnedSlice();
+                }
+                if (have_tag and tag_index < tags.len) {
+                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                    errdefer out.deinit();
+                    try out.appendSlice(tag_name);
+                    const args_range = tags.items(.args)[tag_index];
+                    const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
+                    if (arg_vars.len > 0) {
+                        try out.append('(');
+                        if (arg_vars.len == 1) {
+                            // Single payload: first element
+                            const payload_elem = try tup_acc.getElement(0);
+                            const arg_var = arg_vars[0];
+                            const rendered = try renderValueRocWithType(ctx, payload_elem, arg_var);
+                            defer gpa.free(rendered);
+                            try out.appendSlice(rendered);
+                        } else {
+                            // Multiple payloads: first element is a nested tuple containing all payload args
+                            const payload_elem = try tup_acc.getElement(0);
+                            if (payload_elem.layout.tag == .tuple) {
+                                var payload_tup = try payload_elem.asTuple(ctx.layout_store);
+                                var j: usize = 0;
+                                while (j < arg_vars.len) : (j += 1) {
+                                    const elem_value = try payload_tup.getElement(j);
+                                    const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
+                                    defer gpa.free(rendered);
+                                    try out.appendSlice(rendered);
+                                    if (j + 1 < arg_vars.len) try out.appendSlice(", ");
+                                }
+                            } else {
+                                // Fallback: render the raw payload
+                                const rendered = try renderValueRoc(ctx, payload_elem);
+                                defer gpa.free(rendered);
+                                try out.appendSlice(rendered);
+                            }
+                        }
+                        try out.append(')');
                     }
+                    return out.toOwnedSlice();
                 }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
@@ -127,12 +153,11 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const tag_field = try acc.getFieldByIndex(idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                        tag_index = @intCast(tmp_sv.asI128());
-                        have_tag = true;
-                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                        const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        tag_index = if (b.* != 0) 1 else 0;
-                        have_tag = true;
+                        // Only treat as tag if value fits in usize (valid tag discriminants are small)
+                        if (std.math.cast(usize, tmp_sv.asI128())) |tag_idx| {
+                            tag_index = tag_idx;
+                            have_tag = true;
+                        }
                     }
                 }
                 if (have_tag and tag_index < tags.len) {

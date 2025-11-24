@@ -345,14 +345,14 @@ main = |_| "done"
 		(patt (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
-		(patt (type "List(_a) -> Num(Int(Unsigned64))"))
+		(patt (type "List(_a) -> U64"))
 		(patt (type "a -> Try(Try(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
-		(expr (type "List(_a) -> Num(Int(Unsigned64))"))
+		(expr (type "List(_a) -> U64"))
 		(expr (type "a -> Try(Try(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

@@ -21,7 +21,7 @@ jobs:
 
       - name: zig lints
         run: |
-          ./ci/zig_lints.sh
+          zig run ci/zig_lints.zig
 
           zig build check-fmt
 

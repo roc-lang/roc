@@ -72,5 +72,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: Num(_size), balance: Num(Frac(_size2)), name: Str, scores: List(Num(_size3)) }"))
+(expr (type "{ active: Error, age: a, balance: b, name: Str, scores: List(c) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 ~~~

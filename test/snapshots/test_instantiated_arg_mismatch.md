@@ -13,23 +13,18 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:10:5:10
+MISSING METHOD - test_instantiated_arg_mismatch.md:5:10:5:12
 # PROBLEMS
-**TYPE MISMATCH**
-The first and second arguments to `pair` must have compatible types, but they are incompatible in this call:
-**test_instantiated_arg_mismatch.md:5:10:**
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**test_instantiated_arg_mismatch.md:5:10:5:12:**
 ```roc
     pair(42, "hello")
 ```
-         ^^  ^^^^^^^
+         ^^
 
-The first argument has the type:
-    _Num(_size)_
 
-But the second argument has the type:
-    _Str_
-
-`pair` needs these arguments to have compatible types.
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -99,5 +94,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "(Str, Str)"))
 ~~~

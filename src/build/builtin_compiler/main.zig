@@ -64,6 +64,8 @@ const BuiltinIndices = struct {
     f32_type: CIR.Statement.Idx,
     /// Statement index of nested F64 type declaration within Builtin module
     f64_type: CIR.Statement.Idx,
+    /// Statement index of nested Numeral type declaration within Builtin module
+    numeral_type: CIR.Statement.Idx,
 };
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
@@ -165,6 +167,46 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         try low_level_map.put(ident, .num_is_ne);
     }
 
+    // Numeric to_str operations (all numeric types)
+    // Note: Types like Dec are nested under Num in Builtin.roc, so the canonical identifier is
+    // "Builtin.Num.Dec.to_str". But Dec is auto-imported as "Dec", so user code
+    // calling Dec.to_str looks up "Builtin.Dec.to_str". We need the canonical name here.
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+        const to_str_name = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.to_str", .{num_type});
+        if (env.common.findIdent(to_str_name)) |ident| {
+            const low_level_op: CIR.Expr.LowLevel = if (std.mem.eql(u8, num_type, "U8"))
+                .u8_to_str
+            else if (std.mem.eql(u8, num_type, "I8"))
+                .i8_to_str
+            else if (std.mem.eql(u8, num_type, "U16"))
+                .u16_to_str
+            else if (std.mem.eql(u8, num_type, "I16"))
+                .i16_to_str
+            else if (std.mem.eql(u8, num_type, "U32"))
+                .u32_to_str
+            else if (std.mem.eql(u8, num_type, "I32"))
+                .i32_to_str
+            else if (std.mem.eql(u8, num_type, "U64"))
+                .u64_to_str
+            else if (std.mem.eql(u8, num_type, "I64"))
+                .i64_to_str
+            else if (std.mem.eql(u8, num_type, "U128"))
+                .u128_to_str
+            else if (std.mem.eql(u8, num_type, "I128"))
+                .i128_to_str
+            else if (std.mem.eql(u8, num_type, "Dec"))
+                .dec_to_str
+            else if (std.mem.eql(u8, num_type, "F32"))
+                .f32_to_str
+            else if (std.mem.eql(u8, num_type, "F64"))
+                .f64_to_str
+            else
+                continue;
+            try low_level_map.put(ident, low_level_op);
+        }
+    }
+
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -217,6 +259,16 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // from_numeral (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
+        if (env.common.findIdent(from_numeral)) |ident| {
+            try low_level_map.put(ident, .num_from_numeral);
+        }
+    }
+
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -243,6 +295,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
         if (env.common.findIdent(div_by)) |ident| {
             try low_level_map.put(ident, .num_div_by);
+        }
+
+        // div_trunc_by
+        const div_trunc_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_trunc_by", .{num_type});
+        if (env.common.findIdent(div_trunc_by)) |ident| {
+            try low_level_map.put(ident, .num_div_trunc_by);
         }
 
         // rem_by
@@ -280,15 +338,23 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create a dummy parameter pattern for the lambda
-                    // Use the identifier "_arg" for the parameter
-                    const arg_ident = env.common.findIdent("_arg") orelse try env.common.insertIdent(gpa, base.Ident.for_text("_arg"));
-                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                    // Create parameter patterns for the lambda
+                    // Binary operations need 2 parameters, unary operations need 1
+                    const num_params: u32 = switch (low_level_op) {
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
+                        else => 2, // Most numeric operations are binary
+                    };
 
-                    // Create a pattern span containing just this one parameter
                     const patterns_start = env.store.scratchTop("patterns");
-                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
-                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+                    var i: u32 = 0;
+                    while (i < num_params) : (i += 1) {
+                        var arg_name_buf: [16]u8 = undefined;
+                        const arg_name = try std.fmt.bufPrint(&arg_name_buf, "_arg{d}", .{i});
+                        const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
+                        const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                        try env.store.scratch.?.patterns.append(arg_pattern_idx);
+                    }
+                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = num_params } };
 
                     // Create an e_runtime_error body that crashes when the function is called
                     const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
@@ -306,16 +372,38 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // We need to modify the def's expr field to point to our new expression
-                    // CIR.Def.Idx and Node.Idx have the same underlying representation
+                    // Def structure is stored in extra_data:
+                    // extra_data[0] = pattern, extra_data[1] = expr, ...
+                    // node.data_1 points to the start index in extra_data
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
-                    var def_node = env.store.nodes.get(def_node_idx);
-                    def_node.data_2 = @intFromEnum(expr_idx);
-                    env.store.nodes.set(def_node_idx, def_node);
+                    const def_node = env.store.nodes.get(def_node_idx);
+                    const extra_start = def_node.data_1;
+
+                    // Update the expr field (at extra_start + 1)
+                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
                 }
+            }
+        }
+    }
+
+    // Expose to_str under aliases like "Builtin.Dec.to_str" for user code lookups.
+    // The canonical names are like "Builtin.Num.Dec.to_str" (since numeric types are nested under Num),
+    // but user code calling Dec.to_str will look for "Builtin.Dec.to_str".
+    for (numeric_types) |num_type| {
+        var canonical_buf: [256]u8 = undefined;
+        var alias_buf: [256]u8 = undefined;
+        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.{s}.to_str", .{num_type});
+        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.{s}.to_str", .{num_type});
+
+        if (env.common.findIdent(canonical_name)) |canonical_ident| {
+            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
+                // Insert the alias identifier
+                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
+                // Expose the same node under the alias
+                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
             }
         }
     }
@@ -422,6 +510,7 @@ pub fn main() !void {
     const dec_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Dec");
     const f32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F32");
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
+    const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
@@ -446,6 +535,7 @@ pub fn main() !void {
     const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
     const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
     const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
+    const numeral_ident = builtin_env.common.findIdent("Numeral") orelse unreachable;
 
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
@@ -467,6 +557,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -495,6 +586,7 @@ pub fn main() !void {
         .dec_type = dec_type_idx,
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
+        .numeral_type = numeral_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -535,10 +627,12 @@ fn compileModule(
 
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
+    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
+        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,
@@ -586,7 +680,7 @@ fn compileModule(
     }
 
     // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(module_env, parse_ast, null, false);
+    can_result.* = try Can.init(module_env, parse_ast, null);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

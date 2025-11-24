@@ -14,18 +14,15 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - polymorphism.md:6:5:6:37
+MISSING METHOD - polymorphism.md:6:5:6:37
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_str` on a type that doesn't support methods:
+**MISSING METHOD**
+This `to_str` method is being called on the type _{ first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d } where [{ first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }.from_numeral : { first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }, { first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }.from_numeral : { first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d }]_, which has no method with that name:
 **polymorphism.md:6:5:6:37:**
 ```roc
     { pair1, pair2, pair3 }.to_str()
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }_
 
 
 

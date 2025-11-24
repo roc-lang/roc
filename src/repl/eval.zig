@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const can = @import("can");
@@ -401,6 +402,7 @@ pub const Repl = struct {
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+            .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = bool_stmt_in_bool_module,
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
@@ -439,7 +441,7 @@ pub const Repl = struct {
             .statement_idx = self.builtin_indices.set_type,
         });
 
-        var czer = Can.init(cir, &parse_ast, &module_envs_map, false) catch |err| {
+        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
@@ -477,7 +479,7 @@ pub const Repl = struct {
 
         // Create interpreter instance with BuiltinTypes containing real Builtin module
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &imported_modules) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinitAndFreeOtherEnvs();

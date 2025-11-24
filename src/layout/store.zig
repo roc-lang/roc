@@ -71,6 +71,21 @@ pub const Store = struct {
     // Cached Box ident to avoid repeated string lookups (null if Box doesn't exist in this env)
     box_ident: ?Ident.Idx,
 
+    // Cached numeric type idents to avoid repeated string lookups
+    u8_ident: ?Ident.Idx,
+    i8_ident: ?Ident.Idx,
+    u16_ident: ?Ident.Idx,
+    i16_ident: ?Ident.Idx,
+    u32_ident: ?Ident.Idx,
+    i32_ident: ?Ident.Idx,
+    u64_ident: ?Ident.Idx,
+    i64_ident: ?Ident.Idx,
+    u128_ident: ?Ident.Idx,
+    i128_ident: ?Ident.Idx,
+    f32_ident: ?Ident.Idx,
+    f64_ident: ?Ident.Idx,
+    dec_ident: ?Ident.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -80,10 +95,9 @@ pub const Store = struct {
     pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
         // opaque_ptr (tag 0) -> 2
-        // bool (tag 1) -> 0
-        // str (tag 2) -> 1
-        // int (tag 3) with precision p -> 3 + p
-        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
+        // str (tag 1) -> 1
+        // int (tag 2) with precision p -> 3 + p
+        // frac (tag 3) with precision p -> 13 + (p - 2) = 11 + p
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -93,13 +107,12 @@ pub const Store = struct {
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 3, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 3));
+        // is_numeric: 1 when tag >= 2, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 2));
 
         // Calculate the base index based on tag mappings
         const base_idx = switch (scalar.tag) {
             .opaque_ptr => @as(u7, 2),
-            .bool => @as(u7, 0),
             .str => @as(u7, 1),
             .int => @as(u7, 3),
             .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
@@ -158,6 +171,19 @@ pub const Store = struct {
             .builtin_str_ident = builtin_str_ident,
             .list_ident = env.common.findIdent("List"),
             .box_ident = env.common.findIdent("Box"),
+            .u8_ident = env.common.findIdent("Num.U8"),
+            .i8_ident = env.common.findIdent("Num.I8"),
+            .u16_ident = env.common.findIdent("Num.U16"),
+            .i16_ident = env.common.findIdent("Num.I16"),
+            .u32_ident = env.common.findIdent("Num.U32"),
+            .i32_ident = env.common.findIdent("Num.I32"),
+            .u64_ident = env.common.findIdent("Num.U64"),
+            .i64_ident = env.common.findIdent("Num.I64"),
+            .u128_ident = env.common.findIdent("Num.U128"),
+            .i128_ident = env.common.findIdent("Num.I128"),
+            .f32_ident = env.common.findIdent("Num.F32"),
+            .f64_ident = env.common.findIdent("Num.F64"),
+            .dec_ident = env.common.findIdent("Num.Dec"),
         };
     }
 
@@ -200,6 +226,7 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
+        env: *ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
@@ -233,10 +260,15 @@ pub const Store = struct {
             }
         };
 
+        // Handle empty records specially to avoid NonEmptyRange with count=0
+        if (temp_fields.items.len == 0) {
+            return self.getEmptyRecordLayout();
+        }
+
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -482,13 +514,12 @@ pub const Store = struct {
             .scalar => switch (layout.data.scalar.tag) {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
-                .bool => 1, // bool is 1 byte
                 .str => 3 * target_usize.size(), // ptr, byte length, capacity
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list => 3 * target_usize.size(), // ptr, length, capacity
-            .list_of_zst => target_usize.size(), // Zero-sized lists might be different
+            .list_of_zst => 3 * target_usize.size(), // list_of_zst has same header structure as list
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => {
@@ -531,7 +562,9 @@ pub const Store = struct {
             const resolved_ext = self.types_store.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
+                    .empty_tag_union => {
+                        break;
+                    },
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             num_tags += ext_tag_union.tags.len();
@@ -882,6 +915,8 @@ pub const Store = struct {
                 @panic("Layout computation exceeded iteration limit - possible infinite loop");
             }
 
+            if (current.desc.content == .structure) {}
+
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
                     .nominal_type => |nominal_type| {
@@ -947,11 +982,15 @@ pub const Store = struct {
                             std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
                             const elem_var = type_args[0];
 
-                            // Check if the element type is unbound (flex or rigid) or a known ZST
+                            // Check if the element type is a known ZST
+                            // Treat flex/rigid as ZST ONLY if they are unconstrained.
+                            // Constrained flex types (e.g., numeric literals with constraints) should default to Dec.
+                            // Unconstrained flex types (e.g., empty list []) should use list_of_zst.
                             const elem_resolved = self.types_store.resolveVar(elem_var);
                             const elem_content = elem_resolved.desc.content;
-                            const is_elem_zst_or_unbound = switch (elem_content) {
-                                .flex, .rigid => true,
+                            const is_elem_zst = switch (elem_content) {
+                                .flex => |flex| flex.constraints.count == 0,
+                                .rigid => |rigid| rigid.constraints.count == 0,
                                 .structure => |ft| switch (ft) {
                                     .empty_record, .empty_tag_union => true,
                                     else => false,
@@ -959,8 +998,8 @@ pub const Store = struct {
                                 else => false,
                             };
 
-                            if (is_elem_zst_or_unbound) {
-                                // For unbound or ZST element types, use list of zero-sized type
+                            if (is_elem_zst) {
+                                // For ZST element types, use list of zero-sized type
                                 break :flat_type Layout.listOfZst();
                             } else {
                                 // Otherwise, add this to the stack of pending work
@@ -975,9 +1014,31 @@ pub const Store = struct {
                             }
                         }
 
-                        // TODO special-case the builtin Num type here.
-                        // If we have one of those, then convert it to a Num layout,
-                        // or to a runtime error if it's an invalid elem type.
+                        // Special handling for built-in numeric types from Builtin module
+                        // These have empty tag union backings but need scalar layouts
+                        if (nominal_type.origin_module == self.env.builtin_module_ident) {
+                            const ident_idx = nominal_type.ident.ident_idx;
+                            const num_layout: ?Layout = blk: {
+                                if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
+                                if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
+                                if (self.u16_ident) |u16_id| if (ident_idx == u16_id) break :blk Layout.int(types.Int.Precision.u16);
+                                if (self.i16_ident) |i16_id| if (ident_idx == i16_id) break :blk Layout.int(types.Int.Precision.i16);
+                                if (self.u32_ident) |u32_id| if (ident_idx == u32_id) break :blk Layout.int(types.Int.Precision.u32);
+                                if (self.i32_ident) |i32_id| if (ident_idx == i32_id) break :blk Layout.int(types.Int.Precision.i32);
+                                if (self.u64_ident) |u64_id| if (ident_idx == u64_id) break :blk Layout.int(types.Int.Precision.u64);
+                                if (self.i64_ident) |i64_id| if (ident_idx == i64_id) break :blk Layout.int(types.Int.Precision.i64);
+                                if (self.u128_ident) |u128_id| if (ident_idx == u128_id) break :blk Layout.int(types.Int.Precision.u128);
+                                if (self.i128_ident) |i128_id| if (ident_idx == i128_id) break :blk Layout.int(types.Int.Precision.i128);
+                                if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
+                                if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
+                                if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
+                                break :blk null;
+                            };
+
+                            if (num_layout) |layout| {
+                                break :flat_type layout;
+                            }
+                        }
 
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
@@ -986,64 +1047,6 @@ pub const Store = struct {
 
                         current = resolved;
                         continue;
-                    },
-                    .num => |initial_num| {
-                        var num = initial_num;
-
-                        while (true) {
-                            switch (num) {
-                                // TODO: Unwrap number to get the root precision or requiremnets
-                                .num_compact => |compact| switch (compact) {
-                                    .int => |precision| break :flat_type Layout.int(precision),
-                                    .frac => |precision| break :flat_type Layout.frac(precision),
-                                },
-                                .int_precision => |precision| break :flat_type Layout.int(precision),
-                                .frac_precision => |precision| break :flat_type Layout.frac(precision),
-                                // For polymorphic types, use default precision
-                                .num_unbound => |_| {
-                                    // Default unbound number types to Dec
-                                    break :flat_type Layout.default_num();
-                                },
-                                .int_unbound => {
-                                    // Default unbound int types to Dec
-                                    break :flat_type Layout.default_num();
-                                },
-                                .frac_unbound => {
-                                    // Default unbound frac types to Dec
-                                    break :flat_type Layout.default_num();
-                                },
-                                .num_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.default_num();
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .int_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.default_num();
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .frac_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.default_num();
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                            }
-                        }
                     },
                     .tuple => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);
@@ -1216,7 +1219,8 @@ pub const Store = struct {
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
 
-                        for (tags_slice.items(.args)) |tag_args| {
+                        for (tags_slice.items(.args), 0..) |tag_args, tag_idx| {
+                            _ = tag_idx;
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
                                 // No payload arguments
@@ -1241,35 +1245,36 @@ pub const Store = struct {
                             }
                         }
 
-                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
-                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
-
+                        // Use a tuple instead of a record to avoid needing field name identifiers
+                        // Tag unions are represented as (payload, tag) where:
+                        //   - payload is the largest payload layout (or empty record if no payloads)
+                        //   - tag is the discriminant
                         const payload_layout = max_payload_layout orelse blk: {
                             const empty_idx = try self.ensureEmptyRecordLayout();
                             break :blk self.getLayout(empty_idx);
                         };
 
-                        var field_layouts = [_]Layout{
+                        var element_layouts = [_]Layout{
                             payload_layout,
                             discriminant_layout,
                         };
 
-                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
+                        const tuple_idx = try self.putTuple(&element_layouts);
 
-                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        // Apply maximum payload alignment if needed
                         if (max_payload_alignment_any.toByteUnits() > 1) {
                             const desired_alignment = max_payload_alignment_any;
-                            var rec_layout = self.getLayout(rec_idx);
-                            const current_alignment = rec_layout.alignment(self.targetUsize());
+                            var tuple_layout = self.getLayout(tuple_idx);
+                            const current_alignment = tuple_layout.alignment(self.targetUsize());
                             if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
-                                std.debug.assert(rec_layout.tag == .record);
-                                const record_idx = rec_layout.data.record.idx;
-                                const new_layout = Layout.record(desired_alignment, record_idx);
-                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
+                                std.debug.assert(tuple_layout.tag == .tuple);
+                                const tuple_data_idx = tuple_layout.data.tuple.idx;
+                                const new_layout = Layout.tuple(desired_alignment, tuple_data_idx);
+                                self.layouts.set(@enumFromInt(@intFromEnum(tuple_idx)), new_layout);
                             }
                         }
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
-                        return rec_idx;
+                        // Break to fall through to pending container processing instead of returning directly
+                        break :flat_type self.getLayout(tuple_idx);
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1338,23 +1343,24 @@ pub const Store = struct {
                         continue :outer;
                     }
 
-                    // Flex vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.len > 0) {
-                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                        if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.opaquePtr();
-                        }
-                    }
-
                     // If the flex var has no constraints, it represents a phantom type parameter
                     // or unused tag branch that doesn't exist at runtime.
                     if (flex.constraints.isEmpty()) {
+                        // Flex vars can only be sent to the host if boxed.
+                        // Only return opaque_ptr for truly unconstrained flex vars inside containers.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
                         break :blk Layout.zst();
                     }
 
                     // Flex vars with constraints appear in REPL/eval contexts where type constraints
                     // haven't been fully solved. This is a known issue that needs proper constraint
                     // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
+                    // This includes flex vars inside lists - they should default to Dec, not opaque_ptr.
                     break :blk Layout.default_num();
                 },
                 .rigid => |rigid| blk: {
@@ -1491,11 +1497,13 @@ pub const Store = struct {
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            return idxFromScalar(layout.data.scalar);
+            const result = idxFromScalar(layout.data.scalar);
+            return result;
         }
 
         // For non-scalar types, insert as normal
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
-        return @enumFromInt(@intFromEnum(safe_list_idx));
+        const result: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        return result;
     }
 };

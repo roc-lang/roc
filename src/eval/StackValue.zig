@@ -36,6 +36,8 @@ layout: Layout,
 ptr: ?*anyopaque,
 /// Flag to track whether the memory has been initialized
 is_initialized: bool = false,
+/// Optional runtime type variable for type information (used in constant folding)
+rt_var: ?types.Var = null,
 
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
@@ -70,39 +72,39 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 switch (precision) {
                     .u8 => {
                         const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
                     },
                     .u16 => {
                         const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
                     },
                     .u32 => {
                         const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
                     },
                     .u64 => {
                         const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
                     },
                     .u128 => {
                         const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
                     },
                     .i8 => {
                         const typed_ptr: *i8 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
                     },
                     .i16 => {
                         const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
                     },
                     .i32 => {
                         const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
                     },
                     .i64 => {
                         const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
-                        typed_ptr.* = @intCast(value);
+                        typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
                     },
                     .i128 => {
                         const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));
@@ -132,9 +134,62 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
+    if (self.layout.tag == .list) {
+        // Copy the list header and incref the underlying data
+        std.debug.assert(self.ptr != null);
+        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
+        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        dest_list.* = src_list.*;
+        // Incref the list data if it's not empty
+        if (src_list.bytes) |bytes| {
+            builtins.utils.increfDataPtrC(bytes, 1);
+        }
+        return;
+    }
+
+    if (self.layout.tag == .list_of_zst) {
+        // Copy the list header for ZST lists - no refcounting needed for ZSTs
+        std.debug.assert(self.ptr != null);
+        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
+        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        dest_list.* = src_list.*;
+        return;
+    }
+
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+
+    // Skip memcpy if source and destination overlap to avoid aliasing error
+    const src_start = @intFromPtr(src.ptr);
+    const src_end = src_start + result_size;
+    const dst_start = @intFromPtr(dst.ptr);
+    const dst_end = dst_start + result_size;
+
+    // Check if ranges overlap
+    if ((src_start < dst_end) and (dst_start < src_end)) {
+        // Overlapping regions - skip if they're identical, otherwise use memmove
+        if (src.ptr == dst.ptr) {
+            return;
+        }
+        // Use manual copy for overlapping but non-identical regions
+        if (dst_start < src_start) {
+            // Copy forward
+            var i: usize = 0;
+            while (i < result_size) : (i += 1) {
+                dst[i] = src[i];
+            }
+        } else {
+            // Copy backward
+            var i: usize = result_size;
+            while (i > 0) {
+                i -= 1;
+                dst[i] = src[i];
+            }
+        }
+        return;
+    }
+
     @memcpy(dst, src);
 }
 
@@ -190,7 +245,8 @@ pub fn asI128(self: StackValue) i128 {
 }
 
 /// Initialise the StackValue integer value
-pub fn setInt(self: *StackValue, value: i128) void {
+/// Returns error.IntegerOverflow if the value doesn't fit in the target type
+pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
 
     // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
@@ -206,42 +262,43 @@ pub fn setInt(self: *StackValue, value: i128) void {
     const precision = self.layout.data.scalar.data.int;
 
     // Inline integer writing logic with proper type casting and alignment
+    // Use std.math.cast to safely check if value fits, returning error instead of panicking
     switch (precision) {
         .u8 => {
             const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
         },
         .u16 => {
             const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
         },
         .u32 => {
             const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
         },
         .u64 => {
             const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
         },
         .u128 => {
             const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
         },
         .i8 => {
             const typed_ptr: *i8 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
         },
         .i16 => {
             const typed_ptr: *i16 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
         },
         .i32 => {
             const typed_ptr: *i32 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
         },
         .i64 => {
             const typed_ptr: *i64 = @ptrCast(@alignCast(self.ptr.?));
-            typed_ptr.* = @intCast(value);
+            typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
         },
         .i128 => {
             const typed_ptr: *i128 = @ptrCast(@alignCast(self.ptr.?));
@@ -250,13 +307,64 @@ pub fn setInt(self: *StackValue, value: i128) void {
     }
 }
 
+/// Initialise the StackValue integer value from raw bytes
+/// This variant handles u128 values that don't fit in i128
+pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{IntegerOverflow}!void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is an integer
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+
+    // Assert this is uninitialised memory
+    std.debug.assert(!self.is_initialized);
+
+    const precision = self.layout.data.scalar.data.int;
+
+    // For u128 values, use bitcast directly; for i128 values, use the signed path
+    if (is_u128) {
+        const u128_value: u128 = @bitCast(bytes);
+        switch (precision) {
+            .u8 => {
+                const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u8, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u16 => {
+                const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u16, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u32 => {
+                const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u32, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u64 => {
+                const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = std.math.cast(u64, u128_value) orelse return error.IntegerOverflow;
+            },
+            .u128 => {
+                const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
+                typed_ptr.* = u128_value;
+            },
+            .i8, .i16, .i32, .i64, .i128 => {
+                // Can't assign u128 to signed types - always overflow
+                return error.IntegerOverflow;
+            },
+        }
+    } else {
+        const i128_value: i128 = @bitCast(bytes);
+        try self.setInt(i128_value);
+        return;
+    }
+}
+
 /// Initialise the StackValue boolean value
 pub fn setBool(self: *StackValue, value: u8) void {
     // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
 
-    // Assert this is a boolean
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    // Assert this is a boolean (u8 int)
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.data.scalar.data.int == .u8);
 
     // Assert this is uninitialised memory
     //
@@ -272,7 +380,8 @@ pub fn setBool(self: *StackValue, value: u8) void {
 pub fn asBool(self: StackValue) bool {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.data.scalar.data.int == .u8);
 
     // Read the boolean value as a byte
     const bool_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));
@@ -372,16 +481,11 @@ pub fn setDec(self: *StackValue, value: RocDec) void {
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
+    std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .tuple);
 
     const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
     const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
-
-    // Zero-sized tuples can have null pointers
-    const tuple_size = layout_cache.layoutSize(self.layout);
-    if (tuple_size > 0) {
-        std.debug.assert(self.ptr != null);
-    }
 
     return TupleAccessor{
         .base_value = self,
@@ -398,30 +502,19 @@ pub const TupleAccessor = struct {
     tuple_layout: Layout,
     element_layouts: layout_mod.TupleField.SafeMultiList.Slice,
 
-    /// Get a StackValue for the element at the given index
-    pub fn getElement(self: TupleAccessor, index: usize) !StackValue {
-        if (index >= self.element_layouts.len) {
-            return error.TupleIndexOutOfBounds;
-        }
+    /// Get a StackValue for the element at the given original index (before sorting)
+    pub fn getElement(self: TupleAccessor, original_index: usize) !StackValue {
+        // Find the sorted index corresponding to this original index
+        const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
 
         std.debug.assert(self.base_value.is_initialized);
         std.debug.assert(self.base_value.ptr != null);
 
-        const element_layout_info = self.element_layouts.get(index);
+        const element_layout_info = self.element_layouts.get(sorted_index);
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
 
-        // Handle zero-sized elements (like unit type {})
-        const element_size = self.layout_cache.layoutSize(element_layout);
-        if (element_size == 0) {
-            return StackValue{
-                .layout = element_layout,
-                .ptr = null,
-                .is_initialized = true,
-            };
-        }
-
-        // Get the offset for this element within the tuple
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(index));
+        // Get the offset for this element within the tuple (using sorted index)
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(sorted_index));
 
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
@@ -442,10 +535,6 @@ pub const TupleAccessor = struct {
     /// Set an element by copying from a source StackValue
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
-        // Skip copying for zero-sized elements
-        if (dest_element.ptr == null) {
-            return;
-        }
         try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
     }
 
@@ -569,16 +658,11 @@ fn copyListValueToPtr(
 /// Create a RecordAccessor for safe record field access
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
     std.debug.assert(self.is_initialized); // Record must be initialized before accessing
+    // Note: ptr can be null for records with all ZST fields
     std.debug.assert(self.layout.tag == .record);
 
     const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
     const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
-
-    // Zero-sized records can have null pointers
-    const record_size = layout_cache.layoutSize(self.layout);
-    if (record_size > 0) {
-        std.debug.assert(self.ptr != null);
-    }
 
     return RecordAccessor{
         .base_value = self,
@@ -686,10 +770,12 @@ pub const RecordAccessor = struct {
     }
 
     /// Find field index by comparing field names (requires env access for name comparison)
-    pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
+    pub fn findFieldIndex(self: RecordAccessor, _: anytype, field_name: []const u8) ?usize {
+        // Use the environment from the layout cache, not the passed env parameter
+        // This ensures we use the same environment that was used to create the layout
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, env.getIdent(field.name), field_name)) {
+            if (std.mem.eql(u8, self.layout_cache.env.getIdent(field.name), field_name)) {
                 return idx;
             }
         }
@@ -965,6 +1051,61 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (self.ptr == null) return;
             const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
             slot.* = 0;
+            return;
+        },
+        .tuple => {
+            if (self.ptr == null) return;
+            const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
+            if (tuple_data.fields.count == 0) return;
+
+            const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+            var elem_index: usize = 0;
+            while (elem_index < element_layouts.len) : (elem_index += 1) {
+                const elem_info = element_layouts.get(elem_index);
+                const elem_layout = layout_cache.getLayout(elem_info.layout);
+
+                const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
+                const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+
+                const elem_value = StackValue{
+                    .layout = elem_layout,
+                    .ptr = elem_ptr,
+                    .is_initialized = true,
+                };
+
+                elem_value.decref(layout_cache, ops);
+            }
+
+            return;
+        },
+        .closure => {
+            if (self.ptr == null) return;
+            // Get the closure header to find the captures layout
+            const closure = self.asClosure();
+            const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+
+            // Only decref if there are actual captures (record with fields)
+            if (captures_layout.tag == .record) {
+                const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+                if (record_data.fields.count > 0) {
+                    // Calculate the offset to the captures record (after header, with alignment)
+                    const header_size = @sizeOf(layout_mod.Closure);
+                    const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                    const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                    const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+
+                    // Create a StackValue for the captures record and decref it
+                    const captures_value = StackValue{
+                        .layout = captures_layout,
+                        .ptr = rec_ptr,
+                        .is_initialized = true,
+                    };
+                    captures_value.decref(layout_cache, ops);
+                }
+            }
             return;
         },
         else => {},

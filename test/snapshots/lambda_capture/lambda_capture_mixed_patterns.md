@@ -58,32 +58,35 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-lambda
-		(args
-			(p-assign (ident "base")))
-		(e-block
-			(s-let
-				(p-assign (ident "simple"))
-				(e-closure
-					(captures
-						(capture (ident "base")))
-					(e-lambda
-						(args
-							(p-assign (ident "x")))
-						(e-binop (op "add")
+	(e-closure
+		(captures
+			(capture (ident "simple")))
+		(e-lambda
+			(args
+				(p-assign (ident "base")))
+			(e-block
+				(s-let
+					(p-assign (ident "simple"))
+					(e-closure
+						(captures
+							(capture (ident "base")))
+						(e-lambda
+							(args
+								(p-assign (ident "x")))
 							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "base")))
-								(e-lookup-local
-									(p-assign (ident "x"))))
-							(e-num (value "1"))))))
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "simple")))
-				(e-num (value "1")))))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "base")))
+									(e-lookup-local
+										(p-assign (ident "x"))))
+								(e-num (value "1"))))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "simple")))
+					(e-num (value "1"))))))
 	(e-num (value "1")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Num(_size)"))
+(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~
