@@ -2038,12 +2038,18 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const range_start: u32 = self.types_store.record_fields.len();
-
-        // Here, iterate over shared fields, sub unifying the field variables.
-        // At this point, the fields are know to be identical, so we arbitrary choose b
+        // First, unify all field types. This may cause nested record unifications
+        // which will append their own fields to the store. We must NOT interleave
+        // our field appends with these nested calls.
         for (shared_fields) |shared| {
             try self.unifyGuarded(shared.a.var_, shared.b.var_);
+        }
+
+        // Now that all nested unifications are complete, append OUR fields.
+        // This ensures our fields form a contiguous range.
+        const range_start: u32 = self.types_store.record_fields.len();
+
+        for (shared_fields) |shared| {
             _ = self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
@@ -2058,7 +2064,7 @@ const Unifier = struct {
             _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
         }
 
-        // Merge vars
+        // Merge vars - now the range correctly contains only THIS record's fields
         self.merge(vars, Content{ .structure = FlatType{ .record = .{
             .fields = self.types_store.record_fields.rangeToEnd(range_start),
             .ext = ext,

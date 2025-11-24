@@ -1217,6 +1217,10 @@ pub const Store = struct {
         return self.static_dispatch_constraints.sliceRange(range);
     }
 
+    pub fn sliceTags(self: *const Self, range: SnapshotTagSafeList.Range) SnapshotTagSafeList.Slice {
+        return self.tags.sliceRange(range);
+    }
+
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
     }

@@ -15,23 +15,6 @@ Builtin :: [].{
 
 		is_eq : List(item), List(item) -> Bool
 		    where [item.is_eq : item, item -> Bool]
-		is_eq = |self, other| {
-		    if self.len() != other.len() {
-				return False
-			}
-
-			var $index = 0
-
-			while $index < self.len() {
-			    if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
-					return False
-				}
-
-				$index = $index + 1
-			}
-
-			True
-		}
 
 		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| List.get(list, 0)
@@ -69,7 +52,6 @@ Builtin :: [].{
 		}
 
 		is_eq : Bool, Bool -> Bool
-		is_ne : Bool, Bool -> Bool
 
 		#encoder : Bool -> Encoder(fmt, [])
 		#	where [fmt implements EncoderFormatting]
@@ -370,7 +352,6 @@ Builtin :: [].{
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool
 			is_eq : Dec, Dec -> Bool
-			is_ne : Dec, Dec -> Bool
 			is_gt : Dec, Dec -> Bool
 			is_gte : Dec, Dec -> Bool
 			is_lt : Dec, Dec -> Bool

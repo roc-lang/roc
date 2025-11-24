@@ -110,6 +110,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
         try low_level_map.put(list_concat_ident, .list_concat);
     }
+    if (env.common.findIdent("Builtin.List.is_eq")) |list_is_eq_ident| {
+        try low_level_map.put(list_is_eq_ident, .list_is_eq);
+    }
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
@@ -118,9 +121,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
-    }
-    if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
-        try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
     }
 
     // Numeric type checking operations (all numeric types)
@@ -163,11 +163,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         if (env.common.findIdent(is_eq)) |ident| {
             try low_level_map.put(ident, .num_is_eq);
         }
-    }
-
-    // Numeric inequality operation (Dec only)
-    if (env.common.findIdent("Builtin.Num.Dec.is_ne")) |ident| {
-        try low_level_map.put(ident, .num_is_ne);
     }
 
     // Numeric comparison operations (all numeric types)
@@ -304,20 +299,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        // Unary numeric operations
-                        .num_negate,
-                        .num_is_zero,
-                        .num_is_negative,
-                        .num_is_positive,
-                        .num_from_numeral,
-                        .num_from_int_digits,
-                        // Unary collection operations
-                        .list_len,
-                        .list_is_empty,
-                        .str_is_empty,
-                        .set_is_empty,
-                        => 1,
-                        else => 2, // Most numeric operations are binary
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .str_is_empty, .list_len, .list_is_empty, .set_is_empty => 1,
+                        else => 2, // Most operations are binary
                     };
 
                     const patterns_start = env.store.scratchTop("patterns");

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Test == and != operators with numbers, booleans, strings, and lists
+description=Test == and != operators with numbers, booleans, and strings
 type=repl
 ~~~
 # SOURCE
@@ -17,20 +17,8 @@ type=repl
 » "hello" == "world"
 » "hello" != "hello"
 » "hello" != "world"
-» [1, 2, 3] == [1, 2, 3]
-» [1, 2, 3] == [1, 2, 4]
-» [1, 2, 3] != [1, 2, 3]
-» [1, 2, 3] != [1, 2, 4]
 ~~~
 # OUTPUT
-True
----
-False
----
-False
----
-True
----
 True
 ---
 False

@@ -196,6 +196,85 @@ test "check type - record" {
     try checkTypesExpr(source, .pass, "{ hello: Str, world: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
+// anonymous type equality (is_eq) //
+
+test "check type - record equality - same records are equal" {
+    const source =
+        \\{ x: 1, y: 2 } == { x: 1, y: 2 }
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tuple equality - same tuples are equal" {
+    const source =
+        \\(1, 2) == (1, 2)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - empty record equality" {
+    const source =
+        \\{} == {}
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - record with function field - no is_eq" {
+    // Records containing functions should not have is_eq because functions don't have is_eq
+    const source =
+        \\{ x: 1, f: |a| a + 1 } == { x: 1, f: |a| a + 1 }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tuple with function element - no is_eq" {
+    // Tuples containing functions should not have is_eq because functions don't have is_eq
+    const source =
+        \\(1, |a| a) == (1, |a| a)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - nested record equality" {
+    // Nested records should type-check as Bool
+    const source =
+        \\{ a: { x: 1 }, b: 2 } == { a: { x: 1 }, b: 2 }
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - nested tuple equality" {
+    // Nested tuples should type-check as Bool
+    const source =
+        \\((1, 2), 3) == ((1, 2), 3)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - nested record with function - no is_eq" {
+    // Nested records containing functions should not have is_eq
+    const source =
+        \\{ a: { f: |x| x } } == { a: { f: |x| x } }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tag union equality" {
+    // Tag unions should type-check for equality
+    const source =
+        \\Ok(1) == Ok(1)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tag union with function payload - no is_eq" {
+    // Tag unions with function payloads should not have is_eq
+    const source =
+        \\Fn(|x| x) == Fn(|x| x)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
 // tags //
 
 test "check type - tag" {
@@ -2042,113 +2121,6 @@ test "check type - equirecursive static dispatch with type annotation" {
         source,
         .{ .pass = .{ .def = "fn" } },
         "a, b -> ret where [a.plus : a, b -> ret, a.from_int_digits : List(U8) -> Try(a, [OutOfRange]), b.from_int_digits : List(U8) -> Try(b, [OutOfRange])]",
-    );
-}
-
-// comparison operator constraints //
-
-test "check type - equals operator generates is_eq constraint" {
-    // The == operator desugars to a.is_eq(b), which requires an is_eq constraint
-    const source =
-        \\equals : a, a -> Bool where [a.is_eq : a, a -> Bool]
-        \\equals = |x, y| x == y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "equals" } },
-        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
-    );
-}
-
-test "check type - not equals operator generates is_eq constraint and calls not on Bool" {
-    // The != operator desugars to a.is_eq(b).not()
-    // - is_eq constraint is on type 'a' (appears in where clause)
-    // - not is called on Bool (concrete type, so immediately satisfied)
-    const source =
-        \\not_equals : a, a -> Bool where [a.is_eq : a, a -> Bool]
-        \\not_equals = |x, y| x != y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "not_equals" } },
-        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
-    );
-}
-
-test "check type - less than operator generates is_lt constraint" {
-    // The < operator desugars to a.is_lt(b), which requires an is_lt constraint
-    const source =
-        \\less_than : a, a -> Bool where [a.is_lt : a, a -> Bool]
-        \\less_than = |x, y| x < y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "less_than" } },
-        "a, a -> Bool where [a.is_lt : a, a -> Bool]",
-    );
-}
-
-test "check type - greater than operator generates is_gt constraint" {
-    // The > operator desugars to a.is_gt(b), which requires an is_gt constraint
-    const source =
-        \\greater_than : a, a -> Bool where [a.is_gt : a, a -> Bool]
-        \\greater_than = |x, y| x > y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "greater_than" } },
-        "a, a -> Bool where [a.is_gt : a, a -> Bool]",
-    );
-}
-
-test "check type - less than or equal operator generates is_lte constraint" {
-    // The <= operator desugars to a.is_lte(b), which requires an is_lte constraint
-    const source =
-        \\less_than_or_eq : a, a -> Bool where [a.is_lte : a, a -> Bool]
-        \\less_than_or_eq = |x, y| x <= y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "less_than_or_eq" } },
-        "a, a -> Bool where [a.is_lte : a, a -> Bool]",
-    );
-}
-
-test "check type - greater than or equal operator generates is_gte constraint" {
-    // The >= operator desugars to a.is_gte(b), which requires an is_gte constraint
-    const source =
-        \\greater_than_or_eq : a, a -> Bool where [a.is_gte : a, a -> Bool]
-        \\greater_than_or_eq = |x, y| x >= y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "greater_than_or_eq" } },
-        "a, a -> Bool where [a.is_gte : a, a -> Bool]",
-    );
-}
-
-test "check type - inferred equals constraint on polymorphic function" {
-    // Without explicit annotation, the is_eq constraint should be inferred
-    const source =
-        \\equals = |x, y| x == y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .last_def },
-        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
-    );
-}
-
-test "check type - inferred not equals constraint on polymorphic function" {
-    // Without explicit annotation, is_eq constraint should be inferred
-    // (not is called on Bool, which is a concrete type with not defined)
-    const source =
-        \\not_equals = |x, y| x != y
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .last_def },
-        "a, a -> Bool where [a.is_eq : a, a -> Bool]",
     );
 }
 

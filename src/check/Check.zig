@@ -3703,16 +3703,13 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_crash => |_| {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
             },
-            .s_return => |ret| {
+            .s_return => |_| {
                 // To implement early returns and make them usable, we need to:
                 // 1. Update the parse to allow for if statements (as opposed to if expressions)
                 // 2. Track function scope in czer and capture the function for this return in `s_return`
                 // 3. When type checking a lambda, capture all early returns
                 //    a. Unify all early returns together
                 //    b. Unify early returns with func return type
-
-                // Type check the return expression (important for type variable resolution)
-                does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
@@ -4160,97 +4157,64 @@ fn checkBinopExpr(
             // num, otherwise the propgate error
             _ = try self.unify(expr_var, lhs_var, env);
         },
-        .lt, .gt, .le, .ge, .eq, .ne => {
-            // Desugar comparison operators to method calls:
-            // - a < b  => a.is_lt(b)
-            // - a > b  => a.is_gt(b)
-            // - a <= b => a.is_lte(b)
-            // - a >= b => a.is_gte(b)
-            // - a == b => a.is_eq(b)
-            // - a != b => a.is_eq(b).not()  (requires TWO constraints: is_eq on a and not on Bool)
+        .lt, .gt, .le, .ge => {
+            // Ensure the operands are the same type
+            const result = try self.unify(lhs_var, rhs_var, env);
 
-            // First, unify lhs and rhs to ensure they're the same type
-            _ = try self.unify(lhs_var, rhs_var, env);
+            if (result.isOk()) {
+                const fresh_bool = try self.freshBool(env, expr_region);
+                _ = try self.unify(expr_var, fresh_bool, env);
+            } else {
+                try self.unifyWith(expr_var, .err, env);
+            }
+        },
+        .eq, .ne => {
+            // For == and !=, we need to check if the type implements is_eq
+            // (Both use is_eq because != desugars to is_eq().not())
+            // Create a static dispatch constraint for the is_eq method
 
-            // Get the comparison method name
-            const comparison_method_name = switch (binop.op) {
-                .lt => self.cir.is_lt_ident,
-                .gt => self.cir.is_gt_ident,
-                .le => self.cir.is_lte_ident,
-                .ge => self.cir.is_gte_ident,
-                .eq, .ne => self.cir.is_eq_ident,
-                else => unreachable,
-            };
+            // Ensure the operands are the same type
+            const lhs_rhs_result = try self.unify(lhs_var, rhs_var, env);
+            if (lhs_rhs_result.isProblem()) {
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                // Both == and != use is_eq because != desugars to is_eq().not()
+                const method_name = self.cir.is_eq_ident;
 
-            // Create the function type for the comparison: lhs_type, lhs_type -> Bool
-            // (using lhs_var twice since lhs and rhs are unified)
-            const args_range = try self.types.appendVars(&.{ lhs_var, lhs_var });
-            const bool_var = try self.freshBool(env, expr_region);
-            try env.var_pool.addVarToRank(bool_var, env.rank());
+                // Create the function type: lhs_type, rhs_type -> Bool
+                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
-            // Create the constraint function type
-            const comparison_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                .args = args_range,
-                .ret = bool_var,
-                .needs_instantiation = false,
-            } } }, env, expr_region);
-            try env.var_pool.addVarToRank(comparison_fn_var, env.rank());
+                // The return type is Bool
+                const ret_var = try self.freshBool(env, expr_region);
 
-            // Create the static dispatch constraint for the comparison method
-            const comparison_constraint = StaticDispatchConstraint{
-                .fn_name = comparison_method_name,
-                .fn_var = comparison_fn_var,
-                .origin = .desugared_binop,
-            };
-
-            // Add the comparison constraint to lhs_var
-            const comparison_constraint_range = try self.types.appendStaticDispatchConstraints(&.{comparison_constraint});
-            const constrained_lhs_var = try self.freshFromContent(
-                .{ .flex = Flex{ .name = null, .constraints = comparison_constraint_range } },
-                env,
-                expr_region,
-            );
-            try env.var_pool.addVarToRank(constrained_lhs_var, env.rank());
-            _ = try self.unify(constrained_lhs_var, lhs_var, env);
-
-            if (binop.op == .ne) {
-                // For !=, we need a second constraint for .not() on the Bool result
-                // a != b desugars to a.is_eq(b).not()
-
-                // Create the function type for not: Bool -> Bool
-                const not_args_range = try self.types.appendVars(&.{bool_var});
-                const not_ret_var = try self.freshBool(env, expr_region);
-                try env.var_pool.addVarToRank(not_ret_var, env.rank());
-
-                const not_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                    .args = not_args_range,
-                    .ret = not_ret_var,
+                // Create the constraint function type
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = args_range,
+                    .ret = ret_var,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
-                try env.var_pool.addVarToRank(not_fn_var, env.rank());
+                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
-                // Create the static dispatch constraint for not on Bool
-                const not_constraint = StaticDispatchConstraint{
-                    .fn_name = self.cir.not_ident,
-                    .fn_var = not_fn_var,
+                // Create the static dispatch constraint
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = method_name,
+                    .fn_var = constraint_fn_var,
                     .origin = .desugared_binop,
                 };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                // Add the not constraint to bool_var (the result of is_eq)
-                const not_constraint_range = try self.types.appendStaticDispatchConstraints(&.{not_constraint});
-                const constrained_bool_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = not_constraint_range } },
+                // Create a constrained flex and unify it with the lhs (receiver)
+                const constrained_var = try self.freshFromContent(
+                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
                     env,
                     expr_region,
                 );
-                try env.var_pool.addVarToRank(constrained_bool_var, env.rank());
-                _ = try self.unify(constrained_bool_var, bool_var, env);
+                try env.var_pool.addVarToRank(constrained_var, env.rank());
 
-                // The final result is the return type of not
-                try self.types.setVarRedirect(expr_var, not_ret_var);
-            } else {
-                // For other comparisons (==, <, >, <=, >=), result is Bool
-                try self.types.setVarRedirect(expr_var, bool_var);
+                _ = try self.unify(constrained_var, lhs_var, env);
+
+                // Set the expression to redirect to the return type (Bool)
+                _ = try self.unify(expr_var, ret_var, env);
             }
         },
         .@"and" => {
@@ -4823,8 +4787,51 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     );
                 }
             }
+        } else if (dispatcher_content == .structure and
+            (dispatcher_content.structure == .record or
+                dispatcher_content.structure == .tuple or
+                dispatcher_content.structure == .tag_union or
+                dispatcher_content.structure == .empty_record or
+                dispatcher_content.structure == .empty_tag_union))
+        {
+            // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
+            // only if all their components also support is_eq
+            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+            for (constraints) |constraint| {
+                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
+
+                // Check if this is a call to is_eq (anonymous types have implicit structural equality)
+                if (std.mem.eql(u8, constraint_fn_name_bytes, "is_eq")) {
+                    // Check if all components of this anonymous type support is_eq
+                    if (self.typeSupportsIsEq(dispatcher_content.structure)) {
+                        // All components support is_eq, unify return type with Bool
+                        const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                        const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                        if (mb_resolved_func) |resolved_func| {
+                            const region = self.getRegionAt(deferred_constraint.var_);
+                            const bool_var = try self.freshBool(env, region);
+                            _ = try self.unify(bool_var, resolved_func.ret, env);
+                        }
+                    } else {
+                        // Some component doesn't support is_eq (e.g., contains a function)
+                        try self.reportEqualityError(
+                            deferred_constraint.var_,
+                            constraint,
+                            env,
+                        );
+                    }
+                } else {
+                    // Other methods are not supported on anonymous types
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .not_nominal,
+                        env,
+                    );
+                }
+            }
         } else {
-            // If the root type is anything but a nominal type, push an error
+            // If the root type is anything but a nominal type or anonymous structural type, push an error
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
@@ -4844,6 +4851,75 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
     // Now that we've processed all constraints, reset the array
     env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+}
+
+/// Check if a structural type supports is_eq.
+/// A type supports is_eq if:
+/// - It's not a function type
+/// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
+/// - For nominal types, we assume they support is_eq (TODO: actually check for is_eq method)
+fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
+    return switch (flat_type) {
+        // Function types do not support is_eq
+        .fn_pure, .fn_effectful, .fn_unbound => false,
+
+        // Empty types trivially support is_eq
+        .empty_record, .empty_tag_union => true,
+
+        // Records support is_eq if all field types support is_eq
+        .record => |record| {
+            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!self.varSupportsIsEq(field_var)) return false;
+            }
+            return true;
+        },
+
+        // Tuples support is_eq if all element types support is_eq
+        .tuple => |tuple| {
+            const elems = self.types.sliceVars(tuple.elems);
+            for (elems) |elem_var| {
+                if (!self.varSupportsIsEq(elem_var)) return false;
+            }
+            return true;
+        },
+
+        // Tag unions support is_eq if all payload types support is_eq
+        .tag_union => |tag_union| {
+            const tags_slice = self.types.getTagsSlice(tag_union.tags);
+            for (tags_slice.items(.args)) |tag_args| {
+                const args = self.types.sliceVars(tag_args);
+                for (args) |arg_var| {
+                    if (!self.varSupportsIsEq(arg_var)) return false;
+                }
+            }
+            return true;
+        },
+
+        // Nominal types: TODO: actually check if they have an is_eq method
+        // For now, assume they do (numbers, Bool, Str, etc. all have is_eq)
+        .nominal_type => true,
+
+        // Unbound records need to be resolved first
+        .record_unbound => true, // TODO: check resolved type
+    };
+}
+
+/// Check if a type variable supports is_eq by resolving it and checking its content
+fn varSupportsIsEq(self: *Self, var_: Var) bool {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |s| self.typeSupportsIsEq(s),
+        // Flex/rigid vars could be anything, assume they support is_eq for now
+        // (the actual constraint will be checked when the type is known)
+        .flex, .rigid => true,
+        // Aliases: check the underlying type
+        .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
+        // Recursion vars: assume they support is_eq (recursive types like List are ok)
+        .recursion_var => true,
+        // Error types: allow them to proceed
+        .err => true,
+    };
 }
 
 /// Mark a constraint function's return type as error
@@ -4888,6 +4964,26 @@ fn reportConstraintError(
         } },
     };
     _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
+
+    try self.markConstraintFunctionAsError(constraint, env);
+}
+
+/// Report an error when an anonymous type doesn't support equality
+fn reportEqualityError(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) !void {
+    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const equality_problem = problem.Problem{ .static_dispach = .{
+        .type_does_not_support_equality = .{
+            .dispatcher_var = dispatcher_var,
+            .dispatcher_snapshot = snapshot,
+            .fn_var = constraint.fn_var,
+        },
+    } };
+    _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
 
     try self.markConstraintFunctionAsError(constraint, env);
 }
