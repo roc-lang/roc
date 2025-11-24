@@ -196,6 +196,85 @@ test "check type - record" {
     try checkTypesExpr(source, .pass, "{ hello: Str, world: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
+// anonymous type equality (is_eq) //
+
+test "check type - record equality - same records are equal" {
+    const source =
+        \\{ x: 1, y: 2 } == { x: 1, y: 2 }
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tuple equality - same tuples are equal" {
+    const source =
+        \\(1, 2) == (1, 2)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - empty record equality" {
+    const source =
+        \\{} == {}
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - record with function field - no is_eq" {
+    // Records containing functions should not have is_eq because functions don't have is_eq
+    const source =
+        \\{ x: 1, f: |a| a + 1 } == { x: 1, f: |a| a + 1 }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tuple with function element - no is_eq" {
+    // Tuples containing functions should not have is_eq because functions don't have is_eq
+    const source =
+        \\(1, |a| a) == (1, |a| a)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - nested record equality" {
+    // Nested records should type-check as Bool
+    const source =
+        \\{ a: { x: 1 }, b: 2 } == { a: { x: 1 }, b: 2 }
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - nested tuple equality" {
+    // Nested tuples should type-check as Bool
+    const source =
+        \\((1, 2), 3) == ((1, 2), 3)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - nested record with function - no is_eq" {
+    // Nested records containing functions should not have is_eq
+    const source =
+        \\{ a: { f: |x| x } } == { a: { f: |x| x } }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tag union equality" {
+    // Tag unions should type-check for equality
+    const source =
+        \\Ok(1) == Ok(1)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tag union with function payload - no is_eq" {
+    // Tag unions with function payloads should not have is_eq
+    const source =
+        \\Fn(|x| x) == Fn(|x| x)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
 // tags //
 
 test "check type - tag" {

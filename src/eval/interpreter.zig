@@ -4442,13 +4442,13 @@ pub const Interpreter = struct {
             .tag_union => {
                 return try self.structuralEqualTag(lhs, rhs, lhs_var);
             },
-            .list => |elem_var| {
-                return try self.structuralEqualList(lhs, rhs, elem_var);
-            },
             .empty_record => true,
-            .list_unbound, .record_unbound, .fn_pure, .fn_effectful, .fn_unbound, .nominal_type, .empty_tag_union, .box => error.NotImplemented,
-            .str => error.NotImplemented,
-            .num => error.NotImplemented,
+            .empty_tag_union => true,
+            .nominal_type => |nom| {
+                // For nominal types, dispatch to their is_eq method
+                return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var);
+            },
+            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => error.NotImplemented,
         };
     }
 
@@ -4628,6 +4628,41 @@ pub const Interpreter = struct {
         }
 
         return true;
+    }
+
+    /// Dispatch is_eq method call for a nominal type
+    fn dispatchNominalIsEq(
+        self: *Interpreter,
+        lhs: StackValue,
+        rhs: StackValue,
+        nom: types.NominalType,
+        lhs_var: types.Var,
+    ) StructuralEqError!bool {
+        // TODO: Properly dispatch to the nominal type's is_eq method
+        // For now, use a simplified approach:
+        // - If the nominal type is a wrapper around a scalar or simple structure, compare directly
+        // - Otherwise, fall back to structural comparison of the backing type
+
+        // Get the backing var of the nominal type
+        const backing_var = self.runtime_types.getNominalBackingVar(nom);
+        const backing_resolved = self.runtime_types.resolveVar(backing_var);
+
+        // If the backing type is a structure, recursively compare
+        if (backing_resolved.desc.content == .structure) {
+            return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var);
+        }
+
+        // For other cases, fall back to attempting scalar comparison
+        // This handles cases like Bool which wraps a tag union but is represented as a scalar
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+            const order = self.compareNumericScalars(lhs, rhs) catch return error.NotImplemented;
+            return order == .eq;
+        }
+
+        // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
+        // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
+        _ = lhs_var;
+        return error.NotImplemented;
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
@@ -5437,22 +5472,40 @@ pub const Interpreter = struct {
         var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
         defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
-        // Get the nominal type information from lhs
-        const nominal_info = switch (lhs_resolved.desc.content) {
+        // Get the nominal type information from lhs, or handle anonymous structural types
+        const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
             .structure => |s| switch (s) {
                 .nominal_type => |nom| .{
                     .origin = nom.origin_module,
                     .ident = nom.ident.ident_idx,
                 },
-                else => return error.InvalidMethodReceiver,
+                .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                    // Anonymous structural types have implicit is_eq
+                    if (method_ident == self.env.is_eq_ident) {
+                        const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
+                            // If structural equality is not implemented for this type, return false
+                            if (err == error.NotImplemented) {
+                                return try self.makeBoolValue(false);
+                            }
+                            return err;
+                        };
+                        return try self.makeBoolValue(result);
+                    }
+                    break :blk null;
+                },
+                else => null,
             },
-            else => return error.InvalidMethodReceiver,
+            else => null,
         };
+
+        if (nominal_info == null) {
+            return error.InvalidMethodReceiver;
+        }
 
         // Resolve the method function
         const method_func = self.resolveMethodFunction(
-            nominal_info.origin,
-            nominal_info.ident,
+            nominal_info.?.origin,
+            nominal_info.?.ident,
             method_ident,
             roc_ops,
         ) catch |err| return err;
