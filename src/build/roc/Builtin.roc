@@ -15,6 +15,23 @@ Builtin :: [].{
 
 		is_eq : List(item), List(item) -> Bool
 		    where [item.is_eq : item, item -> Bool]
+		is_eq = |self, other| {
+		    if self.len() != other.len() {
+				return False
+			}
+
+			var $index = 0
+
+			while $index < self.len() {
+			    if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
+					return False
+				}
+
+				$index = $index + 1
+			}
+
+			True
+		}
 
 		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| List.get(list, 0)
