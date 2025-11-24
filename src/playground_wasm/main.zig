@@ -961,7 +961,6 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .diagnostics = serialized_ptr.diagnostics,
                 .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
                 .evaluation_order = null,
-                .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
                 .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
                 .try_ident = common.findIdent("Try") orelse unreachable,
                 .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,

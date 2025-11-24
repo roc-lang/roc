@@ -79,7 +79,6 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .evaluation_order = null,
         // Well-known identifiers for type checking - look them up in the deserialized common env
         // These must exist in the Builtin module which defines them
-        .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
         .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
         .try_ident = common.findIdent("Try") orelse unreachable,
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,

@@ -438,7 +438,6 @@ pub const Expr = union(enum) {
         num_rem_by, // All numeric types
 
         // Numeric parsing operations
-        num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
         num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
     };

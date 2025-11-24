@@ -2109,9 +2109,7 @@ test "check type - equirecursive static dispatch with type annotation" {
     // with the same constraint structure as the motivating example.
     const source =
         \\fn : a, b -> ret where [
-        \\    a.plus : a, b -> ret,
-        \\    a.from_int_digits : List(U8) -> Try(a, [OutOfRange]),
-        \\    b.from_int_digits : List(U8) -> Try(b, [OutOfRange])
+        \\    a.plus : a, b -> ret
         \\]
         \\fn = |a, b| (|x| x.plus(b))(a)
     ;
@@ -2120,7 +2118,7 @@ test "check type - equirecursive static dispatch with type annotation" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "fn" } },
-        "a, b -> ret where [a.plus : a, b -> ret, a.from_int_digits : List(U8) -> Try(a, [OutOfRange]), b.from_int_digits : List(U8) -> Try(b, [OutOfRange])]",
+        "a, b -> ret where [a.plus : a, b -> ret]",
     );
 }
 

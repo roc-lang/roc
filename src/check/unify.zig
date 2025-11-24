@@ -1116,53 +1116,6 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
-    /// Check if a nominal type has a from_int_digits method by unifying its signature
-    /// with the expected type: List(U8) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromIntDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.from_int_digits_ident) orelse return false;
-        const resolved = self.types_store.resolveVar(method_var);
-
-        const func = switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => structure.fn_pure,
-                .fn_effectful => structure.fn_effectful,
-                .fn_unbound => structure.fn_unbound,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        const ret_desc = self.types_store.resolveVar(func.ret);
-        const ret_nominal = switch (ret_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .nominal_type => structure.nominal_type,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (!self.isBuiltinTryNominal(ret_nominal)) return false;
-        const ret_args = self.types_store.sliceVars(ret_nominal.vars.nonempty);
-        if (ret_args.len < 3) return false;
-
-        const args_slice = self.types_store.sliceVars(func.args);
-        if (args_slice.len != 1) return false;
-
-        const list_u8_var = try self.createListU8Var();
-        self.unifyGuarded(args_slice[0], list_u8_var) catch return false;
-
-        const self_ret_var = try self.createNominalInstanceVar(nominal_type);
-        self.unifyGuarded(ret_args[1], self_ret_var) catch return false;
-
-        const try_error_var = try self.createOutOfRangeTagUnion();
-        self.unifyGuarded(ret_args[2], try_error_var) catch return false;
-
-        return true;
-    }
-
     /// Check if a nominal type has a from_dec_digits method by unifying its signature
     /// with the expected type: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
     /// Returns true if unification succeeds, false otherwise.
