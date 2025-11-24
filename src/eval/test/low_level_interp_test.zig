@@ -222,6 +222,60 @@ test "e_low_level_lambda - Str.is_empty in conditional" {
     try testing.expectEqualStrings("True", value);
 }
 
+test "e_low_level_lambda - Str.concat with two non-empty strings" {
+    const src =
+        \\x = Str.concat("hello", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"helloworld\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with empty and non-empty string" {
+    const src =
+        \\x = Str.concat("", "test")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"test\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with non-empty and empty string" {
+    const src =
+        \\x = Str.concat("test", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"test\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with two empty strings" {
+    const src =
+        \\x = Str.concat("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with special characters" {
+    const src =
+        \\x = Str.concat("hello ", "world!")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world!\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with longer strings" {
+    const src =
+        \\x = Str.concat("This is a longer string that contains about one hundred characters for testing concatenation.", " This is the second string that also has many characters in it for testing longer string operations.")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"This is a longer string that contains about one hundred characters for testing concatenation. This is the second string that also has many characters in it for testing longer string operations.\"", value);
+}
+
 test "e_low_level_lambda - List.concat with two non-empty lists" {
     const src =
         \\x = List.concat([1, 2], [3, 4])
