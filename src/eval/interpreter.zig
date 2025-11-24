@@ -389,7 +389,14 @@ pub const Interpreter = struct {
 
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
     pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
-        return try self.evalExprMinimal(expr_idx, roc_ops, null);
+        return self.evalExprMinimal(expr_idx, roc_ops, null) catch |err| {
+            // EarlyReturn should never escape to the top level - the compiler should
+            // catch `return` outside of function and convert it to a crash before evaluation.
+            if (err == error.EarlyReturn) {
+                unreachable;
+            }
+            return err;
+        };
     }
 
     pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {

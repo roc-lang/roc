@@ -305,9 +305,17 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
                         // Unary numeric operations
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits,
+                        .num_negate,
+                        .num_is_zero,
+                        .num_is_negative,
+                        .num_is_positive,
+                        .num_from_numeral,
+                        .num_from_int_digits,
                         // Unary collection operations
-                        .list_len, .list_is_empty, .str_is_empty, .set_is_empty,
+                        .list_len,
+                        .list_is_empty,
+                        .str_is_empty,
+                        .set_is_empty,
                         => 1,
                         else => 2, // Most numeric operations are binary
                     };

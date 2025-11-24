@@ -1300,6 +1300,32 @@ pub const ReportBuilder = struct {
 
         // Create actual tag str
         const actual_content = self.snapshots.getContent(types.actual_snapshot);
+
+        // Handle case where expected type is not a tag union (e.g., record-backed nominal type)
+        const expected_content = self.snapshots.getContent(types.expected_snapshot);
+        if (expected_content != .structure or expected_content.structure != .tag_union) {
+            // Fall back to generic type mismatch for non-tag-union nominal types
+            self.snapshot_writer.resetContext();
+            try self.snapshot_writer.write(types.actual_snapshot);
+            const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+
+            self.snapshot_writer.resetContext();
+            try self.snapshot_writer.write(types.expected_snapshot);
+            const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+
+            try report.document.addText("I'm having trouble with this type:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("    Found:    ");
+            try report.document.addAnnotated(actual_type, .type_variable);
+            try report.document.addLineBreak();
+            try report.document.addText("    Expected: ");
+            try report.document.addAnnotated(expected_type, .type_variable);
+
+            return report;
+        }
+
+        // Handle tag union case
         std.debug.assert(actual_content == .structure);
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
@@ -1308,10 +1334,7 @@ pub const ReportBuilder = struct {
         try self.snapshot_writer.writeTag(actual_tag, types.actual_snapshot);
         const actual_tag_str = try report.addOwnedString(self.snapshot_writer.get());
 
-        // Create expected tag str
-        const expected_content = self.snapshots.getContent(types.expected_snapshot);
-        std.debug.assert(expected_content == .structure);
-        std.debug.assert(expected_content.structure == .tag_union);
+        // Create expected tag str (we already verified it's a tag union above)
         const expected_num_tags_str = expected_content.structure.tag_union.tags.len();
 
         // Add description
