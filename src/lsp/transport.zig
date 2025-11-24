@@ -126,6 +126,8 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             var offset: usize = 0;
             while (offset < bytes.len) {
                 const written = try self.writeSome(bytes[offset..]);
+                if (written == 0) return error.UnexpectedWriterFailure;
+                offset += written;
                 offset += written;
             }
         }
