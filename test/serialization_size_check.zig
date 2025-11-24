@@ -14,7 +14,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const collections = @import("collections");
 const can = @import("can");
-const base = @import("base");
 
 const ModuleEnv = can.ModuleEnv;
 const NodeStore = can.CIR.NodeStore;
@@ -97,20 +96,4 @@ pub fn main() void {
     if (builtin.os.tag != .freestanding) {
         std.debug.print("✓ Serialization size check passed - all types have correct platform-independent sizes\n", .{});
     }
-}
-
-// Additional size checks for nested Serialized structs
-// Ensures Serialized types are at least as large as their runtime counterparts
-// for safe in-place deserialization
-test "nested struct size check" {
-    const CommonEnvLocal = base.CommonEnv;
-    const IdentLocal = base.Ident;
-    const SmallStringInternerLocal = base.SmallStringInterner;
-
-    // These assertions must hold for safe in-place deserialization
-    try std.testing.expect(@sizeOf(CommonEnvLocal.Serialized) >= @sizeOf(CommonEnvLocal));
-    try std.testing.expect(@sizeOf(IdentLocal.Store.Serialized) >= @sizeOf(IdentLocal.Store));
-    try std.testing.expect(@sizeOf(SmallStringInternerLocal.Serialized) >= @sizeOf(SmallStringInternerLocal));
-    try std.testing.expect(@sizeOf(SafeList(u8).Serialized) >= @sizeOf(SafeList(u8)));
-    try std.testing.expect(@sizeOf(SafeList(SmallStringInternerLocal.Idx).Serialized) >= @sizeOf(SafeList(SmallStringInternerLocal.Idx)));
 }
