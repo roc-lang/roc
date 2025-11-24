@@ -7,6 +7,21 @@ The experimental LSP currently only holds the scaffolding for the incoming imple
 It doesn't implement any LSP capabilities yet except `initialized` and `exit` which allows it
 to be connected to an editor and verify it's actually running.
 
+## How to implement new LSP capabilities
+The core functionnalities of the LSP have been implemented in a way so that `transport.zig` and
+`protocol.zig` shouldn't have to be modified as more capabilities are added. When handling a new
+LSP method, like `textDocument/completion` for example, the handler should be added in the `handlers`
+directory and its call should be added in `server.zig` like this :
+```zig
+const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
+    .{ "initialize", &InitializeHandler.call },
+    .{ "shutdown", &ShutdownHandler.call },
+    .{ "textDocument/completion", &CompletionHandler.call },
+});
+```
+The `Server` holds the state so it will be responsible of knowing the project and how different parts
+interact. This is then accessible by every handler.
+
 ## Starting the server
 Build the Roc toolchain and run:
 ```bash
@@ -24,12 +39,12 @@ Passing the `--debug-transport` flag will create a log file in your OS tmp folde
 systems). A mirror of the raw JSON-RPC traffic will be appended to the log file. Watching the file 
 will allow an user to see incoming and outgoing message between the server and the editor
 ```bash
-tail -f /tmp/roc-lsp-debug-1763905495474.log 
+tail -f /tmp/roc-lsp-debug.log 
 ---
-[1763905495476] OUT (127 bytes)
-{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":"utf-16"},"serverInfo":{"name":"roc-lsp","version":null}}}
+[1763992681773] OUT (128 bytes)
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":"utf-16"},"serverInfo":{"name":"roc-lsp","version":"0.1"}}}
 ---
-[1763905495529] IN (52 bytes)
+[1763992681828] IN (52 bytes)
 {"jsonrpc":"2.0","method":"initialized","params":{}}
 ---
 ```
@@ -57,7 +72,6 @@ if not configs.roc_lsp then
   }
 end
 
--- If using Mason, this next part goes other the Mason setup
 lspconfig.roc_lsp.setup({
   capabilities = require("cmp_nvim_lsp").default_capabilities(),
 })
