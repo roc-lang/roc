@@ -8,8 +8,10 @@ type=repl
 » return 42
 ~~~
 # OUTPUT
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **return** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**RETURN OUTSIDE FUNCTION**
+The **return** keyword can only be used inside a function body.
+
+Use `return` to exit early from a function and provide a value. For example:
+    foo = |x| { if x < 0 { return Err(NegativeInput) }; Ok(x) }
 # PROBLEMS
 NIL
