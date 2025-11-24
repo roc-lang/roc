@@ -16,6 +16,11 @@ const Diagnostic = AST.Diagnostic;
 
 const sexpr = base.sexpr;
 
+/// When storing optional indices/values where 0 is a valid value, we add this offset
+/// to distinguish "value is 0" from "value is null". This is a common pattern when
+/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
+const OPTIONAL_VALUE_OFFSET: u32 = 1;
+
 const NodeStore = @This();
 
 gpa: std.mem.Allocator,
@@ -440,9 +445,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.region = a.region;
             node.data.lhs = a.name;
             node.data.rhs = @intFromEnum(a.anno);
-            if (a.where) |w| {
-                node.main_token = @intFromEnum(w);
-            }
+            node.main_token = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -1301,7 +1304,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
                 .name = node.data.lhs,
                 .anno = @enumFromInt(node.data.rhs),
-                .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
+                .where = if (node.main_token != 0) @enumFromInt(node.main_token - OPTIONAL_VALUE_OFFSET) else null,
             } };
         },
         .malformed => {

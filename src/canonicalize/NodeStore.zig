@@ -24,6 +24,11 @@ const Ident = base.Ident;
 const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
 
+/// When storing optional indices/values where 0 is a valid value, we add this offset
+/// to distinguish "value is 0" from "value is null". This is a common pattern when
+/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
+const OPTIONAL_VALUE_OFFSET: u32 = 1;
+
 const NodeStore = @This();
 
 gpa: Allocator,
@@ -719,10 +724,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_dot_access => {
-            // Subtract 1 to undo the +1 offset used during storage
-            // This allows distinguishing empty args {start:0, len:0} from null args
             const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(node.data_3 - 1);
+                const packed_span = FunctionArgs.fromU32(node.data_3 - OPTIONAL_VALUE_OFFSET);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -1162,7 +1165,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
+            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
         } },
         .ty_tag => return CIR.TypeAnno{ .tag = .{
             .name = @bitCast(node.data_1),
@@ -1571,13 +1574,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @intFromEnum(e.receiver);
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
-                // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
-                // Add 1 to distinguish empty args {start:0, len:0} (becomes 1) from null args (remains 0)
                 std.debug.assert(FunctionArgs.canFit(args.span));
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                node.data_3 = packed_span.toU32() + 1;
+                node.data_3 = packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
             } else {
-                node.data_3 = 0; // No args (null)
+                node.data_3 = 0;
             }
         },
         .e_runtime_error => |e| {
@@ -2139,7 +2140,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .tag_union => |tu| {
             node.data_1 = tu.tags.span.start;
             node.data_2 = tu.tags.span.len;
-            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) else 0;
+            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0;
             node.tag = .ty_tag_union;
         },
         .tag => |t| {
