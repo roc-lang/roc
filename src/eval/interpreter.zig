@@ -681,6 +681,15 @@ pub const Interpreter = struct {
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
                         },
+                        .s_dbg => |dbg_stmt| {
+                            const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
+                            const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                            const value = try self.evalExprMinimal(dbg_stmt.expr, roc_ops, inner_rt_var);
+                            defer value.decref(&self.runtime_layout_store, roc_ops);
+                            const rendered = try self.renderValueRocWithType(value, inner_rt_var);
+                            defer self.allocator.free(rendered);
+                            roc_ops.dbg(rendered);
+                        },
                         .s_for => |for_stmt| {
                             // Evaluate the list expression
                             const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
