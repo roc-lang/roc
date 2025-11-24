@@ -8,7 +8,7 @@ It doesn't implement any LSP capabilities yet except `initialized` and `exit` wh
 to be connected to an editor and verify it's actually running.
 
 ## How to implement new LSP capabilities
-The core functionnalities of the LSP have been implemented in a way so that `transport.zig` and
+The core functionalities of the LSP have been implemented in a way so that `transport.zig` and
 `protocol.zig` shouldn't have to be modified as more capabilities are added. When handling a new
 LSP method, like `textDocument/completion` for example, the handler should be added in the `handlers`
 directory and its call should be added in `server.zig` like this :
