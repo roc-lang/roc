@@ -341,7 +341,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_is_empty, .str_is_empty, .set_is_empty => 1,
                         else => 2, // Most numeric operations are binary
                     };
 
