@@ -275,6 +275,14 @@ test "check type - tag union with function payload - no is_eq" {
     try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
 
+test "check type - direct lambda equality - no is_eq" {
+    // Lambdas/functions should not support equality comparison
+    const source =
+        \\|x| x == |x| x
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
 // anonymous type inequality (desugars to is_eq().not()) //
 
 test "check type - (a == b) desugars to exactly a.is_eq(b)" {
@@ -335,6 +343,14 @@ test "check type - tuple with function element - no inequality" {
     // Tuples containing functions should not support != because they don't have is_eq
     const source =
         \\(1, |a| a) != (1, |a| a)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - direct lambda inequality - no is_eq" {
+    // Lambdas/functions should not support inequality comparison (requires is_eq)
+    const source =
+        \\|x| x != |x| x
     ;
     try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
