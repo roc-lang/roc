@@ -1088,6 +1088,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
 
             return statement_idx;
         },
+        .KwWhile => {
+            const start = self.pos;
+            self.advance();
+            const cond = try self.parseExpr();
+            const body = try self.parseExpr();
+            const statement_idx = try self.store.addStatement(.{ .@"while" = .{
+                .region = .{ .start = start, .end = self.pos },
+                .cond = cond,
+                .body = body,
+            } });
+
+            return statement_idx;
+        },
         .KwCrash => {
             const start = self.pos;
             self.advance();
@@ -1207,11 +1220,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             const start = self.pos;
             if (statementType == .top_level or statementType == .in_associated_block) {
                 const header = try self.parseTypeHeader();
-                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
+                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual or self.peek() == .OpDoubleColon) .nominal else .alias;
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
@@ -2089,17 +2102,22 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             const condition = try self.parseExpr();
             const then = try self.parseExpr();
             if (self.peek() != .KwElse) {
-                // Point to the if keyword for missing else error
-                return try self.pushMalformed(AST.Expr.Idx, .no_else, start);
+                // Statement form: if without else
+                expr = try self.store.addExpr(.{ .if_without_else = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .condition = condition,
+                    .then = then,
+                } });
+            } else {
+                self.advance();
+                const else_idx = try self.parseExpr();
+                expr = try self.store.addExpr(.{ .if_then_else = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .condition = condition,
+                    .then = then,
+                    .@"else" = else_idx,
+                } });
             }
-            self.advance();
-            const else_idx = try self.parseExpr();
-            expr = try self.store.addExpr(.{ .if_then_else = .{
-                .region = .{ .start = start, .end = self.pos },
-                .condition = condition,
-                .then = then,
-                .@"else" = else_idx,
-            } });
         },
         .KwMatch => {
             self.advance();

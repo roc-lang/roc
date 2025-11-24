@@ -15,32 +15,24 @@ type=expr
     Left(1),
     Right(2),
     Some(Ok(Just(42))),
-    Result(Ok(Some(True))),
+    Try(Ok(Some(True))),
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:9:5:9:5
+TYPE DOES NOT HAVE METHODS - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The eighth and ninth elements in this list have incompatible types:
-**tag_applications_simple.md:9:5:**
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `from_numeral` on a type that doesn't support methods:
+**tag_applications_simple.md:2:10:2:12:**
 ```roc
-    Right(2),
-    Some(Ok(Just(42))),
+    Some(42),
 ```
-    ^^^^^^^^
-    ^^^^^^^^^^^^^^^^^^
+         ^^
 
-The eighth element has this type:
-    _[Err(Str), Just(Num(_size)), Left(Num(_size2)), None, Nothing, Ok(Str), Some(Num(_size3)), Right(Num(_size4))]_others_
+This type doesn't support methods:
+    _[Ok([Just(_a)]_others)]_others2 where [[Ok([Just(b)]c)]d.from_numeral : [Ok([Just(b)]c)]d]_
 
-However, the ninth element has this type:
-    _[Some([Ok([Just(Num(_size))]_others)]_others2)][Err(Str), Just(Num(_size2)), Left(Num(_size3)), None, Nothing, Ok(Str), Right(Num(_size4))]_others3_
 
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -91,7 +83,7 @@ EndOfFile,
 				(e-tag (raw "Just"))
 				(e-int (raw "42")))))
 	(e-apply
-		(e-tag (raw "Result"))
+		(e-tag (raw "Try"))
 		(e-apply
 			(e-tag (raw "Ok"))
 			(e-apply
@@ -110,7 +102,7 @@ EndOfFile,
 	Left(1),
 	Right(2),
 	Some(Ok(Just(42))),
-	Result(Ok(Some(True))),
+	Try(Ok(Some(True))),
 ]
 ~~~
 # CANONICALIZE
@@ -146,7 +138,7 @@ EndOfFile,
 						(e-tag (name "Just")
 							(args
 								(e-num (value "42"))))))))
-		(e-tag (name "Result")
+		(e-tag (name "Try")
 			(args
 				(e-tag (name "Ok")
 					(args
@@ -156,5 +148,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List([Err(Str), Just(a), Left(b), None, Nothing, Ok(Str), Right(c), Some([Ok([Just(d)]_others)]_others2), Try([Ok([Some([True]_others3)]_others4)]_others5)]_others6) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 ~~~

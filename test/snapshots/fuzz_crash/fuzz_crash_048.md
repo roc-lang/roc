@@ -10,7 +10,7 @@ bar : Thing(a, b, _)
 biz : (a, b, c)
 add_one : (
 U8, U16 -> U32)
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
@@ -41,7 +41,7 @@ The type _String_ is not declared in this scope.
 This type is referenced here:
 **fuzz_crash_048.md:6:14:6:20:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
 
@@ -97,7 +97,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "String")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-record)
 					(_))))
 		(s-type-anno (name "tag_tuple")
@@ -115,7 +115,7 @@ bar : Thing(a, b, _)
 biz : (a, b, c)
 add_one : (
 	U8, U16 -> U32)
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
 # CANONICALIZE
@@ -155,7 +155,7 @@ tag_tuple : Value((a, b, c))
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let
@@ -168,17 +168,17 @@ tag_tuple : Value((a, b, c))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "U64"))
 		(patt (type "Error"))
 		(patt (type "(a, b, c)"))
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(patt (type "U8, U16 -> U32"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "U64"))
 		(expr (type "Error"))
 		(expr (type "(a, b, c)"))
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(expr (type "U8, U16 -> U32"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "Error"))))
 ~~~

@@ -51,7 +51,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -79,7 +79,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -93,7 +93,18 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
-    try std.testing.expectEqual(expected_int, result.asI128());
+    // Check if this is an integer or Dec
+    const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+        // Suffixed integer literals (e.g., 255u8, 42i32) remain as integers
+        break :blk result.asI128();
+    } else blk: {
+        // Unsuffixed numeric literals default to Dec, so extract the integer value
+        const dec_value = result.asDec();
+        const RocDec = builtins.dec.RocDec;
+        // Convert Dec to integer by dividing by the decimal scale factor
+        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+    };
+    try std.testing.expectEqual(expected_int, int_value);
 }
 
 /// Helper function to run an expression and expect a boolean result.
@@ -105,7 +116,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -119,16 +130,19 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
-    const actual = switch (result.layout.tag) {
-        .scalar => switch (result.layout.data.scalar.tag) {
-            .bool => result.asBool(),
-            .int => result.asI128() != 0,
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    };
-
-    try std.testing.expectEqual(expected_bool, actual);
+    // For boolean results, read the underlying byte value
+    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+        // Boolean represented as integer (discriminant)
+        const int_val = result.asI128();
+        const bool_val = int_val != 0;
+        try std.testing.expectEqual(expected_bool, bool_val);
+    } else {
+        // Try reading as raw byte (for boolean tag values)
+        std.debug.assert(result.ptr != null);
+        const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
+        const bool_val = bool_ptr.* != 0;
+        try std.testing.expectEqual(expected_bool, bool_val);
+    }
 }
 
 /// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
@@ -140,7 +154,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -172,7 +186,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -206,7 +220,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -236,7 +250,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -285,7 +299,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -311,11 +325,17 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         // Get the element at the specified index
         const element = try tuple_accessor.getElement(@intCast(expected_element.index));
 
-        // Verify it's an integer
-        try std.testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
-
-        // Get the integer value from the element
-        const int_val = element.asI128();
+        // Check if this is an integer or Dec
+        try std.testing.expect(element.layout.tag == .scalar);
+        const int_val = if (element.layout.data.scalar.tag == .int) blk: {
+            // Suffixed integer literals remain as integers
+            break :blk element.asI128();
+        } else blk: {
+            // Unsuffixed numeric literals default to Dec
+            const dec_value = element.asDec();
+            const RocDec = builtins.dec.RocDec;
+            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        };
         try std.testing.expectEqual(expected_element.value, int_val);
     }
 }
@@ -329,7 +349,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -360,7 +380,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
             if (std.mem.eql(u8, field_name, expected_field.name)) {
                 found = true;
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
-                try std.testing.expect(field_layout.tag == .scalar and field_layout.data.scalar.tag == .int);
+                try std.testing.expect(field_layout.tag == .scalar);
 
                 const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
@@ -369,7 +389,16 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     .ptr = field_ptr,
                     .is_initialized = true,
                 };
-                const int_val = field_value.asI128();
+                // Check if this is an integer or Dec
+                const int_val = if (field_layout.data.scalar.tag == .int) blk: {
+                    // Suffixed integer literals remain as integers
+                    break :blk field_value.asI128();
+                } else blk: {
+                    // Unsuffixed numeric literals default to Dec
+                    const dec_value = field_value.asDec();
+                    const RocDec = builtins.dec.RocDec;
+                    break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+                };
                 try std.testing.expectEqual(expected_field.value, int_val);
                 break;
             }
@@ -379,6 +408,118 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 }
 
 /// Parse and canonicalize an expression.
+/// Rewrite deferred numeric literals to match their inferred types
+/// This is similar to what ComptimeEvaluator does but for test expressions
+fn rewriteDeferredNumericLiterals(env: *ModuleEnv, types_store: *types.Store) !void {
+    const literals = env.deferred_numeric_literals.items.items;
+
+    for (literals) |literal| {
+        // Resolve the type variable to get the concrete type
+        const resolved = types_store.resolveVar(literal.type_var);
+        const content = resolved.desc.content;
+
+        // Extract the nominal type if this is a structure
+        const nominal_type = switch (content) {
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nom| nom,
+                else => continue, // Not a nominal type
+            },
+            else => continue, // Not a structure
+        };
+
+        // Extract short type name (e.g., "I64" from "Num.I64")
+        const type_name_bytes = env.getIdent(nominal_type.ident.ident_idx);
+        const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
+            type_name_bytes[dot_idx + 1 ..]
+        else
+            type_name_bytes;
+
+        const num_lit_info = literal.constraint.num_literal orelse continue;
+
+        // Rewrite the expression
+        try rewriteNumericLiteralExpr(env, literal.expr_idx, short_type_name, num_lit_info);
+    }
+}
+
+/// Rewrite a single numeric literal expression to match its inferred type
+fn rewriteNumericLiteralExpr(
+    env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    type_name: []const u8,
+    num_lit_info: types.NumeralInfo,
+) !void {
+    const current_expr = env.store.getExpr(expr_idx);
+
+    // Extract the f64 value from the current expression
+    const f64_value: f64 = switch (current_expr) {
+        .e_dec => |dec| blk: {
+            // Dec is stored as i128 scaled by 10^18
+            const scaled = @as(f64, @floatFromInt(dec.value.num));
+            break :blk scaled / 1e18;
+        },
+        .e_dec_small => |small| blk: {
+            // Small dec has numerator and denominator_power_of_ten
+            const numerator = @as(f64, @floatFromInt(small.value.numerator));
+            const power: u8 = small.value.denominator_power_of_ten;
+            var divisor: f64 = 1.0;
+            var i: u8 = 0;
+            while (i < power) : (i += 1) {
+                divisor *= 10.0;
+            }
+            break :blk numerator / divisor;
+        },
+        else => return, // Not a dec literal - nothing to rewrite
+    };
+
+    // Determine the target expression type based on type_name
+    if (std.mem.eql(u8, type_name, "F32")) {
+        // Rewrite to e_frac_f32
+        const f32_value: f32 = @floatCast(f64_value);
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        env.store.nodes.set(node_idx, .{
+            .tag = .expr_frac_f32,
+            .data_1 = @bitCast(f32_value),
+            .data_2 = 1, // has_suffix = true
+            .data_3 = 0,
+        });
+    } else if (std.mem.eql(u8, type_name, "F64")) {
+        // Rewrite to e_frac_f64
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const f64_bits: u64 = @bitCast(f64_value);
+        const low: u32 = @truncate(f64_bits);
+        const high: u32 = @truncate(f64_bits >> 32);
+        env.store.nodes.set(node_idx, .{
+            .tag = .expr_frac_f64,
+            .data_1 = low,
+            .data_2 = high,
+            .data_3 = 1, // has_suffix = true
+        });
+    } else if (!num_lit_info.is_fractional) {
+        // Integer type - rewrite to e_num
+        const num_kind: CIR.NumKind = blk: {
+            if (std.mem.eql(u8, type_name, "I8")) break :blk .i8;
+            if (std.mem.eql(u8, type_name, "U8")) break :blk .u8;
+            if (std.mem.eql(u8, type_name, "I16")) break :blk .i16;
+            if (std.mem.eql(u8, type_name, "U16")) break :blk .u16;
+            if (std.mem.eql(u8, type_name, "I32")) break :blk .i32;
+            if (std.mem.eql(u8, type_name, "U32")) break :blk .u32;
+            if (std.mem.eql(u8, type_name, "I64")) break :blk .i64;
+            if (std.mem.eql(u8, type_name, "U64")) break :blk .u64;
+            if (std.mem.eql(u8, type_name, "I128")) break :blk .i128;
+            if (std.mem.eql(u8, type_name, "U128")) break :blk .u128;
+            break :blk .int_unbound;
+        };
+
+        const int_value = CIR.IntValue{
+            .bytes = num_lit_info.bytes,
+            .kind = if (num_lit_info.is_u128) .u128 else .i128,
+        };
+        try env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+    }
+    // For Dec type, keep the original e_dec/e_dec_small expression
+}
+
+/// Parses and canonicalizes a Roc expression for testing, returning all necessary context.
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) TestParseError!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -390,7 +531,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     builtin_indices: CIR.BuiltinIndices,
     builtin_types: BuiltinTypes,
 } {
-    // Load Builtin module once - Bool, Result, and Str are all types within this module
+    // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
@@ -426,19 +567,22 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
-    // Register Builtin as import so Bool, Result, and Str are available
+    // Register Builtin as import so Bool, Try, and Str are available
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
 
-    // Get Bool and Result statement indices from Builtin module
+    // Get Bool, Try, and Str statement indices from Builtin module
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 
@@ -446,8 +590,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
     const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs_map.put(bool_ident, .{
@@ -462,6 +607,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // (see transformStrNominalToPrimitive in builtin_compiler)
     try module_envs_map.put(str_ident, .{
         .env = builtin_module.env,
+    });
+    try module_envs_map.put(list_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.list_type,
     });
     try module_envs_map.put(dict_ident, .{
         .env = builtin_module.env,
@@ -491,7 +640,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass Bool and Result as imported modules
+        // Pass Bool and Try as imported modules
         const imported_envs = [_]*const ModuleEnv{builtin_module.env};
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
         const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
@@ -518,6 +667,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);
+
+    // Rewrite deferred numeric literals to match their inferred types
+    try rewriteDeferredNumericLiterals(module_env, &module_env.types);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
@@ -561,7 +713,7 @@ test "eval tag - already primitive" {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -590,7 +742,7 @@ test "interpreter reuse across multiple evaluations" {
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -602,38 +754,23 @@ test "interpreter reuse across multiple evaluations" {
             defer result.decref(layout_cache, ops);
 
             try std.testing.expect(result.layout.tag == .scalar);
-            try std.testing.expect(result.layout.data.scalar.tag == .int);
-            try std.testing.expectEqual(case.expected, result.asI128());
+
+            // With numeric literal constraints, integer literals may default to Dec instead of Int
+            // Accept either int or Dec (frac) layout
+            const actual_value: i128 = switch (result.layout.data.scalar.tag) {
+                .int => result.asI128(),
+                .frac => blk: {
+                    try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
+                    const dec_value = result.asDec();
+                    // Dec stores values scaled by 10^18, divide to get the integer part
+                    break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
+                },
+                else => unreachable,
+            };
+
+            try std.testing.expectEqual(case.expected, actual_value);
         }
 
         try std.testing.expectEqual(@as(usize, 0), interpreter.bindings.items.len);
     }
-}
-
-test "nominal type context preservation - boolean" {
-    // Test that True and False get correct boolean layout
-    // This tests the nominal type context preservation fix
-
-    // Test True
-    try runExpectBool("True", true, .no_trace);
-
-    // Test False
-    try runExpectBool("False", false, .no_trace);
-
-    // Test boolean negation with nominal types
-    try runExpectBool("!True", false, .no_trace);
-    try runExpectBool("!False", true, .no_trace);
-
-    // Test boolean operations with nominal types
-    try runExpectBool("True and False", false, .no_trace);
-    try runExpectBool("True or False", true, .no_trace);
-}
-
-test "nominal type context preservation - regression prevention" {
-    // Test that the fix prevents the original regression
-    // The original issue was that (|x| !x)(True) would return "0" instead of "False"
-
-    // This should work correctly now with nominal type context preservation
-    try runExpectBool("(|x| !x)(True)", false, .no_trace);
-    try runExpectBool("(|x| !x)(False)", true, .no_trace);
 }

@@ -147,7 +147,7 @@ match_time = |
 expect # Comment after expect keyword
 	blah == 1 # Comment after expect statement
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
 	var number = 123
@@ -262,6 +262,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
+NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
@@ -655,7 +656,7 @@ The type _String_ is not declared in this scope.
 This type is referenced here:
 **fuzz_crash_023.md:143:14:143:20:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
 
@@ -779,6 +780,11 @@ Is there an `import` or `exposing` missing up-top?
 ```
 	                    ^^^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
@@ -915,7 +921,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num(Int(Unsigned64))_
+    _Num.U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -985,7 +991,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red][Blue, Green]_others_
+    _[Red][Blue, Green][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -1015,7 +1021,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red][Blue, Green]_others, _arg -> Error_
+    _[Red][Blue, Green][ProvidedByCompiler], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1555,7 +1561,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "String")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-record)
 					(_))))
 		(s-decl
@@ -1897,7 +1903,7 @@ match_time = |
 expect # Comment after expect keyword
 	blah == 1 # Comment after expect statement
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
 	var number = 123
@@ -1983,29 +1989,32 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
-			(args
-				(p-assign (ident "num")))
-			(e-block
-				(s-let
-					(p-assign (ident "other"))
-					(e-num (value "1")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+		(e-closure
+			(captures
+				(capture (ident "other")))
+			(e-lambda
+				(args
+					(p-assign (ident "num")))
+				(e-block
+					(s-let
+						(p-assign (ident "other"))
+						(e-num (value "1")))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-lookup-local
+									(p-assign (ident "num")))
+								(e-block
+									(s-dbg
+										(e-call
+											(e-runtime-error (tag "ident_not_in_scope"))))
+									(e-num (value "0")))))
+						(if-else
 							(e-block
 								(s-dbg
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))))
-								(e-num (value "0")))))
-					(if-else
-						(e-block
-							(s-dbg
-								(e-num (value "123")))
-							(e-lookup-local
-								(p-assign (ident "other"))))))))
+									(e-num (value "123")))
+								(e-lookup-local
+									(p-assign (ident "other")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -2380,11 +2389,7 @@ expect {
 						(p-assign (ident "bin_op_result"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-tag (name "Err")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2429,7 +2434,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let
@@ -2572,9 +2577,9 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Num(Int(Unsigned64))"))
-		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Error -> U64"))
+		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2619,9 +2624,9 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Num(Int(Unsigned64))"))
-		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Error -> U64"))
+		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

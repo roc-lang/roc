@@ -61,6 +61,31 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Identifier for "Builtin.Str" to recognize the string type without string comparisons
+    // (null when compiling Builtin module itself or when Builtin.Str isn't available)
+    builtin_str_ident: ?Ident.Idx,
+
+    // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
+    list_ident: ?Ident.Idx,
+
+    // Cached Box ident to avoid repeated string lookups (null if Box doesn't exist in this env)
+    box_ident: ?Ident.Idx,
+
+    // Cached numeric type idents to avoid repeated string lookups
+    u8_ident: ?Ident.Idx,
+    i8_ident: ?Ident.Idx,
+    u16_ident: ?Ident.Idx,
+    i16_ident: ?Ident.Idx,
+    u32_ident: ?Ident.Idx,
+    i32_ident: ?Ident.Idx,
+    u64_ident: ?Ident.Idx,
+    i64_ident: ?Ident.Idx,
+    u128_ident: ?Ident.Idx,
+    i128_ident: ?Ident.Idx,
+    f32_ident: ?Ident.Idx,
+    f64_ident: ?Ident.Idx,
+    dec_ident: ?Ident.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -70,10 +95,9 @@ pub const Store = struct {
     pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
         // opaque_ptr (tag 0) -> 2
-        // bool (tag 1) -> 0
-        // str (tag 2) -> 1
-        // int (tag 3) with precision p -> 3 + p
-        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
+        // str (tag 1) -> 1
+        // int (tag 2) with precision p -> 3 + p
+        // frac (tag 3) with precision p -> 13 + (p - 2) = 11 + p
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -83,13 +107,12 @@ pub const Store = struct {
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 3, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 3));
+        // is_numeric: 1 when tag >= 2, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 2));
 
         // Calculate the base index based on tag mappings
         const base_idx = switch (scalar.tag) {
             .opaque_ptr => @as(u7, 2),
-            .bool => @as(u7, 0),
             .str => @as(u7, 1),
             .int => @as(u7, 3),
             .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
@@ -105,6 +128,7 @@ pub const Store = struct {
     pub fn init(
         env: *ModuleEnv,
         type_store: *const types_store.Store,
+        builtin_str_ident: ?Ident.Idx,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -144,6 +168,22 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .builtin_str_ident = builtin_str_ident,
+            .list_ident = env.common.findIdent("List"),
+            .box_ident = env.common.findIdent("Box"),
+            .u8_ident = env.common.findIdent("Num.U8"),
+            .i8_ident = env.common.findIdent("Num.I8"),
+            .u16_ident = env.common.findIdent("Num.U16"),
+            .i16_ident = env.common.findIdent("Num.I16"),
+            .u32_ident = env.common.findIdent("Num.U32"),
+            .i32_ident = env.common.findIdent("Num.I32"),
+            .u64_ident = env.common.findIdent("Num.U64"),
+            .i64_ident = env.common.findIdent("Num.I64"),
+            .u128_ident = env.common.findIdent("Num.U128"),
+            .i128_ident = env.common.findIdent("Num.I128"),
+            .f32_ident = env.common.findIdent("Num.F32"),
+            .f64_ident = env.common.findIdent("Num.F64"),
+            .dec_ident = env.common.findIdent("Num.Dec"),
         };
     }
 
@@ -186,6 +226,7 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
+        env: *ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
@@ -219,10 +260,15 @@ pub const Store = struct {
             }
         };
 
+        // Handle empty records specially to avoid NonEmptyRange with count=0
+        if (temp_fields.items.len == 0) {
+            return self.getEmptyRecordLayout();
+        }
+
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -443,6 +489,21 @@ pub const Store = struct {
         return self.getEmptyRecordLayout();
     }
 
+    /// Get or create a zero-sized type layout
+    pub fn ensureZstLayout(self: *Self) !Idx {
+        // Check if we already have a ZST layout
+        for (0..self.layouts.len()) |i| {
+            const layout = self.layouts.get(i);
+            if (layout.tag == .zst) {
+                return @enumFromInt(i);
+            }
+        }
+
+        // Create new ZST layout
+        const zst_layout = Layout.zst();
+        return try self.insertLayout(zst_layout);
+    }
+
     /// Get the size in bytes of a layout, given the store's target usize.
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)
@@ -453,13 +514,12 @@ pub const Store = struct {
             .scalar => switch (layout.data.scalar.tag) {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
-                .bool => 1, // bool is 1 byte
                 .str => 3 * target_usize.size(), // ptr, byte length, capacity
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list => 3 * target_usize.size(), // ptr, length, capacity
-            .list_of_zst => target_usize.size(), // Zero-sized lists might be different
+            .list_of_zst => 3 * target_usize.size(), // list_of_zst has same header structure as list
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => {
@@ -471,7 +531,14 @@ pub const Store = struct {
                 const captures_size = self.layoutSize(captures_layout);
                 return aligned_captures_offset + captures_size;
             },
+            .zst => 0, // Zero-sized types have size 0
         };
+    }
+
+    /// Check if a layout is zero-sized
+    /// This simply checks if the layout has size 0
+    pub fn isZeroSized(self: *const Self, layout: Layout) bool {
+        return self.layoutSize(layout) == 0;
     }
 
     /// Add the tag union's tags to self.pending_tags,
@@ -495,7 +562,9 @@ pub const Store = struct {
             const resolved_ext = self.types_store.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
+                    .empty_tag_union => {
+                        break;
+                    },
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             num_tags += ext_tag_union.tags.len();
@@ -846,49 +915,130 @@ pub const Store = struct {
                 @panic("Layout computation exceeded iteration limit - possible infinite loop");
             }
 
+            if (current.desc.content == .structure) {}
+
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => Layout.str(),
-                    .box => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .box,
-                        });
-                        // Push a pending Box container and "recurse" on the elem type
-                        current = self.types_store.resolveVar(elem_var);
-                        continue;
-                    },
-                    .list => |elem_var| {
-                        const elem_content = self.types_store.resolveVar(elem_var).desc.content;
-                        if (elem_content == .flex or elem_content == .rigid) {
-                            // For unbound lists (empty lists), use list of zero-sized type
-                            const layout = Layout.listOfZst();
-                            const idx = try self.insertLayout(layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                            return idx;
-                        } else {
-                            // Otherwise, add this to the stack of pending work
-                            try self.work.pending_containers.append(self.env.gpa, .{
-                                .var_ = current.var_,
-                                .container = .list,
-                            });
-
-                            // Push a pending List container and "recurse" on the elem type
-                            current = self.types_store.resolveVar(elem_var);
-                            continue;
-                        }
-                    },
-                    .list_unbound => {
-                        // For unbound lists (empty lists), use list of zero-sized type
-                        const layout = Layout.listOfZst();
-                        const idx = try self.insertLayout(layout);
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                        return idx;
-                    },
                     .nominal_type => |nominal_type| {
-                        // TODO special-case the builtin Num type here.
-                        // If we have one of those, then convert it to a Num layout,
-                        // or to a runtime error if it's an invalid elem type.
+                        // Special-case Builtin.Str: it has a tag union backing type, but
+                        // should have RocStr layout (3 pointers).
+                        // Check if this nominal type's identifier matches "Builtin.Str"
+                        if (self.builtin_str_ident) |builtin_str| {
+                            if (nominal_type.ident.ident_idx == builtin_str) {
+                                // This is Builtin.Str - use string layout
+                                break :flat_type Layout.str();
+                            }
+                        }
+
+                        // Special handling for Builtin.Box
+                        const is_builtin_box = if (self.box_ident) |box_ident|
+                            nominal_type.origin_module == self.env.builtin_module_ident and
+                                nominal_type.ident.ident_idx == box_ident
+                        else
+                            false;
+                        if (is_builtin_box) {
+                            // Extract the element type from the type arguments
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                            std.debug.assert(type_args.len == 1); // Box must have exactly 1 type parameter
+                            const elem_var = type_args[0];
+
+                            // Check if the element type is a known ZST (but NOT flex/rigid - those need opaque_ptr)
+                            const elem_resolved = self.types_store.resolveVar(elem_var);
+                            const elem_content = elem_resolved.desc.content;
+                            const is_elem_zst = switch (elem_content) {
+                                .structure => |ft| switch (ft) {
+                                    .empty_record, .empty_tag_union => true,
+                                    else => false,
+                                },
+                                else => false,
+                            };
+
+                            if (is_elem_zst) {
+                                // For ZST element types, use box of zero-sized type
+                                break :flat_type Layout.boxOfZst();
+                            } else {
+                                // Otherwise, add this to the stack of pending work
+                                // (This includes flex/rigid which will resolve to opaque_ptr)
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = current.var_,
+                                    .container = .box,
+                                });
+
+                                // Push a pending Box container and "recurse" on the elem type
+                                current = elem_resolved;
+                                continue;
+                            }
+                        }
+
+                        // Special handling for Builtin.List
+                        const is_builtin_list = if (self.list_ident) |list_ident|
+                            nominal_type.origin_module == self.env.builtin_module_ident and
+                                nominal_type.ident.ident_idx == list_ident
+                        else
+                            false;
+                        if (is_builtin_list) {
+                            // Extract the element type from the type arguments
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                            std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
+                            const elem_var = type_args[0];
+
+                            // Check if the element type is a known ZST
+                            // Treat flex/rigid as ZST ONLY if they are unconstrained.
+                            // Constrained flex types (e.g., numeric literals with constraints) should default to Dec.
+                            // Unconstrained flex types (e.g., empty list []) should use list_of_zst.
+                            const elem_resolved = self.types_store.resolveVar(elem_var);
+                            const elem_content = elem_resolved.desc.content;
+                            const is_elem_zst = switch (elem_content) {
+                                .flex => |flex| flex.constraints.count == 0,
+                                .rigid => |rigid| rigid.constraints.count == 0,
+                                .structure => |ft| switch (ft) {
+                                    .empty_record, .empty_tag_union => true,
+                                    else => false,
+                                },
+                                else => false,
+                            };
+
+                            if (is_elem_zst) {
+                                // For ZST element types, use list of zero-sized type
+                                break :flat_type Layout.listOfZst();
+                            } else {
+                                // Otherwise, add this to the stack of pending work
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = current.var_,
+                                    .container = .list,
+                                });
+
+                                // Push a pending List container and "recurse" on the elem type
+                                current = elem_resolved;
+                                continue;
+                            }
+                        }
+
+                        // Special handling for built-in numeric types from Builtin module
+                        // These have empty tag union backings but need scalar layouts
+                        if (nominal_type.origin_module == self.env.builtin_module_ident) {
+                            const ident_idx = nominal_type.ident.ident_idx;
+                            const num_layout: ?Layout = blk: {
+                                if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
+                                if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
+                                if (self.u16_ident) |u16_id| if (ident_idx == u16_id) break :blk Layout.int(types.Int.Precision.u16);
+                                if (self.i16_ident) |i16_id| if (ident_idx == i16_id) break :blk Layout.int(types.Int.Precision.i16);
+                                if (self.u32_ident) |u32_id| if (ident_idx == u32_id) break :blk Layout.int(types.Int.Precision.u32);
+                                if (self.i32_ident) |i32_id| if (ident_idx == i32_id) break :blk Layout.int(types.Int.Precision.i32);
+                                if (self.u64_ident) |u64_id| if (ident_idx == u64_id) break :blk Layout.int(types.Int.Precision.u64);
+                                if (self.i64_ident) |i64_id| if (ident_idx == i64_id) break :blk Layout.int(types.Int.Precision.i64);
+                                if (self.u128_ident) |u128_id| if (ident_idx == u128_id) break :blk Layout.int(types.Int.Precision.u128);
+                                if (self.i128_ident) |i128_id| if (ident_idx == i128_id) break :blk Layout.int(types.Int.Precision.i128);
+                                if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
+                                if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
+                                if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
+                                break :blk null;
+                            };
+
+                            if (num_layout) |layout| {
+                                break :flat_type layout;
+                            }
+                        }
 
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
@@ -897,64 +1047,6 @@ pub const Store = struct {
 
                         current = resolved;
                         continue;
-                    },
-                    .num => |initial_num| {
-                        var num = initial_num;
-
-                        while (true) {
-                            switch (num) {
-                                // TODO: Unwrap number to get the root precision or requiremnets
-                                .num_compact => |compact| switch (compact) {
-                                    .int => |precision| break :flat_type Layout.int(precision),
-                                    .frac => |precision| break :flat_type Layout.frac(precision),
-                                },
-                                .int_precision => |precision| break :flat_type Layout.int(precision),
-                                .frac_precision => |precision| break :flat_type Layout.frac(precision),
-                                // For polymorphic types, use default precision
-                                .num_unbound => |_| {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                },
-                                .int_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                },
-                                .frac_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.frac(types.Num.Frac.Precision.default);
-                                },
-                                .num_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .int_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .frac_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.frac(types.Num.Frac.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                            }
-                        }
                     },
                     .tuple => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);
@@ -1061,10 +1153,15 @@ pub const Store = struct {
 
                         // For general tag unions, we need to compute the layout
                         // First, determine discriminant size based on number of tags
-                        const discriminant_layout = if (num_tags == 0)
-                            // Empty tag union - should not happen in practice
-                            return LayoutError.ZeroSizedType
-                        else if (num_tags <= 256)
+                        if (num_tags == 0) {
+                            // Empty tag union - represents a zero-sized type
+                            const zst_layout = Layout.zst();
+                            const zst_layout_idx = try self.insertLayout(zst_layout);
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, zst_layout_idx);
+                            return zst_layout_idx;
+                        }
+
+                        const discriminant_layout = if (num_tags <= 256)
                             Layout.int(.u8)
                         else if (num_tags <= 65536)
                             Layout.int(.u16)
@@ -1122,10 +1219,11 @@ pub const Store = struct {
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
 
-                        for (tags_slice.items(.args)) |tag_args| {
+                        for (tags_slice.items(.args), 0..) |tag_args, tag_idx| {
+                            _ = tag_idx;
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
-                                // zero-sized payload; nothing to update
+                                // No payload arguments
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
@@ -1133,48 +1231,50 @@ pub const Store = struct {
                                 const layout_val = self.getLayout(arg_layout_idx);
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
-                                // Build tuple layout from argument layouts
+                                // Build tuple layout from argument layouts (including ZSTs)
                                 var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
                                 defer self.env.gpa.free(elem_layouts);
                                 for (args_slice, 0..) |v, i| {
                                     const elem_idx = try self.addTypeVar(v, &temp_scope);
                                     elem_layouts[i] = self.getLayout(elem_idx);
                                 }
+
                                 const tuple_idx = try self.putTuple(elem_layouts);
                                 const tuple_layout = self.getLayout(tuple_idx);
                                 updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             }
                         }
 
-                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
-                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
-
+                        // Use a tuple instead of a record to avoid needing field name identifiers
+                        // Tag unions are represented as (payload, tag) where:
+                        //   - payload is the largest payload layout (or empty record if no payloads)
+                        //   - tag is the discriminant
                         const payload_layout = max_payload_layout orelse blk: {
                             const empty_idx = try self.ensureEmptyRecordLayout();
                             break :blk self.getLayout(empty_idx);
                         };
 
-                        var field_layouts = [_]Layout{
+                        var element_layouts = [_]Layout{
                             payload_layout,
                             discriminant_layout,
                         };
 
-                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
+                        const tuple_idx = try self.putTuple(&element_layouts);
 
-                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        // Apply maximum payload alignment if needed
                         if (max_payload_alignment_any.toByteUnits() > 1) {
                             const desired_alignment = max_payload_alignment_any;
-                            var rec_layout = self.getLayout(rec_idx);
-                            const current_alignment = rec_layout.alignment(self.targetUsize());
+                            var tuple_layout = self.getLayout(tuple_idx);
+                            const current_alignment = tuple_layout.alignment(self.targetUsize());
                             if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
-                                std.debug.assert(rec_layout.tag == .record);
-                                const record_idx = rec_layout.data.record.idx;
-                                const new_layout = Layout.record(desired_alignment, record_idx);
-                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
+                                std.debug.assert(tuple_layout.tag == .tuple);
+                                const tuple_data_idx = tuple_layout.data.tuple.idx;
+                                const new_layout = Layout.tuple(desired_alignment, tuple_data_idx);
+                                self.layouts.set(@enumFromInt(@intFromEnum(tuple_idx)), new_layout);
                             }
                         }
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
-                        return rec_idx;
+                        // Break to fall through to pending container processing instead of returning directly
+                        break :flat_type self.getLayout(tuple_idx);
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1210,94 +1310,32 @@ pub const Store = struct {
                         continue;
                     },
                     .empty_record, .empty_tag_union => blk: {
-                        // Empty records and tag unions are zero-sized, so we need to do something different
-                        // depending on the container we're working on (if any). For example, if we're
-                        // working on a record field, then we need to drop that field from the container.
+                        // Empty records and tag unions are zero-sized types. They get a ZST layout.
+                        // We only special-case List({}) and Box({}) because they need runtime representation.
                         if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.pop() orelse unreachable;
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             switch (pending_item.container) {
                                 .list => {
-                                    // It turned out we were getting the layout for a List({})
+                                    // List({}) needs special runtime representation
+                                    _ = self.work.pending_containers.pop();
                                     break :blk Layout.listOfZst();
                                 },
                                 .box => {
-                                    // It turned out we were getting the layout for a Box({})
+                                    // Box({}) needs special runtime representation
+                                    _ = self.work.pending_containers.pop();
                                     break :blk Layout.boxOfZst();
                                 },
-                                .record => |pending_record| {
-                                    // It turned out we were getting the layout for a record field
-                                    std.debug.assert(pending_record.pending_fields > 0);
-                                    var updated_record = pending_record;
-                                    updated_record.pending_fields -= 1;
-
-                                    // The current field we're working on turned out to be zero-sized, so drop it.
-                                    _ = self.work.pending_record_fields.pop() orelse unreachable;
-
-                                    if (updated_record.pending_fields == 0) {
-                                        if (self.work.resolved_record_fields.len == updated_record.resolved_fields_start) {
-                                            // All fields were zero-sized, so the parent container turned
-                                            // out to be an empty record as well.
-                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-
-                                            continue :flat_type .empty_record;
-                                        } else {
-                                            // We finished the record we were working on.
-                                            break :blk try self.finishRecord(updated_record);
-                                        }
-                                    } else {
-                                        // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{
-                                            .var_ = pending_item.var_,
-                                            .container = .{ .record = updated_record },
-                                        });
-
-                                        // Get the next field to process
-                                        const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-                                        current = self.types_store.resolveVar(next_field.var_);
-                                        continue;
-                                    }
-                                },
-                                .tuple => |pending_tuple| {
-                                    // It turned out we were getting the layout for a tuple field
-                                    std.debug.assert(pending_tuple.pending_fields > 0);
-                                    var updated_tuple = pending_tuple;
-                                    updated_tuple.pending_fields -= 1;
-
-                                    // The current field we're working on turned out to be zero-sized, so drop it.
-                                    _ = self.work.pending_tuple_fields.pop() orelse unreachable;
-
-                                    if (updated_tuple.pending_fields == 0) {
-                                        if (self.work.resolved_tuple_fields.len == updated_tuple.resolved_fields_start) {
-                                            // All fields were zero-sized, so the parent container turned
-                                            // out to be an empty tuple as well.
-                                            self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
-
-                                            continue :flat_type .empty_record; // Empty tuple is like empty record
-                                        } else {
-                                            // We finished the tuple we were working on.
-                                            break :blk try self.finishTuple(updated_tuple);
-                                        }
-                                    } else {
-                                        // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{
-                                            .var_ = pending_item.var_,
-                                            .container = .{ .tuple = updated_tuple },
-                                        });
-
-                                        // Get the next field to process
-                                        const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
-                                        current = self.types_store.resolveVar(next_field.var_);
-                                        continue;
-                                    }
+                                else => {
+                                    // For records and tuples, treat ZST fields normally
+                                    break :blk Layout.zst();
                                 },
                             }
                         }
-
-                        // Unboxed zero-sized types cannot have a layout
-                        return LayoutError.ZeroSizedType;
+                        // Not inside any container, just return ZST
+                        break :blk Layout.zst();
                     },
                 },
-                .flex => |_| blk: {
+                .flex => |flex| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1305,20 +1343,27 @@ pub const Store = struct {
                         continue :outer;
                     }
 
-                    // Flex vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.len > 0) {
-                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                        if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.opaquePtr();
+                    // If the flex var has no constraints, it represents a phantom type parameter
+                    // or unused tag branch that doesn't exist at runtime.
+                    if (flex.constraints.isEmpty()) {
+                        // Flex vars can only be sent to the host if boxed.
+                        // Only return opaque_ptr for truly unconstrained flex vars inside containers.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
                         }
+                        break :blk Layout.zst();
                     }
 
-                    // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
-                    // This is a known issue that needs proper constraint solving before layout computation.
-                    // For now, default to I64 for numeric flex vars.
-                    break :blk Layout.int(.i64);
+                    // Flex vars with constraints appear in REPL/eval contexts where type constraints
+                    // haven't been fully solved. This is a known issue that needs proper constraint
+                    // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
+                    // This includes flex vars inside lists - they should default to Dec, not opaque_ptr.
+                    break :blk Layout.default_num();
                 },
-                .rigid => |_| blk: {
+                .rigid => |rigid| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1334,17 +1379,26 @@ pub const Store = struct {
                         }
                     }
 
-                    // Rigid vars should not appear unboxed in layout computation.
-                    // This is likely a bug in the type system.
-                    //
-                    // Unlike flex vars, rigid vars represent type parameters that should
-                    // have been instantiated. This is a bug that should be fixed.
+                    // If the rigid var has no constraints, it represents a phantom type parameter
+                    // or unused tag branch that doesn't exist at runtime (e.g., `_err` in `Try(ok, _err)`).
+                    if (rigid.constraints.isEmpty()) {
+                        break :blk Layout.zst();
+                    }
+
+                    // Rigid vars with constraints should not appear unboxed in layout computation.
+                    // This is likely a bug in the type system where the rigid var should
+                    // have been instantiated based on its constraints.
                     return LayoutError.BugUnboxedRigidVar;
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     current = self.types_store.resolveVar(backing_var);
+                    continue;
+                },
+                .recursion_var => |rec_var| {
+                    // Follow the recursion var structure
+                    current = self.types_store.resolveVar(rec_var.structure);
                     continue;
                 },
                 .err => return LayoutError.TypeContainedMismatch,
@@ -1360,10 +1414,22 @@ pub const Store = struct {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        layout = Layout.box(layout_idx);
+                        // Check if the element type is zero-sized (recursively)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (self.isZeroSized(elem_layout)) {
+                            layout = Layout.boxOfZst();
+                        } else {
+                            layout = Layout.box(layout_idx);
+                        }
                     },
                     .list => {
-                        layout = Layout.list(layout_idx);
+                        // Check if the element type is zero-sized (recursively)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (self.isZeroSized(elem_layout)) {
+                            layout = Layout.listOfZst();
+                        } else {
+                            layout = Layout.list(layout_idx);
+                        }
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
@@ -1431,11 +1497,13 @@ pub const Store = struct {
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            return idxFromScalar(layout.data.scalar);
+            const result = idxFromScalar(layout.data.scalar);
+            return result;
         }
 
         // For non-scalar types, insert as normal
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
-        return @enumFromInt(@intFromEnum(safe_list_idx));
+        const result: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        return result;
     }
 };

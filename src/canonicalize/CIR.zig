@@ -40,6 +40,8 @@ pub const BuiltinIndices = struct {
     set_type: Statement.Idx,
     /// Statement index of nested Str type declaration within Builtin module
     str_type: Statement.Idx,
+    /// Statement index of nested List type declaration within Builtin module
+    list_type: Statement.Idx,
     /// Statement index of nested U8 type declaration within Builtin module
     u8_type: Statement.Idx,
     /// Statement index of nested I8 type declaration within Builtin module
@@ -66,6 +68,8 @@ pub const BuiltinIndices = struct {
     f32_type: Statement.Idx,
     /// Statement index of nested F64 type declaration within Builtin module
     f64_type: Statement.Idx,
+    /// Statement index of nested Numeral type declaration within Builtin module
+    numeral_type: Statement.Idx,
 };
 
 // Type definitions for module compilation
@@ -73,7 +77,7 @@ pub const BuiltinIndices = struct {
 /// Represents a definition (binding of a pattern to an expression) in the CIR
 pub const Def = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     pattern: Pattern.Idx,
     expr: Expr.Idx,
@@ -129,10 +133,10 @@ pub const Def = struct {
     }
 };
 
-/// Represents a type header (e.g., 'Maybe a' or 'Result err ok') in type annotations
+/// Represents a type header (e.g., 'Maybe a' or 'Try err ok') in type annotations
 pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { start: u32, len: u32 };
+    pub const Span = extern struct { start: u32, len: u32 };
 
     name: base.Ident.Idx,
     args: TypeAnno.Span,
@@ -168,7 +172,7 @@ pub const TypeHeader = struct {
 /// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     w_method: struct {
         var_: TypeAnno.Idx,
@@ -291,7 +295,7 @@ pub const Annotation = struct {
 /// Represents an item exposed by a module's interface
 pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     name: base.Ident.Idx,
     alias: ?base.Ident.Idx,
@@ -319,7 +323,7 @@ pub const ExposedItem = struct {
 /// Represents a field in a record pattern for pattern matching
 pub const PatternRecordField = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { start: u32, len: u32 };
+    pub const Span = extern struct { start: u32, len: u32 };
 };
 
 /// Represents an arbitrary precision smallish decimal value
@@ -336,9 +340,9 @@ pub const SmallDecValue = struct {
     }
 
     /// Calculate the int requirements of a SmallDecValue
-    pub fn toFracRequirements(self: SmallDecValue) types_mod.Num.FracRequirements {
+    pub fn toFracRequirements(self: SmallDecValue) types_mod.FracRequirements {
         const f64_val = self.toF64();
-        return types_mod.Num.FracRequirements{
+        return types_mod.FracRequirements{
             .fits_in_f32 = fitsInF32(f64_val),
             .fits_in_dec = fitsInDec(f64_val),
         };
@@ -449,7 +453,7 @@ pub const IntValue = struct {
 
     /// Calculate the int requirements of an IntValue
     /// TODO: Review, claude generated
-    pub fn toIntRequirements(self: IntValue) types_mod.Num.IntRequirements {
+    pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
 
@@ -483,8 +487,8 @@ pub const IntValue = struct {
         // For minimum signed values, subtract 1 from the magnitude
         // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
         const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
-        const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.Num.IntRequirements{
+        const bits_needed = types_mod.Int.BitsNeeded.fromValue(adjusted_val);
+        return types_mod.IntRequirements{
             .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
             .bits_needed = bits_needed.toBits(),
             .is_minimum_signed = is_minimum_signed,
@@ -494,7 +498,7 @@ pub const IntValue = struct {
     /// Calculate the frac requirements of an IntValue
     /// TODO: Review, claude generated
     /// Calculate the frac requirements of an IntValue
-    pub fn toFracRequirements(self: IntValue) types_mod.Num.FracRequirements {
+    pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
             .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
@@ -522,7 +526,7 @@ pub const IntValue = struct {
 
         const fits_in_dec = fitsInDec(f64_val);
 
-        return types_mod.Num.FracRequirements{
+        return types_mod.FracRequirements{
             .fits_in_f32 = fits_in_f32,
             .fits_in_dec = fits_in_dec,
         };
@@ -551,6 +555,45 @@ pub const NumKind = enum {
     f32,
     f64,
     dec,
+};
+
+/// Base-256 digit storage for Numeral values.
+/// Used to construct Roc Numeral values during compile-time evaluation.
+///
+/// Numeral in Roc stores:
+/// - is_negative: Bool (whether there was a minus sign)
+/// - digits_before_pt: List(U8) (base-256 digits before decimal point)
+/// - digits_after_pt: List(U8) (base-256 digits after decimal point)
+///
+/// Example: "356.517" becomes:
+/// - is_negative = false
+/// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
+/// - digits_after_pt = [2, 5] (because 517 = 2*256 + 5)
+pub const NumeralDigits = struct {
+    /// Index into the shared digit byte array in ModuleEnv
+    digits_start: u32,
+    /// Number of bytes for digits_before_pt
+    before_pt_len: u16,
+    /// Number of bytes for digits_after_pt
+    after_pt_len: u16,
+    /// Whether the literal had a minus sign
+    is_negative: bool,
+
+    /// Get the total length of stored digits
+    pub fn totalLen(self: NumeralDigits) u32 {
+        return @as(u32, self.before_pt_len) + @as(u32, self.after_pt_len);
+    }
+
+    /// Extract digits_before_pt from the shared byte array
+    pub fn getDigitsBeforePt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
+        return digit_bytes[self.digits_start..][0..self.before_pt_len];
+    }
+
+    /// Extract digits_after_pt from the shared byte array
+    pub fn getDigitsAfterPt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
+        const after_start = self.digits_start + self.before_pt_len;
+        return digit_bytes[after_start..][0..self.after_pt_len];
+    }
 };
 
 // RocDec type definition (for missing export)
@@ -637,10 +680,11 @@ pub const Import = struct {
             self.imports.relocate(offset);
         }
 
-        pub const Serialized = struct {
+        /// Uses extern struct to guarantee consistent field layout across optimization levels.
+        pub const Serialized = extern struct {
             // Placeholder to match Store size - not serialized
             // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
-            map: [3]u64 = undefined,
+            map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -689,7 +733,7 @@ pub const Import = struct {
 /// Represents a field in a record expression
 pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     name: base.Ident.Idx,
     value: Expr.Idx,
@@ -720,7 +764,7 @@ pub const ExternalDecl = struct {
     region: Region,
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
 

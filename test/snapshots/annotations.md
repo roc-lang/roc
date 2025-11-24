@@ -29,39 +29,61 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:16:28:16:28
-INVALID NOMINAL TAG - annotations.md:19:22:19:41
+TYPE MISMATCH - annotations.md:16:21:16:35
+MISSING METHOD - annotations.md:16:33:16:34
+TYPE MISMATCH - annotations.md:19:22:19:41
+MISSING METHOD - annotations.md:19:32:19:33
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
-The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
-**annotations.md:16:28:**
+This expression is used in an unexpected way:
+**annotations.md:16:21:16:35:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                           ^^^  ^
+                    ^^^^^^^^^^^^^^
 
-The first argument has the type:
-    _Str_
+It has the type:
+    _Pair(Str)_
 
-But the second argument has the type:
-    _Num(_size)_
+But the type annotation says it should have the type:
+    _Pair(Num.U8)_
 
-`mkPair` needs these arguments to have compatible types.
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**annotations.md:16:33:16:34:**
+```roc
+failPairDiffTypes = mkPair("1", 2)
+```
+                                ^
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **annotations.md:19:22:19:41:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                      ^^^^^^^^^^^^^^^^^^^
 
-The tag is:
-    _Pair(Num(_size), Str)_
+It has the type:
+    _Pair(Str)_
 
-But the nominal type needs it to be:
-    _Pair(Num(_size), Num(_size2))_
+But the type annotation says it should have the type:
+    _Pair(Num.U64)_
+
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**annotations.md:19:32:19:33:**
+```roc
+failPairDiffTypes2 = Pair.Pair(1, "str")
+```
+                               ^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -312,12 +334,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Pair(Num(Int(Unsigned64)))"))
+		(patt (type "Pair(U64)"))
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
-		(patt (type "Pair(Num(Int(Unsigned8)))"))
-		(patt (type "Pair(Num(Int(Unsigned8)))"))
-		(patt (type "Pair(Num(Int(Unsigned64)))"))
+		(patt (type "Pair(U8)"))
+		(patt (type "Pair(U8)"))
+		(patt (type "Pair(U64)"))
 		(patt (type "a, b -> Error")))
 	(type_decls
 		(nominal (type "Pair(a)")
@@ -325,10 +347,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Pair(Num(Int(Unsigned64)))"))
+		(expr (type "Pair(U64)"))
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
-		(expr (type "Pair(Num(Int(Unsigned8)))"))
+		(expr (type "Pair(U8)"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "a, b -> Error"))))

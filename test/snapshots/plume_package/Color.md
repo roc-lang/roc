@@ -30,7 +30,7 @@ rgba = |r, g, b, a| {
     Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
     bytes = str.to_utf8()
@@ -64,7 +64,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
     if str.is_named_color()
         Ok(Color.Named(str))
@@ -88,16 +88,10 @@ DOES NOT EXIST - Color.md:51:57:51:67
 DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
-TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
-TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
-TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
-TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
-TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
-TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
-TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
-TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
+MISSING METHOD - Color.md:22:15:22:26
+MISSING METHOD - Color.md:29:13:29:26
 TYPE MISMATCH - Color.md:32:5:45:6
-TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
+MISSING METHOD - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -203,6 +197,9 @@ The unused variable is declared here:
 **DOES NOT EXIST**
 `Set.from_list` does not exist.
 
+`Set` is in scope, but it has no associated `from_list`.
+
+It's referenced here:
 **Color.md:68:14:68:27:**
 ```roc
     colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -210,109 +207,27 @@ The unused variable is declared here:
              ^^^^^^^^^^^^^
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_frac` on a type that doesn't support methods:
+**MISSING METHOD**
+This **to_frac** method is being called on the type **Num.U8**, which has no method with that name:
 **Color.md:22:15:22:26:**
 ```roc
     rounded = a.to_frac() / 255.0
 ```
               ^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(Unsigned8))_
 
+**Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_utf8` on a type that doesn't support methods:
+**MISSING METHOD**
+This **to_utf8** method is being called on the type **Str**, which has no method with that name:
 **Color.md:29:13:29:26:**
 ```roc
     bytes = str.to_utf8()
 ```
             ^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
 
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:35:17:35:41:**
-```roc
-                a.is_char_in_hex_range()
-```
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:36:21:36:45:**
-```roc
-                and b.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:37:21:37:45:**
-```roc
-                and c.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:38:21:38:45:**
-```roc
-                and d.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:39:21:39:45:**
-```roc
-                and e.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:40:21:40:45:**
-```roc
-                and f.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Num(Int(_size))_
-
-
+**Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -340,18 +255,16 @@ It has the type:
 But the type annotation says it should have the type:
     _Try(Color, [InvalidHex(Str)])_
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_named_color` on a type that doesn't support methods:
+**MISSING METHOD**
+This **is_named_color** method is being called on the type **Str**, which has no method with that name:
 **Color.md:62:8:62:28:**
 ```roc
     if str.is_named_color()
 ```
        ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
 
-
+**Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -508,7 +421,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Color"))
 					(ty-tag-union
 						(tags
@@ -735,7 +648,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Color"))
 					(ty-tag-union
 						(tags
@@ -816,7 +729,7 @@ rgba = |r, g, b, a| {
 	Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
 	bytes = str.to_utf8()
@@ -850,7 +763,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
 	if str.is_named_color()
 		Ok(Color.Named(str))
@@ -1076,7 +989,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
@@ -1207,7 +1120,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")
@@ -1221,7 +1134,7 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "colors"))
 					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
+						(e-runtime-error (tag "nested_value_not_found"))
 						(e-list
 							(elems
 								(e-string
@@ -1301,8 +1214,8 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(patt (type "U8, U8, U8 -> Color"))
+		(patt (type "U8, U8, U8, U8 -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Color -> Error"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
@@ -1311,8 +1224,8 @@ is_named_color = |str| {
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(expr (type "U8, U8, U8 -> Color"))
+		(expr (type "U8, U8, U8, U8 -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Color -> Error"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))

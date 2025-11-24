@@ -44,7 +44,7 @@ const TestHost = struct {
             .roc_dbg = testRocDbg,
             .roc_expect_failed = testRocExpectFailed,
             .roc_crashed = recordCrashCallback,
-            .host_fns = undefined,
+            .hosted_fns = .{ .count = 0, .fns = undefined },
         };
     }
 
@@ -110,7 +110,7 @@ test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -128,7 +128,7 @@ test "interpreter: (|n| n + 1)(41) yields 42" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -146,7 +146,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -166,27 +166,7 @@ test "interpreter: 6 / 3 yields 2" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("2", rendered);
-}
-
-test "interpreter: 5 // 2 yields 2" {
-    const roc_src = "5 // 2";
-    try helpers.runExpectInt(roc_src, 2, .no_trace);
-
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -206,7 +186,7 @@ test "interpreter: 7 % 3 yields 1" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -224,7 +204,7 @@ test "interpreter: 0.2 + 0.3 yields 0.5" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -242,7 +222,7 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -255,58 +235,40 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     try std.testing.expectEqualStrings("0.25", rendered);
 }
 
-test "interpreter: 1.5f64 + 2.25f64 yields 3.75" {
-    const roc_src = "1.5f64 + 2.25f64";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("3.75", rendered);
+test "interpreter: F64 addition" {
+    try helpers.runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 1.5
+        \\    b : F64
+        \\    b = 2.25
+        \\    a + b
+        \\}
+    , 3.75, .no_trace);
 }
 
-test "interpreter: 1.5f32 * 2f32 yields 3" {
-    const roc_src = "1.5f32 * 2f32";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("3", rendered);
+test "interpreter: F32 multiplication" {
+    try helpers.runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 1.5
+        \\    b : F32
+        \\    b = 2
+        \\    a * b
+        \\}
+    , 3.0, .no_trace);
 }
 
-test "interpreter: 2.0f64 / 4.0f64 yields 0.5" {
-    const roc_src = "2.0f64 / 4.0f64";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("0.5", rendered);
+test "interpreter: F64 division" {
+    try helpers.runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 2.0
+        \\    b : F64
+        \\    b = 4.0
+        \\    a / b
+        \\}
+    , 0.5, .no_trace);
 }
 
 test "interpreter: literal True renders True" {
@@ -314,7 +276,7 @@ test "interpreter: literal True renders True" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -329,12 +291,11 @@ test "interpreter: literal True renders True" {
 }
 
 test "interpreter: True == False yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "True == False";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -349,14 +310,13 @@ test "interpreter: True == False yields False" {
 }
 
 test "interpreter: \"hi\" == \"hi\" yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "\"hi\" == \"hi\"";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
     //
     //     try helpers.runExpectBool(roc_src, true, .no_trace);
     //
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
     //
     //     var host = TestHost.init(std.testing.allocator);
@@ -371,12 +331,11 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
 }
 
 test "interpreter: (1, 2) == (1, 2) yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "(1, 2) == (1, 2)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -391,12 +350,11 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
 }
 
 test "interpreter: (1, 2) == (2, 1) yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "(1, 2) == (2, 1)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -411,12 +369,11 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
 }
 
 test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{ x: 1, y: 2 } == { y: 2, x: 1 }";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -431,12 +388,11 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
 }
 
 test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{ x: 1, y: 2 } == { x: 1, y: 3 }";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -455,7 +411,7 @@ test "interpreter: record update copies base fields" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -473,7 +429,7 @@ test "interpreter: record update overrides field" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -491,7 +447,7 @@ test "interpreter: record update expression can reference base" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -510,7 +466,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(std.testing.allocator);
@@ -529,7 +485,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(std.testing.allocator);
@@ -548,7 +504,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(std.testing.allocator);
@@ -562,12 +518,11 @@ test "interpreter: record update expression can reference base" {
 // }
 
 test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "[1, 2, 3] == [1, 2, 3]";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -582,12 +537,11 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
 }
 
 test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "[1, 2, 3] == [1, 3, 2]";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -602,12 +556,11 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
 }
 
 test "interpreter: Ok(1) == Ok(1) yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "Ok(1) == Ok(1)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -622,12 +575,11 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
 }
 
 test "interpreter: Ok(1) == Err(1) yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "Ok(1) == Err(1)";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -646,7 +598,7 @@ test "interpreter: match tuple pattern destructures" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -664,7 +616,7 @@ test "interpreter: match bool patterns" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -682,7 +634,7 @@ test "interpreter: match result tag payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -700,7 +652,7 @@ test "interpreter: match record destructures fields" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -713,12 +665,12 @@ test "interpreter: match record destructures fields" {
     try std.testing.expectEqualStrings("3", rendered);
 }
 
-test "interpreter: render Result.Ok literal" {
+test "interpreter: render Try.Ok literal" {
     const roc_src = "match True { True => Ok(42), False => Err(\"boom\") }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -732,12 +684,12 @@ test "interpreter: render Result.Ok literal" {
     try std.testing.expectEqualStrings("Ok(42)", rendered);
 }
 
-test "interpreter: render Result.Err string" {
+test "interpreter: render Try.Err string" {
     const roc_src = "match True { True => Err(\"boom\"), False => Ok(42) }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -751,12 +703,12 @@ test "interpreter: render Result.Err string" {
     try std.testing.expectEqualStrings("Err(\"boom\")", rendered);
 }
 
-test "interpreter: render Result.Ok tuple payload" {
+test "interpreter: render Try.Ok tuple payload" {
     const roc_src = "match True { True => Ok((1, 2)), False => Err(\"boom\") }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -775,7 +727,7 @@ test "interpreter: match tuple payload tag" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -793,7 +745,7 @@ test "interpreter: match record payload tag" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -811,7 +763,7 @@ test "interpreter: match list pattern destructures" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -824,20 +776,16 @@ test "interpreter: match list pattern destructures" {
     try std.testing.expectEqualStrings("6", rendered);
 }
 
-test "debug List.len expression" {
-    return error.SkipZigTest;
-}
+test "debug List.len expression" {}
 
-test "interpreter: List.len on literal" {
-    return error.SkipZigTest;
-}
+test "interpreter: List.len on literal" {}
 
 test "interpreter: match list rest binds slice" {
     const roc_src = "match [1, 2, 3] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -855,7 +803,7 @@ test "interpreter: match empty list branch" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -868,12 +816,122 @@ test "interpreter: match empty list branch" {
     try std.testing.expectEqualStrings("42", rendered);
 }
 
+test "interpreter: simple for loop sum" {
+    // Test simpler for loop without passing functions
+    const roc_src = "{\n    var total = 0\n    for n in [1, 2, 3, 4] {\n        total = total + n\n    }\n    total\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("10", rendered);
+}
+
+test "interpreter: List.fold sum with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([1, 2, 3, 4], 0, |acc, x| acc + x)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("10", rendered);
+}
+
+test "interpreter: List.fold product with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([2, 3, 4], 1, |acc, x| acc * x)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("24", rendered);
+}
+
+test "interpreter: List.fold empty list with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([], 42, |acc, x| acc + x)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+}
+
+test "interpreter: List.fold count elements with inline lambda" {
+    const roc_src = "(|list, init, step| {\n    var $state = init\n    for item in list {\n        $state = step($state, item)\n    }\n    $state\n})([10, 20, 30, 40], 0, |acc, _| acc + 1)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("4", rendered);
+}
+
+test "interpreter: List.fold from Builtin using numbers" {
+    const roc_src = "List.fold([1, 2, 3], 0, |acc, item| acc + item)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+}
+
 test "interpreter: crash statement triggers crash error and message" {
     const roc_src = "{\n    crash \"boom\"\n    0\n}";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -888,12 +946,11 @@ test "interpreter: crash statement triggers crash error and message" {
 }
 
 test "interpreter: expect expression succeeds" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{\n    expect 1 == 1\n    {}\n}";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -909,12 +966,11 @@ test "interpreter: expect expression succeeds" {
 }
 
 test "interpreter: expect expression failure crashes with message" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "{\n    expect 1 == 0\n    {}\n}";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -933,7 +989,7 @@ test "interpreter: empty record expression renders {}" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -947,22 +1003,14 @@ test "interpreter: empty record expression renders {}" {
     try std.testing.expectEqualStrings("{}", rendered);
 }
 
-test "interpreter: f64 literal renders 3.25" {
-    const roc_src = "3.25f64";
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
-    defer interp2.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("3.25", rendered);
+test "interpreter: F64 literal" {
+    try helpers.runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 3.25
+        \\    a
+        \\}
+    , 3.25, .no_trace);
 }
 
 test "interpreter: decimal literal renders 0.125" {
@@ -970,7 +1018,7 @@ test "interpreter: decimal literal renders 0.125" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -984,12 +1032,11 @@ test "interpreter: decimal literal renders 0.125" {
 }
 
 test "interpreter: f64 equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3.25f64 == 3.25f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1004,12 +1051,11 @@ test "interpreter: f64 equality True" {
 }
 
 test "interpreter: decimal equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.125 == 0.125";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1024,12 +1070,11 @@ test "interpreter: decimal equality True" {
 }
 
 test "interpreter: int and f64 equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "1 == 1.0f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -1054,12 +1099,11 @@ test "interpreter: int and f64 equality True" {
 }
 
 test "interpreter: int and decimal equality True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "1 == 1.0";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -1084,12 +1128,11 @@ test "interpreter: int and decimal equality True" {
 }
 
 test "interpreter: int less-than yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3 < 4";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1104,12 +1147,11 @@ test "interpreter: int less-than yields True" {
 }
 
 test "interpreter: int greater-than yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "5 > 8";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1128,7 +1170,7 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1143,12 +1185,11 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
 }
 
 test "interpreter: f64 greater-than yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3.5f64 > 1.25f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1163,12 +1204,11 @@ test "interpreter: f64 greater-than yields True" {
 }
 
 test "interpreter: decimal less-than-or-equal yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.5 <= 0.5";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1183,12 +1223,11 @@ test "interpreter: decimal less-than-or-equal yields True" {
 }
 
 test "interpreter: int and f64 less-than yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "1 < 2.0f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1203,12 +1242,11 @@ test "interpreter: int and f64 less-than yields True" {
 }
 
 test "interpreter: int and decimal greater-than yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3 > 5.5";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1223,12 +1261,11 @@ test "interpreter: int and decimal greater-than yields False" {
 }
 
 test "interpreter: bool inequality yields True" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "True != False";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1243,12 +1280,11 @@ test "interpreter: bool inequality yields True" {
 }
 
 test "interpreter: decimal inequality yields False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.5 != 0.5";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1263,12 +1299,11 @@ test "interpreter: decimal inequality yields False" {
 }
 
 test "interpreter: f64 equality False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "3.25f64 == 4.0f64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1283,12 +1318,11 @@ test "interpreter: f64 equality False" {
 }
 
 test "interpreter: decimal equality False" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src = "0.125 == 0.25";
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1307,7 +1341,7 @@ test "interpreter: tuples and records" {
     const src_tuple = "(1, 2)";
     const res_t = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_tuple);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, res_t);
-    var it = try Interpreter.init(std.testing.allocator, res_t.module_env, res_t.builtin_types, &[_]*const can.ModuleEnv{});
+    var it = try Interpreter.init(std.testing.allocator, res_t.module_env, res_t.builtin_types, res_t.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer it.deinit();
     var host_t = TestHost.init(std.testing.allocator);
     defer host_t.deinit();
@@ -1321,7 +1355,7 @@ test "interpreter: tuples and records" {
     const src_rec = "{ x: 1, y: 2 }";
     const res_r = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_rec);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, res_r);
-    var ir = try Interpreter.init(std.testing.allocator, res_r.module_env, res_r.builtin_types, &[_]*const can.ModuleEnv{});
+    var ir = try Interpreter.init(std.testing.allocator, res_r.module_env, res_r.builtin_types, res_r.builtin_module.env, &[_]*const can.ModuleEnv{});
     defer ir.deinit();
     var host_r = TestHost.init(std.testing.allocator);
     defer host_r.deinit();
@@ -1331,6 +1365,49 @@ test "interpreter: tuples and records" {
     defer std.testing.allocator.free(text_r);
     // Sorted field order by name should be "{ x: 1, y: 2 }"
     try std.testing.expectEqualStrings("{ x: 1, y: 2 }", text_r);
+}
+
+test "interpreter: empty list [] has list_of_zst layout" {
+    // Test that [] (unconstrained, unbound) gets list_of_zst layout
+    const roc_src = "[]";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+
+    // Check that the layout is list_of_zst
+    try std.testing.expectEqual(layout.LayoutTag.list_of_zst, result.layout.tag);
+}
+
+test "interpreter: singleton list [1] has list of Dec layout" {
+    // Test that [1] (constrained by number literal) gets list of Dec layout
+    const roc_src = "[1]";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    defer result.decref(&interp2.runtime_layout_store, &ops);
+
+    // Check that the layout is a regular list (not list_of_zst)
+    try std.testing.expectEqual(layout.LayoutTag.list, result.layout.tag);
+
+    // Check that the element layout is Dec
+    const elem_layout_idx = result.layout.data.list;
+    try std.testing.expectEqual(layout.Idx.dec, elem_layout_idx);
 }
 
 // Boolean/if support intentionally omitted for now

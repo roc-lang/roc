@@ -188,6 +188,11 @@ pub const Instantiator = struct {
                 const fresh_flat_type = try self.instantiateFlatType(flat_type);
                 break :blk Content{ .structure = fresh_flat_type };
             },
+            .recursion_var => |rec_var| blk: {
+                // Instantiate the structure the recursion var points to
+                const fresh_structure = try self.instantiateVar(rec_var.structure);
+                break :blk Content{ .recursion_var = .{ .structure = fresh_structure, .name = rec_var.name } };
+            },
             .err => Content.err,
         };
     }
@@ -216,12 +221,7 @@ pub const Instantiator = struct {
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
         return switch (flat_type) {
-            .str => FlatType.str,
-            .box => |box_var| FlatType{ .box = try self.instantiateVar(box_var) },
-            .list => |list_var| FlatType{ .list = try self.instantiateVar(list_var) },
-            .list_unbound => FlatType.list_unbound,
             .tuple => |tuple| FlatType{ .tuple = try self.instantiateTuple(tuple) },
-            .num => |num| FlatType{ .num = try self.instantiateNum(num) },
             .nominal_type => |nominal| FlatType{ .nominal_type = try self.instantiateNominalType(nominal) },
             .fn_pure => |func| FlatType{ .fn_pure = try self.instantiateFunc(func) },
             .fn_effectful => |func| FlatType{ .fn_effectful = try self.instantiateFunc(func) },
@@ -263,22 +263,6 @@ pub const Instantiator = struct {
         const fresh_elems_range = try self.store.appendVars(fresh_elems.items);
         return Tuple{ .elems = fresh_elems_range };
     }
-
-    fn instantiateNum(self: *Self, num: Num) std.mem.Allocator.Error!Num {
-        return switch (num) {
-            .num_poly => |poly_var| Num{ .num_poly = try self.instantiateVar(poly_var) },
-            .int_poly => |poly_var| Num{ .int_poly = try self.instantiateVar(poly_var) },
-            .frac_poly => |poly_var| Num{ .frac_poly = try self.instantiateVar(poly_var) },
-            // Concrete types remain unchanged
-            .int_precision => |precision| Num{ .int_precision = precision },
-            .frac_precision => |precision| Num{ .frac_precision = precision },
-            .num_unbound => |unbound| Num{ .num_unbound = unbound },
-            .int_unbound => |unbound| Num{ .int_unbound = unbound },
-            .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
-            .num_compact => |compact| Num{ .num_compact = compact },
-        };
-    }
-
     fn instantiateFunc(self: *Self, func: Func) std.mem.Allocator.Error!Func {
         const args_slice = self.store.sliceVars(func.args);
         var fresh_args = std.ArrayList(Var).empty;

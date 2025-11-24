@@ -60,12 +60,26 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     var i = region.start;
     const tags = self.tokens.tokens.items(.tag);
     while (i < region.end) {
-        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
-            tags[i + 1] == .CloseRound or
-            tags[i + 1] == .CloseCurly or
-            tags[i + 1] == .OpBar))
-        {
-            return true;
+        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len) {
+            const next_tag = tags[i + 1];
+            if (next_tag == .CloseSquare or next_tag == .CloseRound or next_tag == .CloseCurly) {
+                return true;
+            }
+            // For OpBar, we need to distinguish between:
+            // - Closing bar (trailing comma): |x, y,| body
+            // - Opening bar (NOT trailing): fn(a, |x| body)
+            // Check the token after the bar to determine which case this is
+            if (next_tag == .OpBar and i + 2 < self.tokens.tokens.len) {
+                const after_bar = tags[i + 2];
+                // If what follows is a lambda parameter, the bar is opening (not a trailing comma)
+                const is_opening_bar = switch (after_bar) {
+                    .LowerIdent, .UpperIdent, .Underscore, .OpenRound, .OpenSquare, .OpenCurly => true,
+                    else => false,
+                };
+                if (!is_opening_bar) {
+                    return true;
+                }
+            }
         }
         i += 1;
     }
@@ -128,6 +142,9 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
         .DollarInMiddleOfIdentifier => "STRAY DOLLAR SIGN",
+        .SingleQuoteTooLong => "SINGLE QUOTE TOO LONG",
+        .SingleQuoteEmpty => "SINGLE QUOTE EMPTY",
+        .SingleQuoteUnclosed => "UNCLOSED SINGLE QUOTE",
     };
 
     const body = switch (diagnostic.tag) {
@@ -141,6 +158,8 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
         .DollarInMiddleOfIdentifier => "Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.",
+        .SingleQuoteTooLong, .SingleQuoteEmpty => "Single-quoted literals must contain exactly one valid UTF-8 codepoint.",
+        .SingleQuoteUnclosed => "This single-quoted literal is missing a closing quote.",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
@@ -442,7 +461,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addAnnotated("Result(a, Str)", .dimmed);
+            try report.document.addAnnotated("Try(a, Str)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
@@ -842,6 +861,11 @@ pub const Statement = union(enum) {
         body: Expr.Idx,
         region: TokenizedRegion,
     },
+    @"while": struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
     @"return": struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
@@ -1071,6 +1095,20 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .@"while" => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // condition
+                try ast.store.getExpr(a.cond).pushToSExprTree(gpa, env, ast, tree);
+
+                // body
+                try ast.store.getExpr(a.body).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .@"return" => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -1125,6 +1163,7 @@ pub const Statement = union(enum) {
             .dbg => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
+            .@"while" => |s| s.region,
             .@"return" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
@@ -2317,6 +2356,11 @@ pub const Expr = union(enum) {
         @"else": Expr.Idx,
         region: TokenizedRegion,
     },
+    if_without_else: struct {
+        condition: Expr.Idx,
+        then: Expr.Idx,
+        region: TokenizedRegion,
+    },
     match: struct {
         expr: Expr.Idx,
         branches: MatchBranch.Span,
@@ -2382,6 +2426,7 @@ pub const Expr = union(enum) {
             .suffix_single_question => |e| e.region,
             .apply => |e| e.region,
             .if_then_else => |e| e.region,
+            .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
             .block => |e| e.region,
@@ -2581,6 +2626,17 @@ pub const Expr = union(enum) {
                 try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
                 try ast.store.getExpr(stmt.then).pushToSExprTree(gpa, env, ast, tree);
                 try ast.store.getExpr(stmt.@"else").pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .if_without_else => |stmt| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-if-without-else");
+                try ast.appendRegionInfoToSexprTree(env, tree, stmt.region);
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
+                try ast.store.getExpr(stmt.then).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },

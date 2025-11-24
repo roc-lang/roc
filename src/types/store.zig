@@ -391,31 +391,19 @@ pub const Store = struct {
             .rigid => true, // Rigid variables need instantiation when used outside their defining scope
             .alias => true, // Aliases may contain type variables, so assume they need instantiation
             .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
+            .recursion_var => |rec_var| self.needsInstantiation(rec_var.structure),
             .err => false,
         };
     }
 
     pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) bool {
         return switch (flat_type) {
-            .str => false,
-            .box => |box_var| self.needsInstantiation(box_var),
-            .list => |list_var| self.needsInstantiation(list_var),
-            .list_unbound => true,
             .tuple => |tuple| blk: {
                 const elems_slice = self.sliceVars(tuple.elems);
                 for (elems_slice) |elem_var| {
                     if (self.needsInstantiation(elem_var)) break :blk true;
                 }
                 break :blk false;
-            },
-            .num => |num| switch (num) {
-                .num_poly => |poly_var| self.needsInstantiation(poly_var),
-                .num_unbound => true,
-                .int_poly => |poly_var| self.needsInstantiation(poly_var),
-                .int_unbound => true,
-                .frac_poly => |poly_var| self.needsInstantiation(poly_var),
-                .frac_unbound => true,
-                else => false, // Concrete numeric types don't need instantiation
             },
             .nominal_type => false, // Nominal types are concrete
             .fn_pure => |func| func.needs_instantiation,
@@ -732,7 +720,8 @@ pub const Store = struct {
     // serialization //
 
     /// Serialized representation of types store
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
         slots: SlotStore.Serialized,
         descs: DescStore.Serialized,
@@ -934,7 +923,8 @@ const SlotStore = struct {
     }
 
     /// Serialized representation of SlotStore
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         backing: collections.SafeList(Slot).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
@@ -1036,7 +1026,8 @@ const DescStore = struct {
     }
 
     /// Serialized representation of DescStore
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         backing: DescSafeMultiList.Serialized,
 
         /// Serialize a DescStore into this Serialized struct, appending data to the writer
@@ -1135,42 +1126,6 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
 
     const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, result.desc.content);
-    try std.testing.expectEqual(c, result.var_);
-    try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
-}
-
-test "resolveVarAndCompressPath - no-op on already root" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
-    const num_var = try store.freshFromContent(num);
-
-    const result = store.resolveVarAndCompressPath(num_var);
-
-    try std.testing.expectEqual(num, result.desc.content);
-    try std.testing.expectEqual(num_var, result.var_);
-    // try std.testing.expectEqual(store.getSlot(num_var), Slot{ .root = num_desc_idx });
-}
-
-test "resolveVarAndCompressPath - flattens redirect chain to structure" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    const num_flex = try store.fresh();
-    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
-    const c = try store.freshFromContent(num);
-    const b = try store.freshRedirect(c);
-    const a = try store.freshRedirect(b);
-
-    const result = store.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(num, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
@@ -1293,9 +1248,17 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     // Create various types
     const flex = try original.fresh();
-    const str_var = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const str_var = try original.freshFromContent(Content{ .structure = .empty_record });
     const list_elem = try original.fresh();
-    const list_var = try original.freshFromContent(Content{ .structure = .{ .list = list_elem } });
+    const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 999 };
+    const builtin_module_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 998 };
+    const list_content = try original.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        list_elem,
+        &[_]Var{list_elem},
+        builtin_module_idx,
+    );
+    const list_var = try original.freshFromContent(list_content);
 
     // Create a function type
     const arg1 = try original.fresh();
@@ -1356,10 +1319,14 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     // Verify all types
     const deser_str = deserialized.resolveVar(str_var);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
-    try std.testing.expectEqual(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
+    // List is a nominal type
+    try std.testing.expect(deser_list.desc.content.structure == .nominal_type);
+    const deser_nominal = deser_list.desc.content.structure.nominal_type;
+    const deser_list_args = deserialized.sliceNominalArgs(deser_nominal);
+    try std.testing.expectEqual(list_elem, deser_list_args[0]);
 
     const deser_func = deserialized.resolveVar(func_var);
     switch (deser_func.desc.content.structure) {
@@ -1474,7 +1441,7 @@ test "DescStore.Serialized roundtrip" {
         .mark = Mark.none,
     };
     const desc2 = Descriptor{
-        .content = Content{ .structure = .{ .str = {} } },
+        .content = Content{ .structure = .empty_record },
         .rank = Rank.top_level,
         .mark = Mark.visited,
     };
@@ -1533,7 +1500,7 @@ test "Store.Serialized roundtrip" {
 
     // Create some type variables
     const flex = try store.fresh();
-    const str_var = try store.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const str_var = try store.freshFromContent(Content{ .structure = .empty_record });
     const redirect_var = try store.freshRedirect(flex);
 
     // Create temp file
@@ -1574,7 +1541,7 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, flex_resolved.desc.content);
 
     const str_resolved = deserialized.resolveVar(str_var);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, str_resolved.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, str_resolved.desc.content);
 
     const redirect_resolved = deserialized.resolveVar(redirect_var);
     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
@@ -1596,7 +1563,7 @@ test "Store multiple instances CompactWriter roundtrip" {
 
     // Populate differently
     const var1_1 = try store1.fresh();
-    const var1_2 = try store1.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const var1_2 = try store1.freshFromContent(Content{ .structure = .empty_record });
     _ = try store1.freshRedirect(var1_1);
 
     const var2_1 = try store2.fresh();
@@ -1654,7 +1621,7 @@ test "Store multiple instances CompactWriter roundtrip" {
     // Verify store 1
     try std.testing.expectEqual(@as(usize, 3), deserialized1.len());
     const deser1_var2 = deserialized1.resolveVar(var1_2);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser1_var2.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, deser1_var2.desc.content);
 
     // Verify store 2
     try std.testing.expectEqual(@as(usize, 3), deserialized2.len());
@@ -1672,7 +1639,7 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     // Create several variables to populate SlotStore with roots
     const var1 = try original.freshFromContent(Content{ .flex = Flex.init() });
-    const var2 = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const var2 = try original.freshFromContent(Content{ .structure = .empty_record });
     const var3 = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) });
 
     // Create redirects to populate SlotStore with redirects
@@ -1729,7 +1696,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, resolved1.desc.content);
 
     const resolved2 = deserialized.resolveVar(var2);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, resolved2.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved2.desc.content);
 
     const resolved3 = deserialized.resolveVar(var3);
     try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) }, resolved3.desc.content);

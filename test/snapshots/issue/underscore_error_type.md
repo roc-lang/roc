@@ -38,7 +38,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
-TYPE MISMATCH - underscore_error_type.md:4:7:4:9
+MISSING METHOD - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:14:7:14:32
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
@@ -121,19 +121,16 @@ BadTuple := (_, U32)
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **BadType**, which has no method with that name:
 **underscore_error_type.md:4:7:4:9:**
 ```roc
 foo = 42
 ```
       ^^
 
-It has the type:
-    _Num(_size)_
 
-But the type annotation says it should have the type:
-    _BadType_
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -144,7 +141,7 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(Num(_size))_
+    _List(_a) where [List(b).from_numeral : List(b)]_
 
 But the type annotation says it should have the type:
     _BadList_
@@ -158,7 +155,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: Num(_size) }_
+    _{ field: Str, other: _field2 } where [{ field: Str, other: a }.from_numeral : { field: Str, other: a }]_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -186,7 +183,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, Num(_size))_
+    _(Str, _field2) where [(Str, a).from_numeral : (Str, a)]_
 
 But the type annotation says it should have the type:
     _BadTuple_
@@ -404,7 +401,7 @@ quux = ("hello", 42)
 		(nominal (type "BadTuple")
 			(ty-header (name "BadTuple"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "BadType"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

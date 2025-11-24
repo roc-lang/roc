@@ -5,57 +5,57 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-Result(a, b) : [Ok(a), Err(b)]
+Try(a, b) : [Ok(a), Err(b)]
 
 processData : Str -> Str
 processData = |data|
     "processed"
 
-# In a nested module scope, redeclare Result
+# In a nested module scope, redeclare Try
 InnerModule : {
-    Result : [Success, Failure]
+    Try : [Success, Failure]
 }
 ~~~
 # EXPECTED
-PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:11
-PARSE ERROR - type_shadowing_across_scopes.md:9:24:9:31
-PARSE ERROR - type_shadowing_across_scopes.md:9:31:9:32
+PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:8
+PARSE ERROR - type_shadowing_across_scopes.md:9:21:9:28
+PARSE ERROR - type_shadowing_across_scopes.md:9:28:9:29
 PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
-TYPE REDECLARED - type_shadowing_across_scopes.md:1:1:1:31
-MALFORMED TYPE - type_shadowing_across_scopes.md:9:24:9:31
+TYPE REDECLARED - type_shadowing_across_scopes.md:1:1:1:28
+MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:9:5:9:11:**
+**type_shadowing_across_scopes.md:9:5:9:8:**
 ```roc
-    Result : [Success, Failure]
+    Try : [Success, Failure]
 ```
-    ^^^^^^
+    ^^^
 
 
 **PARSE ERROR**
 A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:9:24:9:31:**
+**type_shadowing_across_scopes.md:9:21:9:28:**
 ```roc
-    Result : [Success, Failure]
+    Try : [Success, Failure]
 ```
-                       ^^^^^^^
+                    ^^^^^^^
 
 
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:9:31:9:32:**
+**type_shadowing_across_scopes.md:9:28:9:29:**
 ```roc
-    Result : [Success, Failure]
+    Try : [Success, Failure]
 ```
-                              ^
+                           ^
 
 
 **PARSE ERROR**
@@ -70,19 +70,19 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **TYPE REDECLARED**
-The type _Result_ is being redeclared.
+The type _Try_ is being redeclared.
 
 The redeclaration is here:
-**type_shadowing_across_scopes.md:1:1:1:31:**
+**type_shadowing_across_scopes.md:1:1:1:28:**
 ```roc
-Result(a, b) : [Ok(a), Err(b)]
+Try(a, b) : [Ok(a), Err(b)]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But _Result_ was already declared here:
+But _Try_ was already declared here:
 **type_shadowing_across_scopes.md:1:1:1:1:**
 ```roc
-Result(a, b) : [Ok(a), Err(b)]
+Try(a, b) : [Ok(a), Err(b)]
 ```
 ^
 
@@ -90,11 +90,11 @@ Result(a, b) : [Ok(a), Err(b)]
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
-**type_shadowing_across_scopes.md:9:24:9:31:**
+**type_shadowing_across_scopes.md:9:21:9:28:**
 ```roc
-    Result : [Success, Failure]
+    Try : [Success, Failure]
 ```
-                       ^^^^^^^
+                    ^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -126,7 +126,7 @@ EndOfFile,
 	(type-module)
 	(statements
 		(s-type-decl
-			(header (name "Result")
+			(header (name "Try")
 				(args
 					(ty-var (raw "a"))
 					(ty-var (raw "b"))))
@@ -158,13 +158,13 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Result(a, b) : [Ok(a), Err(b)]
+Try(a, b) : [Ok(a), Err(b)]
 
 processData : Str -> Str
 processData = |data|
 	"processed"
 
-# In a nested module scope, redeclare Result
+# In a nested module scope, redeclare Try
 InnerModule : 
 
 ~~~
@@ -183,7 +183,7 @@ InnerModule :
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
-		(ty-header (name "Result")
+		(ty-header (name "Try")
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
@@ -202,8 +202,8 @@ InnerModule :
 	(defs
 		(patt (type "Str -> Str")))
 	(type_decls
-		(alias (type "Result(a, b)")
-			(ty-header (name "Result")
+		(alias (type "Try(a, b)")
+			(ty-header (name "Try")
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))

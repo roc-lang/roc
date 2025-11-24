@@ -3,6 +3,13 @@
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
+
+/// Configure std library logging to suppress debug messages in production.
+/// This prevents debug logs from polluting stderr which should only contain
+/// actual program output (like Stderr.line! calls).
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+};
 const build_options = @import("build_options");
 const builtin = @import("builtin");
 const base = @import("base");
@@ -63,7 +70,6 @@ const Allocators = base.Allocators;
 const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
 test "main cli tests" {
-    _ = @import("test_bundle_logic.zig");
     _ = @import("libc_finder.zig");
     _ = @import("test_shared_memory_system.zig");
 }
@@ -116,6 +122,33 @@ var stdout_initialized = false;
 var stderr_buffer: [4096]u8 = undefined;
 var stderr_writer: std.fs.File.Writer = undefined;
 var stderr_initialized = false;
+
+var windows_console_configured = false;
+var windows_console_previous_code_page: ?std.os.windows.UINT = null;
+
+fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
+    if (!is_windows) return;
+    if (windows_console_configured) return;
+    windows_console_configured = true;
+
+    // Ensure the legacy console interprets escape sequences and UTF-8 output.
+    const kernel32 = std.os.windows.kernel32;
+    const current_code_page = kernel32.GetConsoleOutputCP();
+    if (current_code_page != 0 and current_code_page != 65001) {
+        windows_console_previous_code_page = current_code_page;
+        _ = kernel32.SetConsoleOutputCP(65001);
+    }
+    _ = std.fs.File.stdout().getOrEnableAnsiEscapeSupport();
+    _ = std.fs.File.stderr().getOrEnableAnsiEscapeSupport();
+}
+
+fn restoreWindowsConsoleCodePage() void {
+    if (!is_windows) return;
+    if (windows_console_previous_code_page) |code_page| {
+        windows_console_previous_code_page = null;
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
+    }
+}
 
 fn stdoutWriter() *std.Io.Writer {
     if (is_windows or !stdout_initialized) {
@@ -379,6 +412,7 @@ pub fn main() !void {
             .ReleaseFast, .ReleaseSmall => .{ std.heap.c_allocator, false },
         };
     };
+    defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
         const mem_state = debug_allocator.deinit();
         std.debug.assert(mem_state == .ok);
@@ -401,6 +435,7 @@ pub fn main() !void {
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
         }
+        restoreWindowsConsoleCodePage();
         std.process.exit(1);
     };
 
@@ -412,6 +447,8 @@ pub fn main() !void {
 fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    ensureWindowsConsoleSupportsAnsiAndUtf8();
 
     const stdout = stdoutWriter();
     defer stdout.flush() catch {};
@@ -869,12 +906,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
                     // as specified in the design document.
 
                     const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs.gpa)) |libc_info| {
-                        defer {
-                            var info = libc_info;
-                            info.deinit();
-                        }
-
+                    if (libc_finder.findLibc(allocs)) |libc_info| {
                         // Use system CRT files from the detected lib directory
                         // TODO: Remove this once platforms provide their own CRT files
                         const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {
@@ -1301,10 +1333,10 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 }
 
-/// Set up shared memory with a compiled ModuleEnv from a Roc file.
-/// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
+/// Set up shared memory with compiled ModuleEnvs from a Roc file and its platform modules.
+/// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
 /// ending up in shared memory because all allocations were done into shared memory.
-/// Stores all exported definitions for multi-entrypoint evaluation.
+/// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
 pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -1313,79 +1345,394 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     const shm_allocator = shm.allocator();
 
-    // Create a properly aligned header structure
-    const Header = struct {
-        parent_base_addr: u64,
-        entry_count: u32,
-        _padding: u32, // Ensure 8-byte alignment
-        def_indices_offset: u64,
-        module_env_offset: u64,
-    };
-
-    const header_ptr = try shm_allocator.create(Header);
-
-    // Store the base address of the shared memory mapping (for ASLR-safe relocation)
-    // The child will calculate the offset from its own base address
-    const shm_base_addr = @intFromPtr(shm.base_ptr);
-    header_ptr.parent_base_addr = shm_base_addr;
-
-    // Allocate the ModuleEnv right after the header for predictable layout
-    const env_ptr = try shm_allocator.create(ModuleEnv);
-    const module_env_offset = @intFromPtr(env_ptr) - @intFromPtr(shm.base_ptr);
-    header_ptr.module_env_offset = module_env_offset;
-
-    // Read the actual Roc file
-    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
-        std.log.err("Failed to open Roc file '{s}': {}", .{ roc_file_path, err });
-        return error.FileNotFound;
-    };
-    defer roc_file.close();
-
-    // Read the entire file into shared memory
-    const file_size = try roc_file.getEndPos();
-    const source = try shm_allocator.alloc(u8, @intCast(file_size));
-    _ = try roc_file.read(source);
-
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(roc_file_path);
-    const module_name = try shm_allocator.dupe(u8, basename);
-
-    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
+    // Load builtin modules
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
     defer builtin_modules.deinit();
 
-    // Create arena allocator for scratch memory
-    var arena = std.heap.ArenaAllocator.init(shm_allocator);
-    defer arena.deinit();
+    // Try to find and compile platform modules
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+    const platform_dir = try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, "platform" });
+    defer allocs.gpa.free(platform_dir);
 
-    var env = try ModuleEnv.init(shm_allocator, source);
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(shm_allocator);
+    const platform_main_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "main.roc" });
+    defer allocs.gpa.free(platform_main_path);
 
-    // Parse the source code as a full module
-    var parse_ast = try parse.parse(&env.common, allocs.gpa);
+    // Extract exposed modules from the platform header (if platform exists)
+    var exposed_modules = std.ArrayList([]const u8).empty;
+    defer exposed_modules.deinit(allocs.gpa);
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
+    extractExposedModulesFromPlatform(allocs, platform_main_path, &exposed_modules) catch {
+        // No platform found - that's fine, just continue with no platform modules
+    };
 
-    // Initialize CIR fields in ModuleEnv
-    try env.initCIRFields(shm_allocator, module_name);
-    const common_idents: Check.CommonIdents = .{
-        .module_name = try env.insertIdent(base.Ident.for_text("test")),
-        .list = try env.insertIdent(base.Ident.for_text("List")),
-        .box = try env.insertIdent(base.Ident.for_text("Box")),
+    // Create header - use multi-module format
+    const Header = struct {
+        parent_base_addr: u64,
+        module_count: u32,
+        entry_count: u32,
+        def_indices_offset: u64,
+        module_envs_offset: u64,
+    };
+
+    const header_ptr = try shm_allocator.create(Header);
+    const shm_base_addr = @intFromPtr(shm.base_ptr);
+    header_ptr.parent_base_addr = shm_base_addr;
+
+    // Module count = 1 (app) + number of platform modules
+    const total_module_count: u32 = 1 + @as(u32, @intCast(exposed_modules.items.len));
+    header_ptr.module_count = total_module_count;
+
+    // Allocate array for module env offsets
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, total_module_count);
+    const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.module_envs_offset = module_envs_offset_location;
+
+    // Compile platform modules (if any)
+    var platform_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, exposed_modules.items.len);
+    defer allocs.gpa.free(platform_env_ptrs);
+
+    for (exposed_modules.items, 0..) |module_name, i| {
+        const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
+        defer allocs.gpa.free(module_filename);
+
+        const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, module_filename });
+        defer allocs.gpa.free(module_path);
+
+        const module_env_ptr = try compileModuleToSharedMemory(
+            allocs,
+            module_path,
+            module_filename,
+            shm_allocator,
+            &builtin_modules,
+        );
+
+        // Add exposed item aliases with "pf." prefix for import resolution
+        // The canonicalizer builds lookup names like "Stdout.roc.pf.Stdout.line!"
+        // because the import "pf.Stdout" creates an alias Stdout -> pf.Stdout,
+        // and scopeLookupModule returns "pf.Stdout" which becomes part of the qualified name.
+        // We need to add aliases that match this pattern.
+        module_env_ptr.common.exposed_items.ensureSorted(shm_allocator);
+        const exposed_entries = module_env_ptr.common.exposed_items.items.entries.items;
+        for (exposed_entries) |entry| {
+            const key_ident: base.Ident.Idx = @bitCast(entry.key);
+            const key_text = module_env_ptr.common.getIdent(key_ident);
+
+            // Check if this is a qualified name like "Stdout.roc.Stdout.line!"
+            // We want to create an alias "Stdout.roc.pf.Stdout.line!"
+            // The pattern is: "{module}.roc.{Type}.{method}"
+            // We want to create: "{module}.roc.pf.{Type}.{method}"
+            if (std.mem.indexOf(u8, key_text, ".roc.")) |roc_pos| {
+                const prefix = key_text[0 .. roc_pos + 5]; // "Stdout.roc."
+                const suffix = key_text[roc_pos + 5 ..]; // "Stdout.line!"
+
+                // Create the aliased name "Stdout.roc.pf.Stdout.line!"
+                const aliased_name = try std.fmt.allocPrint(shm_allocator, "{s}pf.{s}", .{ prefix, suffix });
+                // Note: We don't defer free because this is allocated in shm_allocator (shared memory)
+
+                // Insert the aliased name into the platform env's ident table
+                const aliased_ident = try module_env_ptr.insertIdent(base.Ident.for_text(aliased_name));
+
+                // Add to exposed_items with the same node_idx value
+                try module_env_ptr.common.exposed_items.setNodeIndexById(shm_allocator, @bitCast(aliased_ident), entry.value);
+            }
+        }
+
+        // Store platform modules at indices 0..N-2, app will be at N-1
+        module_env_offsets_ptr[i] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
+        platform_env_ptrs[i] = module_env_ptr;
+    }
+
+    // Collect and sort all hosted functions globally, then assign indices
+    if (platform_env_ptrs.len > 0) {
+        const HostedCompiler = can.HostedCompiler;
+        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+        defer all_hosted_fns.deinit(allocs.gpa);
+
+        // Collect from all platform modules
+        for (platform_env_ptrs) |platform_env| {
+            var module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
+            defer module_fns.deinit(platform_env.gpa);
+
+            for (module_fns.items) |fn_info| {
+                try all_hosted_fns.append(allocs.gpa, fn_info);
+            }
+        }
+
+        // Sort globally
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+            }
+        };
+        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+        // Deduplicate
+        var write_idx: usize = 0;
+        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                if (write_idx != read_idx) {
+                    all_hosted_fns.items[write_idx] = fn_info;
+                }
+                write_idx += 1;
+            } else {
+                allocs.gpa.free(fn_info.name_text);
+            }
+        }
+        all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+        // Reassign global indices
+        for (platform_env_ptrs) |platform_env| {
+            const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+            for (all_defs) |def_idx| {
+                const def = platform_env.store.getDef(def_idx);
+                const expr = platform_env.store.getExpr(def.expr);
+
+                if (expr == .e_hosted_lambda) {
+                    const hosted = expr.e_hosted_lambda;
+                    const local_name = platform_env.getIdent(hosted.symbol_name);
+
+                    var plat_module_name = platform_env.module_name;
+                    if (std.mem.endsWith(u8, plat_module_name, ".roc")) {
+                        plat_module_name = plat_module_name[0 .. plat_module_name.len - 4];
+                    }
+                    const qualified_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}", .{ plat_module_name, local_name });
+                    defer allocs.gpa.free(qualified_name);
+
+                    const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                        qualified_name[0 .. qualified_name.len - 1]
+                    else
+                        qualified_name;
+
+                    for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                        if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                            const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                            var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                            expr_node.data_2 = @intCast(idx);
+                            platform_env.store.nodes.set(expr_node_idx, expr_node);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Now compile the app module
+    const app_env_ptr = try shm_allocator.create(ModuleEnv);
+
+    const app_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
+        std.log.err("Failed to open Roc file '{s}': {}", .{ roc_file_path, err });
+        return error.FileNotFound;
+    };
+    defer app_file.close();
+
+    const app_file_size = try app_file.getEndPos();
+    const app_source = try shm_allocator.alloc(u8, @intCast(app_file_size));
+    _ = try app_file.read(app_source);
+
+    const app_basename = std.fs.path.basename(roc_file_path);
+    const app_module_name = try shm_allocator.dupe(u8, app_basename);
+
+    var app_env = try ModuleEnv.init(shm_allocator, app_source);
+    app_env.common.source = app_source;
+    app_env.module_name = app_module_name;
+    try app_env.common.calcLineStarts(shm_allocator);
+
+    var app_parse_ast = try parse.parse(&app_env.common, allocs.gpa);
+    defer app_parse_ast.deinit(allocs.gpa);
+    app_parse_ast.store.emptyScratch();
+
+    try app_env.initCIRFields(shm_allocator, app_module_name);
+
+    var app_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer app_module_envs_map.deinit();
+
+    try Can.populateModuleEnvs(
+        &app_module_envs_map,
+        &app_env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+    );
+
+    // Add platform modules to the module envs map for canonicalization
+    // Two keys are needed for each platform module:
+    // 1. "pf.Stdout" - used during import validation (import pf.Stdout)
+    // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
+    // Also set statement_idx to a non-null value to trigger qualified name lookup,
+    // since associated items are stored as "Stdout.roc.Stdout.line!", not just "line!".
+    for (exposed_modules.items, 0..) |module_name, i| {
+        const platform_env = platform_env_ptrs[i];
+        const auto_type = Can.AutoImportedType{
+            .env = platform_env,
+            .statement_idx = @enumFromInt(0), // Non-null triggers qualified name building
+        };
+
+        // Add with qualified name key (for import validation: "pf.Stdout")
+        const qualified_name = try std.fmt.allocPrint(allocs.gpa, "pf.{s}", .{module_name});
+        defer allocs.gpa.free(qualified_name);
+        const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
+        try app_module_envs_map.put(qualified_ident, auto_type);
+
+        // Add with unaliased name key (for expression canonicalization: "Stdout")
+        const module_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+        try app_module_envs_map.put(module_ident, auto_type);
+
+        // Add with resolved module name key (for after alias resolution: "Stdout.roc")
+        // The import system resolves "pf.Stdout" to "Stdout.roc", so scopeLookupModule
+        // returns "Stdout.roc" which is then used to look up in module_envs
+        const module_name_with_roc = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
+        defer allocs.gpa.free(module_name_with_roc);
+        const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
+        try app_module_envs_map.put(resolved_ident, auto_type);
+    }
+
+    var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
+    defer app_canonicalizer.deinit();
+
+    try app_canonicalizer.canonicalizeFile();
+    try app_canonicalizer.validateForExecution();
+
+    if (app_env.exports.span.len == 0) {
+        std.log.err("No exported definitions found after canonicalization", .{});
+        return error.NoMainFunction;
+    }
+
+    // Store app env at the last index (N-1, after platform modules at 0..N-2)
+    module_env_offsets_ptr[total_module_count - 1] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
+
+    const exports_slice = app_env.store.sliceDefs(app_env.exports);
+    header_ptr.entry_count = @intCast(exports_slice.len);
+
+    const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+    header_ptr.def_indices_offset = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
+
+    for (exports_slice, 0..) |def_idx, i| {
+        def_indices_ptr[i] = @intFromEnum(def_idx);
+    }
+
+    // Type check with all imported modules
+    const app_common_idents: Check.CommonIdents = .{
+        .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
+        .list = try app_env.insertIdent(base.Ident.for_text("List")),
+        .box = try app_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try app_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
+        .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
     };
 
-    // Create module_envs map for auto-importing builtin types
+    var app_imported_envs = std.ArrayList(*const ModuleEnv).empty;
+    defer app_imported_envs.deinit(allocs.gpa);
+    try app_imported_envs.append(allocs.gpa, builtin_modules.builtin_module.env);
+    for (platform_env_ptrs) |penv| {
+        try app_imported_envs.append(allocs.gpa, penv);
+    }
+
+    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_common_idents);
+    defer app_checker.deinit();
+
+    try app_checker.checkFile();
+
+    app_env_ptr.* = app_env;
+
+    shm.updateHeader();
+
+    return SharedMemoryHandle{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+    };
+}
+
+/// Extract exposed modules from a platform's main.roc file
+fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const u8, exposed_modules: *std.ArrayList([]const u8)) !void {
+    // Read the Roc file
+    const source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    defer allocs.gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try allocs.arena.dupe(u8, basename);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(allocs.gpa);
+
+    // Parse the source code as a full module
+    var parse_ast = parse.parse(&env.common, allocs.gpa) catch return error.ParseFailed;
+    defer parse_ast.deinit(allocs.gpa);
+
+    // Look for platform header in the AST
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file with a platform header
+    switch (header) {
+        .platform => |platform_header| {
+            // Get the exposes collection
+            const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
+            const exposes_items = parse_ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
+
+            // Extract all exposed module names
+            for (exposes_items) |item_idx| {
+                const item = parse_ast.store.getExposedItem(item_idx);
+                const token_idx = switch (item) {
+                    .upper_ident => |ui| ui.ident,
+                    .upper_ident_star => |uis| uis.ident,
+                    .lower_ident => |li| li.ident,
+                    .malformed => continue, // Skip malformed items
+                };
+                const item_name = parse_ast.resolve(token_idx);
+                try exposed_modules.append(allocs.gpa, try allocs.arena.dupe(u8, item_name));
+            }
+        },
+        else => {
+            return error.NotPlatformFile;
+        },
+    }
+}
+
+/// Compile a single module to shared memory (for platform modules)
+fn compileModuleToSharedMemory(
+    allocs: *Allocators,
+    file_path: []const u8,
+    module_name_arg: []const u8,
+    shm_allocator: std.mem.Allocator,
+    builtin_modules: *eval.BuiltinModules,
+) !*ModuleEnv {
+    // Read file
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    const file_size = try file.getEndPos();
+    const source = try shm_allocator.alloc(u8, @intCast(file_size));
+    _ = try file.read(source);
+
+    const module_name_copy = try shm_allocator.dupe(u8, module_name_arg);
+
+    // Initialize ModuleEnv
+    var env = try ModuleEnv.init(shm_allocator, source);
+    env.common.source = source;
+    env.module_name = module_name_copy;
+    try env.common.calcLineStarts(shm_allocator);
+
+    // Parse
+    var parse_ast = try parse.parse(&env.common, allocs.gpa);
+    defer parse_ast.deinit(allocs.gpa);
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR
+    try env.initCIRFields(shm_allocator, module_name_copy);
+
+    // Create module_envs map
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs_map.deinit();
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
-    // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs_map,
         &env,
@@ -1393,64 +1740,42 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         builtin_modules.builtin_indices,
     );
 
-    // Create canonicalizer with module_envs
+    // Canonicalize (without root_is_platform - we'll run HostedCompiler separately)
     var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
+    defer canonicalizer.deinit();
 
-    // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
-    try canonicalizer.validateForExecution();
 
-    // Validation check - ensure exports were populated during canonicalization
-    if (env.exports.span.len == 0) {
-        std.log.err("No exported definitions found after canonicalization", .{});
-        return error.NoMainFunction;
-    }
+    // Run HostedCompiler to convert e_anno_only to e_hosted_lambda
+    // This is the key step for platform type modules
+    const HostedCompiler = can.HostedCompiler;
+    _ = try HostedCompiler.replaceAnnoOnlyWithHosted(&env);
 
-    // Get the exported definitions from the canonicalization process
-    const exports_slice = env.store.sliceDefs(env.exports);
+    // Type check
+    var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer check_module_envs_map.deinit();
 
-    // Store entry count based on exports
-    header_ptr.entry_count = @intCast(exports_slice.len);
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try env.insertIdent(base.Ident.for_text(module_name_arg)),
+        .list = try env.insertIdent(base.Ident.for_text("List")),
+        .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
+        .bool_stmt = builtin_modules.builtin_indices.bool_type,
+        .try_stmt = builtin_modules.builtin_indices.try_type,
+        .str_stmt = builtin_modules.builtin_indices.str_type,
+        .builtin_module = builtin_modules.builtin_module.env,
+    };
 
-    // Allocate space for exported def indices array
-    const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+    const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
+    defer checker.deinit();
 
-    // Store the def_indices location in the header
-    const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
-    header_ptr.def_indices_offset = def_indices_location;
-
-    // Store definition index for each exported function
-    for (exports_slice, 0..) |def_idx, i| {
-        def_indices_ptr[i] = @intFromEnum(def_idx);
-    }
-
-    // Type check the module - pass the single Builtin module as the only imported module
-    const imported_envs = [_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
-    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &module_envs_map, &env.store.regions, common_idents);
     try checker.checkFile();
 
-    // Copy the ModuleEnv to the allocated space
+    // Allocate and return
+    const env_ptr = try shm_allocator.create(ModuleEnv);
     env_ptr.* = env;
-
-    // Clean up the canonicalizer and parsing structures
-    canonicalizer.deinit();
-
-    // Clean up parse_ast since it was allocated with gpa, not shared memory
-    parse_ast.deinit(allocs.gpa);
-
-    // Clean up checker since it was allocated with shared memory, but we need to clean up its gpa allocations
-    checker.deinit();
-
-    // Update the header with used size
-    shm.updateHeader();
-
-    // Return the shared memory handle from SharedMemoryAllocator
-    // This ensures we use the SAME shared memory region for both processes
-    return SharedMemoryHandle{
-        .fd = shm.handle,
-        .ptr = shm.base_ptr,
-        .size = shm.getUsedSize(),
-    };
+    return env_ptr;
 }
 
 fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
@@ -1782,7 +2107,12 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
                 const field_name = parse_ast.resolve(field.name);
-                try entrypoints.append(try allocs.arena.dupe(u8, field_name));
+                // Strip trailing '!' from effectful function names for the exported symbol
+                const symbol_name = if (std.mem.endsWith(u8, field_name, "!"))
+                    field_name[0 .. field_name.len - 1]
+                else
+                    field_name;
+                try entrypoints.append(try allocs.arena.dupe(u8, symbol_name));
             }
 
             if (provides_fields.len == 0) {
@@ -2417,8 +2747,10 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .try_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .builtin_module = null,
     };
 
@@ -2480,7 +2812,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     defer builtin_module.deinit();
 
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -2761,6 +3093,31 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Additional errors from std library that might be missing
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
+    // Interpreter errors (propagate from eval during build)
+    Crash,
+    DivisionByZero,
+    IntegerOverflow,
+    InvalidMethodReceiver,
+    InvalidNumExt,
+    InvalidTagExt,
+    ListIndexOutOfBounds,
+    MethodLookupFailed,
+    MethodNotFound,
+    NotImplemented,
+    NotNumeric,
+    NullStackPointer,
+    RecordIndexOutOfBounds,
+    StackOverflow,
+    StringOrderingNotSupported,
+    TupleIndexOutOfBounds,
+    TypeMismatch,
+    ZeroSizedType,
+    // Layout errors
+    TypeContainedMismatch,
+    InvalidRecordExtension,
+    InvalidNumberExtension,
+    BugUnboxedFlexVar,
+    BugUnboxedRigidVar,
 };
 
 /// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)

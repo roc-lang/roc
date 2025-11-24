@@ -160,21 +160,10 @@ const CheckOccurs = struct {
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
-                        .str => {},
-                        .box => |sub_var| {
-                            try self.occursSubVar(root, sub_var, ctx.allowRecursion());
-                        },
-                        .list => |sub_var| {
-                            try self.occursSubVar(root, sub_var, ctx.allowRecursion());
-                        },
-                        .list_unbound => {
-                            // list_unbound has no sub-variables to check
-                        },
                         .tuple => |tuple| {
                             const elems = self.types_store.sliceVars(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
                         },
-                        .num => {},
                         .nominal_type => |nominal_type| {
                             // Check all argument vars using iterator
                             var arg_iter = self.types_store.iterNominalArgs(nominal_type);
@@ -230,8 +219,19 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => {},
+                .flex => |flex| {
+                    // Check static dispatch constraints to detect cycles through constraint functions
+                    // For example: a.plus : a, a -> a (where the function type refers back to 'a')
+                    const constraints = self.types_store.static_dispatch_constraints.sliceRange(flex.constraints);
+                    for (constraints) |constraint| {
+                        try self.occursSubVar(root, constraint.fn_var, ctx);
+                    }
+                },
                 .rigid => {},
+                .recursion_var => |rec_var| {
+                    // Check the structure the recursion var points to
+                    try self.occursSubVar(root, rec_var.structure, ctx);
+                },
                 .err => {},
             }
             self.scratch.popSeen();
@@ -375,35 +375,13 @@ test "occurs: no recurcion (v = Str)" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const str_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     const result = occurs(&types_store, &scratch, str_var);
     try std.testing.expectEqual(.not_recursive, result);
 }
 
-test "occurs: direct recursion (v = List v)" {
-    const gpa = std.testing.allocator;
-    var types_store = try Store.init(gpa);
-    defer types_store.deinit();
-
-    var scratch = try Scratch.init(gpa);
-    defer scratch.deinit();
-
-    const list_var = try types_store.fresh();
-    const list_content = Content{
-        .structure = .{ .list = list_var },
-    };
-    try types_store.setRootVarContent(list_var, list_content);
-
-    const result = occurs(&types_store, &scratch, list_var);
-    try std.testing.expectEqual(.recursive_anonymous, result);
-
-    const err_chain = scratch.errChainSlice();
-    try std.testing.expectEqual(1, err_chain.len);
-    try std.testing.expectEqual(list_var, err_chain[0]);
-}
-
-test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
+test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
     defer types_store.deinit();
@@ -414,31 +392,15 @@ test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
     const v1 = try types_store.fresh();
     const v2 = try types_store.fresh();
 
-    try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
-    try types_store.setRootVarContent(v2, Content{ .structure = .{ .list = v1 } });
-
-    const result = occurs(&types_store, &scratch, v1);
-    try std.testing.expectEqual(.recursive_anonymous, result);
-
-    const err_chain = scratch.errChainSlice();
-    try std.testing.expectEqual(2, err_chain.len);
-    try std.testing.expectEqual(v2, err_chain[0]);
-    try std.testing.expectEqual(v1, err_chain[1]);
-}
-
-test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
-    const gpa = std.testing.allocator;
-    var types_store = try Store.init(gpa);
-    defer types_store.deinit();
-
-    var scratch = try Scratch.init(gpa);
-    defer scratch.deinit();
-
-    const v1 = try types_store.fresh();
-    const v2 = try types_store.fresh();
-
-    try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
-    try types_store.setRootVarContent(v2, Content{ .structure = .str });
+    // Create a nominal Box type wrapping v2
+    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
+    try types_store.setVarContent(v1, try types_store.mkNominal(
+        undefined,
+        backing_var,
+        &.{v2},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
+    try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
 
     const result = occurs(&types_store, &scratch, v1);
     try std.testing.expectEqual(.not_recursive, result);
@@ -453,7 +415,7 @@ test "occurs: tuple recursion (v = Tuple(v, Str))" {
     defer scratch.deinit();
 
     const v = try types_store.fresh();
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const str_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     const elems_range = try types_store.appendVars(&[_]Var{ v, str_var });
     const tuple = types.Tuple{ .elems = elems_range };
@@ -476,7 +438,7 @@ test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const str_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     const elems_range = try types_store.appendVars(&[_]Var{ str_var, str_var });
     const tuple = types.Tuple{ .elems = elems_range };
@@ -524,8 +486,8 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     defer scratch.deinit();
 
     const alias_var = try types_store.fresh();
-    const backing_var = try types_store.freshFromContent(Content{ .structure = .str });
-    const arg_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
+    const arg_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     try types_store.setRootVarContent(alias_var, try types_store.mkAlias(
         types.TypeIdent{ .ident_idx = undefined },
@@ -582,9 +544,15 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const linked_list = try types_store.fresh();
     const elem = try types_store.fresh();
 
-    // Wrap the recursive var in a Box to simulate nesting
+    // Wrap the recursive var in a nominal Box to simulate nesting
     const boxed_linked_list = try types_store.fresh();
-    try types_store.setRootVarContent(boxed_linked_list, .{ .structure = .{ .box = linked_list } });
+    const box_backing_var = try types_store.freshFromContent(.{ .structure = .empty_record });
+    try types_store.setVarContent(boxed_linked_list, try types_store.mkNominal(
+        undefined,
+        box_backing_var,
+        &.{linked_list},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
 
     // Build tag args: (elem, Box(linked_list))
     const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, boxed_linked_list });

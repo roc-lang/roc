@@ -84,8 +84,9 @@ pub fn serialize(
     return @constCast(offset_self);
 }
 
-/// Serialized representation of ModuleEnv
-pub const Serialized = struct {
+/// Serialized representation of CommonEnv
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,
     exposed_items: ExposedItems.Serialized,

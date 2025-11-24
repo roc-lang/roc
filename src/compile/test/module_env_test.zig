@@ -90,7 +90,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .gpa = gpa,
         .common = common,
         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
-        .module_kind = deserialized_ptr.module_kind,
+        .module_kind = deserialized_ptr.module_kind.decode(),
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,
@@ -108,6 +108,20 @@ test "ModuleEnv.Serialized roundtrip" {
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent("minus") orelse unreachable,
+        .times_ident = common.findIdent("times") orelse unreachable,
+        .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+        .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+        .not_ident = common.findIdent("not") orelse unreachable,
+        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
     };
 
     // Verify the data was preserved
@@ -115,8 +129,9 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 6 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus
-    try testing.expectEqual(@as(u32, 9), original.common.idents.interner.entry_count);
+    // ModuleEnv.init() also interns 19 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
+    // Plus 13 numeric type identifiers: Num.U8, Num.I8, Num.U16, Num.I16, Num.U32, Num.I32, Num.U64, Num.I64, Num.U128, Num.I128, Num.F32, Num.F64, Num.Dec
+    try testing.expectEqual(@as(u32, 35), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -125,8 +140,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 9 identifiers as original: hello, world, TestModule + 6 well-known identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 9), env.common.idents.interner.entry_count);
+    // Should have same 35 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 13 numeric type identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 35), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -404,13 +419,29 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     // First add a string literal
     const str_literal_idx = try env.insertString("hello");
 
+    // Create a nominal Str type
+    const str_ident = try env.insertIdent(base.Ident.for_text("Str"));
+    const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
+
+    // Create backing type for Str (empty_record as placeholder for the tag union)
+    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const str_vars = [_]types.Var{str_backing_var};
+    const str_vars_range = try env.types.appendVars(&str_vars);
+
+    const str_nominal = types.NominalType{
+        .ident = types.TypeIdent{ .ident_idx = str_ident },
+        .vars = .{ .nonempty = str_vars_range },
+        .origin_module = builtin_ident,
+    };
+    const str_type = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    _ = str_type;
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    _ = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);
@@ -426,9 +457,6 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     // Verify the output contains the type information
     const result_str = result.items;
-
-    // Uncomment to debug:
-    // std.debug.print("\nType extraction result:\n{s}\n", .{result_str});
 
     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);

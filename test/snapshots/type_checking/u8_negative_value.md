@@ -9,19 +9,9 @@ x : U8
 x = -1
 ~~~
 # EXPECTED
-NEGATIVE UNSIGNED INTEGER - u8_negative_value.md:2:5:2:7
+NIL
 # PROBLEMS
-**NEGATIVE UNSIGNED INTEGER**
-The number **-1** is **signed** because it is negative:
-**u8_negative_value.md:2:5:2:7:**
-```roc
-x = -1
-```
-    ^^
-
-However, its inferred type is **unsigned**:
-    _Num(Int(Unsigned8))_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -56,7 +46,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8))")))
+		(patt (type "U8")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U8"))))
 ~~~

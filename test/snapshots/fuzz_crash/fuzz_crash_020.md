@@ -177,6 +177,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
 NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
@@ -743,6 +744,11 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
@@ -878,7 +884,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    _Num(_size)_
+    __f where [j.from_numeral : j]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -909,7 +915,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]_others_
+    _[Blue][ProvidedByCompiler]_
 
 All patterns in an `match` must have compatible types.
 
@@ -951,7 +957,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(Num(_size), Str, Error, [O]_others, (Error, Error), List(Num(_size2)))_
+    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [(j, Str, Error, [O]k, (Error, Error), List(l)).from_numeral : (j, Str, Error, [O]k, (Error, Error), List(l)), (j, Str, Error, [O]k, (Error, Error), List(l)).from_numeral : (j, Str, Error, [O]k, (Error, Error), List(l))]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1857,9 +1863,7 @@ expect {
 					(s-expr
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-num (value "5")))
 							(e-binop (op "or")
 								(e-binop (op "and")
@@ -1977,10 +1981,10 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "[Rum]_others -> Error"))
-		(patt (type "[Blue]_others -> Error"))
+		(patt (type "[Blue][ProvidedByCompiler] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{  }"))
@@ -2014,10 +2018,10 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "[Rum]_others -> Error"))
-		(expr (type "[Blue]_others -> Error"))
+		(expr (type "[Blue][ProvidedByCompiler] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{  }"))

@@ -40,6 +40,26 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         anno: ?Annotation.Idx,
     },
+    /// A generalized declaration (for lambdas and number literals only).
+    /// These bindings use let-polymorphism and can be instantiated at different types.
+    ///
+    /// ```roc
+    /// id = |x| x         # generalized - can be used polymorphically
+    /// number = id(0)     # works
+    /// empty_str = id("") # also works
+    ///
+    /// one = 1            # generalized - can be used polymorphically
+    /// u64_one = one + [].len()   # `one` can be a U64
+    /// two_point_one = one + 1.1  # `one` can also be Dec
+    /// ```
+    ///
+    /// Other literals don't allow generalization - see
+    /// https://github.com/seanpm2001/Roc-Lang_RFCs/blob/main/0010-let-generalization-lets-not.md
+    s_decl_gen: struct {
+        pattern: Pattern.Idx,
+        expr: Expr.Idx,
+        anno: ?Annotation.Idx,
+    },
     /// A rebindable declaration using the "var" keyword.
     ///
     /// Not valid at the top level of a module.
@@ -109,6 +129,20 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         body: Expr.Idx,
     },
+    /// A block of code that will run repeatedly while a condition is true.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// while $count < 10 {
+    ///     print!($count.toStr())
+    ///     $count = $count + 1
+    /// }
+    /// ```
+    s_while: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
@@ -147,7 +181,7 @@ pub const Statement = union(enum) {
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
     /// ```roc
-    /// print! : Str => Result({}, [IOErr])
+    /// print! : Str => Try({}, [IOErr])
     /// ```
     ///
     /// Typically an annotation will be stored on the `Def` and will not be
@@ -164,11 +198,23 @@ pub const Statement = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .s_decl => |d| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-let");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getPattern(d.pattern).pushToSExprTree(env, tree, d.pattern);
+                try env.store.getExpr(d.expr).pushToSExprTree(env, tree, d.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_decl_gen => |d| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-let");
                 const region = env.store.getStatementRegion(stmt_idx);
@@ -255,6 +301,18 @@ pub const Statement = union(enum) {
 
                 try env.store.getPattern(s.patt).pushToSExprTree(env, tree, s.patt);
                 try env.store.getExpr(s.expr).pushToSExprTree(env, tree, s.expr);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_while => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
                 try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
 
                 try tree.endNode(begin, attrs);

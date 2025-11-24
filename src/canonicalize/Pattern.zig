@@ -66,7 +66,7 @@ pub const Pattern = union(enum) {
     /// Used for pattern matching nominal types.
     ///
     /// ```roc
-    /// Result.Ok("success")       # Tags
+    /// Try.Ok("success")       # Tags
     /// Config.{ optimize : Bool}  # Records
     /// Point.(1.0, 2.0)           # Tuples
     /// Point.(1.0)                # Values
@@ -80,7 +80,7 @@ pub const Pattern = union(enum) {
     /// Used for pattern matching nominal types.
     ///
     /// ```roc
-    /// MyModule.Result.Ok("success")       # Tags
+    /// MyModule.Try.Ok("success")       # Tags
     /// MyModule.Config.{ optimize : Bool}  # Records
     /// MyModule.Point.(1.0, 2.0)           # Tuples
     /// MyModule.Point.(1.0)                # Values
@@ -231,7 +231,7 @@ pub const Pattern = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Represents the destructuring of a single field within a record pattern.
     /// Each record destructure specifies how to extract a field from a record.
@@ -247,7 +247,7 @@ pub const Pattern = union(enum) {
         kind: Kind,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
 
         /// The kind of record field destructuring pattern.
         pub const Kind = union(enum) {

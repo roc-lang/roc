@@ -73,7 +73,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .gpa = gpa,
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
+        .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -91,6 +91,20 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
         .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .minus_ident = common.findIdent("minus") orelse unreachable,
+        .times_ident = common.findIdent("times") orelse unreachable,
+        .div_by_ident = common.findIdent("div_by") orelse unreachable,
+        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+        .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
+        .not_ident = common.findIdent("not") orelse unreachable,
+        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
     };
 
     return LoadedModule{
@@ -113,6 +127,8 @@ module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 builtin_module: LoadedModule,
 // Whether this TestEnv owns the builtin_module and should deinit it
 owns_builtin_module: bool,
+/// Heap-allocated source buffer owned by this TestEnv (if any)
+owned_source: ?[]u8 = null,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -122,7 +138,7 @@ const TestEnv = @This();
 /// Accepts another module that should already be can'd and type checked, and will
 /// add that module as an import to this module.
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
-/// type variables from auto-imported types (Bool, Result, Str) are shared across modules.
+/// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
@@ -143,7 +159,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
     // Reuse the Builtin module from the imported module
-    // This ensures type variables for auto-imported types (Bool, Result, Str) are shared
+    // This ensures type variables for auto-imported types (Bool, Try, Str) are shared
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const builtin_env = other_test_env.builtin_module.env;
 
@@ -180,7 +196,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .statement_idx = statement_idx,
     });
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs,
@@ -203,16 +219,19 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     try can.canonicalizeFile();
     try can.validateForChecking();
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = other_test_env.builtin_module.env,
     };
 
@@ -282,7 +301,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-    // Load Builtin module once - Bool, Result, and Str are all types within this module
+    // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
@@ -296,7 +315,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
-    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
     // This ensures production and tests use identical logic
     try Can.populateModuleEnvs(
         &module_envs,
@@ -319,16 +338,19 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try can.canonicalizeFile();
     try can.validateForChecking();
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 
@@ -372,16 +394,23 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !TestEnv {
+    const gpa = std.testing.allocator;
+
     const source_wrapper =
         \\main =
     ;
 
-    var source: [source_wrapper.len + 1 + source_expr.len]u8 = undefined;
-    std.mem.copyForwards(u8, source[0..], source_wrapper);
-    std.mem.copyForwards(u8, source[source_wrapper.len..], " ");
+    const total_len = source_wrapper.len + 1 + source_expr.len;
+    var source = try gpa.alloc(u8, total_len);
+    errdefer gpa.free(source);
+
+    std.mem.copyForwards(u8, source[0..source_wrapper.len], source_wrapper);
+    source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    return TestEnv.init(module_name, &source);
+    var test_env = try TestEnv.init(module_name, source);
+    test_env.owned_source = source;
+    return test_env;
 }
 
 pub fn deinit(self: *TestEnv) void {
@@ -397,6 +426,10 @@ pub fn deinit(self: *TestEnv) void {
     // Since common is now a value field, we don't need to free it separately
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
+
+    if (self.owned_source) |buffer| {
+        self.gpa.free(buffer);
+    }
 
     self.module_envs.deinit();
 
@@ -455,9 +488,7 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
-    try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
-    try self.assertNoTypeProblems();
+    try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
@@ -466,6 +497,23 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
 
     try self.type_writer.write(last_def_var);
     try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+/// Assert that the last definition's type contains the given substring
+pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) !void {
+    try self.assertNoErrors();
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var);
+    const type_str = self.type_writer.get();
+    if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
+        std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });
+        return error.TestExpectedEqual;
+    }
 }
 
 /// Get the inferred type descriptor of the last declaration
@@ -481,6 +529,13 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
     const last_def_idx = defs_slice[defs_slice.len - 1];
 
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
+}
+
+/// Assert that there were no parse, canonicalization, or type checking errors.
+pub fn assertNoErrors(self: *TestEnv) !void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertNoTypeProblems();
 }
 
 /// Assert that there was a single type error when checking the input. Assert

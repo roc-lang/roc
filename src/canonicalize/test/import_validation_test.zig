@@ -84,7 +84,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try utils_env.addExposedById(map_idx);
     const filter_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("filter"));
     try utils_env.addExposedById(filter_idx);
-    const result_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("Result"));
+    const result_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("Try"));
     try utils_env.addExposedById(result_idx);
     // Parse source code with various import statements
     const source =
@@ -94,7 +94,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\import Json exposing [decode, JsonError]
         \\
         \\# Import from existing module with some invalid items
-        \\import Utils exposing [map, doesNotExist, Result, InvalidType]
+        \\import Utils exposing [map, doesNotExist, Try, InvalidType]
         \\
         \\# Import from non-existent module
         \\import NonExistent exposing [something, SomeType]
@@ -171,7 +171,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try expectEqual(true, found_does_not_exist);
     try expectEqual(true, found_invalid_type);
     // Verify that valid imports didn't generate errors
-    // The imports for decode, JsonError, map, Result, encode, and DecodeProblem should all work
+    // The imports for decode, JsonError, map, Try, encode, and DecodeProblem should all work
 }
 
 test "import validation - no module_envs provided" {
@@ -296,7 +296,7 @@ test "import interner - comprehensive usage example" {
         \\
         \\import List exposing [map, filter]
         \\import Dict
-        \\import Result exposing [Result, withDefault]
+        \\import Try exposing [Try, withDefault]
         \\
         \\process : List Str -> Dict Str Nat
         \\process = \items ->
@@ -321,7 +321,7 @@ test "import interner - comprehensive usage example" {
     }
     _ = try result.can.canonicalizeFile();
     // Check that we have the correct number of unique imports
-    // Expected: List, Dict, Result (3 unique)
+    // Expected: List, Dict, Try (3 unique)
     try expectEqual(@as(usize, 3), result.parse_env.imports.imports.len());
     // Verify each unique module has an Import.Idx
     var found_list = false;
@@ -333,7 +333,7 @@ test "import interner - comprehensive usage example" {
             // Note: We can't verify exposed items count here as Import.Store only stores module names
         } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Dict")) {
             found_dict = true;
-        } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Result")) {
+        } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Try")) {
             found_result = true;
         }
         // Verify Import.Idx can be created from the index

@@ -202,6 +202,7 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:13:7
 UNDECLARED TYPE - everything.md:43:5:43:6
 MODULE NOT FOUND - everything.md:2:1:5:2
 MODULE NOT FOUND - everything.md:6:1:9:2
+EXPECTED NOMINAL TYPE - everything.md:71:7:74:3
 UNUSED VARIABLE - everything.md:88:5:88:6
 UNUSED VARIABLE - everything.md:93:4:93:5
 UNUSED VARIABLE - everything.md:98:5:98:6
@@ -371,7 +372,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:17:11:17:12:**
@@ -529,7 +530,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:22:1:22:2:**
@@ -753,7 +754,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:27:11:27:12:**
@@ -911,7 +912,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:33:1:33:2:**
@@ -1232,6 +1233,21 @@ import I2 exposing [
 ]
 ```
 
+
+**EXPECTED NOMINAL TYPE**
+You are using the type _A_ like a nominal type, but it is an alias.
+
+This type is referenced here:
+**everything.md:71:7:74:3:**
+```roc
+	h3 = A(
+		x,
+		y
+	)
+```
+
+
+**Hint:** You can declare this type with `:=` to make it nominal.
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -1812,12 +1828,7 @@ h = |x, y| {
 								(p-assign (ident "y")))))
 					(s-let
 						(p-assign (ident "h3"))
-						(e-tag (name "A")
-							(args
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
+						(e-runtime-error (tag "type_alias_but_needed_nominal")))
 					(s-let
 						(p-assign (ident "h4"))
 						(e-list

@@ -92,6 +92,11 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     @"for",
+    /// A while statement
+    /// * main_token - node index for condition expression
+    /// * lhs - node index for condition expression
+    /// * rhs - node index for loop body expression
+    @"while",
     /// An early return statement
     /// * lhs - node index for expr
     /// * rhs - ignored
@@ -123,7 +128,7 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_nominal,
     /// A Type annotation
-    /// Example: `main! : List Str => Result {} _`
+    /// Example: `main! : List Str => Try {} _`
     /// Example: `colors : List Color`
     /// Example: `color : { red : U8, green: U8, blue: U8 }`
     /// * main_token - lower_ident token index
@@ -402,6 +407,11 @@ pub const Tag = enum {
     /// * lhs - node index of expr
     /// * rhs - RHS DESCRIPTION
     if_then_else,
+    /// If-statement (no else branch) - statement form of if, returns unit type
+    /// Example: if Bool.true {}
+    /// * lhs - node index of condition expr
+    /// * rhs - node index of then branch expr
+    if_without_else,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - start index of extra_data

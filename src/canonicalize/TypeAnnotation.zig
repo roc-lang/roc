@@ -97,7 +97,7 @@ pub const TypeAnno = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
@@ -325,7 +325,7 @@ pub const TypeAnno = union(enum) {
         ty: TypeAnno.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: DataSpan };
+        pub const Span = extern struct { span: DataSpan };
     };
 
     /// Either a locally declare type, or an external type
@@ -375,7 +375,6 @@ pub const TypeAnno = union(enum) {
 
     /// A builtin type
     pub const Builtin = enum {
-        str,
         list,
         box,
         num,
@@ -398,7 +397,6 @@ pub const TypeAnno = union(enum) {
         /// Convert a builtin type to it's name
         pub fn toBytes(self: @This()) []const u8 {
             switch (self) {
-                .str => return "Str",
                 .list => return "List",
                 .box => return "Box",
                 .num => return "Num",
@@ -422,7 +420,6 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Box")) return .box;
             if (std.mem.eql(u8, bytes, "Num")) return .num;

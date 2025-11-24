@@ -13,7 +13,7 @@ pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const safe_memory = @import("safe_memory.zig");
 
 pub const target = @import("target.zig");
-pub const DataSpan = @import("DataSpan.zig");
+pub const DataSpan = @import("DataSpan.zig").DataSpan;
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
@@ -46,14 +46,14 @@ pub const CalledVia = enum {
     string_interpolation,
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
-    /// { Result.parallel <-
+    /// { Try.parallel <-
     ///     foo: get("a"),
     ///     bar: get("b"),
     /// }
     /// ```
     /// is transformed into
     /// ```roc
-    /// Result.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
+    /// Try.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
     /// ```
     record_builder,
 };
@@ -92,7 +92,7 @@ pub const FracLiteral = union(enum) {
 };
 
 /// An integer or fractional number literal.
-pub const NumLiteral = union(enum) {
+pub const Numeral = union(enum) {
     Int: IntLiteral,
     Frac: FracLiteral,
 };

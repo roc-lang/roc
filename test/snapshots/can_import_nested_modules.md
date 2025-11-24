@@ -18,7 +18,7 @@ authenticate : Str, Str -> HttpAuth.Token
 authenticate = |user, pass| HttpAuth.login(user, pass)
 
 # Test deeply nested qualification
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
 processData = |advancedConfig, input|
     Config.Parser.Advanced.parseWith(advancedConfig, input)
 
@@ -27,7 +27,7 @@ formatOutput : Str -> Str
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 # Test qualified type in function signature
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
@@ -38,7 +38,7 @@ MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
+MODULE NOT IMPORTED - can_import_nested_modules.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
@@ -115,7 +115,7 @@ There is no module with the name `Config.Parser` imported into this Roc file.
 You're attempting to use this module here:
 **can_import_nested_modules.md:14:15:14:37:**
 ```roc
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
 ```
               ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -124,11 +124,11 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 There is no module with the name `Config.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:14:58:14:77:**
+**can_import_nested_modules.md:14:55:14:74:**
 ```roc
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
 ```
-                                                         ^^^^^^^^^^^^^^^^^^^
+                                                      ^^^^^^^^^^^^^^^^^^^
 
 
 **DOES NOT EXIST**
@@ -236,7 +236,7 @@ EndOfFile,
 				(ty (name "Config.Parser.Advanced"))
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Str"))
 					(ty (name "Config.Parser.Error")))))
 		(s-decl
@@ -266,7 +266,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "HttpAuth.Credentials"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "HttpAuth.Token"))
 					(ty (name "HttpAuth.Error")))))
 		(s-decl
@@ -293,7 +293,7 @@ authenticate : Str, Str -> HttpAuth.Token
 authenticate = |user, pass| HttpAuth.login(user, pass)
 
 # Test deeply nested qualification
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
 processData = |advancedConfig, input|
 	Config.Parser.Advanced.parseWith(advancedConfig, input)
 
@@ -302,7 +302,7 @@ formatOutput : Str -> Str
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 # Test qualified type in function signature
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # CANONICALIZE
@@ -354,7 +354,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Str") (builtin))
 					(ty-malformed)))))
 	(d-let
@@ -383,7 +383,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Credentials") (external-module "http.Client.Auth"))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Token") (external-module "http.Client.Auth"))
 					(ty-lookup (name "Error") (external-module "http.Client.Auth"))))))
 	(s-import (module "json.Parser")

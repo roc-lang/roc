@@ -307,45 +307,13 @@ pub const Generalizer = struct {
             },
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .str, .empty_record, .empty_tag_union => return Rank.top_level,
-                    .list_unbound => {
-                        // Unbounds are special-cased: An unbound represents a
-                        // flex var _at the same rank_ as the  unbound list. So,
-                        // if we actually had that, it would recurse and unwrap
-                        // to group_rank. So we just return that directly here.
-                        return group_rank;
-                    },
-                    .box => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
-                    },
-                    .list => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
-                    },
+                    .empty_record, .empty_tag_union => return Rank.top_level,
                     .tuple => |tuple| {
                         var next_rank = Rank.top_level;
                         for (self.store.sliceVars(tuple.elems)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
                         return next_rank;
-                    },
-                    .num => |num| {
-                        switch (num) {
-                            .num_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .int_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .frac_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-
-                            // Unbound - optimizations like list_unbound
-                            .num_unbound, .int_unbound, .frac_unbound => return group_rank,
-
-                            // Concrete - fully determined types with no variables
-                            .int_precision, .frac_precision, .num_compact => return Rank.top_level,
-                        }
                     },
                     .nominal_type => |nominal| {
                         var next_rank = Rank.top_level;
@@ -422,6 +390,10 @@ pub const Generalizer = struct {
                         return next_rank;
                     },
                 }
+            },
+            .recursion_var => |rec_var| {
+                // Adjust rank by checking the structure the recursion var points to
+                return Rank.top_level.max(try self.adjustRank(rec_var.structure, group_rank, vars_to_generalize));
             },
             .err => return group_rank,
         };

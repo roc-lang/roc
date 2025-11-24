@@ -40,6 +40,56 @@ pub const ModuleKind = union(enum) {
     hosted,
     deprecated_module,
     malformed,
+
+    /// Extern-compatible tag for serialization
+    pub const Tag = enum(u32) {
+        type_module,
+        default_app,
+        app,
+        package,
+        platform,
+        hosted,
+        deprecated_module,
+        malformed,
+    };
+
+    /// Extern-compatible payload union for serialization
+    pub const Payload = extern union {
+        type_module_ident: Ident.Idx,
+        none: u32,
+    };
+
+    /// Extern-compatible serialized form
+    pub const Serialized = extern struct {
+        tag: Tag,
+        payload: Payload,
+
+        pub fn encode(kind: ModuleKind) @This() {
+            return switch (kind) {
+                .type_module => |idx| .{ .tag = .type_module, .payload = .{ .type_module_ident = idx } },
+                .default_app => .{ .tag = .default_app, .payload = .{ .none = 0 } },
+                .app => .{ .tag = .app, .payload = .{ .none = 0 } },
+                .package => .{ .tag = .package, .payload = .{ .none = 0 } },
+                .platform => .{ .tag = .platform, .payload = .{ .none = 0 } },
+                .hosted => .{ .tag = .hosted, .payload = .{ .none = 0 } },
+                .deprecated_module => .{ .tag = .deprecated_module, .payload = .{ .none = 0 } },
+                .malformed => .{ .tag = .malformed, .payload = .{ .none = 0 } },
+            };
+        }
+
+        pub fn decode(self: @This()) ModuleKind {
+            return switch (self.tag) {
+                .type_module => .{ .type_module = self.payload.type_module_ident },
+                .default_app => .default_app,
+                .app => .app,
+                .package => .package,
+                .platform => .platform,
+                .hosted => .hosted,
+                .deprecated_module => .deprecated_module,
+                .malformed => .malformed,
+            };
+        }
+    };
 };
 
 gpa: std.mem.Allocator,
@@ -94,6 +144,46 @@ out_of_range_ident: Ident.Idx,
 builtin_module_ident: Ident.Idx,
 /// Interned identifier for "plus" - used for + operator desugaring
 plus_ident: Ident.Idx,
+/// Interned identifier for "minus" - used for - operator desugaring
+minus_ident: Ident.Idx,
+/// Interned identifier for "times" - used for * operator desugaring
+times_ident: Ident.Idx,
+/// Interned identifier for "div_by" - used for / operator desugaring
+div_by_ident: Ident.Idx,
+/// Interned identifier for "div_trunc_by" - used for // operator desugaring
+div_trunc_by_ident: Ident.Idx,
+/// Interned identifier for "rem_by" - used for % operator desugaring
+rem_by_ident: Ident.Idx,
+/// Interned identifier for "negate" - used for unary - operator desugaring
+negate_ident: Ident.Idx,
+/// Interned identifier for "not" - used for ! operator desugaring
+not_ident: Ident.Idx,
+/// Interned identifier for "is_lt" - used for < operator desugaring
+is_lt_ident: Ident.Idx,
+/// Interned identifier for "is_lte" - used for <= operator desugaring
+is_lte_ident: Ident.Idx,
+/// Interned identifier for "is_gt" - used for > operator desugaring
+is_gt_ident: Ident.Idx,
+/// Interned identifier for "is_gte" - used for >= operator desugaring
+is_gte_ident: Ident.Idx,
+/// Interned identifier for "is_eq" - used for == operator desugaring
+is_eq_ident: Ident.Idx,
+/// Interned identifier for "is_ne" - used for != operator desugaring
+is_ne_ident: Ident.Idx,
+
+/// Deferred numeric literals collected during type checking
+/// These will be validated during comptime evaluation
+deferred_numeric_literals: DeferredNumericLiteral.SafeList,
+
+/// Deferred numeric literal for compile-time validation
+pub const DeferredNumericLiteral = struct {
+    expr_idx: CIR.Expr.Idx,
+    type_var: TypeVar,
+    constraint: types_mod.StaticDispatchConstraint,
+    region: Region,
+
+    pub const SafeList = collections.SafeList(@This());
+};
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -103,7 +193,8 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.imports.relocate(offset);
-    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
+    self.store.relocate(offset);
+    self.deferred_numeric_literals.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -148,6 +239,34 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
     const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
+    const minus_ident = try common.insertIdent(gpa, Ident.for_text("minus"));
+    const times_ident = try common.insertIdent(gpa, Ident.for_text("times"));
+    const div_by_ident = try common.insertIdent(gpa, Ident.for_text("div_by"));
+    const div_trunc_by_ident = try common.insertIdent(gpa, Ident.for_text("div_trunc_by"));
+    const rem_by_ident = try common.insertIdent(gpa, Ident.for_text("rem_by"));
+    const negate_ident = try common.insertIdent(gpa, Ident.for_text(Ident.NEGATE_METHOD_NAME));
+    const not_ident = try common.insertIdent(gpa, Ident.for_text("not"));
+    const is_lt_ident = try common.insertIdent(gpa, Ident.for_text("is_lt"));
+    const is_lte_ident = try common.insertIdent(gpa, Ident.for_text("is_lte"));
+    const is_gt_ident = try common.insertIdent(gpa, Ident.for_text("is_gt"));
+    const is_gte_ident = try common.insertIdent(gpa, Ident.for_text("is_gte"));
+    const is_eq_ident = try common.insertIdent(gpa, Ident.for_text("is_eq"));
+    const is_ne_ident = try common.insertIdent(gpa, Ident.for_text("is_ne"));
+
+    // Pre-intern numeric type identifiers for layout store (these get looked up during runtime layout generation)
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U8"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I8"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U16"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I16"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U32"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I32"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U64"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I64"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.U128"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.I128"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.F32"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.F64"));
+    _ = try common.insertIdent(gpa, Ident.for_text("Num.Dec"));
 
     return Self{
         .gpa = gpa,
@@ -171,6 +290,20 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
         .plus_ident = plus_ident,
+        .minus_ident = minus_ident,
+        .times_ident = times_ident,
+        .div_by_ident = div_by_ident,
+        .div_trunc_by_ident = div_trunc_by_ident,
+        .rem_by_ident = rem_by_ident,
+        .negate_ident = negate_ident,
+        .not_ident = not_ident,
+        .is_lt_ident = is_lt_ident,
+        .is_lte_ident = is_lte_ident,
+        .is_gt_ident = is_gt_ident,
+        .is_gte_ident = is_gte_ident,
+        .is_eq_ident = is_eq_ident,
+        .is_ne_ident = is_ne_ident,
+        .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
 
@@ -180,6 +313,7 @@ pub fn deinit(self: *Self) void {
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
+    self.deferred_numeric_literals.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -764,6 +898,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(").");
             break :blk report;
         },
+        .if_then_not_canonicalized => |_| blk: {
+            var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
+            try report.document.addReflowingText("The branch in this ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" expression could not be processed.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The branch must contain a valid expression. Check for syntax errors or missing values.");
+            break :blk report;
+        },
         .if_else_not_canonicalized => |_| blk: {
             var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
             try report.document.addReflowingText("The ");
@@ -777,12 +921,33 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
             try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Note: Every ");
+            break :blk report;
+        },
+        .if_expr_without_else => |_| blk: {
+            var report = Report.init(allocator, "IF EXPRESSION WITHOUT ELSE", .runtime_error);
+            try report.document.addReflowingText("This ");
             try report.document.addKeyword("if");
-            try report.document.addReflowingText(" expression in Roc must have an ");
+            try report.document.addReflowingText(" has no ");
             try report.document.addKeyword("else");
-            try report.document.addReflowingText(" branch, and both branches must have the same type.");
+            try report.document.addReflowingText(" branch, but it's being used as an expression (assigned to a variable, passed to a function, etc.).");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("You can only use ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" without ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" when it's a statement. When ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" is used as an expression that evaluates to a value, ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" is required because otherwise there wouldn't always be a value available.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Either add an ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch, or use this ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" as a standalone statement.");
             break :blk report;
         },
         .pattern_not_canonicalized => |_| blk: {
@@ -954,13 +1119,40 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             // Format the message to match origin/main
             try report.document.addText("The type ");
             try report.document.addInlineCode(type_name);
-            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addReflowingText(" is not exposed by the module ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .value_not_exposed => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "VALUE NOT EXPOSED", .runtime_error);
+
+            // Format the message to match origin/main
+            try report.document.addText("The value ");
+            try report.document.addInlineCode(self.getIdent(data.value_name));
+            try report.document.addReflowingText(" is not exposed by the module ");
+            try report.document.addInlineCode(self.getIdent(data.module_name));
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this value here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -1513,8 +1705,8 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 }
 
 /// Serialized representation of ModuleEnv.
-/// NOTE: Field order matters for cross-platform compatibility! Keep `module_kind` at the end.
-pub const Serialized = struct {
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
@@ -1528,7 +1720,7 @@ pub const Serialized = struct {
     module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: ModuleKind,
+    module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
     from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
@@ -1536,6 +1728,20 @@ pub const Serialized = struct {
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
     plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
+    minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
+    times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
+    div_by_ident_reserved: u32, // Reserved space for div_by_ field (interned during deserialization)
+    div_trunc_by_ident_reserved: u32, // Reserved space for div_trunc_by_ident field (interned during deserialization)
+    rem_by_ident_reserved: u32, // Reserved space for rem_by_ident field (interned during deserialization)
+    negate_ident_reserved: u32, // Reserved space for negate_ident field (interned during deserialization)
+    not_ident_reserved: u32, // Reserved space for not_ident field (interned during deserialization)
+    is_lt_ident_reserved: u32, // Reserved space for is_lt_ident field (interned during deserialization)
+    is_lte_ident_reserved: u32, // Reserved space for is_lte_ident field (interned during deserialization)
+    is_gt_ident_reserved: u32, // Reserved space for is_gt_ident field (interned during deserialization)
+    is_gte_ident_reserved: u32, // Reserved space for is_gte_ident field (interned during deserialization)
+    is_eq_ident_reserved: u32, // Reserved space for is_eq_ident field (interned during deserialization)
+    is_ne_ident_reserved: u32, // Reserved space for is_ne_ident field (interned during deserialization)
+    deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1548,7 +1754,7 @@ pub const Serialized = struct {
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
-        self.module_kind = env.module_kind;
+        self.module_kind = ModuleKind.Serialized.encode(env.module_kind);
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
@@ -1558,10 +1764,12 @@ pub const Serialized = struct {
         try self.imports.serialize(&env.imports, allocator, writer);
 
         self.diagnostics = env.diagnostics;
-        self.module_kind = env.module_kind;
 
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
+
+        // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
+        try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
 
         // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
         // the space needs to be here, but the values will be set separately during deserialization (these are runtime-only).
@@ -1575,6 +1783,19 @@ pub const Serialized = struct {
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
         self.plus_ident_reserved = 0;
+        self.minus_ident_reserved = 0;
+        self.times_ident_reserved = 0;
+        self.div_by_ident_reserved = 0;
+        self.div_trunc_by_ident_reserved = 0;
+        self.rem_by_ident_reserved = 0;
+        self.negate_ident_reserved = 0;
+        self.not_ident_reserved = 0;
+        self.is_lt_ident_reserved = 0;
+        self.is_lte_ident_reserved = 0;
+        self.is_gt_ident_reserved = 0;
+        self.is_gte_ident_reserved = 0;
+        self.is_eq_ident_reserved = 0;
+        self.is_ne_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1600,7 +1821,7 @@ pub const Serialized = struct {
             .gpa = gpa,
             .common = common,
             .types = self.types.deserialize(offset, gpa).*,
-            .module_kind = self.module_kind,
+            .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
@@ -1619,6 +1840,20 @@ pub const Serialized = struct {
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
             .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .minus_ident = common.findIdent("minus") orelse unreachable,
+            .times_ident = common.findIdent("times") orelse unreachable,
+            .div_by_ident = common.findIdent("div_by") orelse unreachable,
+            .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
+            .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
+            .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+            .not_ident = common.findIdent("not") orelse unreachable,
+            .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
+            .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
+            .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
+            .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
+            .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
+            .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 
         return env;
@@ -1656,7 +1891,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
     _ = self; // Not needed for this simplified implementation
 
-    // For auto-imported builtin types (Bool, Result, etc.), the statement index
+    // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
     // indexed by their statement index, not by their position in arrays.
     const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));

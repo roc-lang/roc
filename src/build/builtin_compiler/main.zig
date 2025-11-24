@@ -1,7 +1,7 @@
 //! Build-time compiler for Roc builtin module (Builtin.roc).
 //!
 //! This executable runs during `zig build` on the host machine to:
-//! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Result, Str, Dict, Set types)
+//! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
 //! 3. Output Builtin.bin to zig-out/builtins/ (which gets embedded in the roc binary)
 
@@ -64,60 +64,9 @@ const BuiltinIndices = struct {
     f32_type: CIR.Statement.Idx,
     /// Statement index of nested F64 type declaration within Builtin module
     f64_type: CIR.Statement.Idx,
+    /// Statement index of nested Numeral type declaration within Builtin module
+    numeral_type: CIR.Statement.Idx,
 };
-
-/// Transform all Str nominal types to .str primitive types in a module.
-/// This is necessary because the interpreter needs .str to be a primitive type,
-/// but we define methods on Str as a nominal type in Str.roc for ergonomics.
-///
-/// This transformation happens after type-checking but before serialization,
-/// ensuring that the serialized .bin file contains methods associated with
-/// the .str primitive type rather than a nominal Str type.
-fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
-    const FlatType = types.FlatType;
-
-    // Get the Str identifier in this module
-    const str_ident = env.common.findIdent("Str") orelse {
-        @panic("Str identifier not found in Builtin module");
-    };
-
-    // Iterate through all slots in the type store
-    for (0..env.types.len()) |i| {
-        const var_idx = @as(Var, @enumFromInt(i));
-
-        // Skip redirects, only process roots
-        if (!env.types.resolveVar(var_idx).is_root) {
-            continue;
-        }
-
-        const resolved = env.types.resolveVar(var_idx);
-        const desc = resolved.desc;
-
-        // Check if this descriptor contains a nominal type
-        switch (desc.content) {
-            .structure => |structure| {
-                switch (structure) {
-                    .nominal_type => |nominal| {
-                        // Check if this is the Str nominal type
-                        // TypeIdent has an ident_idx field that references the identifier
-                        if (nominal.ident.ident_idx == str_ident) {
-                            // Replace with .str primitive type
-                            const new_content = Content{ .structure = FlatType.str };
-                            const new_desc = types.Descriptor{
-                                .content = new_content,
-                                .rank = desc.rank,
-                                .mark = desc.mark,
-                            };
-                            try env.types.setVarDesc(var_idx, new_desc);
-                        }
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
-}
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
 /// This transforms standalone annotations into low-level builtin lambda operations
@@ -270,6 +219,16 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // from_numeral (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
+        if (env.common.findIdent(from_numeral)) |ident| {
+            try low_level_map.put(ident, .num_from_numeral);
+        }
+    }
+
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -296,6 +255,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
         if (env.common.findIdent(div_by)) |ident| {
             try low_level_map.put(ident, .num_div_by);
+        }
+
+        // div_trunc_by
+        const div_trunc_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_trunc_by", .{num_type});
+        if (env.common.findIdent(div_trunc_by)) |ident| {
+            try low_level_map.put(ident, .num_div_trunc_by);
         }
 
         // rem_by
@@ -333,15 +298,23 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create a dummy parameter pattern for the lambda
-                    // Use the identifier "_arg" for the parameter
-                    const arg_ident = env.common.findIdent("_arg") orelse try env.common.insertIdent(gpa, base.Ident.for_text("_arg"));
-                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                    // Create parameter patterns for the lambda
+                    // Binary operations need 2 parameters, unary operations need 1
+                    const num_params: u32 = switch (low_level_op) {
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits => 1,
+                        else => 2, // Most numeric operations are binary
+                    };
 
-                    // Create a pattern span containing just this one parameter
                     const patterns_start = env.store.scratchTop("patterns");
-                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
-                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+                    var i: u32 = 0;
+                    while (i < num_params) : (i += 1) {
+                        var arg_name_buf: [16]u8 = undefined;
+                        const arg_name = try std.fmt.bufPrint(&arg_name_buf, "_arg{d}", .{i});
+                        const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
+                        const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                        try env.store.scratch.?.patterns.append(arg_pattern_idx);
+                    }
+                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = num_params } };
 
                     // Create an e_runtime_error body that crashes when the function is called
                     const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
@@ -359,12 +332,15 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // We need to modify the def's expr field to point to our new expression
-                    // CIR.Def.Idx and Node.Idx have the same underlying representation
+                    // Def structure is stored in extra_data:
+                    // extra_data[0] = pattern, extra_data[1] = expr, ...
+                    // node.data_1 points to the start index in extra_data
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
-                    var def_node = env.store.nodes.get(def_node_idx);
-                    def_node.data_2 = @intFromEnum(expr_idx);
-                    env.store.nodes.set(def_node_idx, def_node);
+                    const def_node = env.store.nodes.get(def_node_idx);
+                    const extra_start = def_node.data_1;
+
+                    // Update the expr field (at extra_start + 1)
+                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -398,65 +374,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     return new_def_indices;
-}
-
-/// Transform all List nominal types to .list primitive types in a module.
-/// This is similar to transformStrNominalToPrimitive but handles List's type parameter.
-///
-/// List is parameterized (List(a)), so we need to preserve the element type parameter
-/// when transforming from nominal to primitive. The transformation replaces
-/// nominal List(a) with FlatType{ .list = element_type_var }.
-fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
-    // Get the List identifier in this module
-    const list_ident = env.common.findIdent("List") orelse {
-        @panic("List identifier not found in Builtin module");
-    };
-
-    // Iterate through all slots in the type store
-    for (0..env.types.len()) |i| {
-        const var_idx = @as(Var, @enumFromInt(i));
-
-        // Skip redirects, only process roots
-        if (!env.types.resolveVar(var_idx).is_root) {
-            continue;
-        }
-
-        const resolved = env.types.resolveVar(var_idx);
-        const desc = resolved.desc;
-
-        // Check if this descriptor contains a nominal type
-        switch (desc.content) {
-            .structure => |structure| {
-                switch (structure) {
-                    .nominal_type => |nominal| {
-                        // Check if this is the List nominal type
-                        if (nominal.ident.ident_idx == list_ident) {
-                            // List should have exactly 1 type parameter (the element type)
-                            // sliceNominalArgs returns only the type arguments (excludes backing var)
-                            const type_args = env.types.sliceNominalArgs(nominal);
-
-                            if (type_args.len != 1) {
-                                @panic("List nominal type must have exactly 1 type parameter");
-                            }
-
-                            const element_type_var = type_args[0];
-
-                            // Replace with .list primitive type with the element type
-                            const new_content = Content{ .structure = .{ .list = element_type_var } };
-                            const new_desc = types.Descriptor{
-                                .content = new_content,
-                                .rank = desc.rank,
-                                .mark = desc.mark,
-                            };
-                            try env.types.setVarDesc(var_idx, new_desc);
-                        }
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
 }
 
 fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
@@ -503,6 +420,7 @@ pub fn main() !void {
         &.{}, // No module dependencies
         null, // bool_stmt not available yet (will be found within Builtin)
         null, // try_stmt not available yet (will be found within Builtin)
+        null, // str_stmt not available yet (will be found within Builtin)
     );
     defer {
         builtin_env.deinit();
@@ -533,6 +451,7 @@ pub fn main() !void {
     const dec_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Dec");
     const f32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F32");
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
+    const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
@@ -557,6 +476,7 @@ pub fn main() !void {
     const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
     const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
     const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
+    const numeral_ident = builtin_env.common.findIdent("Numeral") orelse unreachable;
 
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
@@ -578,12 +498,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
-
-    // Transform nominal types to primitive types as necessary.
-    // This must happen BEFORE serialization to ensure the .bin file contains
-    // methods associated with the .str primitive, not a nominal type
-    try transformStrNominalToPrimitive(builtin_env);
-    try transformListNominalToPrimitive(builtin_env);
+    try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -612,6 +527,7 @@ pub fn main() !void {
         .dec_type = dec_type_idx,
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
+        .numeral_type = numeral_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -628,6 +544,7 @@ fn compileModule(
     deps: []const ModuleDep,
     bool_stmt_opt: ?CIR.Statement.Idx,
     try_stmt_opt: ?CIR.Statement.Idx,
+    str_stmt_opt: ?CIR.Statement.Idx,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -649,14 +566,17 @@ fn compileModule(
     const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
-    // Use provided bool_stmt and try_stmt if available, otherwise use undefined
+    // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
+    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
     var common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
+        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
+        .str_stmt = str_stmt_opt orelse undefined,
         .builtin_module = null,
     };
 
@@ -794,8 +714,8 @@ fn compileModule(
             module_env.evaluation_order = eval_order_ptr;
         }
 
-        // Find Bool and Try statements before type checking
-        // When compiling Builtin, bool_stmt and try_stmt are initially undefined,
+        // Find Bool, Try, and Str statements before type checking
+        // When compiling Builtin, bool_stmt, try_stmt, and str_stmt are initially undefined,
         // but they must be set before type checking begins
         const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
@@ -813,10 +733,19 @@ fn compileModule(
             std.debug.print("=" ** 80 ++ "\n", .{});
             return error.TypeDeclarationNotFound;
         };
+        const found_str_stmt = findTypeDeclaration(module_env, "Str") catch {
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+            std.debug.print("ERROR: Could not find Str type in Builtin module\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("The Str type declaration is required for type checking.\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            return error.TypeDeclarationNotFound;
+        };
 
         // Update common_idents with the found statement indices
         common_idents.bool_stmt = found_bool_stmt;
         common_idents.try_stmt = found_try_stmt;
+        common_idents.str_stmt = found_str_stmt;
     }
 
     // 6. Type check

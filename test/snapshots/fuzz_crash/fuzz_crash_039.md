@@ -9,9 +9,20 @@ module[}('
 )
 ~~~
 # EXPECTED
+UNCLOSED SINGLE QUOTE - fuzz_crash_039.md:1:10:1:11
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
 PARSE ERROR - fuzz_crash_039.md:3:1:3:1
 # PROBLEMS
+**UNCLOSED SINGLE QUOTE**
+This single-quoted literal is missing a closing quote.
+
+**fuzz_crash_039.md:1:10:1:11:**
+```roc
+module[}('
+```
+         ^
+
+
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
@@ -36,7 +47,7 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-KwModule,OpenSquare,CloseCurly,NoSpaceOpenRound,MalformedSingleQuoteUnclosed,
+KwModule,OpenSquare,CloseCurly,NoSpaceOpenRound,MalformedSingleQuote,
 CloseRound,
 EndOfFile,
 ~~~

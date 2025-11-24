@@ -28,6 +28,7 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:1:14:1:17
 UNDECLARED TYPE - fuzz_crash_032.md:1:21:1:24
 UNDECLARED TYPE - fuzz_crash_032.md:4:25:4:30
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:6:26:6:37
+EXPECTED NOMINAL TYPE - fuzz_crash_032.md:7:10:7:21
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
@@ -67,7 +68,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **fuzz_crash_032.md:1:34:1:35:**
@@ -90,7 +91,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **fuzz_crash_032.md:1:44:1:45:**
@@ -177,6 +178,19 @@ This type is referenced here:
     match color { RGB => LocalStatus.Pending
 ```
                          ^^^^^^^^^^^
+
+
+**Hint:** You can declare this type with `:=` to make it nominal.
+
+**EXPECTED NOMINAL TYPE**
+You are using the type _LocalStatus_ like a nominal type, but it is an alias.
+
+This type is referenced here:
+**fuzz_crash_032.md:7:10:7:21:**
+```roc
+Green => LocalStatus-Complete
+```
+         ^^^^^^^^^^^
 
 
 **Hint:** You can declare this type with `:=` to make it nominal.
@@ -309,7 +323,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-tag (name "LocalStatus"))))
+									(e-runtime-error (tag "type_alias_but_needed_nominal"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
