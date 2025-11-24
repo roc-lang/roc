@@ -167,6 +167,14 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         try low_level_map.put(ident, .num_is_ne);
     }
 
+    // Dec to_str operation
+    // Note: Dec is nested under Num in Builtin.roc, so the canonical identifier is
+    // "Builtin.Num.Dec.to_str". But Dec is auto-imported as "Dec", so user code
+    // calling Dec.to_str looks up "Builtin.Dec.to_str". We need the canonical name here.
+    if (env.common.findIdent("Builtin.Num.Dec.to_str")) |ident| {
+        try low_level_map.put(ident, .dec_to_str);
+    }
+
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -301,7 +309,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits => 1,
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .dec_to_str => 1,
                         else => 2, // Most numeric operations are binary
                     };
 
@@ -346,6 +354,18 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     try new_def_indices.append(gpa, def_idx);
                 }
             }
+        }
+    }
+
+    // Expose Dec.to_str under the alias "Builtin.Dec.to_str" for user code lookups.
+    // The canonical name is "Builtin.Num.Dec.to_str" (since Dec is nested under Num),
+    // but user code calling Dec.to_str will look for "Builtin.Dec.to_str".
+    if (env.common.findIdent("Builtin.Num.Dec.to_str")) |canonical_ident| {
+        if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
+            // Insert the alias identifier
+            const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text("Builtin.Dec.to_str"));
+            // Expose the same node under the alias
+            try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
         }
     }
 

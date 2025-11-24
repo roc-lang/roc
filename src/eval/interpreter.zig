@@ -4016,6 +4016,24 @@ pub const Interpreter = struct {
                 self.triggerCrash("num_from_numeral: unsupported result layout", false, roc_ops);
                 return error.Crash;
             },
+            .dec_to_str => {
+                // Dec.to_str : Dec -> Str
+                std.debug.assert(args.len == 1); // expects 1 argument: Dec
+
+                const dec_arg = args[0];
+                if (dec_arg.ptr == null) {
+                    self.triggerCrash("dec_to_str: null argument", false, roc_ops);
+                    return error.Crash;
+                }
+
+                const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
+                const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
+
+                const value = try self.pushStr("");
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                roc_str_ptr.* = result_str;
+                return value;
+            },
         }
     }
 

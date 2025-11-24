@@ -294,3 +294,36 @@ test "e_low_level_lambda - List.concat with empty string list" {
     const len_value = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 3), len_value);
 }
+
+test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
+    const src =
+        \\a : Dec
+        \\a = 123.45dec
+        \\x = Dec.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"123.45\"", value);
+}
+
+test "e_low_level_lambda - Dec.to_str with negative decimal" {
+    const src =
+        \\a : Dec
+        \\a = -456.78dec
+        \\x = Dec.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-456.78\"", value);
+}
+
+test "e_low_level_lambda - Dec.to_str with zero" {
+    const src =
+        \\a : Dec
+        \\a = 0.0dec
+        \\x = Dec.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"0.0\"", value);
+}

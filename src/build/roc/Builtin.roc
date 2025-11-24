@@ -344,6 +344,7 @@ Builtin :: [].{
 		}
 
 		Dec :: [].{
+		    to_str : Dec -> Str
 			is_zero : Dec -> Bool
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool

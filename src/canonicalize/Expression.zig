@@ -402,6 +402,9 @@ pub const Expr = union(enum) {
         // String operations
         str_is_empty,
 
+        // Dec operations
+        dec_to_str,
+
         // List operations
         list_len,
         list_is_empty,
