@@ -14,6 +14,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const collections = @import("collections");
 const can = @import("can");
+const base = @import("base");
 
 const ModuleEnv = can.ModuleEnv;
 const NodeStore = can.CIR.NodeStore;
@@ -96,4 +97,18 @@ pub fn main() void {
     if (builtin.os.tag != .freestanding) {
         std.debug.print("✓ Serialization size check passed - all types have correct platform-independent sizes\n", .{});
     }
+}
+
+// Verify Serialized types are at least as large as their runtime counterparts,
+// which is required for safe in-place deserialization.
+test "Serialized struct sizes are sufficient for in-place deserialization" {
+    const CommonEnv = base.CommonEnv;
+    const Ident = base.Ident;
+    const SmallStringInterner = base.SmallStringInterner;
+
+    try std.testing.expect(@sizeOf(CommonEnv.Serialized) >= @sizeOf(CommonEnv));
+    try std.testing.expect(@sizeOf(Ident.Store.Serialized) >= @sizeOf(Ident.Store));
+    try std.testing.expect(@sizeOf(SmallStringInterner.Serialized) >= @sizeOf(SmallStringInterner));
+    try std.testing.expect(@sizeOf(SafeList(u8).Serialized) >= @sizeOf(SafeList(u8)));
+    try std.testing.expect(@sizeOf(SafeList(SmallStringInterner.Idx).Serialized) >= @sizeOf(SafeList(SmallStringInterner.Idx)));
 }
