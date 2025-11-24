@@ -110,6 +110,31 @@ pub const c = struct {
     pub const link = std.c.link;
     pub const ftruncate = std.c.ftruncate;
     pub const _errno = std.c._errno;
+
+    // POSIX wait status macros
+    pub fn WIFEXITED(status: c_int) bool {
+        return WTERMSIG(status) == 0;
+    }
+
+    pub fn WEXITSTATUS(status: c_int) u8 {
+        return @intCast((status >> 8) & 0xff);
+    }
+
+    pub fn WIFSIGNALED(status: c_int) bool {
+        return ((status & 0x7f) + 1) >> 1 > 0;
+    }
+
+    pub fn WTERMSIG(status: c_int) u8 {
+        return @intCast(status & 0x7f);
+    }
+
+    pub fn WIFSTOPPED(status: c_int) bool {
+        return (status & 0xff) == 0x7f;
+    }
+
+    pub fn WSTOPSIG(status: c_int) u8 {
+        return WEXITSTATUS(status);
+    }
 };
 
 // Platform-specific shared memory implementation
@@ -1193,34 +1218,16 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         },
     };
 
-    // Duplicate the fd to a higher number (>= 10) to avoid conflicts with
-    // std.process.Child which uses fd 3 for progress reporting via dup2.
-    // If our shared memory happens to be on fd 3, it would be overwritten.
-    const target_fd: c_int = 10;
-    const new_fd = std.c.dup2(shm_handle.fd, target_fd);
-    if (new_fd < 0) {
-        std.log.err("Failed to duplicate fd {} to {}: errno={}", .{ shm_handle.fd, target_fd, c._errno().* });
-        return error.FdConfigFailed;
-    }
-    std.log.debug("Duplicated shared memory fd {} to {}", .{ shm_handle.fd, new_fd });
-
-    // Create a new handle with the higher fd number
-    const safe_shm_handle = SharedMemoryHandle{
-        .fd = new_fd,
-        .ptr = shm_handle.ptr,
-        .size = shm_handle.size,
-    };
-
     // Create temporary directory structure for fd communication
     std.log.debug("Creating temporary directory structure for fd communication", .{});
-    const temp_exe_path = createTempDirStructure(allocs, exe_path, safe_shm_handle, temp_cache_dir) catch |err| {
+    const temp_exe_path = createTempDirStructure(allocs, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}", .{err});
         return err;
     };
     std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
     // Configure fd inheritance - clear FD_CLOEXEC so child inherits the fd
-    var flags = posix.fcntl(safe_shm_handle.fd, posix.F_GETFD, 0);
+    var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
         std.log.err("Failed to get fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
@@ -1228,66 +1235,75 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
 
     flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
-    if (posix.fcntl(safe_shm_handle.fd, posix.F_SETFD, flags) < 0) {
+    if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
         std.log.err("Failed to set fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
 
-    // Run the interpreter as a child process from the temp directory
-    var child = std.process.Child.init(&.{temp_exe_path}, allocs.gpa);
-    child.cwd = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |err| {
-        std.log.err("Failed to get current directory: {}", .{err});
-        return err;
-    };
+    // Use direct fork/exec instead of std.process.Child to avoid any
+    // interference with our file descriptor inheritance. std.process.Child
+    // manipulates file descriptors internally which can conflict with our
+    // shared memory fd.
+    std.log.debug("Spawning child process via fork/exec: {s}", .{temp_exe_path});
 
-    // Forward stdout and stderr
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
+    const pid = std.c.fork();
+    if (pid < 0) {
+        std.log.err("fork() failed: {}", .{c._errno().*});
+        return error.ForkFailed;
+    }
 
-    // Spawn the child process
-    std.log.debug("Spawning child process: {s}", .{temp_exe_path});
-    std.log.debug("Child process working directory: {s}", .{child.cwd.?});
-    child.spawn() catch |err| {
-        std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
-        return err;
-    };
-    std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
+    if (pid == 0) {
+        // Child process - exec the interpreter
+        // Create null-terminated path for execve
+        const path_z = allocs.arena.dupeZ(u8, temp_exe_path) catch {
+            std.c._exit(127);
+        };
+        const argv = [_:null]?[*:0]const u8{path_z};
+        const envp = [_:null]?[*:0]const u8{};
 
-    // Wait for child to complete
-    const term = child.wait() catch |err| {
-        std.log.err("Failed waiting for child process: {}", .{err});
-        return err;
-    };
+        _ = std.c.execve(path_z, &argv, &envp);
 
-    // Check the termination status
-    switch (term) {
-        .Exited => |exit_code| {
-            if (exit_code == 0) {
-                std.log.debug("Child process completed successfully", .{});
-            } else {
-                std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
-                return error.ProcessExitedWithError;
-            }
-        },
-        .Signal => |signal| {
-            std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
-            if (signal == 11) { // SIGSEGV
-                std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
-            } else if (signal == 6) { // SIGABRT
-                std.log.err("Child process aborted (SIGABRT)", .{});
-            } else if (signal == 9) { // SIGKILL
-                std.log.err("Child process was killed (SIGKILL)", .{});
-            }
-            return error.ProcessKilledBySignal;
-        },
-        .Stopped => |signal| {
-            std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
-            return error.ProcessStopped;
-        },
-        .Unknown => |status| {
-            std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
-            return error.ProcessUnknownTermination;
-        },
+        // If execve returns, it failed
+        std.c._exit(127);
+    }
+
+    // Parent process - wait for child
+    std.log.debug("Child process spawned (PID: {})", .{pid});
+
+    var status: c_int = 0;
+    const wait_result = std.c.waitpid(pid, &status, 0);
+    if (wait_result < 0) {
+        std.log.err("waitpid() failed: {}", .{c._errno().*});
+        return error.WaitFailed;
+    }
+
+    // Check termination status using POSIX macros
+    if (c.WIFEXITED(status)) {
+        const exit_code = c.WEXITSTATUS(status);
+        if (exit_code == 0) {
+            std.log.debug("Child process completed successfully", .{});
+        } else {
+            std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+            return error.ProcessExitedWithError;
+        }
+    } else if (c.WIFSIGNALED(status)) {
+        const signal = c.WTERMSIG(status);
+        std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
+        if (signal == 11) { // SIGSEGV
+            std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
+        } else if (signal == 6) { // SIGABRT
+            std.log.err("Child process aborted (SIGABRT)", .{});
+        } else if (signal == 9) { // SIGKILL
+            std.log.err("Child process was killed (SIGKILL)", .{});
+        }
+        return error.ProcessKilledBySignal;
+    } else if (c.WIFSTOPPED(status)) {
+        const signal = c.WSTOPSIG(status);
+        std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
+        return error.ProcessStopped;
+    } else {
+        std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
+        return error.ProcessUnknownTermination;
     }
 }
 
