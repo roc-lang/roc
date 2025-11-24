@@ -6,7 +6,32 @@
 const std = @import("std");
 const testing = std.testing;
 
+const roc_binary_path = "./zig-out/bin/roc";
+
+/// Ensures the roc binary exists, building it if necessary.
+/// This is needed because these tests spawn the roc CLI as a child process.
+fn ensureRocBinary(allocator: std.mem.Allocator) !void {
+    // Check if binary exists
+    std.fs.cwd().access(roc_binary_path, .{}) catch {
+        // Binary doesn't exist, build it
+        std.debug.print("roc binary not found, building with 'zig build roc'...\n", .{});
+        const build_result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &[_][]const u8{ "zig", "build", "roc" },
+        });
+        defer allocator.free(build_result.stdout);
+        defer allocator.free(build_result.stderr);
+
+        if (build_result.term != .Exited or build_result.term.Exited != 0) {
+            std.debug.print("Failed to build roc binary:\n{s}\n", .{build_result.stderr});
+            return error.RocBuildFailed;
+        }
+        std.debug.print("roc binary built successfully.\n", .{});
+    };
+}
+
 fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_input: []const u8) !std.process.Child.RunResult {
+    try ensureRocBinary(allocator);
     var child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/roc", roc_file }, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
@@ -44,6 +69,8 @@ fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_inp
 
 test "fx platform effectful functions" {
     const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
 
     // Run the app directly with the roc CLI (not build, just run)
     const run_result = try std.process.Child.run(.{
