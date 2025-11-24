@@ -19,18 +19,15 @@ type=expr
 ]
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - tag_applications_simple.md:2:10:2:12
+MISSING METHOD - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_numeral` on a type that doesn't support methods:
+**MISSING METHOD**
+This `from_numeral` method is being called on the type _[Ok([Just(_a)]_others)]_others2 where [[Ok([Just(b)]c)]d.from_numeral : [Ok([Just(b)]c)]d]_, which has no method with that name:
 **tag_applications_simple.md:2:10:2:12:**
 ```roc
     Some(42),
 ```
          ^^
-
-This type doesn't support methods:
-    _[Ok([Just(_a)]_others)]_others2 where [[Ok([Just(b)]c)]d.from_numeral : [Ok([Just(b)]c)]d]_
 
 
 

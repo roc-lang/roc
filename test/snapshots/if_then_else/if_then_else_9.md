@@ -16,8 +16,8 @@ if bool {
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
 MISSING METHOD - if_then_else_9.md:3:11:3:13
-TYPE DOES NOT HAVE METHODS - if_then_else_9.md:2:2:2:3
-TYPE DOES NOT HAVE METHODS - if_then_else_9.md:6:2:6:3
+MISSING METHOD - if_then_else_9.md:2:2:2:3
+MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -41,29 +41,23 @@ This **from_numeral** method is being called on the type **Bool**, which has no 
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_numeral` on a type that doesn't support methods:
+**MISSING METHOD**
+This `from_numeral` method is being called on the type _[A]_others_, which has no method with that name:
 **if_then_else_9.md:2:2:2:3:**
 ```roc
 	1
 ```
 	^
 
-This type doesn't support methods:
-    _[A]_others_
 
 
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_numeral` on a type that doesn't support methods:
+**MISSING METHOD**
+This `from_numeral` method is being called on the type _[A]_others_, which has no method with that name:
 **if_then_else_9.md:6:2:6:3:**
 ```roc
 	3
 ```
 	^
-
-This type doesn't support methods:
-    _[A]_others_
 
 
 

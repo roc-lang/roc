@@ -1894,8 +1894,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         .Int => {
             self.advance();
 
-            // Disallow dot suffixes after Int
-            if (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
+            // Disallow NoSpaceDotInt after Int (ambiguous with decimal literals like 35.123)
+            // But allow NoSpaceDotLowerIdent for method calls like 35.to_str()
+            if (self.peek() == .NoSpaceDotInt) {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
 
