@@ -1244,7 +1244,8 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             if (exit_code == 0) {
                 std.log.debug("Child process completed successfully", .{});
             } else {
-                std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+                // The host exited with an error - it should have printed any error messages
+                std.log.debug("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
                 return error.ProcessExitedWithError;
             }
         },
