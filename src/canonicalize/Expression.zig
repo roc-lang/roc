@@ -401,6 +401,7 @@ pub const Expr = union(enum) {
     pub const LowLevel = enum {
         // String operations
         str_is_empty,
+        str_concat,
 
         // Numeric to_str operations
         u8_to_str,
