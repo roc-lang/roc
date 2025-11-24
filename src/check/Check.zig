@@ -2913,13 +2913,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
-            does_fx = try self.checkBlockStatements(statements, env, expr_region) or does_fx;
+            const stmt_result = try self.checkBlockStatements(statements, env, expr_region);
+            does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
             does_fx = try self.checkExpr(block.final_expr, env, expected) or does_fx;
 
-            // Link the root expr with the final expr
-            _ = try self.unify(expr_var, ModuleEnv.varFrom(block.final_expr), env);
+            // If the block diverges (has a return/crash), use a flex var for the block's type
+            // since the final expression is unreachable
+            if (stmt_result.diverges) {
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+            } else {
+                // Link the root expr with the final expr
+                _ = try self.unify(expr_var, ModuleEnv.varFrom(block.final_expr), env);
+            }
         },
         // function //
         .e_lambda => |lambda| {
@@ -3476,9 +3483,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
 // stmts //
 
+const BlockStatementsResult = struct {
+    does_fx: bool,
+    diverges: bool,
+};
+
 /// Given a slice of stmts, type check each one
-fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env: *Env, _: Region) std.mem.Allocator.Error!bool {
+/// Returns whether any statement has effects and whether the block diverges (return/crash)
+fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
     var does_fx = false;
+    var diverges = false;
     for (statements) |stmt_idx| {
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
@@ -3702,16 +3716,20 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             },
             .s_crash => |_| {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
+                diverges = true;
             },
             .s_return => |_| {
-                // To implement early returns and make them usable, we need to:
-                // 1. Update the parse to allow for if statements (as opposed to if expressions)
-                // 2. Track function scope in czer and capture the function for this return in `s_return`
-                // 3. When type checking a lambda, capture all early returns
+                // A return statement's type should be a flex var so it can unify with any type.
+                // This allows branches containing early returns to match any other branch type.
+                //
+                // TODO: To fully implement early returns, we need to:
+                // 1. Track function scope in czer and capture the function for this return in `s_return`
+                // 2. When type checking a lambda, capture all early returns
                 //    a. Unify all early returns together
                 //    b. Unify early returns with func return type
 
-                try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+                try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
+                diverges = true;
             },
             .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno => {
                 // These are only valid at the top level, czer reports error
@@ -3722,7 +3740,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             },
         }
     }
-    return does_fx;
+    return .{ .does_fx = does_fx, .diverges = diverges };
 }
 
 // if-else //

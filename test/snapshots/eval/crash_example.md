@@ -46,5 +46,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{}"))
+(expr (type "_a"))
 ~~~
