@@ -278,7 +278,7 @@ test "check type - tag union with function payload - no is_eq" {
 test "check type - direct lambda equality - no is_eq" {
     // Lambdas/functions should not support equality comparison
     const source =
-        \\|x| x == |x| x
+        \\(|x| x) == (|y| y)
     ;
     try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
@@ -350,7 +350,7 @@ test "check type - tuple with function element - no inequality" {
 test "check type - direct lambda inequality - no is_eq" {
     // Lambdas/functions should not support inequality comparison (requires is_eq)
     const source =
-        \\|x| x != |x| x
+        \\(|x| x) != (|y| y)
     ;
     try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }

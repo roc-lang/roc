@@ -4892,15 +4892,28 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             }
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
+            // This handles function types, which do not support any methods
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
-                try self.reportConstraintError(
-                    deferred_constraint.var_,
-                    constraints[0],
-                    .not_nominal,
-                    env,
-                );
+                const constraint = constraints[0];
+                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
+
+                // For is_eq constraints, use the specific equality error message
+                if (std.mem.eql(u8, constraint_fn_name_bytes, "is_eq")) {
+                    try self.reportEqualityError(
+                        deferred_constraint.var_,
+                        constraint,
+                        env,
+                    );
+                } else {
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .not_nominal,
+                        env,
+                    );
+                }
             } else {
                 // It should be impossible to have a deferred constraint check
                 // that has no constraints.
