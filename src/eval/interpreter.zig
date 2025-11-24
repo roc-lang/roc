@@ -4016,6 +4016,36 @@ pub const Interpreter = struct {
                 self.triggerCrash("num_from_numeral: unsupported result layout", false, roc_ops);
                 return error.Crash;
             },
+            .dec_to_str => {
+                // Dec.to_str : Dec -> Str
+                std.debug.assert(args.len == 1); // expects 1 argument: Dec
+
+                const dec_arg = args[0];
+                if (dec_arg.ptr == null) {
+                    self.triggerCrash("dec_to_str: null argument", false, roc_ops);
+                    return error.Crash;
+                }
+
+                const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
+                const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
+
+                const value = try self.pushStr("");
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                roc_str_ptr.* = result_str;
+                return value;
+            },
+            .u8_to_str => return self.intToStr(u8, args, roc_ops),
+            .i8_to_str => return self.intToStr(i8, args, roc_ops),
+            .u16_to_str => return self.intToStr(u16, args, roc_ops),
+            .i16_to_str => return self.intToStr(i16, args, roc_ops),
+            .u32_to_str => return self.intToStr(u32, args, roc_ops),
+            .i32_to_str => return self.intToStr(i32, args, roc_ops),
+            .u64_to_str => return self.intToStr(u64, args, roc_ops),
+            .i64_to_str => return self.intToStr(i64, args, roc_ops),
+            .u128_to_str => return self.intToStr(u128, args, roc_ops),
+            .i128_to_str => return self.intToStr(i128, args, roc_ops),
+            .f32_to_str => return self.floatToStr(f32, args, roc_ops),
+            .f64_to_str => return self.floatToStr(f64, args, roc_ops),
         }
     }
 
@@ -4029,6 +4059,48 @@ pub const Interpreter = struct {
         // Store the Bool runtime type variable for constant folding
         bool_value.rt_var = try self.getCanonicalBoolRuntimeVar();
         return bool_value;
+    }
+
+    /// Helper for integer to_str operations
+    fn intToStr(self: *Interpreter, comptime T: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        if (int_arg.ptr == null) {
+            self.triggerCrash("int_to_str: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const int_value: T = @as(*const T, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+
+        // Use std.fmt to format the integer
+        var buf: [40]u8 = undefined; // 40 is enough for i128
+        const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch unreachable;
+
+        const value = try self.pushStr("");
+        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
+        return value;
+    }
+
+    /// Helper for float to_str operations
+    fn floatToStr(self: *Interpreter, comptime T: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        if (float_arg.ptr == null) {
+            self.triggerCrash("float_to_str: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const float_value: T = @as(*const T, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Use std.fmt to format the float
+        var buf: [400]u8 = undefined;
+        const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch unreachable;
+
+        const value = try self.pushStr("");
+        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
+        return value;
     }
 
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {

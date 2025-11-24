@@ -36,6 +36,7 @@ const runExpectInt = helpers.runExpectInt;
 const runExpectF32 = helpers.runExpectF32;
 const runExpectF64 = helpers.runExpectF64;
 const runExpectDec = helpers.runExpectDec;
+const runExpectStr = helpers.runExpectStr;
 
 // ============================================================================
 // U8 Tests (Unsigned 8-bit: 0 to 255)
@@ -2309,4 +2310,82 @@ test "Dec: div_by" {
         \\    a / b
         \\}
     , 333333333333333333, .no_trace);
+}
+
+// ============================================================================
+// Dec: to_str
+// ============================================================================
+
+test "Dec: to_str" {
+    // Simple whole number
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 100.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "100.0", .no_trace);
+
+    // Positive decimal
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 123.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "123.45", .no_trace);
+
+    // Negative decimal
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = -123.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "-123.45", .no_trace);
+
+    // Whole number without trailing zeros in decimal part
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 123.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "123.0", .no_trace);
+
+    // Negative whole number
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = -123.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "-123.0", .no_trace);
+
+    // Decimal less than 1
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 0.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "0.45", .no_trace);
+
+    // Negative decimal less than 1
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = -0.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "-0.45", .no_trace);
+
+    // Zero
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 0.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "0.0", .no_trace);
 }
