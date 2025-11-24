@@ -119,13 +119,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
+		(patt (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
+		(patt (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
+		(patt (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]")))
 	(expressions
-		(expr (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ age: a, city: Str, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
+		(expr (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
+		(expr (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
+		(expr (type "{ age: a, city: b, name: c } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))))
 ~~~

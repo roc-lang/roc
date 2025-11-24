@@ -180,5 +180,5 @@ match x {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))
 ~~~

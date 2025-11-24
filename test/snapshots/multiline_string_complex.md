@@ -263,17 +263,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "f where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)])]"))
+		(patt (type "f where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)])]"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "Str"))
-		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
-		(patt (type "Str")))
+		(patt (type "{ a: f, b: (g, h), c: List(i), d: Str, e: Error } where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)]), g.try_from_str : Str -> Try(g, [InvalidStr(Str)]), h.try_from_str : Str -> Try(h, [InvalidStr(Str)]), i.try_from_str : Str -> Try(i, [InvalidStr(Str)])]"))
+		(patt (type "f where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)])]")))
 	(expressions
+		(expr (type "f where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)])]"))
+		(expr (type "f where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)])]"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "Str"))
-		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
-		(expr (type "Str"))))
+		(expr (type "{ a: f, b: (g, h), c: List(i), d: Str, e: Error } where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)]), g.try_from_str : Str -> Try(g, [InvalidStr(Str)]), h.try_from_str : Str -> Try(h, [InvalidStr(Str)]), i.try_from_str : Str -> Try(i, [InvalidStr(Str)])]"))
+		(expr (type "f where [f.try_from_str : Str -> Try(f, [InvalidStr(Str)])]"))))
 ~~~

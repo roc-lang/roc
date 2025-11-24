@@ -175,8 +175,22 @@ is_ne_ident: Ident.Idx,
 /// These will be validated during comptime evaluation
 deferred_numeric_literals: DeferredNumericLiteral.SafeList,
 
+/// Deferred string literals collected during type checking
+/// These will be validated during comptime evaluation
+deferred_string_literals: DeferredStringLiteral.SafeList,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
+    expr_idx: CIR.Expr.Idx,
+    type_var: TypeVar,
+    constraint: types_mod.StaticDispatchConstraint,
+    region: Region,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Deferred string literal for compile-time validation
+pub const DeferredStringLiteral = struct {
     expr_idx: CIR.Expr.Idx,
     type_var: TypeVar,
     constraint: types_mod.StaticDispatchConstraint,
@@ -195,6 +209,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
+    self.deferred_string_literals.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -304,6 +319,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .is_eq_ident = is_eq_ident,
         .is_ne_ident = is_ne_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
+        .deferred_string_literals = try DeferredStringLiteral.SafeList.initCapacity(gpa, 16),
     };
 }
 
@@ -314,6 +330,7 @@ pub fn deinit(self: *Self) void {
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
+    self.deferred_string_literals.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1742,6 +1759,7 @@ pub const Serialized = extern struct {
     is_eq_ident_reserved: u32, // Reserved space for is_eq_ident field (interned during deserialization)
     is_ne_ident_reserved: u32, // Reserved space for is_ne_ident field (interned during deserialization)
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
+    deferred_string_literals: DeferredStringLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1770,6 +1788,9 @@ pub const Serialized = extern struct {
 
         // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
         try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
+
+        // Serialize deferred string literals (will be empty during serialization since it's only used during type checking/evaluation)
+        try self.deferred_string_literals.serialize(&env.deferred_string_literals, allocator, writer);
 
         // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
         // the space needs to be here, but the values will be set separately during deserialization (these are runtime-only).
@@ -1854,6 +1875,7 @@ pub const Serialized = extern struct {
             .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
             .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
+            .deferred_string_literals = self.deferred_string_literals.deserialize(offset).*,
         };
 
         return env;

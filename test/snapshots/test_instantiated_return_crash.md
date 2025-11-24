@@ -27,7 +27,7 @@ The first argument being passed to this function has the wrong type:
                          ^^^^^^^^^
 
 This argument has the type:
-    _List(Str)_
+    _List(_b) where [List(c).try_from_str : List(c)]_
 
 But `f` needs the first argument to be:
     _Str_

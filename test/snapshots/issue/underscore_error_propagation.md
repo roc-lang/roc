@@ -21,8 +21,8 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
-TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
+MISSING METHOD - underscore_error_propagation.md:6:10:6:14
+MISSING METHOD - underscore_error_propagation.md:13:14:13:18
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -35,33 +35,27 @@ BadBase := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_propagation.md:6:9:6:15:**
+**MISSING METHOD**
+This **try_from_str** method is being called on the type **BadDerived**, which has no method with that name:
+**underscore_error_propagation.md:6:10:6:14:**
 ```roc
 value = "test"
 ```
-        ^^^^^^
+         ^^^^
 
-It has the type:
-    _Str_
 
-But the type annotation says it should have the type:
-    _BadDerived_
+**Hint: **For this to work, the type would need to have a method named **try_from_str** associated with it in the type's declaration.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_propagation.md:13:13:13:19:**
+**MISSING METHOD**
+This **try_from_str** method is being called on the type **GoodDerived**, which has no method with that name:
+**underscore_error_propagation.md:13:14:13:18:**
 ```roc
 goodValue = "test"
 ```
-            ^^^^^^
+             ^^^^
 
-It has the type:
-    _Str_
 
-But the type annotation says it should have the type:
-    _GoodDerived_
+**Hint: **For this to work, the type would need to have a method named **try_from_str** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -145,8 +139,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "BadDerived"))
+		(patt (type "GoodDerived")))
 	(type_decls
 		(nominal (type "BadBase")
 			(ty-header (name "BadBase")))
@@ -157,6 +151,6 @@ NO CHANGE
 		(nominal (type "GoodDerived")
 			(ty-header (name "GoodDerived"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "BadDerived"))
+		(expr (type "GoodDerived"))))
 ~~~

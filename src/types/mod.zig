@@ -20,6 +20,7 @@ pub const Flex = types.Flex;
 pub const Rigid = types.Rigid;
 pub const RecursionVar = types.RecursionVar;
 pub const NumeralInfo = types.NumeralInfo;
+pub const StringLiteralInfo = types.StringLiteralInfo;
 pub const RecursionInfo = types.RecursionInfo;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;

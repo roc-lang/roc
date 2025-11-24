@@ -29,61 +29,39 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:16:21:16:35
-MISSING METHOD - annotations.md:16:33:16:34
-TYPE MISMATCH - annotations.md:19:22:19:41
-MISSING METHOD - annotations.md:19:32:19:33
+TYPE MISMATCH - annotations.md:16:28:16:28
+INVALID NOMINAL TAG - annotations.md:19:22:19:41
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:16:21:16:35:**
+The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
+**annotations.md:16:28:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                    ^^^^^^^^^^^^^^
+                           ^^^  ^
 
-It has the type:
-    _Pair(Str)_
+The first argument has the type:
+    __c where [d.try_from_str : d]_
 
-But the type annotation says it should have the type:
-    _Pair(Num.U8)_
+But the second argument has the type:
+    __c where [d.from_numeral : d]_
 
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**annotations.md:16:33:16:34:**
-```roc
-failPairDiffTypes = mkPair("1", 2)
-```
-                                ^
+`mkPair` needs these arguments to have compatible types.
 
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
 **annotations.md:19:22:19:41:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                      ^^^^^^^^^^^^^^^^^^^
 
-It has the type:
-    _Pair(Str)_
+The tag is:
+    _Pair(a, _c)_
 
-But the type annotation says it should have the type:
-    _Pair(Num.U64)_
-
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**annotations.md:19:32:19:33:**
-```roc
-failPairDiffTypes2 = Pair.Pair(1, "str")
-```
-                               ^
-
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+But the nominal type needs it to be:
+    _Pair(a, a)_
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:

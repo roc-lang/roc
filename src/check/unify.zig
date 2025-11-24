@@ -2496,6 +2496,10 @@ const Unifier = struct {
         // Partition constraints
         const partitioned = self.partitionStaticDispatchConstraints(a_constraints, b_constraints) catch return Error.AllocatorError;
 
+        // Check for incompatible constraint origins (e.g., try_from_str vs from_numeral)
+        // These constraints are mutually exclusive - no type can satisfy both
+        try self.checkIncompatibleConstraintOrigins(partitioned);
+
         // Unify shared constraints
         if (partitioned.in_both.len() > 0) {
             for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
@@ -2525,6 +2529,35 @@ const Unifier = struct {
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+    }
+
+    /// Check if there are incompatible constraint origins between two sets of constraints.
+    /// For example, `try_from_str` and `from_numeral` are mutually exclusive - no type can
+    /// be both a string literal target and a numeric literal target.
+    fn checkIncompatibleConstraintOrigins(self: *const Self, partitioned: PartitionedStaticDispatchConstraints) Error!void {
+        const only_a_constraints = self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a);
+        const only_b_constraints = self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b);
+
+        // Check if one side has try_from_str and the other has from_numeral
+        var a_has_try_from_str = false;
+        var a_has_from_numeral = false;
+        var b_has_try_from_str = false;
+        var b_has_from_numeral = false;
+
+        for (only_a_constraints) |constraint| {
+            if (constraint.origin == .try_from_str) a_has_try_from_str = true;
+            if (constraint.origin == .from_numeral) a_has_from_numeral = true;
+        }
+
+        for (only_b_constraints) |constraint| {
+            if (constraint.origin == .try_from_str) b_has_try_from_str = true;
+            if (constraint.origin == .from_numeral) b_has_from_numeral = true;
+        }
+
+        // Incompatible: one side has try_from_str and the other has from_numeral
+        if ((a_has_try_from_str and b_has_from_numeral) or (a_has_from_numeral and b_has_try_from_str)) {
+            return Error.TypeMismatch;
+        }
     }
 
     /// Unify two static dispatch constraints

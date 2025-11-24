@@ -61,5 +61,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ camelCase: Str, field123: Str, field_with_underscores: Str }"))
+(expr (type "{ camelCase: a, field123: b, field_with_underscores: c } where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))
 ~~~

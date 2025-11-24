@@ -105,6 +105,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
         .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .deferred_string_literals = try ModuleEnv.DeferredStringLiteral.SafeList.initCapacity(gpa, 0),
     };
 
     return LoadedModule{

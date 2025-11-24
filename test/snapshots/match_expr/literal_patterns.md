@@ -13,32 +13,29 @@ match Answer {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - literal_patterns.md:2:15:2:16
-MISSING METHOD - literal_patterns.md:4:17:4:18
+INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
 TYPE DOES NOT HAVE METHODS - literal_patterns.md:5:5:5:7
-MISSING METHOD - literal_patterns.md:5:11:5:12
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**literal_patterns.md:2:15:2:16:**
+**INCOMPATIBLE MATCH BRANCHES**
+The second branch's type in this `match` is different from the previous ones:
+**literal_patterns.md:1:1:**
 ```roc
+match Answer {
     Answer => 1
+    Zero => "hello"
 ```
-              ^
+            ^^^^^^^
 
+The second branch has this type;
+    __a where [b.try_from_str : b]_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+But the previous branch has this type:
+    __a where [b.from_numeral : b]_
 
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**literal_patterns.md:4:17:4:18:**
-```roc
-    Greeting => 3
-```
-                ^
+All branches in an `match` must have compatible types.
 
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 **TYPE DOES NOT HAVE METHODS**
 You're calling the method `from_numeral` on a type that doesn't support methods:
@@ -52,17 +49,6 @@ This type doesn't support methods:
     _[Answer, Zero, Greeting]_others_
 
 
-
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**literal_patterns.md:5:11:5:12:**
-```roc
-    10 => 4
-```
-          ^
-
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -137,5 +123,5 @@ match Answer {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

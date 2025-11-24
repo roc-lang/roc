@@ -8,50 +8,46 @@ type=expr
 [1, "hello", [3, "world"]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:5:1:5
-MISSING METHOD - can_list_mismatch_then_nested_error.md:1:2:1:3
-MISSING METHOD - can_list_mismatch_then_nested_error.md:1:15:1:16
+INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:2:1:2
+INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:15:1:15
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-The second and third elements in this list have incompatible types:
-**can_list_mismatch_then_nested_error.md:1:5:**
+The first two elements in this list have incompatible types:
+**can_list_mismatch_then_nested_error.md:1:2:**
 ```roc
 [1, "hello", [3, "world"]]
 ```
-    ^^^^^^^  ^^^^^^^^^^^^
+ ^  ^^^^^^^
 
-The second element has this type:
-    _Str_
+The first element has this type:
+    __a where [b.from_numeral : b]_
 
-However, the third element has this type:
-    _List(Str)_
+However, the second element has this type:
+    __a where [b.try_from_str : b]_
 
 All elements in a list must have compatible types.
 
 Note: You can wrap each element in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**can_list_mismatch_then_nested_error.md:1:2:1:3:**
+**INCOMPATIBLE LIST ELEMENTS**
+The two elements in this list have incompatible types:
+**can_list_mismatch_then_nested_error.md:1:15:**
 ```roc
 [1, "hello", [3, "world"]]
 ```
- ^
+              ^  ^^^^^^^
 
+The first element has this type:
+    __a where [b.from_numeral : b]_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+However, the second element has this type:
+    __a where [b.try_from_str : b]_
 
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**can_list_mismatch_then_nested_error.md:1:15:1:16:**
-```roc
-[1, "hello", [3, "world"]]
-```
-              ^
+All elements in a list must have compatible types.
 
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

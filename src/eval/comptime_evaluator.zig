@@ -832,6 +832,318 @@ pub const ComptimeEvaluator = struct {
         }
     }
 
+    /// Validate all deferred string literals collected during type checking.
+    ///
+    /// This function is called after type checking to validate string literals that
+    /// have been inferred to be custom types with try_from_str methods.
+    ///
+    /// For each deferred string literal:
+    /// 1. Resolve the type variable to get the concrete type
+    /// 2. If type is Str (builtin string), skip validation - it's a plain string
+    /// 3. If type is a nominal type, look up try_from_str method
+    /// 4. Build a RocStr from the literal content
+    /// 5. Call try_from_str and check the Try result
+    /// 6. For Err results, report the InvalidStr error message
+    fn validateDeferredStringLiterals(self: *ComptimeEvaluator) !void {
+        const literals = self.env.deferred_string_literals.items.items;
+
+        for (literals) |literal| {
+            // Step 1: Resolve the type variable to get the concrete type
+            const resolved = self.env.types.resolveVar(literal.type_var);
+            const content = resolved.desc.content;
+
+            // Extract the nominal type if this is a structure
+            const nominal_type = switch (content) {
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nom| nom,
+                    else => {
+                        // Non-nominal types (e.g., records, tuples, functions) don't have try_from_str
+                        // This is a type error - string literal can't be used as this type
+                        const error_msg = try std.fmt.allocPrint(
+                            self.allocator,
+                            "String literal cannot be used as this type (type doesn't support try_from_str)",
+                            .{},
+                        );
+                        try self.error_names.append(error_msg);
+                        const problem = Problem{
+                            .comptime_eval_error = .{
+                                .error_name = error_msg,
+                                .region = literal.region,
+                            },
+                        };
+                        _ = try self.problems.appendProblem(self.allocator, problem);
+                        continue;
+                    },
+                },
+                else => {
+                    // Non-structure types (flex, rigid, alias, etc.)
+                    // If still flex, type checking didn't fully resolve it - default to Str, no validation needed
+                    // If rigid/alias, it doesn't support try_from_str
+                    if (content != .flex) {
+                        const error_msg = try std.fmt.allocPrint(
+                            self.allocator,
+                            "String literal cannot be used as this type (type doesn't support try_from_str)",
+                            .{},
+                        );
+                        try self.error_names.append(error_msg);
+                        const problem = Problem{
+                            .comptime_eval_error = .{
+                                .error_name = error_msg,
+                                .region = literal.region,
+                            },
+                        };
+                        _ = try self.problems.appendProblem(self.allocator, problem);
+                    }
+                    // Flex vars default to Str - no validation needed
+                    continue;
+                },
+            };
+
+            // Step 2: Check if this is the Str type - no validation needed
+            const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
+
+            // Extract just the type name for checking
+            const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
+                type_name_bytes[dot_idx + 1 ..]
+            else
+                type_name_bytes;
+
+            // Skip validation for Str type - it's the default/fallback
+            if (std.mem.eql(u8, short_type_name, "Str")) {
+                continue;
+            }
+
+            // Step 3: Look up the try_from_str method for this nominal type
+            const origin_module_ident = nominal_type.origin_module;
+            const is_builtin = origin_module_ident == self.env.builtin_module_ident;
+
+            const origin_env: *const ModuleEnv = if (is_builtin) blk: {
+                break :blk self.interpreter.builtin_module_env orelse {
+                    // No builtin module available (shouldn't happen in normal compilation)
+                    continue;
+                };
+            } else blk: {
+                // For user-defined types, use interpreter's module lookup
+                break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
+                    // Module not found - might be current module
+                    if (origin_module_ident == self.env.module_name_idx) {
+                        break :blk self.env;
+                    }
+                    // Unknown module - skip for now
+                    continue;
+                };
+            };
+
+            // Build the qualified method name: ModuleName.TypeName.try_from_str
+            const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
+
+            // Build qualified name: Module.TypeName.try_from_str
+            var qualified_name_buf: [256]u8 = undefined;
+            const qualified_name = std.fmt.bufPrint(
+                &qualified_name_buf,
+                "{s}.{s}.{s}",
+                .{ origin_env.module_name, type_name_bytes, method_name_bytes },
+            ) catch continue;
+
+            // Look up the identifier in the origin module
+            const ident_in_origin = origin_env.getIdentStoreConst().findByString(qualified_name) orelse {
+                // Method not found - the type doesn't have a try_from_str method
+                const error_msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Type {s} does not have a try_from_str method",
+                    .{short_type_name},
+                );
+                try self.error_names.append(error_msg);
+                const problem = Problem{
+                    .comptime_eval_error = .{
+                        .error_name = error_msg,
+                        .region = literal.region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+                continue;
+            };
+
+            // Get the definition index
+            const node_idx_in_origin = origin_env.getExposedNodeIndexById(ident_in_origin) orelse {
+                // Definition not exposed - this is also an error
+                const error_msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Type {s} does not have an accessible try_from_str method",
+                    .{short_type_name},
+                );
+                try self.error_names.append(error_msg);
+                const problem = Problem{
+                    .comptime_eval_error = .{
+                        .error_name = error_msg,
+                        .region = literal.region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+                continue;
+            };
+
+            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_origin)));
+
+            // Get str_lit_info for validation
+            const str_lit_info = literal.constraint.str_literal orelse {
+                // No StringLiteralInfo means this isn't a try_from_str constraint
+                continue;
+            };
+
+            // Step 4: Validate the literal by invoking try_from_str
+            const is_valid = try self.invokeTryFromStr(
+                origin_env,
+                def_idx,
+                str_lit_info,
+                literal.region,
+            );
+
+            if (!is_valid) {
+                // Error already reported by invokeTryFromStr
+                // Mark this expression as failed so we skip evaluating it
+                try self.failed_literal_exprs.put(literal.expr_idx, {});
+                continue;
+            }
+            // Validation passed - expression can be evaluated normally
+        }
+    }
+
+    /// Invoke a user-defined try_from_str function and check the result.
+    /// Returns true if validation passed (Ok), false if it failed (Err with InvalidStr).
+    fn invokeTryFromStr(
+        self: *ComptimeEvaluator,
+        origin_env: *const ModuleEnv,
+        def_idx: CIR.Def.Idx,
+        str_lit_info: types_mod.StringLiteralInfo,
+        region: base.Region,
+    ) !bool {
+        const roc_ops = self.get_ops();
+
+        // Look up the try_from_str function
+        const target_def = origin_env.store.getDef(def_idx);
+
+        // Save current environment and switch to origin_env
+        const saved_env = self.interpreter.env;
+        const saved_bindings_len = self.interpreter.bindings.items.len;
+        self.interpreter.env = @constCast(origin_env);
+        defer {
+            self.interpreter.env = saved_env;
+            self.interpreter.bindings.items.len = saved_bindings_len;
+        }
+
+        // Get the string content from the literal index
+        const str_content = self.env.getString(str_lit_info.string_idx);
+
+        // Build a RocStr from the content
+        const str_layout = layout_mod.Layout.str();
+        const str_size: u32 = self.interpreter.runtime_layout_store.layoutSize(str_layout);
+        const str_alignment = str_layout.alignment(self.interpreter.runtime_layout_store.targetUsize());
+        const str_ptr = try self.interpreter.stack_memory.alloca(str_size, str_alignment);
+        const str_value = eval_mod.StackValue{ .layout = str_layout, .ptr = str_ptr, .is_initialized = true };
+        defer str_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
+
+        // Initialize the RocStr
+        const roc_str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(str_ptr));
+        roc_str_ptr.* = builtins.str.RocStr.fromSlice(str_content, roc_ops);
+
+        // Evaluate the try_from_str function to get a closure
+        const func_value = self.interpreter.evalMinimal(target_def.expr, roc_ops) catch |err| {
+            const error_msg = try std.fmt.allocPrint(
+                self.allocator,
+                "Failed to evaluate try_from_str function: {s}",
+                .{@errorName(err)},
+            );
+            try self.error_names.append(error_msg);
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        };
+        defer func_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
+
+        // Check if func_value is a closure
+        if (func_value.layout.tag != .closure) {
+            const error_msg = try std.fmt.allocPrint(
+                self.allocator,
+                "try_from_str is not a function",
+                .{},
+            );
+            try self.error_names.append(error_msg);
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        }
+
+        const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(func_value.ptr.?));
+
+        // Get the parameters
+        const params = origin_env.store.slicePatterns(closure_header.params);
+        if (params.len != 1) {
+            const error_msg = try std.fmt.allocPrint(
+                self.allocator,
+                "try_from_str has wrong number of parameters (expected 1, got {d})",
+                .{params.len},
+            );
+            try self.error_names.append(error_msg);
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        }
+
+        // Bind the string argument to the parameter
+        const param_pattern = params[0];
+        try self.interpreter.bindings.append(.{
+            .pattern_idx = param_pattern,
+            .value = str_value,
+            .expr_idx = @enumFromInt(0),
+            .source_env = origin_env,
+        });
+        defer _ = self.interpreter.bindings.pop();
+
+        // Provide closure context
+        try self.interpreter.active_closures.append(func_value);
+        defer _ = self.interpreter.active_closures.pop();
+
+        // Evaluate the function body
+        const result = self.interpreter.evalMinimal(closure_header.body_idx, roc_ops) catch |err| {
+            const error_msg = try std.fmt.allocPrint(
+                self.allocator,
+                "Failed to evaluate try_from_str: {s}",
+                .{@errorName(err)},
+            );
+            try self.error_names.append(error_msg);
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        };
+        defer result.decref(&self.interpreter.runtime_layout_store, roc_ops);
+
+        // Check if the result is a Try (Ok/Err tag union)
+        // Try is: [Ok(a), Err(err)] where err is [InvalidStr(Str)]
+        // Reuse the existing checkTryResult which handles this pattern
+        return self.checkTryResult(result, region);
+    }
+
     /// Rewrite a numeric literal expression to match the inferred type
     /// Converts e_dec/e_dec_small to e_num, e_frac_f32, or e_frac_f64 based on the target type
     fn rewriteNumericLiteralExpr(
@@ -1460,6 +1772,9 @@ pub const ComptimeEvaluator = struct {
 
         // Validate all deferred numeric literals first
         try self.validateDeferredNumericLiterals();
+
+        // Validate all deferred string literals
+        try self.validateDeferredStringLiterals();
 
         // evaluation_order must be set after successful canonicalization
         const eval_order = self.env.evaluation_order.?;

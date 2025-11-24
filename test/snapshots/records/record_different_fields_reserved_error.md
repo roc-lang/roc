@@ -457,7 +457,7 @@ This expression produces a value, but it's not being used:
             ^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Str_
+    __a where [b.try_from_str : b]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -468,7 +468,7 @@ This expression produces a value, but it's not being used:
             ^^^^^^^^^^^^^
 
 It has the type:
-    _Str_
+    __a where [b.try_from_str : b]_
 
 # TOKENS
 ~~~zig

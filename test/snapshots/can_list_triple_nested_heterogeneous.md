@@ -8,18 +8,26 @@ type=expr
 [[], [[], [1]], [[], ["hello"]]]
 ~~~
 # EXPECTED
-MISSING METHOD - can_list_triple_nested_heterogeneous.md:1:12:1:13
+INCOMPATIBLE LIST ELEMENTS - can_list_triple_nested_heterogeneous.md:1:6:1:6
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**can_list_triple_nested_heterogeneous.md:1:12:1:13:**
+**INCOMPATIBLE LIST ELEMENTS**
+The second and third elements in this list have incompatible types:
+**can_list_triple_nested_heterogeneous.md:1:6:**
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
-           ^
+     ^^^^^^^^^  ^^^^^^^^^^^^^^^
 
+The second element has this type:
+    _List(List(_a)) where [List(List(b)).from_numeral : List(List(b))]_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+However, the third element has this type:
+    _List(List(_a)) where [List(List(b)).try_from_str : List(List(b))]_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -65,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(List(Str)))"))
+(expr (type "List(Error)"))
 ~~~

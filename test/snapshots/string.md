@@ -210,7 +210,7 @@ x = (
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Str, Str, Str, Str, Str, Str, Str, Str)")))
+		(patt (type "(a, b, Str, Str, Str, Str, Str, c) where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]")))
 	(expressions
-		(expr (type "(Str, Str, Str, Str, Str, Str, Str, Str)"))))
+		(expr (type "(a, b, Str, Str, Str, Str, Str, c) where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]"))))
 ~~~
