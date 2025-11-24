@@ -73,14 +73,7 @@ pub const Instantiator = struct {
         self: *Self,
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
-        // Guard against corrupted vars from malformed code (e.g., uninitialized memory)
-        // We return var 0 (which always exists) rather than creating a new var,
-        // since we can't create new vars here without causing array sync issues
-        const var_idx: u64 = @intFromEnum(initial_var);
-        const store_len = self.store.len();
-        if (var_idx >= store_len) {
-            return @enumFromInt(0);
-        }
+        std.debug.assert(@intFromEnum(initial_var) < self.store.len());
 
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;

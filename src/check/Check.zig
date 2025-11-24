@@ -524,15 +524,7 @@ fn instantiateVarHelp(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    // Guard against corrupted vars from malformed code (e.g., uninitialized memory)
-    const var_idx: u64 = @intFromEnum(var_to_instantiate);
-    const type_store_len = self.types.len();
-    if (var_idx >= type_store_len) {
-        // Return a fresh error var for corrupted input - this properly maintains sync
-        const fresh_error_var = try self.types.freshFromContentWithRank(.err, env.rank());
-        try self.fillInRegionsThrough(fresh_error_var);
-        return fresh_error_var;
-    }
+    std.debug.assert(@intFromEnum(var_to_instantiate) < self.types.len());
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();

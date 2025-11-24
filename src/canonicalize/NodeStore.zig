@@ -2626,14 +2626,9 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Creates a slice corresponding to a span.
-/// Returns an empty slice if the span is out of bounds (can happen with corrupted malformed code).
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     const extra_data_len = store.extra_data.items.items.len;
-    // Bounds check: ensure the span doesn't exceed the extra_data length
-    if (span.start >= extra_data_len or span.start + span.len > extra_data_len) {
-        // Return empty slice for corrupted spans
-        return &[_]T{};
-    }
+    std.debug.assert(span.start + span.len <= extra_data_len);
     return @ptrCast(store.extra_data.items.items[span.start..][0..span.len]);
 }
 
