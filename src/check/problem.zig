@@ -217,6 +217,7 @@ pub const InvalidBoolBinop = struct {
 pub const StaticDispatch = union(enum) {
     dispatcher_not_nominal: DispatcherNotNominal,
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
+    type_does_not_support_equality: TypeDoesNotSupportEquality,
 };
 
 /// Error when you try to static dispatch on something that's not a nominal type
@@ -238,6 +239,14 @@ pub const DispatcherDoesNotImplMethod = struct {
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
+};
+
+/// Error when an anonymous type (record, tuple, tag union) doesn't support equality
+/// because one or more of its components contain types that don't have is_eq
+pub const TypeDoesNotSupportEquality = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
 };
 
 // bug //
@@ -367,6 +376,7 @@ pub const ReportBuilder = struct {
                 switch (detail) {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
+                    .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
                 }
             },
             .number_does_not_fit => |data| {
@@ -1766,6 +1776,288 @@ pub const ReportBuilder = struct {
         }
 
         return report;
+    }
+
+    /// Build a report for when an anonymous type doesn't support equality
+    fn buildTypeDoesNotSupportEquality(
+        self: *Self,
+        data: TypeDoesNotSupportEquality,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE DOES NOT SUPPORT EQUALITY", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.dispatcher_snapshot);
+        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This expression uses ");
+        try report.document.addAnnotated("==", .emphasized);
+        try report.document.addReflowingText(" or ");
+        try report.document.addAnnotated("!=", .emphasized);
+        try report.document.addReflowingText(" on a type that doesn't support equality:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The type is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(snapshot_str, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Get the content and explain which parts don't support equality
+        const content = self.snapshots.getContent(data.dispatcher_snapshot);
+        if (content == .structure) {
+            switch (content.structure) {
+                .record => |record| {
+                    try self.explainRecordEqualityFailure(&report, record);
+                },
+                .tuple => |tuple| {
+                    try self.explainTupleEqualityFailure(&report, tuple);
+                },
+                .tag_union => |tag_union| {
+                    try self.explainTagUnionEqualityFailure(&report, tag_union);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    try report.document.addReflowingText("Functions cannot be compared for equality.");
+                    try report.document.addLineBreak();
+                },
+                else => {},
+            }
+        }
+
+        return report;
+    }
+
+    /// Explain which record fields don't support equality
+    fn explainRecordEqualityFailure(
+        self: *Self,
+        report: *Report,
+        record: snapshot.SnapshotRecord,
+    ) !void {
+        const fields = self.snapshots.sliceRecordFields(record.fields);
+        var has_problem_fields = false;
+
+        // First pass: check if any fields don't support equality
+        for (fields.items(.content)) |field_content_idx| {
+            if (!self.snapshotSupportsEquality(field_content_idx)) {
+                has_problem_fields = true;
+                break;
+            }
+        }
+
+        if (has_problem_fields) {
+            try report.document.addReflowingText("This record does not support equality because these fields have types that don't support ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(":");
+            try report.document.addLineBreak();
+
+            const field_names = fields.items(.name);
+            const field_contents = fields.items(.content);
+            for (field_names, field_contents) |name, field_content_idx| {
+                if (!self.snapshotSupportsEquality(field_content_idx)) {
+                    const field_name = self.can_ir.getIdentText(name);
+
+                    self.snapshot_writer.resetContext();
+                    try self.snapshot_writer.write(field_content_idx);
+                    const field_type_str = try report.addOwnedString(self.snapshot_writer.get());
+
+                    try report.document.addText("    ");
+                    try report.document.addAnnotated(field_name, .emphasized);
+                    try report.document.addText(": ");
+                    try report.document.addAnnotated(field_type_str, .type_variable);
+                    try report.document.addLineBreak();
+                }
+            }
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint: ", .emphasized);
+            try report.document.addReflowingText("Anonymous records only have an ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(" method if all of their fields have ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(" methods.");
+            try report.document.addLineBreak();
+        }
+    }
+
+    /// Explain which tuple elements don't support equality
+    fn explainTupleEqualityFailure(
+        self: *Self,
+        report: *Report,
+        tuple: snapshot.SnapshotTuple,
+    ) !void {
+        const elems = self.snapshots.sliceVars(tuple.elems);
+        var has_problem_elems = false;
+
+        // First pass: check if any elements don't support equality
+        for (elems) |elem_content_idx| {
+            if (!self.snapshotSupportsEquality(elem_content_idx)) {
+                has_problem_elems = true;
+                break;
+            }
+        }
+
+        if (has_problem_elems) {
+            try report.document.addReflowingText("This tuple does not support equality because these elements have types that don't support ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(":");
+            try report.document.addLineBreak();
+
+            for (elems, 0..) |elem_content_idx, i| {
+                if (!self.snapshotSupportsEquality(elem_content_idx)) {
+                    self.snapshot_writer.resetContext();
+                    try self.snapshot_writer.write(elem_content_idx);
+                    const elem_type_str = try report.addOwnedString(self.snapshot_writer.get());
+
+                    try report.document.addText("    element ");
+                    var buf: [20]u8 = undefined;
+                    const index_str = std.fmt.bufPrint(&buf, "{}", .{i}) catch "?";
+                    try report.document.addAnnotated(index_str, .emphasized);
+                    try report.document.addText(": ");
+                    try report.document.addAnnotated(elem_type_str, .type_variable);
+                    try report.document.addLineBreak();
+                }
+            }
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint: ", .emphasized);
+            try report.document.addReflowingText("Tuples only have an ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(" method if all of their elements have ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(" methods.");
+            try report.document.addLineBreak();
+        }
+    }
+
+    /// Explain which tag union payloads don't support equality
+    fn explainTagUnionEqualityFailure(
+        self: *Self,
+        report: *Report,
+        tag_union: snapshot.SnapshotTagUnion,
+    ) !void {
+        const tags = self.snapshots.sliceTags(tag_union.tags);
+        var has_problem_tags = false;
+
+        // First pass: check if any tag payloads don't support equality
+        for (tags.items(.args)) |tag_args| {
+            const args = self.snapshots.sliceVars(tag_args);
+            for (args) |arg_content_idx| {
+                if (!self.snapshotSupportsEquality(arg_content_idx)) {
+                    has_problem_tags = true;
+                    break;
+                }
+            }
+            if (has_problem_tags) break;
+        }
+
+        if (has_problem_tags) {
+            try report.document.addReflowingText("This tag union does not support equality because these tags have payload types that don't support ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(":");
+            try report.document.addLineBreak();
+
+            const tag_names = tags.items(.name);
+            const tag_args_list = tags.items(.args);
+            for (tag_names, tag_args_list) |name, tag_args| {
+                const args = self.snapshots.sliceVars(tag_args);
+                var tag_has_problem = false;
+                for (args) |arg_content_idx| {
+                    if (!self.snapshotSupportsEquality(arg_content_idx)) {
+                        tag_has_problem = true;
+                        break;
+                    }
+                }
+                if (tag_has_problem) {
+                    const tag_name = self.can_ir.getIdentText(name);
+                    try report.document.addText("    ");
+                    try report.document.addAnnotated(tag_name, .emphasized);
+
+                    // Show the problematic payload types
+                    if (args.len > 0) {
+                        try report.document.addText(" (");
+                        var first = true;
+                        for (args) |arg_content_idx| {
+                            if (!first) try report.document.addText(", ");
+                            first = false;
+
+                            self.snapshot_writer.resetContext();
+                            try self.snapshot_writer.write(arg_content_idx);
+                            const arg_type_str = try report.addOwnedString(self.snapshot_writer.get());
+                            try report.document.addAnnotated(arg_type_str, .type_variable);
+                        }
+                        try report.document.addText(")");
+                    }
+                    try report.document.addLineBreak();
+                }
+            }
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint: ", .emphasized);
+            try report.document.addReflowingText("Tag unions only have an ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(" method if all of their payload types have ");
+            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addReflowingText(" methods.");
+            try report.document.addLineBreak();
+        }
+    }
+
+    /// Check if a snapshotted type supports equality
+    fn snapshotSupportsEquality(self: *Self, content_idx: snapshot.SnapshotContentIdx) bool {
+        const content = self.snapshots.getContent(content_idx);
+        return switch (content) {
+            .structure => |s| switch (s) {
+                // Functions never support equality
+                .fn_pure, .fn_effectful, .fn_unbound => false,
+                // Empty types trivially support equality
+                .empty_record, .empty_tag_union => true,
+                // Records: all fields must support equality
+                .record => |record| {
+                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    for (fields.items(.content)) |field_content| {
+                        if (!self.snapshotSupportsEquality(field_content)) return false;
+                    }
+                    return true;
+                },
+                // Tuples: all elements must support equality
+                .tuple => |tuple| {
+                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    for (elems) |elem_content| {
+                        if (!self.snapshotSupportsEquality(elem_content)) return false;
+                    }
+                    return true;
+                },
+                // Tag unions: all payloads must support equality
+                .tag_union => |tag_union| {
+                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    for (tags_slice.items(.args)) |tag_args| {
+                        const args = self.snapshots.sliceVars(tag_args);
+                        for (args) |arg_content| {
+                            if (!self.snapshotSupportsEquality(arg_content)) return false;
+                        }
+                    }
+                    return true;
+                },
+                // Other types (nominal, box, etc.) assumed to support equality
+                else => true,
+            },
+            // Aliases: check the underlying type
+            .alias => |alias| self.snapshotSupportsEquality(alias.backing),
+            // Recursion vars: assume they support equality
+            .recursion_var => true,
+            // Other types (flex, rigid, recursive, err) assumed to support equality
+            else => true,
+        };
     }
 
     // number problems //

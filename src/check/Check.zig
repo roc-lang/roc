@@ -4813,10 +4813,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         }
                     } else {
                         // Some component doesn't support is_eq (e.g., contains a function)
-                        try self.reportConstraintError(
+                        try self.reportEqualityError(
                             deferred_constraint.var_,
                             constraint,
-                            .not_nominal,
                             env,
                         );
                     }
@@ -4964,6 +4963,26 @@ fn reportConstraintError(
         } },
     };
     _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
+
+    try self.markConstraintFunctionAsError(constraint, env);
+}
+
+/// Report an error when an anonymous type doesn't support equality
+fn reportEqualityError(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) !void {
+    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const equality_problem = problem.Problem{ .static_dispach = .{
+        .type_does_not_support_equality = .{
+            .dispatcher_var = dispatcher_var,
+            .dispatcher_snapshot = snapshot,
+            .fn_var = constraint.fn_var,
+        },
+    } };
+    _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
 
     try self.markConstraintFunctionAsError(constraint, env);
 }

@@ -224,7 +224,7 @@ test "check type - record with function field - no is_eq" {
     const source =
         \\{ x: 1, f: |a| a + 1 } == { x: 1, f: |a| a + 1 }
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT HAVE METHODS");
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
 
 test "check type - tuple with function element - no is_eq" {
@@ -232,7 +232,7 @@ test "check type - tuple with function element - no is_eq" {
     const source =
         \\(1, |a| a) == (1, |a| a)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT HAVE METHODS");
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
 
 test "check type - nested record equality" {
@@ -256,7 +256,7 @@ test "check type - nested record with function - no is_eq" {
     const source =
         \\{ a: { f: |x| x } } == { a: { f: |x| x } }
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT HAVE METHODS");
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
 
 test "check type - tag union equality" {
@@ -272,7 +272,7 @@ test "check type - tag union with function payload - no is_eq" {
     const source =
         \\Fn(|x| x) == Fn(|x| x)
     ;
-    try checkTypesExpr(source, .fail, "TYPE DOES NOT HAVE METHODS");
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
 
 // tags //
