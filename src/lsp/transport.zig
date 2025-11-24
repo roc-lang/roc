@@ -41,8 +41,8 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         }
 
         pub fn readMessage(self: *Self) ReadMessageError![]u8 {
-            var line_buffer = std.array_list.Managed(u8).init(self.allocator);
-            defer line_buffer.deinit();
+            var line_buffer = std.ArrayList(u8){};
+            defer line_buffer.deinit(self.allocator);
 
             var content_length: ?usize = null;
             while (true) {
@@ -95,7 +95,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             try self.sendBytes(payload);
         }
 
-        fn readHeaderLine(self: *Self, buffer: *std.array_list.Managed(u8)) ReadMessageError!?[]const u8 {
+        fn readHeaderLine(self: *Self, buffer: *std.ArrayList(u8)) ReadMessageError!?[]const u8 {
             buffer.clearRetainingCapacity();
 
             var saw_any = false;
@@ -112,7 +112,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
                 if (byte == '\n') break;
 
                 if (buffer.items.len >= max_header_line) return error.HeaderTooLong;
-                try buffer.append(byte);
+                try buffer.append(self.allocator, byte);
             }
 
             if (buffer.items.len > 0 and buffer.items[buffer.items.len - 1] == '\r') {

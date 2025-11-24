@@ -16,7 +16,7 @@ fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     const WriterType = @TypeOf(sink.writer());
     var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader.reader(), sink.writer(), null);
 
-    var responses = std.ArrayListUnmanaged([]u8){};
+    var responses = std.ArrayList([]u8){};
     errdefer {
         for (responses.items) |body| allocator.free(body);
         responses.deinit(allocator);
@@ -45,7 +45,7 @@ fn lifecycleInput(allocator: std.mem.Allocator) ![]u8 {
         ,
     };
 
-    var builder = std.ArrayListUnmanaged(u8){};
+    var builder = std.ArrayList(u8){};
     errdefer builder.deinit(allocator);
 
     inline for (messages) |body| {
@@ -115,7 +115,7 @@ test "server rejects re-initialization requests" {
         \\{"jsonrpc":"2.0","method":"exit"}
     ;
 
-    var builder = std.ArrayListUnmanaged(u8){};
+    var builder = std.ArrayList(u8){};
     defer builder.deinit(allocator);
 
     for (&[_][]const u8{ init, reinit, shutdown, exit }) |body| {
