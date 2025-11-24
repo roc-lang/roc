@@ -884,8 +884,15 @@ pub const Interpreter = struct {
                         return try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ne => {
-                        // Desugar `a != b` to `a.is_ne(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_ne_ident, binop.lhs, binop.rhs, roc_ops);
+                        // Desugar `a != b` to `!(a.is_eq(b))`
+                        const eq_result = try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
+                        defer eq_result.decref(&self.runtime_layout_store, roc_ops);
+                        // Negate the boolean result
+                        if (eq_result.ptr) |ptr| {
+                            const bool_val = @as(*const u8, @ptrCast(ptr)).*;
+                            return try self.makeBoolValue(bool_val == 0);
+                        }
+                        return eq_result;
                     },
                     .@"or" => {
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
@@ -2893,13 +2900,6 @@ pub const Interpreter = struct {
                 const result = lhs == rhs;
                 return try self.makeBoolValue(result);
             },
-            .bool_is_ne => {
-                // Bool.is_ne : Bool, Bool -> Bool
-                std.debug.assert(args.len == 2); // low-level .bool_is_ne expects 2 arguments
-                const lhs = args[0].asBool();
-                const rhs = args[1].asBool();
-                return try self.makeBoolValue(lhs != rhs);
-            },
 
             // Numeric type checking operations
             .num_is_zero => {
@@ -2950,20 +2950,6 @@ pub const Interpreter = struct {
                     .dec => |l| l.num == rhs.dec.num,
                     .f32, .f64 => {
                         self.triggerCrash("Equality comparison not supported for F32/F64 due to floating point imprecision", false, roc_ops);
-                        return error.Crash;
-                    },
-                };
-                return try self.makeBoolValue(result);
-            },
-            .num_is_ne => {
-                // num.is_ne : num, num -> Bool (Dec only)
-                std.debug.assert(args.len == 2); // low-level .num_is_ne expects 2 arguments
-                const lhs = try self.extractNumericValue(args[0]);
-                const rhs = try self.extractNumericValue(args[1]);
-                const result = switch (lhs) {
-                    .dec => |l| l.num != rhs.dec.num,
-                    .int, .f32, .f64 => {
-                        self.triggerCrash("is_ne only supported for Dec type", false, roc_ops);
                         return error.Crash;
                     },
                 };
@@ -5611,51 +5597,12 @@ pub const Interpreter = struct {
         }
 
         // Resolve the method function
-        const method_func = self.resolveMethodFunction(
+        const method_func = try self.resolveMethodFunction(
             nominal_info.?.origin,
             nominal_info.?.ident,
             method_ident,
             roc_ops,
-        ) catch |err| {
-            // For is_eq, fall back to structural equality on the backing type for any error
-            // (method may not exist, or evaluation may fail for user-defined types in REPL)
-            if (method_ident == self.env.is_eq_ident) {
-                // Get the nominal type from resolved lhs
-                if (lhs_resolved.desc.content == .structure) {
-                    if (lhs_resolved.desc.content.structure == .nominal_type) {
-                        const nom = lhs_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.runtime_types.getNominalBackingVar(nom);
-                        const result = self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops) catch {
-                            return try self.makeBoolValue(false);
-                        };
-                        return try self.makeBoolValue(result);
-                    }
-                }
-            }
-            // For is_ne, fall back to negating is_eq (using user-defined or structural equality)
-            if (method_ident == self.env.is_ne_ident) {
-                // Try to use the is_eq method and negate it
-                const eq_result = self.dispatchBinaryOpMethod(self.env.is_eq_ident, lhs_expr, rhs_expr, roc_ops) catch {
-                    // If is_eq also fails, fall back to structural inequality
-                    if (lhs_resolved.desc.content == .structure) {
-                        if (lhs_resolved.desc.content.structure == .nominal_type) {
-                            const nom = lhs_resolved.desc.content.structure.nominal_type;
-                            const backing_var = self.runtime_types.getNominalBackingVar(nom);
-                            const result = self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops) catch {
-                                return try self.makeBoolValue(true);
-                            };
-                            return try self.makeBoolValue(!result);
-                        }
-                    }
-                    return err;
-                };
-                defer eq_result.decref(&self.runtime_layout_store, roc_ops);
-                // Negate the result
-                const is_equal = boolValueEquals(true, eq_result);
-                return try self.makeBoolValue(!is_equal);
-            }
-            return err;
-        };
+        );
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
         // Prepare arguments: lhs (receiver) + rhs
@@ -5848,8 +5795,16 @@ pub const Interpreter = struct {
         const method_name_str = self.env.common.getIdentStore().getText(method_name);
 
         // Try to find the method in the origin module's exposed items
+        // For user-defined types, methods are stored with fully qualified names like "repl.MyColor.is_eq"
+        // So we try the module-qualified name FIRST, then fall back to other patterns
         const method_ident = blk: {
-            if (origin_env.common.findIdent(qualified_name)) |ident| {
+            // Try with module prefix first (e.g., "repl.MyColor.is_eq")
+            // Associated items in user modules are stored with full "{module}.{Type}.{method}" names
+            // Note: origin_module was translated to the runtime_layout_store's ident store in translateTypeVar
+            const origin_module_str = self.runtime_layout_store.env.getIdent(origin_module);
+            var module_buf: [256]u8 = undefined;
+            const module_qualified = try std.fmt.bufPrint(&module_buf, "{s}.{s}", .{ origin_module_str, qualified_name });
+            if (origin_env.common.findIdent(module_qualified)) |ident| {
                 break :blk ident;
             }
 
@@ -5858,6 +5813,11 @@ pub const Interpreter = struct {
             var builtin_buf: [256]u8 = undefined;
             const builtin_qualified = try std.fmt.bufPrint(&builtin_buf, "Builtin.{s}", .{qualified_name});
             if (origin_env.common.findIdent(builtin_qualified)) |ident| {
+                break :blk ident;
+            }
+
+            // Try without module prefix (e.g., "MyColor.is_eq")
+            if (origin_env.common.findIdent(qualified_name)) |ident| {
                 break :blk ident;
             }
 

@@ -4169,16 +4169,17 @@ fn checkBinopExpr(
             }
         },
         .eq, .ne => {
-            // For == and !=, we need to check if the type implements is_eq/is_ne
-            // Create a static dispatch constraint for the is_eq/is_ne method
+            // For == and !=, we need to check if the type implements is_eq
+            // The != operator is desugared to !(a.is_eq(b)) at runtime
+            // Create a static dispatch constraint for the is_eq method
 
             // Ensure the operands are the same type
             const lhs_rhs_result = try self.unify(lhs_var, rhs_var, env);
             if (lhs_rhs_result.isProblem()) {
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                // Get the appropriate method name
-                const method_name = if (binop.op == .eq) self.cir.is_eq_ident else self.cir.is_ne_ident;
+                // Both == and != use is_eq (runtime negates for !=)
+                const method_name = self.cir.is_eq_ident;
 
                 // Create the function type: lhs_type, rhs_type -> Bool
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });

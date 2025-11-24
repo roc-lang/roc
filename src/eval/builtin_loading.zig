@@ -97,7 +97,6 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
         .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
         .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
     };
 

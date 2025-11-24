@@ -166,10 +166,8 @@ is_lte_ident: Ident.Idx,
 is_gt_ident: Ident.Idx,
 /// Interned identifier for "is_gte" - used for >= operator desugaring
 is_gte_ident: Ident.Idx,
-/// Interned identifier for "is_eq" - used for == operator desugaring
+/// Interned identifier for "is_eq" - used for == and != operator desugaring
 is_eq_ident: Ident.Idx,
-/// Interned identifier for "is_ne" - used for != operator desugaring
-is_ne_ident: Ident.Idx,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -251,7 +249,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const is_gt_ident = try common.insertIdent(gpa, Ident.for_text("is_gt"));
     const is_gte_ident = try common.insertIdent(gpa, Ident.for_text("is_gte"));
     const is_eq_ident = try common.insertIdent(gpa, Ident.for_text("is_eq"));
-    const is_ne_ident = try common.insertIdent(gpa, Ident.for_text("is_ne"));
 
     // Pre-intern numeric type identifiers for layout store (these get looked up during runtime layout generation)
     _ = try common.insertIdent(gpa, Ident.for_text("Num.U8"));
@@ -302,7 +299,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .is_gt_ident = is_gt_ident,
         .is_gte_ident = is_gte_ident,
         .is_eq_ident = is_eq_ident,
-        .is_ne_ident = is_ne_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1740,7 +1736,6 @@ pub const Serialized = extern struct {
     is_gt_ident_reserved: u32, // Reserved space for is_gt_ident field (interned during deserialization)
     is_gte_ident_reserved: u32, // Reserved space for is_gte_ident field (interned during deserialization)
     is_eq_ident_reserved: u32, // Reserved space for is_eq_ident field (interned during deserialization)
-    is_ne_ident_reserved: u32, // Reserved space for is_ne_ident field (interned during deserialization)
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1795,7 +1790,6 @@ pub const Serialized = extern struct {
         self.is_gt_ident_reserved = 0;
         self.is_gte_ident_reserved = 0;
         self.is_eq_ident_reserved = 0;
-        self.is_ne_ident_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1852,7 +1846,6 @@ pub const Serialized = extern struct {
             .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
             .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
             .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-            .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 

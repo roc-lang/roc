@@ -9836,7 +9836,7 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.met
                 .type_anno => |type_anno| {
                     // Get the annotation name (for annotation-only definitions like compiler intrinsics)
                     if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build qualified name (e.g., "Bool.is_ne")
+                        // Build qualified name (e.g., "Bool.is_eq")
                         const parent_text = self.env.getIdent(parent_name);
                         const anno_text = self.env.getIdent(anno_ident);
                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
