@@ -4630,8 +4630,6 @@ pub const Interpreter = struct {
         lhs_var: types.Var,
         roc_ops: *RocOps,
     ) StructuralEqError!bool {
-        _ = lhs_var;
-
         // For scalar types (numbers, Bool), use direct comparison
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const order = self.compareNumericScalars(lhs, rhs) catch {
@@ -4659,11 +4657,7 @@ pub const Interpreter = struct {
         ) catch |err| {
             // If method lookup fails, fall back to structural equality on backing type
             if (err == error.MethodLookupFailed or err == error.MethodNotFound) {
-                const backing_var = self.runtime_types.getNominalBackingVar(nom);
-                const backing_resolved = self.runtime_types.resolveVar(backing_var);
-                if (backing_resolved.desc.content == .structure) {
-                    return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops);
-                }
+                return self.valuesStructurallyEqual(lhs, lhs_var, rhs, lhs_var, roc_ops);
             }
             return error.NotImplemented;
         };
