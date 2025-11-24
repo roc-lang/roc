@@ -19,7 +19,19 @@ result = myBar
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**DOES NOT EXIST**
+`Foo.bar` does not exist.
+
+`Foo` is in scope, but it has no associated `bar`.
+
+It's referenced here:
+**nominal_associated_value_alias.md:7:9:7:16:**
+```roc
+myBar = Foo.bar
+```
+        ^^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -78,8 +90,7 @@ result = myBar
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "myBar"))
-		(e-lookup-local
-			(p-assign (ident "nominal_associated_value_alias.Foo.bar")))
+		(e-runtime-error (tag "nested_value_not_found"))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
@@ -98,13 +109,13 @@ result = myBar
 (inferred-types
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
-		(patt (type "U64")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
-		(expr (type "U64"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

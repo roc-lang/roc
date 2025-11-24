@@ -625,7 +625,7 @@ fn processAssociatedBlock(
     assoc: anytype,
 ) std.mem.Allocator.Error!void {
     // First, introduce placeholder patterns for all associated items
-    try self.processAssociatedItemsFirstPass(qualified_name_idx, type_name, assoc.statements);
+    try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
 
     // Now enter a new scope for the associated block where both qualified and unqualified names work
     try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
@@ -971,31 +971,38 @@ fn processAssociatedItemsSecondPass(
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                                    // Make the real pattern available in current scope (replaces placeholder)
-                                    // We already added unqualified and type-qualified names earlier,
-                                    // but need to update them to point to the real pattern instead of placeholder.
+                                    // Make the real pattern available (replaces placeholder)
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
-                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                    // Check if this is still a placeholder before updating.
-                                    // For nested types with associated blocks (e.g., Numeral inside Num),
-                                    // the item may have already been fully processed during the recursive
-                                    // processAssociatedBlock call in Phase 2b of processAssociatedItemsFirstPass.
-                                    // In that case, the placeholder was already consumed and we should skip it.
-                                    if (self.isPlaceholder(decl_ident)) {
-                                        // Update unqualified name (e.g., "my_not")
-                                        try self.updatePlaceholder(current_scope, decl_ident, pattern_idx);
-
-                                        // Update type-qualified name (e.g., "MyBool.my_not")
-                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                        if (type_qualified_idx.idx != decl_ident.idx) {
-                                            try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
+                                    // Check if the fully-qualified name is still a placeholder before updating.
+                                    // Note: We only track fully-qualified names as placeholders now.
+                                    if (self.isPlaceholder(qualified_idx)) {
+                                        // Find and update the placeholder in whichever scope contains it
+                                        // (should be a parent scope since we're now in the inner scope)
+                                        var scope_idx: usize = 0;
+                                        while (scope_idx < self.scopes.items.len) : (scope_idx += 1) {
+                                            const scope = &self.scopes.items[scope_idx];
+                                            if (scope.idents.get(qualified_idx)) |_| {
+                                                try self.updatePlaceholder(scope, qualified_idx, pattern_idx);
+                                                break;
+                                            }
                                         }
 
-                                        // Update fully qualified name (e.g., "Test.MyBool.my_not")
-                                        if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != decl_ident.idx) {
-                                            try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                                        // Also update aliases in the current (inner) scope if they exist
+                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                        // Update unqualified alias if present
+                                        if (current_scope.idents.get(decl_ident)) |_| {
+                                            try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                            _ = self.placeholder_idents.remove(decl_ident);
+                                        }
+
+                                        // Update type-qualified alias if present
+                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
+                                        if (current_scope.idents.get(type_qualified_idx)) |_| {
+                                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+                                            _ = self.placeholder_idents.remove(type_qualified_idx);
                                         }
                                     }
 
@@ -1023,23 +1030,37 @@ fn processAssociatedItemsSecondPass(
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                    // Make the real pattern available in current scope (replaces placeholder)
+                    // Make the real pattern available (replaces placeholder)
                     const def_cir = self.env.store.getDef(def_idx);
                     const pattern_idx = def_cir.pattern;
-                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                    // Update unqualified name (e.g., "is_empty")
-                    try self.updatePlaceholder(current_scope, name_ident, pattern_idx);
+                    // Check if the fully-qualified name is still a placeholder before updating.
+                    if (self.isPlaceholder(qualified_idx)) {
+                        // Find and update the placeholder in whichever scope contains it
+                        var scope_idx: usize = 0;
+                        while (scope_idx < self.scopes.items.len) : (scope_idx += 1) {
+                            const scope = &self.scopes.items[scope_idx];
+                            if (scope.idents.get(qualified_idx)) |_| {
+                                try self.updatePlaceholder(scope, qualified_idx, pattern_idx);
+                                break;
+                            }
+                        }
 
-                    // Update type-qualified name (e.g., "List.is_empty")
-                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                    if (type_qualified_idx.idx != name_ident.idx) {
-                        try self.updatePlaceholder(current_scope, type_qualified_idx, pattern_idx);
-                    }
+                        // Also update aliases in the current (inner) scope if they exist
+                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                    // Update fully qualified name (e.g., "Builtin.List.is_empty")
-                    if (qualified_idx.idx != type_qualified_idx.idx and qualified_idx.idx != name_ident.idx) {
-                        try self.updatePlaceholder(current_scope, qualified_idx, pattern_idx);
+                        // Update unqualified alias if present
+                        if (current_scope.idents.get(name_ident)) |_| {
+                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+                            _ = self.placeholder_idents.remove(name_ident);
+                        }
+
+                        // Update type-qualified alias if present
+                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
+                        if (current_scope.idents.get(type_qualified_idx)) |_| {
+                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
+                            _ = self.placeholder_idents.remove(type_qualified_idx);
+                        }
                     }
 
                     try self.env.store.addScratchDef(def_idx);
@@ -1100,7 +1121,6 @@ fn processAssociatedItemsSecondPass(
 fn processAssociatedItemsFirstPass(
     self: *Self,
     parent_name: Ident.Idx,
-    parent_type_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     // Multi-phase approach for sibling types:
@@ -1238,21 +1258,14 @@ fn processAssociatedItemsFirstPass(
                         };
                         const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
 
-                        // Also compute type-qualified name (e.g., "List.map")
-                        // Re-fetch identifiers since insertQualifiedIdent may have reallocated the identifier table
-                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), self.env.getIdent(decl_ident));
-
-                        // Track all three identifiers as placeholders
+                        // Multi-scope registration: Only insert fully-qualified name in parent scope
+                        // The unqualified and type-qualified names will be added as aliases
+                        // into the inner scope later (after scopeEnter in processAssociatedBlock)
                         try self.placeholder_idents.put(self.env.gpa, qualified_idx, {});
-                        try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
-                        try self.placeholder_idents.put(self.env.gpa, type_qualified_idx, {});
 
-                        // Directly put placeholder in scope (no conflict checking)
-                        // updatePlaceholder will verify it's replacing a placeholder later
+                        // Insert only fully-qualified name into current (parent) scope
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                         try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
-                        try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
-                        try current_scope.idents.put(self.env.gpa, type_qualified_idx, placeholder_pattern_idx);
                     }
                 }
             },
@@ -1270,21 +1283,14 @@ fn processAssociatedItemsFirstPass(
                     };
                     const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
 
-                    // Also compute type-qualified name (e.g., "List.is_empty")
-                    // Re-fetch anno_text since insertQualifiedIdent may have reallocated the identifier table
-                    const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), self.env.getIdent(anno_ident));
-
-                    // Track all three identifiers as placeholders
+                    // Multi-scope registration: Only insert fully-qualified name in parent scope
+                    // The unqualified and type-qualified names will be added as aliases
+                    // into the inner scope later (after scopeEnter in processAssociatedBlock)
                     try self.placeholder_idents.put(self.env.gpa, qualified_idx, {});
-                    try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
-                    try self.placeholder_idents.put(self.env.gpa, type_qualified_idx, {});
 
-                    // Directly put placeholder in scope (no conflict checking)
-                    // updatePlaceholder will verify it's replacing a placeholder later
+                    // Insert only fully-qualified name into current (parent) scope
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
-                    try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
-                    try current_scope.idents.put(self.env.gpa, type_qualified_idx, placeholder_pattern_idx);
                 }
             },
             else => {

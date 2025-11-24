@@ -5520,14 +5520,23 @@ pub const Interpreter = struct {
     /// Build a fully-qualified method identifier in the form "TypeName.method".
     /// Note: nominal_ident comes from the runtime type store (translated idents),
     /// while method_name comes from the current environment.
-    fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
+    fn getMethodQualifiedIdent(
+        self: *const Interpreter,
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name: base_pkg.Ident.Idx,
+        buf: []u8,
+    ) ![]const u8 {
+        // Build fully-qualified method name: "OriginModule.TypeName.methodName"
         // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
         const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        const origin_module_text = runtime_ident_store.getText(origin_module);
         const type_name = runtime_ident_store.getText(nominal_ident);
-        // method_name is from the current environment (e.g., plus_ident)
+        // method_name is from the current environment
         const current_ident_store = self.env.common.getIdentStore();
         const method_name_str = current_ident_store.getText(method_name);
-        return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
+        // Construct: "OriginModule.TypeName.methodName" (e.g., "Builtin.List.len")
+        return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
@@ -5814,30 +5823,13 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Build the qualified method name: "TypeName.method"
+        // Build the fully-qualified method name: "OriginModule.TypeName.method"
+        // e.g., "Builtin.List.len" or "Builtin.Num.Dec.plus"
         var qualified_name_buf: [256]u8 = undefined;
-        const qualified_name = try self.getMethodQualifiedIdent(nominal_ident, method_name, &qualified_name_buf);
+        const qualified_name = try self.getMethodQualifiedIdent(origin_module, nominal_ident, method_name, &qualified_name_buf);
 
-        const method_name_str = self.env.common.getIdentStore().getText(method_name);
-
-        // Try to find the method in the origin module's exposed items
-        const method_ident = blk: {
-            if (origin_env.common.findIdent(qualified_name)) |ident| {
-                break :blk ident;
-            }
-
-            // Try with "Builtin." prefix for builtin module methods
-            // (Associated items in builtin module are stored with full "Builtin.Type.method" names)
-            var builtin_buf: [256]u8 = undefined;
-            const builtin_qualified = try std.fmt.bufPrint(&builtin_buf, "Builtin.{s}", .{qualified_name});
-            if (origin_env.common.findIdent(builtin_qualified)) |ident| {
-                break :blk ident;
-            }
-
-            // Try unqualified name as fallback
-            if (origin_env.common.findIdent(method_name_str)) |ident| {
-                break :blk ident;
-            }
+        // Single lookup with the fully-qualified method name - no fallbacks, no retries
+        const method_ident = origin_env.common.findIdent(qualified_name) orelse {
             return error.MethodLookupFailed;
         };
 
