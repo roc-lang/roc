@@ -277,22 +277,34 @@ test "check type - tag union with function payload - no is_eq" {
 
 // anonymous type inequality (desugars to is_eq().not()) //
 
-test "check type - equality lambda infers is_eq constraint" {
-    // `a == b` desugars to `a.is_eq(b)`, so the lambda has an is_eq constraint
-    const source =
+test "check type - (a == b) desugars to exactly a.is_eq(b)" {
+    // `a == b` desugars to `a.is_eq(b)`, so their inferred types are identical
+    const src_binop =
         \\|a, b| a == b
     ;
-    // Variable names may differ due to alpha-renaming
-    try checkTypesExpr(source, .pass, "c, c -> d where [c.is_eq : c, c -> d]");
+    const src_direct =
+        \\|a, b| a.is_eq(b)
+    ;
+
+    const expected: []u8 = "c, d -> e where [c.is_eq : c, d -> e]";
+
+    try checkTypesExpr(src_direct, .pass, expected);
+    try checkTypesExpr(src_binop, .pass, expected);
 }
 
-test "check type - inequality lambda infers is_eq and not constraints" {
-    // `a != b` desugars to `a.is_eq(b).not()`, so the lambda has both is_eq and not constraints
-    const source =
+test "check type - (a != b) desugars to exactly a.is_eq(b).not()" {
+    // `a == b` desugars to `a.is_eq(b)`, so their inferred types are identical
+    const src_binop =
         \\|a, b| a != b
     ;
-    // Variable names may differ; is_eq returns e, then e.not returns d
-    try checkTypesExpr(source, .pass, "c, c -> d where [c.is_eq : c, c -> e, e.not : e -> d]");
+    const src_direct =
+        \\|a, b| a.is_eq(b).not()
+    ;
+
+    const expected: []u8 = "c, d -> f where [c.is_eq : c, d -> e, e.not : e -> f]";
+
+    try checkTypesExpr(src_direct, .pass, expected);
+    try checkTypesExpr(src_binop, .pass, expected);
 }
 
 test "check type - record inequality - same records" {
