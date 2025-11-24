@@ -889,5 +889,9 @@ test "bool field equality" {
     try runExpectBool("{ flag: (1 == 1) } == { flag: (1 != 1) }", false, .no_trace);
 }
 
-// TODO: The following tests require more work on runtime handling
-// test "nested tuple equality" - needs additional work for nested tuples
+test "nested tuple equality" {
+    try runExpectBool("((1, 2), 3) == ((1, 2), 3)", true, .no_trace);
+    try runExpectBool("((1, 2), 3) == ((1, 9), 3)", false, .no_trace);
+    try runExpectBool("(1, (2, 3)) == (1, (2, 3))", true, .no_trace);
+    try runExpectBool("(1, (2, 3)) == (1, (2, 9))", false, .no_trace);
+}
