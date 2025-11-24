@@ -403,6 +403,21 @@ pub const Expr = union(enum) {
         str_is_empty,
         str_is_eq,
 
+        // Numeric to_str operations
+        u8_to_str,
+        i8_to_str,
+        u16_to_str,
+        i16_to_str,
+        u32_to_str,
+        i32_to_str,
+        u64_to_str,
+        i64_to_str,
+        u128_to_str,
+        i128_to_str,
+        dec_to_str,
+        f32_to_str,
+        f64_to_str,
+
         // List operations
         list_len,
         list_is_empty,

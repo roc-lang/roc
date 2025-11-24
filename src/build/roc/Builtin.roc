@@ -160,6 +160,7 @@ Builtin :: [].{
 		}
 
 		U8 :: [].{
+			to_str : U8 -> Str
 			is_zero : U8 -> Bool
 			is_eq : U8, U8 -> Bool
 			is_gt : U8, U8 -> Bool
@@ -179,6 +180,7 @@ Builtin :: [].{
 		}
 
 		I8 :: [].{
+			to_str : I8 -> Str
 			is_zero : I8 -> Bool
 			is_negative : I8 -> Bool
 			is_positive : I8 -> Bool
@@ -201,6 +203,7 @@ Builtin :: [].{
 		}
 
 		U16 :: [].{
+			to_str : U16 -> Str
 			is_zero : U16 -> Bool
 			is_eq : U16, U16 -> Bool
 			is_gt : U16, U16 -> Bool
@@ -220,6 +223,7 @@ Builtin :: [].{
 		}
 
 		I16 :: [].{
+			to_str : I16 -> Str
 			is_zero : I16 -> Bool
 			is_negative : I16 -> Bool
 			is_positive : I16 -> Bool
@@ -242,6 +246,7 @@ Builtin :: [].{
 		}
 
 		U32 :: [].{
+			to_str : U32 -> Str
 			is_zero : U32 -> Bool
 			is_eq : U32, U32 -> Bool
 			is_gt : U32, U32 -> Bool
@@ -261,6 +266,7 @@ Builtin :: [].{
 		}
 
 		I32 :: [].{
+			to_str : I32 -> Str
 			is_zero : I32 -> Bool
 			is_negative : I32 -> Bool
 			is_positive : I32 -> Bool
@@ -283,6 +289,7 @@ Builtin :: [].{
 		}
 
 		U64 :: [].{
+			to_str : U64 -> Str
 			is_zero : U64 -> Bool
 			is_eq : U64, U64 -> Bool
 			is_gt : U64, U64 -> Bool
@@ -302,6 +309,7 @@ Builtin :: [].{
 		}
 
 		I64 :: [].{
+			to_str : I64 -> Str
 			is_zero : I64 -> Bool
 			is_negative : I64 -> Bool
 			is_positive : I64 -> Bool
@@ -324,6 +332,7 @@ Builtin :: [].{
 		}
 
 		U128 :: [].{
+			to_str : U128 -> Str
 			is_zero : U128 -> Bool
 			is_eq : U128, U128 -> Bool
 			is_gt : U128, U128 -> Bool
@@ -343,6 +352,7 @@ Builtin :: [].{
 		}
 
 		I128 :: [].{
+			to_str : I128 -> Str
 			is_zero : I128 -> Bool
 			is_negative : I128 -> Bool
 			is_positive : I128 -> Bool
@@ -365,6 +375,7 @@ Builtin :: [].{
 		}
 
 		Dec :: [].{
+		    to_str : Dec -> Str
 			is_zero : Dec -> Bool
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool
@@ -388,6 +399,7 @@ Builtin :: [].{
 		}
 
 		F32 :: [].{
+			to_str : F32 -> Str
 			is_zero : F32 -> Bool
 			is_negative : F32 -> Bool
 			is_positive : F32 -> Bool
@@ -410,6 +422,7 @@ Builtin :: [].{
 		}
 
 		F64 :: [].{
+			to_str : F64 -> Str
 			is_zero : F64 -> Bool
 			is_negative : F64 -> Bool
 			is_positive : F64 -> Bool
