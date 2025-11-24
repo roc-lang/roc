@@ -1,6 +1,7 @@
 Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
 		is_empty : Str -> Bool
+		concat : Str, Str -> Str
 
 		is_eq : Str, Str -> Bool
 

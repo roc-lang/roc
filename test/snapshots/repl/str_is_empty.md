@@ -9,8 +9,8 @@ type=repl
 » Str.is_empty("a")
 ~~~
 # OUTPUT
-Evaluation error: error.TypeMismatch
+True
 ---
-Evaluation error: error.TypeMismatch
+False
 # PROBLEMS
 NIL

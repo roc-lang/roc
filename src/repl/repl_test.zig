@@ -373,3 +373,19 @@ test "Repl - minimal interpreter integration" {
     defer gpa.free(rendered);
     try testing.expectEqualStrings("42", rendered);
 }
+
+test "Repl - Str.is_empty works for empty and non-empty strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const empty_result = try repl.step("Str.is_empty(\"\")");
+    defer std.testing.allocator.free(empty_result);
+    try testing.expectEqualStrings("True", empty_result);
+
+    const non_empty_result = try repl.step("Str.is_empty(\"a\")");
+    defer std.testing.allocator.free(non_empty_result);
+    try testing.expectEqualStrings("False", non_empty_result);
+}
