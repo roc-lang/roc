@@ -3371,7 +3371,37 @@ pub fn canonicalizeExpr(
                                 const field_text = self.env.getIdent(ident);
                                 const type_qualified_idx = try self.env.insertQualifiedIdent(type_text, field_text);
 
-                                // Try to look up the associated item in the current scope
+                                // For auto-imported types (like Str, Bool from Builtin module),
+                                // we need to look up the method in the Builtin module, not current scope
+                                if (is_auto_imported_type and self.module_envs != null) {
+                                    if (self.module_envs.?.get(module_alias)) |auto_imported_type_env| {
+                                        const module_env = auto_imported_type_env.env;
+
+                                        // Get the qualified name of the method (e.g., "Str.is_empty")
+                                        const qualified_text = self.env.getIdent(type_qualified_idx);
+
+                                        // Try to find the method in the Builtin module's exposed items
+                                        if (module_env.common.findIdent(qualified_text)) |qname_ident| {
+                                            if (module_env.getExposedNodeIndexById(qname_ident)) |target_node_idx| {
+                                                // Found it! This is a module-qualified lookup
+                                                // Need to get or create the auto-import for the Builtin module
+                                                const actual_module_name = module_env.module_name;
+                                                const import_idx = try self.getOrCreateAutoImport(actual_module_name);
+
+                                                // Create e_lookup_external expression
+                                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                                    .module_idx = import_idx,
+                                                    .target_node_idx = target_node_idx,
+                                                    .region = region,
+                                                } }, region);
+
+                                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // For types in current scope, try current scope lookup
                                 switch (self.scopeLookup(.ident, type_qualified_idx)) {
                                     .found => |found_pattern_idx| {
                                         // Found the associated item! Mark it as used.

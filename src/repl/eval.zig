@@ -767,20 +767,16 @@ pub const Repl = struct {
             .builtin_module = self.builtin_module.env,
         };
 
+        // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
 
-        const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
-        const try_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Try"));
-        const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
-        const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
-        const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
-
-        try module_envs_map.put(bool_ident, .{ .env = self.builtin_module.env, .statement_idx = self.builtin_indices.bool_type });
-        try module_envs_map.put(try_ident, .{ .env = self.builtin_module.env, .statement_idx = self.builtin_indices.try_type });
-        try module_envs_map.put(str_ident, .{ .env = self.builtin_module.env });
-        try module_envs_map.put(dict_ident, .{ .env = self.builtin_module.env, .statement_idx = self.builtin_indices.dict_type });
-        try module_envs_map.put(set_ident, .{ .env = self.builtin_module.env, .statement_idx = self.builtin_indices.set_type });
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            module_env,
+            self.builtin_module.env,
+            self.builtin_indices,
+        );
 
         var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return .{ .canonicalize_error = try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err}) };
