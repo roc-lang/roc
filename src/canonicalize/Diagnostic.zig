@@ -677,9 +677,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
         try report.document.addKeyword("Bool");
         try report.document.addReflowingText(" value (");
-        try report.document.addKeyword("Bool.true");
+        try report.document.addKeyword("True");
         try report.document.addReflowingText(" or ");
-        try report.document.addKeyword("Bool.false");
+        try report.document.addKeyword("False");
         try report.document.addReflowingText(").");
         return report;
     }

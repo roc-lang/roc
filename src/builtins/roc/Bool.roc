@@ -4,7 +4,7 @@ module [Bool, Eq, true, false, not, is_eq, is_not_eq]
 ##
 ## Total equality means that all values of the type can be compared to each
 ## other, and two values `a`, `b` are identical if and only if `is_eq(a, b)` is
-## `Bool.true`.
+## `True`.
 ##
 ## Not all types support total equality. For example, [`F32`](Num#F32) and [`F64`](Num#F64) can
 ## be a `NaN` ([Not a Number](https://en.wikipedia.org/wiki/NaN)), and the
@@ -12,7 +12,7 @@ module [Bool, Eq, true, false, not, is_eq, is_not_eq]
 ## specifies that two `NaN`s are not equal.
 Eq(a) : a
     where
-        ## Returns `Bool.true` if the input values are equal. This is
+        ## Returns `True` if the input values are equal. This is
         ## equivalent to the logic
         ## [XNOR](https://en.wikipedia.org/wiki/Logical_equality) gate. The infix
         ## operator `==` can be used as shorthand for `Bool.is_eq`.
@@ -25,7 +25,7 @@ Eq(a) : a
         ## 3. The collections [Str], [List], [Dict], and [Set] are equal iff they
         ## are the same length and their elements are equal.
         ## 4. [Num] values are equal if their numbers are equal. However, if both
-        ## inputs are *NaN* then `is_eq` returns `Bool.false`. Refer to `Num.is_nan`
+        ## inputs are *NaN* then `is_eq` returns `False`. Refer to `Num.is_nan`
         ## for more detail.
         ## 5. Functions cannot be compared for structural equality, therefore Roc
         ## cannot derive `is_eq` for types that contain functions.
@@ -51,12 +51,12 @@ is_eq = |b1, b2| match (b1, b2) {
     _ => false
 }
 
-## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
+## Returns `False` when given `True`, and vice versa. This is
 ## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
 ## gate. The operator `!` can also be used as shorthand for `Bool.not`.
 ## ```roc
-## expect Bool.not(Bool.false) == Bool.true
-## expect Bool.false != Bool.true
+## expect Bool.not(False) == True
+## expect False != True
 ## ```
 not : Bool -> Bool
 not = |b| match b {
@@ -72,8 +72,8 @@ not = |b| match b {
 ## **Note** that `is_not_eq` does not accept arguments whose types contain
 ## functions.
 ## ```roc
-## expect Bool.is_not_eq(Bool.false, Bool.true) == Bool.true
-## expect (Bool.false != Bool.false) == Bool.false
+## expect Bool.is_not_eq(False, True) == True
+## expect (False != False) == False
 ## expect "Apples" != "Oranges"
 ## ```
 is_not_eq : a, a -> Bool where a.Eq

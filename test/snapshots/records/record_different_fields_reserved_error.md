@@ -10,8 +10,8 @@ type=expr
     when: "pattern match",
     expect: "test assertion",
     import: "module load",
-    and: Bool.true,
-    or: Bool.false,
+    and: True,
+    or: False,
 }
 ~~~
 # EXPECTED
@@ -28,10 +28,10 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:8:6:9
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:6:20
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:14:6:15
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:14:7:15
 INVALID IF CONDITION - :0:0:0:0
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:2:22:2:23
 MALFORMED TYPE - record_different_fields_reserved_error.md:3:11:3:12
@@ -44,15 +44,15 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:8:6:9
-DOES NOT EXIST - record_different_fields_reserved_error.md:6:10:6:19
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:14:6:15
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
-DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:14:7:15
 UNUSED VARIABLE - record_different_fields_reserved_error.md:3:5:3:12
 UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
 UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
+UNUSED VALUE - record_different_fields_reserved_error.md:6:10:6:14
+UNUSED VALUE - record_different_fields_reserved_error.md:7:9:7:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -181,7 +181,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **record_different_fields_reserved_error.md:6:5:6:8:**
 ```roc
-    and: Bool.true,
+    and: True,
 ```
     ^^^
 
@@ -192,7 +192,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **record_different_fields_reserved_error.md:6:8:6:9:**
 ```roc
-    and: Bool.true,
+    and: True,
 ```
        ^
 
@@ -201,11 +201,11 @@ Expressions can be identifiers, literals, function calls, or operators.
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**record_different_fields_reserved_error.md:6:19:6:20:**
+**record_different_fields_reserved_error.md:6:14:6:15:**
 ```roc
-    and: Bool.true,
+    and: True,
 ```
-                  ^
+             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -214,7 +214,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **record_different_fields_reserved_error.md:7:5:7:7:**
 ```roc
-    or: Bool.false,
+    or: False,
 ```
     ^^
 
@@ -225,7 +225,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **record_different_fields_reserved_error.md:7:7:7:8:**
 ```roc
-    or: Bool.false,
+    or: False,
 ```
       ^
 
@@ -234,17 +234,17 @@ Expressions can be identifiers, literals, function calls, or operators.
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**record_different_fields_reserved_error.md:7:19:7:20:**
+**record_different_fields_reserved_error.md:7:14:7:15:**
 ```roc
-    or: Bool.false,
+    or: False,
 ```
-                  ^
+             ^
 
 
 **INVALID IF CONDITION**
 The condition in this `if` expression could not be processed.
 
-The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+The condition must be a valid expression that evaluates to a `Bool` value (`True` or `False`).
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
@@ -349,7 +349,7 @@ I don't recognize this syntax.
 
 **record_different_fields_reserved_error.md:6:5:6:8:**
 ```roc
-    and: Bool.true,
+    and: True,
 ```
     ^^^
 
@@ -360,33 +360,20 @@ I don't recognize this syntax.
 
 **record_different_fields_reserved_error.md:6:8:6:9:**
 ```roc
-    and: Bool.true,
+    and: True,
 ```
        ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**DOES NOT EXIST**
-`Bool.true` does not exist.
-
-`Bool` is in scope, but it has no associated `true`.
-
-It's referenced here:
-**record_different_fields_reserved_error.md:6:10:6:19:**
-```roc
-    and: Bool.true,
-```
-         ^^^^^^^^^
-
-
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
-**record_different_fields_reserved_error.md:6:19:6:20:**
+**record_different_fields_reserved_error.md:6:14:6:15:**
 ```roc
-    and: Bool.true,
+    and: True,
 ```
-                  ^
+             ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -395,7 +382,7 @@ I don't recognize this syntax.
 
 **record_different_fields_reserved_error.md:7:5:7:7:**
 ```roc
-    or: Bool.false,
+    or: False,
 ```
     ^^
 
@@ -406,33 +393,20 @@ I don't recognize this syntax.
 
 **record_different_fields_reserved_error.md:7:7:7:8:**
 ```roc
-    or: Bool.false,
+    or: False,
 ```
       ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**DOES NOT EXIST**
-`Bool.false` does not exist.
-
-`Bool` is in scope, but it has no associated `false`.
-
-It's referenced here:
-**record_different_fields_reserved_error.md:7:9:7:19:**
-```roc
-    or: Bool.false,
-```
-        ^^^^^^^^^^
-
-
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
-**record_different_fields_reserved_error.md:7:19:7:20:**
+**record_different_fields_reserved_error.md:7:14:7:15:**
 ```roc
-    or: Bool.false,
+    or: False,
 ```
-                  ^
+             ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -470,6 +444,28 @@ This expression produces a value, but it's not being used:
 It has the type:
     _Str_
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:6:10:6:14:**
+```roc
+    and: True,
+```
+         ^^^^
+
+It has the type:
+    _[True]_others_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:7:9:7:14:**
+```roc
+    or: False,
+```
+        ^^^^^
+
+It has the type:
+    _[False]_others_
+
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -477,8 +473,8 @@ KwIf,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 KwExpect,OpColon,StringStart,StringPart,StringEnd,Comma,
 KwImport,OpColon,StringStart,StringPart,StringEnd,Comma,
-OpAnd,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,
-OpOr,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,
+OpAnd,OpColon,UpperIdent,Comma,
+OpOr,OpColon,UpperIdent,Comma,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -508,11 +504,11 @@ EndOfFile,
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-ident (raw "Bool.true"))
+		(e-tag (raw "True"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-ident (raw "Bool.false"))
+		(e-tag (raw "False"))
 		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
@@ -527,9 +523,9 @@ EndOfFile,
 	
 			"module load"
 	
-			Bool.true
+			True
 	
-			Bool.false
+			False
 	
 }
 ~~~
@@ -568,7 +564,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "nested_value_not_found")))
+		(e-tag (name "True")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -576,7 +572,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "nested_value_not_found")))
+		(e-tag (name "False")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

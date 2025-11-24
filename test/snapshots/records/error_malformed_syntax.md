@@ -5,7 +5,7 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
+{ name: "Alice", : 30, , email: , active True, "invalid": value, 42: "number key", : }
 ~~~
 # EXPECTED
 PARSE ERROR - error_malformed_syntax.md:1:18:1:19
@@ -17,7 +17,7 @@ This is an unexpected parsing error. Please check your syntax.
 
 **error_malformed_syntax.md:1:18:1:19:**
 ```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
+{ name: "Alice", : 30, , email: , active True, "invalid": value, 42: "number key", : }
 ```
                  ^
 
@@ -28,14 +28,14 @@ This is an unexpected parsing error. Please check your syntax.
 
 **error_malformed_syntax.md:1:20:1:22:**
 ```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
+{ name: "Alice", : 30, , email: , active True, "invalid": value, 42: "number key", : }
 ```
                    ^^
 
 
 # TOKENS
 ~~~zig
-OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,Int,Comma,Comma,LowerIdent,OpColon,Comma,LowerIdent,UpperIdent,NoSpaceDotLowerIdent,Comma,StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,Int,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,CloseCurly,
+OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,Int,Comma,Comma,LowerIdent,OpColon,Comma,LowerIdent,UpperIdent,Comma,StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,Int,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,CloseCurly,
 EndOfFile,
 ~~~
 # PARSE

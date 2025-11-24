@@ -5,27 +5,15 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
+{ name: "Alice", age: 30, active: True, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # EXPECTED
-DOES NOT EXIST - record_mixed_types.md:1:35:1:44
+NIL
 # PROBLEMS
-**DOES NOT EXIST**
-`Bool.true` does not exist.
-
-`Bool` is in scope, but it has no associated `true`.
-
-It's referenced here:
-**record_mixed_types.md:1:35:1:44:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                                  ^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,LowerIdent,OpColon,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,Comma,LowerIdent,OpColon,Float,CloseCurly,
+OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,Comma,LowerIdent,OpColon,Float,CloseCurly,
 EndOfFile,
 ~~~
 # PARSE
@@ -37,7 +25,7 @@ EndOfFile,
 	(field (field "age")
 		(e-int (raw "30")))
 	(field (field "active")
-		(e-ident (raw "Bool.true")))
+		(e-tag (raw "True")))
 	(field (field "scores")
 		(e-list
 			(e-int (raw "95"))
@@ -60,7 +48,7 @@ NO CHANGE
 		(field (name "age")
 			(e-num (value "30")))
 		(field (name "active")
-			(e-runtime-error (tag "nested_value_not_found")))
+			(e-tag (name "True")))
 		(field (name "scores")
 			(e-list
 				(elems
@@ -72,5 +60,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: a, balance: b, name: Str, scores: List(c) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+(expr (type "{ active: [True]_others, age: a, balance: b, name: Str, scores: List(c) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 ~~~

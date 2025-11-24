@@ -408,7 +408,7 @@ pub const Tag = enum {
     /// * rhs - RHS DESCRIPTION
     if_then_else,
     /// If-statement (no else branch) - statement form of if, returns unit type
-    /// Example: if Bool.true {}
+    /// Example: if True {}
     /// * lhs - node index of condition expr
     /// * rhs - node index of then branch expr
     if_without_else,
