@@ -7410,9 +7410,10 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
                     const returned_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
 
-                    // Create the return statement
+                    // Create the return statement (lambda is null for now - will be implemented later)
                     const return_stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
                         .expr = returned_expr.idx,
+                        .lambda = null,
                     } }, return_region);
                     try self.env.store.addScratchStatement(return_stmt_idx);
 
@@ -7700,9 +7701,10 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Canonicalize the return expression
             const expr = try self.canonicalizeExprOrMalformed(r.expr);
 
-            // Create return statement
+            // Create return statement (lambda is null for now - will be implemented later)
             const stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
                 .expr = expr.idx,
+                .lambda = null,
             } }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };

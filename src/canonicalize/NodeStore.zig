@@ -292,6 +292,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         } },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
+            .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
         } },
         .statement_import => {
             const extra_start = node.data_2;
@@ -1371,6 +1372,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_return => |s| {
             node.tag = .statement_return;
             node.data_1 = @intFromEnum(s.expr);
+            // Store lambda as data_2, using 0 for null and idx+1 for valid indices
+            node.data_2 = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0;
         },
         .s_import => |s| {
             node.tag = .statement_import;

@@ -3070,6 +3070,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
                 const body_var = ModuleEnv.varFrom(lambda.body);
 
+                // Unify all early returns with the body's return type.
+                // This ensures that `return x` has the same type as the implicit return.
+                try self.unifyEarlyReturns(lambda.body, body_var, env);
+
                 // Create the function type
                 if (does_fx) {
                     _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
@@ -3718,16 +3722,13 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
-            .s_return => |_| {
+            .s_return => |ret| {
+                // Type check the return expression
+                does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
+
                 // A return statement's type should be a flex var so it can unify with any type.
                 // This allows branches containing early returns to match any other branch type.
-                //
-                // TODO: To fully implement early returns, we need to:
-                // 1. Track function scope in czer and capture the function for this return in `s_return`
-                // 2. When type checking a lambda, capture all early returns
-                //    a. Unify all early returns together
-                //    b. Unify early returns with func return type
-
+                // The actual unification with the function return type happens in unifyEarlyReturns.
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
@@ -3741,6 +3742,88 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
         }
     }
     return .{ .does_fx = does_fx, .diverges = diverges };
+}
+
+/// Traverse an expression to find s_return statements and unify them with the expected return type.
+/// This is called after type-checking a lambda body to ensure all early returns have matching types.
+fn unifyEarlyReturns(self: *Self, expr_idx: CIR.Expr.Idx, return_var: Var, env: *Env) std.mem.Allocator.Error!void {
+    const expr = self.cir.store.getExpr(expr_idx);
+    switch (expr) {
+        .e_block => |block| {
+            // Check all statements in the block for returns
+            for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                try self.unifyEarlyReturnsInStmt(stmt_idx, return_var, env);
+            }
+            // Also recurse into the final expression
+            try self.unifyEarlyReturns(block.final_expr, return_var, env);
+        },
+        .e_if => |if_expr| {
+            // Check all branches
+            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                try self.unifyEarlyReturns(branch.body, return_var, env);
+            }
+            // Check the final else
+            try self.unifyEarlyReturns(if_expr.final_else, return_var, env);
+        },
+        .e_match => |match| {
+            // Check all branches
+            for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                try self.unifyEarlyReturns(branch.value, return_var, env);
+            }
+        },
+        // Lambdas create a new scope for returns - don't recurse into them
+        .e_lambda, .e_closure => {},
+        // All other expressions don't contain statements
+        else => {},
+    }
+}
+
+/// Check a statement for s_return and unify with the expected return type.
+fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var: Var, env: *Env) std.mem.Allocator.Error!void {
+    const stmt = self.cir.store.getStatement(stmt_idx);
+    switch (stmt) {
+        .s_return => |ret| {
+            const return_expr_var = ModuleEnv.varFrom(ret.expr);
+            _ = try self.unify(return_expr_var, return_var, env);
+        },
+        .s_decl => |decl| {
+            // Recurse into the declaration's expression
+            try self.unifyEarlyReturns(decl.expr, return_var, env);
+        },
+        .s_decl_gen => |decl| {
+            // Recurse into the generalized declaration's expression
+            try self.unifyEarlyReturns(decl.expr, return_var, env);
+        },
+        .s_var => |var_stmt| {
+            // Recurse into the var's expression
+            try self.unifyEarlyReturns(var_stmt.expr, return_var, env);
+        },
+        .s_reassign => |reassign| {
+            try self.unifyEarlyReturns(reassign.expr, return_var, env);
+        },
+        .s_for => |for_stmt| {
+            try self.unifyEarlyReturns(for_stmt.expr, return_var, env);
+            try self.unifyEarlyReturns(for_stmt.body, return_var, env);
+        },
+        .s_while => |while_stmt| {
+            try self.unifyEarlyReturns(while_stmt.cond, return_var, env);
+            try self.unifyEarlyReturns(while_stmt.body, return_var, env);
+        },
+        .s_expr => |s| {
+            // Recurse into the expression (could contain blocks with returns)
+            try self.unifyEarlyReturns(s.expr, return_var, env);
+        },
+        .s_expect => |s| {
+            try self.unifyEarlyReturns(s.body, return_var, env);
+        },
+        .s_dbg => |s| {
+            try self.unifyEarlyReturns(s.expr, return_var, env);
+        },
+        // These statements don't contain expressions with potential returns
+        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_runtime_error => {},
+    }
 }
 
 // if-else //
