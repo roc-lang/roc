@@ -196,18 +196,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // from_dec_digits (Dec, F32, F64 only)
-    const dec_types = [_][]const u8{ "Dec", "F32", "F64" };
-    for (dec_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // from_dec_digits
-        const from_dec_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_dec_digits", .{num_type});
-        if (env.common.findIdent(from_dec_digits)) |ident| {
-            try low_level_map.put(ident, .num_from_dec_digits);
-        }
-    }
-
     // from_numeral (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;

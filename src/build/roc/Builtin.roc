@@ -352,7 +352,6 @@ Builtin :: [].{
 			div_trunc_by : Dec, Dec -> Dec
 			rem_by : Dec, Dec -> Dec
 
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
 		}
 
@@ -373,7 +372,6 @@ Builtin :: [].{
 			div_trunc_by : F32, F32 -> F32
 			rem_by : F32, F32 -> F32
 
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
 		}
 
@@ -394,7 +392,6 @@ Builtin :: [].{
 			div_trunc_by : F64, F64 -> F64
 			rem_by : F64, F64 -> F64
 
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
 		}
 	}

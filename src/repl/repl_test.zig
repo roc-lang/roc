@@ -88,7 +88,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
-        .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
         .try_ident = common.findIdent("Try") orelse unreachable,
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,

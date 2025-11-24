@@ -132,8 +132,9 @@ evaluation_order: ?*DependencyGraph.EvaluationOrder,
 // Cached well-known identifiers for type checking
 // (These are interned once during init to avoid repeated string comparisons during type checking)
 
-/// Interned identifier for "from_dec_digits" - used for decimal literal type checking
-from_dec_digits_ident: Ident.Idx,
+/// Padding for removed from_dec_digits_ident field (maintains struct layout for serialization)
+_padding_removed_from_dec_digits: u32 = 0,
+
 /// Interned identifier for "Try" - used for numeric literal type checking
 try_ident: Ident.Idx,
 /// Interned identifier for "OutOfRange" - used for numeric literal type checking
@@ -231,7 +232,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     var common = try CommonEnv.init(gpa, source);
 
     // Intern well-known identifiers once during initialization for fast type checking
-    const from_dec_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME));
     const try_ident = try common.insertIdent(gpa, Ident.for_text("Try"));
     const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
     const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
@@ -281,7 +281,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
-        .from_dec_digits_ident = from_dec_digits_ident,
         .try_ident = try_ident,
         .out_of_range_ident = out_of_range_ident,
         .builtin_module_ident = builtin_module_ident,
@@ -1718,7 +1717,7 @@ pub const Serialized = extern struct {
     store: NodeStore.Serialized,
     module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
-    from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
+    _padding_removed_from_dec_digits: u32 = 0, // Padding for removed from_dec_digits_ident field (maintains struct layout)
     try_ident_reserved: u32, // Reserved space for try_ident field (interned during deserialization)
     out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
     builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
@@ -1772,7 +1771,6 @@ pub const Serialized = extern struct {
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
-        self.from_dec_digits_ident_reserved = 0;
         self.try_ident_reserved = 0;
         self.out_of_range_ident_reserved = 0;
         self.builtin_module_ident_reserved = 0;
@@ -1828,7 +1826,6 @@ pub const Serialized = extern struct {
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             // Well-known identifiers for type checking - look them up in the deserialized common env
-            .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
             .try_ident = common.findIdent("Try") orelse unreachable,
             .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,

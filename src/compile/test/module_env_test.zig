@@ -102,7 +102,6 @@ test "ModuleEnv.Serialized roundtrip" {
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .evaluation_order = null,
-        .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
         .try_ident = common.findIdent("Try") orelse unreachable,
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
         .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
@@ -128,9 +127,9 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 18 well-known identifiers: from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
+    // ModuleEnv.init() also interns 17 well-known identifiers: Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
     // Plus 13 numeric type identifiers: Num.U8, Num.I8, Num.U16, Num.I16, Num.U32, Num.I32, Num.U64, Num.I64, Num.U128, Num.I128, Num.F32, Num.F64, Num.Dec
-    try testing.expectEqual(@as(u32, 34), original.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 33), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -139,8 +138,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 34 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 13 numeric type identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 34), env.common.idents.interner.entry_count);
+    // Should have same 33 identifiers as original: hello, world, TestModule + 17 well-known identifiers + 13 numeric type identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 33), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

@@ -16,8 +16,6 @@ const CompactWriter = collections.CompactWriter;
 
 const Ident = @This();
 
-/// Method name for parsing decimals from digit lists - used by numeric literal type checking
-pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
 /// Method name for negation - used by unary - operator desugaring

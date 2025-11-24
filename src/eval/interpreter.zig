@@ -3191,11 +3191,6 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .num_from_dec_digits => {
-                // num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])
-                self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
-                return error.Crash;
-            },
             .num_from_numeral => {
                 // num.from_numeral : Numeral -> Try(num, [InvalidNumeral(Str)])
                 // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
