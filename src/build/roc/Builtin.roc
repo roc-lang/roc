@@ -15,12 +15,23 @@ Builtin :: [].{
 
 		is_eq : List(item), List(item) -> Bool
 		    where [item.is_eq : item, item -> Bool]
-		is_eq = |self, other|
-			if self.len().is_eq(other.len()).not() {
-				False
-			} else {
-				list_is_eq_helper(self, other, 0)
+		is_eq = |self, other| {
+		    if self.len() != other.len() {
+				return False
 			}
+
+			var $index = 0
+
+			while $index < self.len() {
+			    if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
+					return False
+				}
+
+				$index = $index + 1
+			}
+
+			True
+		}
 
 		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| List.get(list, 0)
@@ -427,14 +438,3 @@ Builtin :: [].{
 # Private top-level function for unsafe list access
 # This is a low-level operation that gets replaced by the compiler
 list_get_unsafe : List(item), U64 -> item
-
-# Private helper for List.is_eq - recursively compares elements
-list_is_eq_helper : List(item), List(item), U64 -> Bool where [item.is_eq : item, item -> Bool]
-list_is_eq_helper = |self, other, index|
-	if index.is_eq(self.len()) {
-		True
-	} else if list_get_unsafe(self, index).is_eq(list_get_unsafe(other, index)).not() {
-		False
-	} else {
-		list_is_eq_helper(self, other, index + 1)
-	}
