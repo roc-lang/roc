@@ -18,37 +18,23 @@ swap = |pair| {
 main! = |_| {
     # First use: swap (Int, Str)
     result1 = swap((42, "hello"))
-    
+
     # Second use: swap (Bool, List Int)
     # This would fail if 'a' and 'b' from the first call were reused
-    result2 = swap((Bool.true, [1, 2, 3]))
-    
-    # Third use: swap (Str, Str) 
+    result2 = swap((True, [1, 2, 3]))
+
+    # Third use: swap (Str, Str)
     # This shows even when both types are the same, we still need fresh vars
     result3 = swap(("foo", "bar"))
-    
+
     {}
 }
 ~~~
 # EXPECTED
-DOES NOT EXIST - rigid_var_no_instantiation_error.md:17:21:17:30
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-**DOES NOT EXIST**
-`Bool.true` does not exist.
-
-`Bool` is in scope, but it has no associated `true`.
-
-It's referenced here:
-**rigid_var_no_instantiation_error.md:17:21:17:30:**
-```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
-```
-                    ^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
 
@@ -68,7 +54,7 @@ If you don't need this variable, prefix it with an underscore like `_result2` to
 The unused variable is declared here:
 **rigid_var_no_instantiation_error.md:17:5:17:12:**
 ```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
+    result2 = swap((True, [1, 2, 3]))
 ```
     ^^^^^^^
 
@@ -95,7 +81,7 @@ OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
 CloseCurly,
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,CloseRound,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,Comma,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,CloseRound,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,CloseRound,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,NoSpaceOpenRound,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,CloseRound,CloseRound,
 OpenCurly,CloseCurly,
 CloseCurly,
@@ -159,7 +145,7 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "swap"))
 								(e-tuple
-									(e-ident (raw "Bool.true"))
+									(e-tag (raw "True"))
 									(e-list
 										(e-int (raw "1"))
 										(e-int (raw "2"))
@@ -193,9 +179,9 @@ main! = |_| {
 
 	# Second use: swap (Bool, List Int)
 	# This would fail if 'a' and 'b' from the first call were reused
-	result2 = swap((Bool.true, [1, 2, 3]))
+	result2 = swap((True, [1, 2, 3]))
 
-	# Third use: swap (Str, Str) 
+	# Third use: swap (Str, Str)
 	# This shows even when both types are the same, we still need fresh vars
 	result3 = swap(("foo", "bar"))
 
@@ -258,7 +244,7 @@ main! = |_| {
 								(p-assign (ident "swap")))
 							(e-tuple
 								(elems
-									(e-runtime-error (tag "nested_value_not_found"))
+									(e-tag (name "True"))
 									(e-list
 										(elems
 											(e-num (value "1"))

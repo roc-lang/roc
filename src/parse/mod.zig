@@ -108,6 +108,17 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST 
     return try runParse(env, gpa, parseStatementAndReturnIdx);
 }
 
+fn parseTopLevelStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
+    const idx = try parser.parseTopLevelStatement();
+    return @intFromEnum(idx);
+}
+
+/// Parses a single Roc top-level statement (allows type declarations) for use in REPL.
+/// The returned AST should be deallocated by calling deinit after its data is used.
+pub fn parseTopLevelStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
+    return try runParse(env, gpa, parseTopLevelStatementAndReturnIdx);
+}
+
 test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
     std.testing.refAllDecls(@import("HTML.zig"));

@@ -308,23 +308,19 @@ expect
         "  tokenize + parse:             37.6 ms  (37602963 ns)",
         "  other line",
     ]
-    
+
     result = extract_phase_time(test_lines, "missing_phase:")
-    
-    when result is
-        Err _ -> Bool.true
-        Ok _ -> Bool.false
+
+    Result.is_err(result)
 
 expect
     test_lines = [
         "  tokenize + parse:             37.6 ms  (invalid ns)",
     ]
-    
+
     result = extract_phase_time(test_lines, "tokenize + parse:")
-    
-    when result is
-        Err _ -> Bool.true
-        Ok _ -> Bool.false
+
+    Result.is_err(result)
 
 expect
     test_output = 

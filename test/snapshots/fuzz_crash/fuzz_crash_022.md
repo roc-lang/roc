@@ -128,7 +128,7 @@ app [main!] { |f: platform "c" }
 **INVALID IF CONDITION**
 The condition in this `if` expression could not be processed.
 
-The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+The condition must be a valid expression that evaluates to a `Bool` value (`True` or `False`).
 
 **UNUSED VARIABLE**
 Variable `id` is not used anywhere in your code.

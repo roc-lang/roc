@@ -27,6 +27,8 @@ pub const Repl = struct {
     allocator: Allocator,
     /// Map from variable name to source string for definitions
     definitions: std.StringHashMap([]const u8),
+    /// Map from type name to source string for type declarations
+    type_declarations: std.StringHashMap([]const u8),
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
     /// Shared crash context managed by the host (optional)
@@ -60,6 +62,7 @@ pub const Repl = struct {
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
+            .type_declarations = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
             //.trace_writer = null,
@@ -162,6 +165,21 @@ pub const Repl = struct {
         try self.definitions.put(owned_key, owned_source);
     }
 
+    /// Add or replace a type declaration in the REPL context
+    pub fn addOrReplaceTypeDeclaration(self: *Repl, source: []const u8, type_name: []const u8) !void {
+        // Check if we're replacing an existing type declaration
+        if (self.type_declarations.fetchRemove(type_name)) |kv| {
+            // Free both the old key and value
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value);
+        }
+
+        // Duplicate both key and value since they're borrowed from input
+        const owned_key = try self.allocator.dupe(u8, type_name);
+        const owned_source = try self.allocator.dupe(u8, source);
+        try self.type_declarations.put(owned_key, owned_source);
+    }
+
     pub fn deinit(self: *Repl) void {
         // Clean up definition strings and keys
         var iterator = self.definitions.iterator();
@@ -170,6 +188,14 @@ pub const Repl = struct {
             self.allocator.free(kv.value_ptr.*); // Free the source string
         }
         self.definitions.deinit();
+
+        // Clean up type declaration strings and keys
+        var type_iterator = self.type_declarations.iterator();
+        while (type_iterator.next()) |kv| {
+            self.allocator.free(kv.key_ptr.*); // Free the type name
+            self.allocator.free(kv.value_ptr.*); // Free the source string
+        }
+        self.type_declarations.deinit();
 
         // Clean up debug HTML storage
         for (self.debug_can_html.items) |html| {
@@ -249,9 +275,12 @@ pub const Repl = struct {
 
                 return try self.evaluateSource(full_source);
             },
-            .type_decl => {
-                // Type declarations can't be evaluated
-                return try self.allocator.dupe(u8, "");
+            .type_decl => |info| {
+                // Store type declaration for future use
+                try self.addOrReplaceTypeDeclaration(info.source, info.type_name);
+
+                // Return the type name (similar to how Roc shows the type name after defining)
+                return try self.allocator.dupe(u8, info.type_name);
             },
             .parse_error => |msg| {
                 defer self.allocator.free(msg);
@@ -267,7 +296,10 @@ pub const Repl = struct {
         },
         import,
         expression,
-        type_decl,
+        type_decl: struct {
+            source: []const u8, // Borrowed from input
+            type_name: []const u8, // Borrowed from input
+        },
         parse_error: []const u8, // Must be allocator.dupe'd
     };
 
@@ -279,8 +311,8 @@ pub const Repl = struct {
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
-        // Try statement parsing
-        if (parse.parseStatement(&module_env.common, self.allocator)) |ast_const| {
+        // Try top-level statement parsing first (allows type declarations)
+        if (parse.parseTopLevelStatement(&module_env.common, self.allocator)) |ast_const| {
             var ast = ast_const;
             defer ast.deinit(self.allocator);
 
@@ -288,6 +320,7 @@ pub const Repl = struct {
                 const stmt_idx: AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
                 const stmt = ast.store.getStatement(stmt_idx);
 
+                // If we got a valid statement (not malformed), process it
                 switch (stmt) {
                     .decl => |decl| {
                         const pattern = ast.store.getPattern(decl.pattern);
@@ -306,7 +339,20 @@ pub const Repl = struct {
                         return ParseResult.expression;
                     },
                     .import => return ParseResult.import,
-                    .type_decl => return ParseResult.type_decl,
+                    .type_decl => |type_decl| {
+                        // Extract the type name from the type header
+                        const ty_header = ast.store.getTypeHeader(type_decl.header) catch {
+                            return ParseResult.expression;
+                        };
+                        const name_tok = ty_header.name;
+                        const name_region = ast.tokens.resolve(name_tok);
+                        const type_name = module_env.common.source[name_region.start.offset..name_region.end.offset];
+
+                        return ParseResult{ .type_decl = .{
+                            .source = input,
+                            .type_name = type_name,
+                        } };
+                    },
                     else => return ParseResult.expression,
                 }
             }
@@ -328,34 +374,64 @@ pub const Repl = struct {
         return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
     }
 
-    /// Build full source including all definitions wrapped in block syntax
+    /// Check if there are type declarations that require file-level parsing
+    pub fn hasTypeDeclarations(self: *Repl) bool {
+        return self.type_declarations.count() > 0;
+    }
+
+    /// Build full source including all type declarations and definitions
+    /// When type declarations exist, generates file-level syntax (type declarations can't be in blocks)
+    /// When only definitions exist, wraps in block syntax
     pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
-        // If no definitions exist, just return the expression as-is
-        if (self.definitions.count() == 0) {
+        // If no definitions or type declarations exist, just return the expression as-is
+        if (self.definitions.count() == 0 and self.type_declarations.count() == 0) {
             return try self.allocator.dupe(u8, current_expr);
         }
 
         var buffer = std.ArrayList(u8).empty;
         errdefer buffer.deinit(self.allocator);
 
-        // Start block
-        try buffer.appendSlice(self.allocator, "{\n");
+        // If we have type declarations, we need file-level syntax (type declarations can't be in blocks)
+        if (self.type_declarations.count() > 0) {
+            // Add all type declarations at file level
+            var type_iter = self.type_declarations.iterator();
+            while (type_iter.next()) |kv| {
+                try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+                try buffer.append(self.allocator, '\n');
+            }
 
-        // Add all definitions in order
-        var iterator = self.definitions.iterator();
-        while (iterator.next()) |kv| {
+            // Add all variable definitions at file level
+            var def_iterator = self.definitions.iterator();
+            while (def_iterator.next()) |kv| {
+                try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+                try buffer.append(self.allocator, '\n');
+            }
+
+            // Wrap the final expression in a special definition so it's valid at file level
+            // (bare expressions are not allowed at file level)
+            // Use a name that won't conflict and doesn't start with underscore
+            try buffer.appendSlice(self.allocator, "replResult0 = ");
+            try buffer.appendSlice(self.allocator, current_expr);
+        } else {
+            // No type declarations - use block syntax for definitions
+            try buffer.appendSlice(self.allocator, "{\n");
+
+            // Add all variable definitions
+            var def_iterator = self.definitions.iterator();
+            while (def_iterator.next()) |kv| {
+                try buffer.appendSlice(self.allocator, "    ");
+                try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+                try buffer.append(self.allocator, '\n');
+            }
+
+            // Add current expression
             try buffer.appendSlice(self.allocator, "    ");
-            try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+            try buffer.appendSlice(self.allocator, current_expr);
             try buffer.append(self.allocator, '\n');
+
+            // End block
+            try buffer.append(self.allocator, '}');
         }
-
-        // Add current expression
-        try buffer.appendSlice(self.allocator, "    ");
-        try buffer.appendSlice(self.allocator, current_expr);
-        try buffer.append(self.allocator, '\n');
-
-        // End block
-        try buffer.append(self.allocator, '}');
 
         return try buffer.toOwnedSlice(self.allocator);
     }
@@ -368,18 +444,23 @@ pub const Repl = struct {
 
     /// Evaluate a program (which may contain definitions)
     fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
-
-        // Determine if we have definitions (which means we built a block expression)
+        // Check if we have type declarations (requires file-level parsing)
+        const has_type_decls = self.type_declarations.count() > 0;
         const has_definitions = self.definitions.count() > 0;
 
-        // Parse appropriately based on whether we have definitions
-        var parse_ast = if (has_definitions)
-            // Has definitions - we built a block expression, parse as expression
+        // Parse appropriately based on what we have
+        var parse_ast = if (has_type_decls)
+            // Type declarations present - parse as file
+            parse.parse(&module_env.common, self.allocator) catch |err| {
+                return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
+            }
+        else if (has_definitions)
+            // Only definitions - parse as block expression
             parse.parseExpr(&module_env.common, self.allocator) catch |err| {
                 return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
             }
         else
-            // No definitions - simple expression, parse as expression
+            // No definitions - simple expression
             parse.parseExpr(&module_env.common, self.allocator) catch |err| {
                 return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
             };
@@ -449,13 +530,44 @@ pub const Repl = struct {
         // NOTE: True/False/Ok/Err are now just anonymous tags that unify with Bool/Try automatically!
         // No need to register unqualified_nominal_tags - the type system handles it.
 
-        // Since we're always parsing as expressions now, handle them the same way
-        const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        var final_expr_idx: can.CIR.Expr.Idx = undefined;
 
-        const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
-            return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
-        };
-        const final_expr_idx = canonical_expr.get_idx();
+        if (has_type_decls) {
+            // File-level canonicalization for type declarations
+            czer.canonicalizeFile() catch |err| {
+                return try std.fmt.allocPrint(self.allocator, "Canonicalize file error: {}", .{err});
+            };
+
+            // Find the replResult0 definition and get its expression
+            const repl_result_text = "replResult0";
+            const all_defs = cir.store.sliceDefs(cir.all_defs);
+
+            var found_result = false;
+            for (all_defs) |def_idx| {
+                const def = cir.store.getDef(def_idx);
+                const pat = cir.store.getPattern(def.pattern);
+                if (pat == .assign) {
+                    const def_ident_text = cir.getIdent(pat.assign.ident);
+                    if (std.mem.eql(u8, def_ident_text, repl_result_text)) {
+                        final_expr_idx = def.expr;
+                        found_result = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!found_result) {
+                return try self.allocator.dupe(u8, "Error: could not find replResult0 definition");
+            }
+        } else {
+            // Expression-level canonicalization (existing behavior)
+            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+
+            const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+                return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
+            };
+            final_expr_idx = canonical_expr.get_idx();
+        }
 
         // Type check - Pass Builtin as imported module
         const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
@@ -472,10 +584,17 @@ pub const Repl = struct {
         };
         defer checker.deinit();
 
-        // Check the expression (no need to check defs since we're parsing as expressions)
-        _ = checker.checkExprRepl(final_expr_idx) catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
-        };
+        if (has_type_decls) {
+            // Type check the whole file when we have type declarations
+            checker.checkFile() catch |err| {
+                return try std.fmt.allocPrint(self.allocator, "Type check file error: {}", .{err});
+            };
+        } else {
+            // Just check the expression (existing behavior)
+            _ = checker.checkExprRepl(final_expr_idx) catch |err| {
+                return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
+            };
+        }
 
         // Create interpreter instance with BuiltinTypes containing real Builtin module
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
@@ -507,6 +626,13 @@ pub const Repl = struct {
 
         const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
         const output = blk: {
+            // First try to use the runtime type variable attached to the result value
+            // This is set by operations like makeBoolValue and is more reliable
+            // for values created through method dispatch (like != falling back to is_eq)
+            if (result.rt_var) |rt_var| {
+                break :blk try interpreter.renderValueRocWithType(result, rt_var);
+            }
+            // Fall back to translating the expression's compile-time type variable
             const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
                 break :blk try interpreter.renderValueRoc(result);
             };

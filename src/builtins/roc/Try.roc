@@ -19,24 +19,24 @@ import Bool exposing [Bool.*]
 ## okay, or else there was an error of some sort.
 Try(ok, err) := [Ok(ok), Err(err)]
 
-## Returns `Bool.true` if the result indicates a success, else returns `Bool.false`.
+## Returns `True` if the result indicates a success, else returns `False`.
 ## ```roc
 ## Ok(5).is_ok()
 ## ```
 is_ok : Try(ok, err) -> Bool
 is_ok = |result| match result {
-    Try.Ok(_) => Bool.true
-    Try.Err(_) => Bool.false
+    Try.Ok(_) => True
+    Try.Err(_) => False
 }
 
-## Returns `Bool.true` if the result indicates a failure, else returns `Bool.false`.
+## Returns `True` if the result indicates a failure, else returns `False`.
 ## ```roc
 ## Err("uh oh").is_err()
 ## ```
 is_err : Try(ok, err) -> Bool
 is_err = |result| match result {
-    Try.Ok(_) => Bool.false
-    Try.Err(_) => Bool.true
+    Try.Ok(_) => False
+    Try.Err(_) => True
 }
 
 ## If the result is `Ok`, returns the value it holds. Otherwise, returns
