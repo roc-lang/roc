@@ -3703,13 +3703,16 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_crash => |_| {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
             },
-            .s_return => |_| {
+            .s_return => |ret| {
                 // To implement early returns and make them usable, we need to:
                 // 1. Update the parse to allow for if statements (as opposed to if expressions)
                 // 2. Track function scope in czer and capture the function for this return in `s_return`
                 // 3. When type checking a lambda, capture all early returns
                 //    a. Unify all early returns together
                 //    b. Unify early returns with func return type
+
+                // Type check the return expression (important for type variable resolution)
+                does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },

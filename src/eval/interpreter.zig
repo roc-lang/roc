@@ -97,6 +97,7 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
+        EarlyReturn,
         IntegerOverflow,
         InvalidMethodReceiver,
         InvalidNumExt,
@@ -222,6 +223,8 @@ pub const Interpreter = struct {
     num_literal_target_type: ?types.Var,
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
+    /// Value to return from early return statements
+    early_return_value: ?StackValue,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
@@ -372,6 +375,7 @@ pub const Interpreter = struct {
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
             .last_error_message = null,
+            .early_return_value = null,
         };
 
         // Get the "Builtin.Str" identifier from the runtime module's identifier store
@@ -479,7 +483,18 @@ pub const Interpreter = struct {
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
-            const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
+            // Evaluate body, handling early returns
+            const result_value = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
+                if (err == error.EarlyReturn) {
+                    // Early return - use the stored return value
+                    const ret_val = self.early_return_value.?;
+                    self.early_return_value = null;
+                    defer ret_val.decref(&self.runtime_layout_store, roc_ops);
+                    try ret_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+                    return;
+                }
+                return err;
+            };
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
@@ -777,6 +792,12 @@ pub const Interpreter = struct {
                             }
 
                             // While loop completes and returns {} (implicitly)
+                        },
+                        .s_return => |ret| {
+                            // Evaluate the return expression and signal early return
+                            const ret_value = try self.evalExprMinimal(ret.expr, roc_ops, null);
+                            self.early_return_value = ret_value;
+                            return error.EarlyReturn;
                         },
                         else => return error.NotImplemented,
                     }
@@ -1336,7 +1357,12 @@ pub const Interpreter = struct {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
-                const resolved = self.runtime_types.resolveVar(rt_var);
+                var resolved = self.runtime_types.resolveVar(rt_var);
+                // Unwrap nominal types (like Bool) to get the underlying tag union
+                if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                    const backing_var = self.runtime_types.getNominalBackingVar(resolved.desc.content.structure.nominal_type);
+                    resolved = self.runtime_types.resolveVar(backing_var);
+                }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
                 const tu = resolved.desc.content.structure.tag_union;
                 const tags = self.runtime_types.getTagsSlice(tu.tags);
@@ -1402,12 +1428,20 @@ pub const Interpreter = struct {
             },
             .e_tag => |tag| {
                 // Construct a tag union value with payloads
-                const rt_var = expected_rt_var orelse blk: {
+                var rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
                 // Unwrap nominal types and aliases to get the base tag union
-                const resolved = self.resolveBaseVar(rt_var);
+                var resolved = self.resolveBaseVar(rt_var);
+                // Handle unresolved types - for Bool tags (True/False), use canonical Bool type
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    const name_text = self.env.getIdent(tag.name);
+                    if (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False")) {
+                        rt_var = try self.getCanonicalBoolRuntimeVar();
+                        resolved = self.resolveBaseVar(rt_var);
+                    }
+                }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
                 const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -2192,7 +2226,17 @@ pub const Interpreter = struct {
                             }
                         }
                     }
-                    return try self.evalExprMinimal(header.body_idx, roc_ops, null);
+                    // Evaluate closure body, handling early returns
+                    const result = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
+                        if (err == error.EarlyReturn) {
+                            // Early return - use the stored return value
+                            const ret_val = self.early_return_value.?;
+                            self.early_return_value = null;
+                            return ret_val;
+                        }
+                        return err;
+                    };
+                    return result;
                 }
 
                 // Fallback: direct lambda expression (legacy minimal path)
@@ -2214,7 +2258,17 @@ pub const Interpreter = struct {
                             }
                         }
                     }
-                    return try self.evalExprMinimal(lambda.body, roc_ops, null);
+                    // Evaluate lambda body, handling early returns
+                    const result = self.evalExprMinimal(lambda.body, roc_ops, null) catch |err| {
+                        if (err == error.EarlyReturn) {
+                            // Early return - use the stored return value
+                            const ret_val = self.early_return_value.?;
+                            self.early_return_value = null;
+                            return ret_val;
+                        }
+                        return err;
+                    };
+                    return result;
                 }
 
                 return error.NotImplemented;
@@ -5533,8 +5587,21 @@ pub const Interpreter = struct {
             });
         }
 
-        // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        // Evaluate the method body, handling early returns
+        const result = self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
+            if (err == error.EarlyReturn) {
+                // Early return - clean up bindings and return the stored value
+                var cleanup_k = params.len;
+                while (cleanup_k > 0) {
+                    cleanup_k -= 1;
+                    _ = self.bindings.pop();
+                }
+                const ret_val = self.early_return_value.?;
+                self.early_return_value = null;
+                return ret_val;
+            }
+            return err;
+        };
 
         // Clean up bindings
         var k = params.len;
@@ -5641,8 +5708,21 @@ pub const Interpreter = struct {
             });
         }
 
-        // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        // Evaluate the method body, handling early returns
+        const result = self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
+            if (err == error.EarlyReturn) {
+                // Early return - clean up bindings and return the stored value
+                var cleanup_k = params.len;
+                while (cleanup_k > 0) {
+                    cleanup_k -= 1;
+                    _ = self.bindings.pop();
+                }
+                const ret_val = self.early_return_value.?;
+                self.early_return_value = null;
+                return ret_val;
+            }
+            return err;
+        };
 
         // Clean up bindings
         var k = params.len;

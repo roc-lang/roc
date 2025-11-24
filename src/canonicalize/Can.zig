@@ -7398,7 +7398,22 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
                 },
                 .@"return" => |return_stmt| {
-                    last_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+                    // For blocks ending with return, we add the return as a statement
+                    // and use an empty record as the block's final expression.
+                    // This ensures the block's type is {} which unifies with other branches
+                    // in if-expressions (like `if cond { return X } else { {} }`).
+                    const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
+                    const expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+
+                    // Create and add the return statement
+                    const stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
+                        .expr = expr.idx,
+                    } }, return_region);
+                    try self.env.store.addScratchStatement(stmt_idx);
+
+                    // Set final expression to empty record (the return means this is never reached)
+                    const empty_record_idx = try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, return_region);
+                    last_expr = CanonicalizedExpr{ .idx = empty_record_idx, .free_vars = expr.free_vars };
                 },
                 .crash => |crash_stmt| {
                     // For final debug statements, canonicalize as debug expression
@@ -7444,6 +7459,11 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             //
             // We process each stmt individually, saving the result in
             // mb_canonicailzed_stmt for post-processing
+
+            // Statements in a block are in statement position (allows if-without-else)
+            const saved_stmt_pos = self.in_statement_position;
+            self.in_statement_position = true;
+            defer self.in_statement_position = saved_stmt_pos;
 
             const stmt_result = try self.canonicalizeBlockStatement(ast_stmt, ast_stmt_idxs, i);
 
