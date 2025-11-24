@@ -311,10 +311,7 @@ expect
 
     result = extract_phase_time(test_lines, "missing_phase:")
 
-    match result {
-        Err(_) => True
-        Ok(_) => False
-    }
+    Result.is_err(result)
 
 expect
     test_lines = [
@@ -323,10 +320,7 @@ expect
 
     result = extract_phase_time(test_lines, "tokenize + parse:")
 
-    match result {
-        Err(_) => True
-        Ok(_) => False
-    }
+    Result.is_err(result)
 
 expect
     test_output = 
