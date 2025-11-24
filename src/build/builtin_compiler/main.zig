@@ -110,7 +110,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
         try low_level_map.put(list_concat_ident, .list_concat);
     }
-    // List.is_eq has a pure Roc implementation in Builtin.roc, no low-level needed
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
