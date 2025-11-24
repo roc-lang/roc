@@ -714,7 +714,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             };
             const input = input_value.string;
 
-            const result = repl_ptr.step(input) catch |err| {
+            const structured_result = repl_ptr.stepStructured(input) catch |err| {
                 // Handle hard errors (like OOM) that aren't caught by the REPL
                 // Create a static error message to avoid allocation issues
                 const error_msg = @errorName(err);
@@ -727,14 +727,15 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 try writeReplStepResultJson(response_buffer, step_result);
                 return;
             };
-            defer allocator.free(result);
+            defer structured_result.deinit(allocator);
 
             if (crash_ctx.state == .crashed) {
                 const crash_details = crash_ctx.crashMessage();
                 crash_ctx.reset();
 
+                const output = structured_result.getMessage() orelse "";
                 const step_result = ReplStepResult{
-                    .output = result,
+                    .output = output,
                     .try_type = .@"error",
                     .error_stage = .evaluation,
                     .error_details = crash_details,
@@ -743,8 +744,8 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 return;
             }
 
-            // Parse the result to determine type and extract error information
-            const step_result = parseReplResult(result);
+            // Convert StepResult to ReplStepResult
+            const step_result = convertStepResult(structured_result);
             try writeReplStepResultJson(response_buffer, step_result);
         },
         .CLEAR_REPL => {
@@ -1317,72 +1318,54 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Parse REPL result string to determine type and extract error information
-fn parseReplResult(result: []const u8) ReplStepResult {
-    // Check for known error patterns
-    if (std.mem.startsWith(u8, result, "Parse error:")) {
-        return ReplStepResult{
-            .output = result,
+/// Convert REPL StepResult to playground's ReplStepResult
+fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
+    return switch (result) {
+        .expression => |output| ReplStepResult{
+            .output = output,
+            .try_type = .expression,
+        },
+        .definition => |output| ReplStepResult{
+            .output = output,
+            .try_type = .definition,
+        },
+        .help => |output| ReplStepResult{
+            .output = output,
+            .try_type = .expression, // Treat help as expression output
+        },
+        .quit => ReplStepResult{
+            .output = "Goodbye!",
+            .try_type = .expression,
+        },
+        .empty => ReplStepResult{
+            .output = "",
+            .try_type = .expression,
+        },
+        .parse_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .parse,
-            .error_details = if (result.len > 13) result[13..] else null,
-        };
-    } else if (std.mem.startsWith(u8, result, "**") and std.mem.indexOf(u8, result, "**\n") != null) {
-        // New markdown-formatted error messages (e.g., "**UNEXPECTED TOKEN IN EXPRESSION**\n...")
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .parse,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Canonicalize") != null) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .canonicalize_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .canonicalize,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Type check") != null) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .type_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .typecheck,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Layout") != null) {
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .layout,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.startsWith(u8, result, "Evaluation error:")) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .eval_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .evaluation,
-            .error_details = if (result.len > 17) result[17..] else null,
-        };
-    } else if (std.mem.indexOf(u8, result, "Interpreter") != null) {
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .interpreter,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.startsWith(u8, result, "assigned")) {
-        // Definition success
-        return ReplStepResult{
-            .output = result,
-            .try_type = .definition,
-        };
-    } else {
-        // Expression result
-        return ReplStepResult{
-            .output = result,
-            .try_type = .expression,
-        };
-    }
+            .error_details = extractErrorDetails(output),
+        },
+    };
 }
 
 /// Extract error details from an error message (part after ": ")
