@@ -1,12 +1,12 @@
 # META
 ~~~ini
-description=Method call on unbound number literal defaults to Dec and crashes
+description=Method call directly on float literal
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
 age : Str
-age = (35).to_str()
+age = 12.34.to_str()
 ~~~
 # EXPECTED
 NIL
@@ -15,7 +15,7 @@ NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
-LowerIdent,OpAssign,OpenRound,Int,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
+LowerIdent,OpAssign,Float,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
@@ -28,8 +28,7 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "age"))
 			(e-field-access
-				(e-tuple
-					(e-int (raw "35")))
+				(e-frac (raw "12.34"))
 				(e-apply
 					(e-ident (raw "to_str")))))))
 ~~~
@@ -44,7 +43,7 @@ NO CHANGE
 		(p-assign (ident "age"))
 		(e-dot-access (field "to_str")
 			(receiver
-				(e-num (value "35")))
+				(e-dec-small (numerator "1234") (denominator-power-of-ten "2") (value "12.34")))
 			(args))
 		(annotation
 			(ty-lookup (name "Str") (builtin)))))

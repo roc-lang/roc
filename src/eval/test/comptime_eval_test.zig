@@ -1652,7 +1652,7 @@ test "comptime eval - F64 negative valid" {
 test "comptime eval - to_str on unbound number literal" {
     const src =
         \\age : Str
-        \\age = (35).to_str()
+        \\age = 35.to_str()
     ;
 
     var result = try parseCheckAndEvalModule(src);
