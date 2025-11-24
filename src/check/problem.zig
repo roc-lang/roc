@@ -1648,13 +1648,13 @@ pub const ReportBuilder = struct {
 
     // static dispatch //
 
-    /// Build a report for when a type is not nominal, but you're tryint to
-    /// static  dispatch on it
+    /// Build a report for when a type is not nominal, but you're trying to
+    /// static dispatch on it
     fn buildStaticDispatchDispatcherNotNominal(
         self: *Self,
         data: DispatcherNotNominal,
     ) !Report {
-        var report = Report.init(self.gpa, "TYPE DOES NOT HAVE METHODS", .runtime_error);
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
         self.snapshot_writer.resetContext();
@@ -1668,9 +1668,11 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("You're calling the method ");
+        try report.document.addReflowingText("This ");
         try report.document.addAnnotated(method_name_str, .inline_code);
-        try report.document.addReflowingText(" on a type that doesn't support methods:");
+        try report.document.addReflowingText(" method is being called on the type ");
+        try report.document.addAnnotated(snapshot_str, .type_variable);
+        try report.document.addReflowingText(", which has no method with that name:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -1680,13 +1682,6 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("This type doesn't support methods:");
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(snapshot_str, .type_variable);
-        try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         return report;

@@ -51,7 +51,7 @@ main = |_| {
 # EXPECTED
 MISSING METHOD - let_polymorphism_records.md:26:47:26:49
 UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
-TYPE DOES NOT HAVE METHODS - let_polymorphism_records.md:38:2:38:3
+MISSING METHOD - let_polymorphism_records.md:38:2:38:3
 # PROBLEMS
 **MISSING METHOD**
 This **from_numeral** method is being called on the type **Str**, which has no method with that name:
@@ -75,16 +75,13 @@ This expression produces a value, but it's not being used:
 It has the type:
     _{ ..a, data: b }, b -> { ..a, data: b }_
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_numeral` on a type that doesn't support methods:
+**MISSING METHOD**
+This `from_numeral` method is being called on the type _{ ..a, data: b }, b -> { ..a, data: b }_, which has no method with that name:
 **let_polymorphism_records.md:38:2:38:3:**
 ```roc
 	1 + update_data
 ```
 	^
-
-This type doesn't support methods:
-    _{ ..a, data: b }, b -> { ..a, data: b }_
 
 
 

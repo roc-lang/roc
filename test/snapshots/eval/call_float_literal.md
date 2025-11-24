@@ -8,18 +8,15 @@ type=snippet
 x = 12.34()
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - call_float_literal.md:1:5:1:10
+MISSING METHOD - call_float_literal.md:1:5:1:10
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_numeral` on a type that doesn't support methods:
+**MISSING METHOD**
+This `from_numeral` method is being called on the type _({}) -> _ret_, which has no method with that name:
 **call_float_literal.md:1:5:1:10:**
 ```roc
 x = 12.34()
 ```
     ^^^^^
-
-This type doesn't support methods:
-    _({}) -> _ret_
 
 
 
