@@ -11,7 +11,7 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
-TYPE DOES NOT HAVE METHODS - if_then_else_simple_block_formatting.md:3:8:3:9
+MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -24,16 +24,13 @@ if bool {
    ^^^^
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `from_numeral` on a type that doesn't support methods:
+**MISSING METHOD**
+This `from_numeral` method is being called on the type _[A]_others_, which has no method with that name:
 **if_then_else_simple_block_formatting.md:3:8:3:9:**
 ```roc
 } else 2
 ```
        ^
-
-This type doesn't support methods:
-    _[A]_others_
 
 
 

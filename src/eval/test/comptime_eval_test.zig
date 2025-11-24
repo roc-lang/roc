@@ -1648,3 +1648,18 @@ test "comptime eval - F64 negative valid" {
     _ = try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
+
+test "comptime eval - to_str on unbound number literal" {
+    const src =
+        \\age : Str
+        \\age = 35.to_str()
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Flex var defaults to Dec; Dec.to_str is provided by builtins
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}

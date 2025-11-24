@@ -294,3 +294,196 @@ test "e_low_level_lambda - List.concat with empty string list" {
     const len_value = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 3), len_value);
 }
+
+test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
+    const src =
+        \\a : Dec
+        \\a = 123.45dec
+        \\x = Dec.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"123.45\"", value);
+}
+
+test "e_low_level_lambda - Dec.to_str with negative decimal" {
+    const src =
+        \\a : Dec
+        \\a = -456.78dec
+        \\x = Dec.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-456.78\"", value);
+}
+
+test "e_low_level_lambda - Dec.to_str with zero" {
+    const src =
+        \\a : Dec
+        \\a = 0.0dec
+        \\x = Dec.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"0.0\"", value);
+}
+
+// Integer to_str tests
+
+test "e_low_level_lambda - U8.to_str" {
+    const src =
+        \\a : U8
+        \\a = 42u8
+        \\x = U8.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"42\"", value);
+}
+
+test "e_low_level_lambda - I8.to_str with negative" {
+    const src =
+        \\a : I8
+        \\a = -42i8
+        \\x = I8.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-42\"", value);
+}
+
+test "e_low_level_lambda - U16.to_str" {
+    const src =
+        \\a : U16
+        \\a = 1000u16
+        \\x = U16.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"1000\"", value);
+}
+
+test "e_low_level_lambda - I16.to_str with negative" {
+    const src =
+        \\a : I16
+        \\a = -500i16
+        \\x = I16.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-500\"", value);
+}
+
+test "e_low_level_lambda - U32.to_str" {
+    const src =
+        \\a : U32
+        \\a = 100000u32
+        \\x = U32.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"100000\"", value);
+}
+
+test "e_low_level_lambda - I32.to_str with negative" {
+    const src =
+        \\a : I32
+        \\a = -12345i32
+        \\x = I32.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-12345\"", value);
+}
+
+test "e_low_level_lambda - U64.to_str" {
+    const src =
+        \\a : U64
+        \\a = 9876543210u64
+        \\x = U64.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"9876543210\"", value);
+}
+
+test "e_low_level_lambda - I64.to_str with negative" {
+    const src =
+        \\a : I64
+        \\a = -9876543210i64
+        \\x = I64.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-9876543210\"", value);
+}
+
+test "e_low_level_lambda - U128.to_str" {
+    const src =
+        \\a : U128
+        \\a = 12345678901234567890u128
+        \\x = U128.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"12345678901234567890\"", value);
+}
+
+test "e_low_level_lambda - I128.to_str with negative" {
+    const src =
+        \\a : I128
+        \\a = -12345678901234567890i128
+        \\x = I128.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-12345678901234567890\"", value);
+}
+
+// Float to_str tests
+
+test "e_low_level_lambda - F32.to_str" {
+    const src =
+        \\a : F32
+        \\a = 3.14f32
+        \\x = F32.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    // F32 has limited precision, so we just check it starts correctly
+    try testing.expect(std.mem.startsWith(u8, value, "\"3.14"));
+}
+
+test "e_low_level_lambda - F64.to_str" {
+    const src =
+        \\a : F64
+        \\a = 3.14159265359f64
+        \\x = F64.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    // F64 has more precision than F32
+    try testing.expect(std.mem.startsWith(u8, value, "\"3.141592"));
+}
+
+test "e_low_level_lambda - F32.to_str with negative" {
+    const src =
+        \\a : F32
+        \\a = -2.5f32
+        \\x = F32.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "\"-2.5"));
+}
+
+test "e_low_level_lambda - F64.to_str with negative" {
+    const src =
+        \\a : F64
+        \\a = -123.456f64
+        \\x = F64.to_str(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "\"-123.456"));
+}
