@@ -719,8 +719,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_dot_access => {
+            // Subtract 1 to undo the +1 offset used during storage
+            // This allows distinguishing empty args {start:0, len:0} from null args
             const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(node.data_3);
+                const packed_span = FunctionArgs.fromU32(node.data_3 - 1);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -1570,11 +1572,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
                 // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
+                // Add 1 to distinguish empty args {start:0, len:0} (becomes 1) from null args (remains 0)
                 std.debug.assert(FunctionArgs.canFit(args.span));
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                node.data_3 = packed_span.toU32();
+                node.data_3 = packed_span.toU32() + 1;
             } else {
-                node.data_3 = 0; // No args
+                node.data_3 = 0; // No args (null)
             }
         },
         .e_runtime_error => |e| {
