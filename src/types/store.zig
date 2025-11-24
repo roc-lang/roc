@@ -751,21 +751,28 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *Store {
-            // Note: Serialized may be smaller than the runtime struct because:
-            // - Uses i64 offsets instead of usize pointers
-            // - Omits runtime-only fields like the allocator
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
+        pub noinline fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *Store {
+            // CRITICAL: Deserialize ALL nested structs BEFORE casting and writing to store.
+            // Since store aliases self (they point to the same memory), we must complete
+            // all reads before any writes to avoid corruption in Release mode.
+            const deserialized_slots = self.slots.deserialize(offset).*;
+            const deserialized_descs = self.descs.deserialize(offset).*;
+            const deserialized_vars = self.vars.deserialize(offset).*;
+            const deserialized_record_fields = self.record_fields.deserialize(offset).*;
+            const deserialized_tags = self.tags.deserialize(offset).*;
+            const deserialized_static_dispatch_constraints = self.static_dispatch_constraints.deserialize(offset).*;
+
+            // Now we can cast and write to the destination
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
                 .gpa = gpa,
-                .slots = self.slots.deserialize(offset).*,
-                .descs = self.descs.deserialize(offset).*,
-                .vars = self.vars.deserialize(offset).*,
-                .record_fields = self.record_fields.deserialize(offset).*,
-                .tags = self.tags.deserialize(offset).*,
-                .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(offset).*,
+                .slots = deserialized_slots,
+                .descs = deserialized_descs,
+                .vars = deserialized_vars,
+                .record_fields = deserialized_record_fields,
+                .tags = deserialized_tags,
+                .static_dispatch_constraints = deserialized_static_dispatch_constraints,
             };
 
             return store;
@@ -938,13 +945,15 @@ const SlotStore = struct {
         }
 
         /// Deserialize this Serialized struct into a SlotStore
-        pub fn deserialize(self: *Serialized, offset: i64) *SlotStore {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
+        pub noinline fn deserialize(self: *Serialized, offset: i64) *SlotStore {
+            // CRITICAL: Deserialize nested struct BEFORE casting and writing to slot_store
+            // to avoid aliasing issues in Release mode.
+            const deserialized_backing = self.backing.deserialize(offset).*;
+
             const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
 
             slot_store.* = SlotStore{
-                .backing = self.backing.deserialize(offset).*,
+                .backing = deserialized_backing,
             };
 
             return slot_store;
@@ -1041,13 +1050,15 @@ const DescStore = struct {
         }
 
         /// Deserialize this Serialized struct into a DescStore
-        pub fn deserialize(self: *Serialized, offset: i64) *DescStore {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
+        pub noinline fn deserialize(self: *Serialized, offset: i64) *DescStore {
+            // CRITICAL: Deserialize nested struct BEFORE casting and writing to desc_store
+            // to avoid aliasing issues in Release mode.
+            const deserialized_backing = self.backing.deserialize(offset).*;
+
             const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
 
             desc_store.* = DescStore{
-                .backing = self.backing.deserialize(offset).*,
+                .backing = deserialized_backing,
             };
 
             return desc_store;

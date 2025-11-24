@@ -117,18 +117,26 @@ pub const Serialized = extern struct {
         offset: i64,
         source: []const u8,
     ) *CommonEnv {
-        // Note: Serialized may be smaller than the runtime struct because:
-        // - Uses i64 offsets instead of usize pointers (same size on 64-bit, but conceptually different)
-        // - May have different alignment/padding requirements
-        // We deserialize by overwriting the Serialized memory with the runtime struct.
+        // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
+        // output struct. This is because CommonEnv is a regular struct (not extern), so Zig may
+        // reorder its fields differently than Serialized (which is extern). If we read from self
+        // while writing to env (which aliases self), we may read corrupted data in Release mode
+        // when field orderings differ.
+
+        // Step 1: Deserialize all fields into local variables first
+        const deserialized_idents = self.idents.deserialize(offset).*;
+        const deserialized_strings = self.strings.deserialize(offset).*;
+        const deserialized_exposed_items = self.exposed_items.deserialize(offset).*;
+        const deserialized_line_starts = self.line_starts.deserialize(offset).*;
+
+        // Step 2: Overwrite ourself with the deserialized version
         const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
 
         env.* = CommonEnv{
-            .idents = self.idents.deserialize(offset).*,
-            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
-            .strings = self.strings.deserialize(offset).*,
-            .exposed_items = self.exposed_items.deserialize(offset).*,
-            .line_starts = self.line_starts.deserialize(offset).*,
+            .idents = deserialized_idents,
+            .strings = deserialized_strings,
+            .exposed_items = deserialized_exposed_items,
+            .line_starts = deserialized_line_starts,
             .source = source,
         };
 

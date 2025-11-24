@@ -299,33 +299,35 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             }
 
             /// Deserialize this Serialized struct into a SortedArrayBuilder
-            pub fn deserialize(self: *Serialized, offset: i64) *SortedArrayBuilder(K, V) {
-                // Note: Serialized may be smaller than the runtime struct because:
-                // - Uses i64 offsets instead of usize pointers
-                // - Omits runtime-only fields like allocators
-                // - May have different alignment/padding requirements
-                // We deserialize by overwriting the Serialized memory with the runtime struct.
+            pub noinline fn deserialize(self: *Serialized, offset: i64) *SortedArrayBuilder(K, V) {
+                // CRITICAL: Read ALL fields from self BEFORE casting and writing to builder.
+                // Since builder aliases self (they point to the same memory), we must complete
+                // all reads before any writes to avoid corruption in Release mode.
+                const serialized_entries_offset = self.entries_offset;
+                const serialized_entries_len = self.entries_len;
+                const serialized_entries_capacity = self.entries_capacity;
+                const serialized_sorted = self.sorted;
 
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                // Now we can cast and write to the destination
                 const builder = @as(*SortedArrayBuilder(K, V), @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty array case
-                if (self.entries_len == 0) {
+                if (serialized_entries_len == 0) {
                     builder.* = SortedArrayBuilder(K, V){
                         .entries = .{},
-                        .sorted = self.sorted,
+                        .sorted = serialized_sorted,
                     };
                 } else {
                     // Apply the offset to convert from serialized offset to actual pointer
-                    const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
+                    const entries_ptr_usize: usize = @intCast(serialized_entries_offset + offset);
                     const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
 
                     builder.* = SortedArrayBuilder(K, V){
                         .entries = .{
-                            .items = entries_ptr[0..@intCast(self.entries_len)],
-                            .capacity = @intCast(self.entries_capacity),
+                            .items = entries_ptr[0..@intCast(serialized_entries_len)],
+                            .capacity = @intCast(serialized_entries_capacity),
                         },
-                        .sorted = self.sorted,
+                        .sorted = serialized_sorted,
                     };
                 }
 

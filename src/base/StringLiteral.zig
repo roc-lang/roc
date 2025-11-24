@@ -113,12 +113,18 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        pub noinline fn deserialize(self: *Serialized, offset: i64) *Store {
+            // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
+            // output struct to avoid aliasing issues in Release mode.
+
+            // Step 1: Deserialize all fields into local variables first
+            const deserialized_buffer = self.buffer.deserialize(offset).*;
+
+            // Step 2: Overwrite ourself with the deserialized version
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
-                .buffer = self.buffer.deserialize(offset).*,
+                .buffer = deserialized_buffer,
             };
 
             return store;

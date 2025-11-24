@@ -3522,7 +3522,7 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
+    pub noinline fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
         // Note: Serialized may be smaller than the runtime struct.
         // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)

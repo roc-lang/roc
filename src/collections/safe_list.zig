@@ -148,24 +148,30 @@ pub fn SafeList(comptime T: type) type {
             }
 
             /// Deserialize this Serialized struct into a SafeList
-            pub fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
-                // Note: Serialized may be smaller than the runtime struct.
-                // We deserialize by overwriting the Serialized memory with the runtime struct.
+            pub noinline fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
+                // CRITICAL: Read ALL fields from self BEFORE casting and writing to safe_list.
+                // Since safe_list aliases self (they point to the same memory), we must complete
+                // all reads before any writes to avoid corruption in Release mode.
+                const serialized_offset = self.offset;
+                const serialized_len = self.len;
+                const serialized_capacity = self.capacity;
+
+                // Now we can cast and write to the destination
                 const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty list case
-                if (self.len == 0) {
+                if (serialized_len == 0) {
                     safe_list.* = SafeList(T){
                         .items = .{},
                     };
                 } else {
                     // Apply the offset to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(self.offset + offset)));
+                    const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(serialized_offset + offset)));
 
                     safe_list.* = SafeList(T){
                         .items = .{
-                            .items = items_ptr[0..@intCast(self.len)],
-                            .capacity = @intCast(self.capacity),
+                            .items = items_ptr[0..@intCast(serialized_len)],
+                            .capacity = @intCast(serialized_capacity),
                         },
                     };
                 }
@@ -665,20 +671,26 @@ pub fn SafeMultiList(comptime T: type) type {
             }
 
             /// Deserialize this Serialized struct into a SafeMultiList
-            pub fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
-                // Note: Serialized may be smaller than the runtime struct.
-                // We deserialize by overwriting the Serialized memory with the runtime struct.
+            pub noinline fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
+                // CRITICAL: Read ALL fields from self BEFORE casting and writing to multi_list.
+                // Since multi_list aliases self (they point to the same memory), we must complete
+                // all reads before any writes to avoid corruption in Release mode.
+                const serialized_offset = self.offset;
+                const serialized_len = self.len;
+                const serialized_capacity = self.capacity;
+
+                // Now we can cast and write to the destination
                 const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty list case
-                if (self.len == 0) {
+                if (serialized_len == 0) {
                     multi_list.* = SafeMultiList(T){
                         .items = .{},
                     };
                 } else {
                     // We need to reconstruct the MultiArrayList from the serialized field arrays
                     // MultiArrayList stores fields separately by type, and we serialized them in field order
-                    const current_ptr = @as([*]u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
+                    const current_ptr = @as([*]u8, @ptrFromInt(@as(usize, @intCast(serialized_offset + offset))));
 
                     // Allocate aligned memory for the MultiArrayList bytes
                     const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));
@@ -686,8 +698,8 @@ pub fn SafeMultiList(comptime T: type) type {
                     multi_list.* = SafeMultiList(T){
                         .items = .{
                             .bytes = bytes_ptr,
-                            .len = @as(usize, @intCast(self.len)),
-                            .capacity = @as(usize, @intCast(self.capacity)),
+                            .len = @as(usize, @intCast(serialized_len)),
+                            .capacity = @as(usize, @intCast(serialized_capacity)),
                         },
                     };
                 }
@@ -916,7 +928,7 @@ test "SafeList edge cases serialization" {
                     try self.list_u8.serialize(&container.list_u8, allocator, writer);
                 }
 
-                pub fn deserialize(self: *Serialized, offset: i64) *Self {
+                pub noinline fn deserialize(self: *Serialized, offset: i64) *Self {
                     const container = @as(*Self, @ptrFromInt(@intFromPtr(self)));
                     container.* = Self{
                         .list_u32 = self.list_u32.deserialize(offset).*,
