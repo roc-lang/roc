@@ -170,10 +170,13 @@ fn stderrWriter() *std.Io.Writer {
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
+    // NOTE: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL!
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) usize;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
+    /// MAP_FAILED is (void*)-1, which is maxInt(usize)
+    const MAP_FAILED: usize = std.math.maxInt(usize);
     // fcntl constants
     const F_GETFD = 1;
     const F_SETFD = 2;
@@ -1190,16 +1193,34 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         },
     };
 
+    // Duplicate the fd to a higher number (>= 10) to avoid conflicts with
+    // std.process.Child which uses fd 3 for progress reporting via dup2.
+    // If our shared memory happens to be on fd 3, it would be overwritten.
+    const target_fd: c_int = 10;
+    const new_fd = std.c.dup2(shm_handle.fd, target_fd);
+    if (new_fd < 0) {
+        std.log.err("Failed to duplicate fd {} to {}: errno={}", .{ shm_handle.fd, target_fd, c._errno().* });
+        return error.FdConfigFailed;
+    }
+    std.log.debug("Duplicated shared memory fd {} to {}", .{ shm_handle.fd, new_fd });
+
+    // Create a new handle with the higher fd number
+    const safe_shm_handle = SharedMemoryHandle{
+        .fd = new_fd,
+        .ptr = shm_handle.ptr,
+        .size = shm_handle.size,
+    };
+
     // Create temporary directory structure for fd communication
     std.log.debug("Creating temporary directory structure for fd communication", .{});
-    const temp_exe_path = createTempDirStructure(allocs, exe_path, shm_handle, temp_cache_dir) catch |err| {
+    const temp_exe_path = createTempDirStructure(allocs, exe_path, safe_shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}", .{err});
         return err;
     };
     std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
-    // Configure fd inheritance
-    var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
+    // Configure fd inheritance - clear FD_CLOEXEC so child inherits the fd
+    var flags = posix.fcntl(safe_shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
         std.log.err("Failed to get fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
@@ -1207,7 +1228,7 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
 
     flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
-    if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
+    if (posix.fcntl(safe_shm_handle.fd, posix.F_SETFD, flags) < 0) {
         std.log.err("Failed to set fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
@@ -1797,17 +1818,20 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     }
 
     // Map the shared memory
-    const mapped_ptr = posix.mmap(
+    const mmap_result = posix.mmap(
         null,
         total_size,
         0x01 | 0x02, // PROT_READ | PROT_WRITE
         0x0001, // MAP_SHARED
         shm_fd,
         0,
-    ) orelse {
+    );
+    // Check for MAP_FAILED (-1), NOT null!
+    if (mmap_result == posix.MAP_FAILED) {
         _ = c.close(shm_fd);
         return error.SharedMemoryMapFailed;
-    };
+    }
+    const mapped_ptr: *anyopaque = @ptrFromInt(mmap_result);
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
 
     // Write length at the beginning
