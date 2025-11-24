@@ -186,6 +186,10 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, enable_logging: bool) !void {
         stderr_file.writeAll(log_info.path) catch {};
         stderr_file.writeAll("\n") catch {};
         allocator.free(log_info.path);
+        const divider = "\n===== roc-lsp session start =====\n";
+        log_file.?.writeAll(divider) catch {};
+        log_file.?.writeAll("\n") catch {};
+        log_file.?.sync() catch {};
     }
 
     const StdServer = Server(@TypeOf(reader), @TypeOf(writer));
@@ -202,14 +206,20 @@ const LogFileInfo = struct {
 fn createLogFile(allocator: std.mem.Allocator) !LogFileInfo {
     const dir_path = try resolveTempDir(allocator);
     defer allocator.free(dir_path);
-    const filename = try std.fmt.allocPrint(allocator, "roc-lsp-debug-{d}.log", .{std.time.milliTimestamp()});
+    const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
     defer allocator.free(filename);
     const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
-    const file = try std.fs.createFileAbsolute(absolute_path, .{
-        .truncate = true,
+    const file = std.fs.createFileAbsolute(absolute_path, .{
+        .truncate = false,
         .read = true,
         .mode = 0o600,
-    });
+    }) catch |err| switch (err) {
+        error.PathAlreadyExists => try std.fs.openFileAbsolute(absolute_path, .{
+            .mode = .read_write,
+        }),
+        else => return err,
+    };
+    try file.seekFromEnd(0);
     return .{ .file = file, .path = absolute_path };
 }
 
