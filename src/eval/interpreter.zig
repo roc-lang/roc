@@ -2754,6 +2754,34 @@ pub const Interpreter = struct {
 
                 return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
             },
+            .str_concat => {
+                // Str.concat : Str, Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const str_a_arg = args[0];
+                const str_b_arg = args[1];
+
+                std.debug.assert(str_a_arg.ptr != null);
+                std.debug.assert(str_b_arg.ptr != null);
+
+                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
+                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+
+                // Call strConcat to concatenate the strings
+                const result_str = builtins.str.strConcat(str_a.*, str_b.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_a_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
