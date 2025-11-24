@@ -1114,7 +1114,15 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     std.log.debug("Interpreter execution completed", .{});
 }
 
-/// Run child process using Windows handle inheritance (idiomatic Windows approach)
+/// Run child process using Windows handle inheritance.
+///
+/// We use direct Win32 APIs (CreateProcessW) rather than library abstractions
+/// to ensure no interference with our handle inheritance. The handle value is
+/// passed to the child via command line arguments, so we don't depend on any
+/// specific handle number - the child receives the value and uses it directly.
+///
+/// This mirrors the POSIX implementation which uses direct fork/exec for the
+/// same reason.
 fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
@@ -1201,7 +1209,19 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     std.log.debug("Child process completed successfully", .{});
 }
 
-/// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
+/// Run child process using POSIX file descriptor inheritance.
+///
+/// We use direct fork/exec syscalls rather than std.process.Child to ensure
+/// no interference with our fd inheritance. Library abstractions may manipulate
+/// fds between fork and exec (e.g. for progress reporting), which can clobber
+/// our shared memory fd if it happens to use the same fd number.
+///
+/// The fd number is communicated to the child via a coordination file, so we
+/// don't depend on any specific fd number - whatever fd the kernel assigned
+/// for the shared memory will be inherited and used correctly.
+///
+/// This mirrors the Windows implementation which uses direct Win32 APIs for
+/// the same reason.
 fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(allocs.arena) catch |err| {
@@ -1240,10 +1260,19 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         return error.FdConfigFailed;
     }
 
-    // Use direct fork/exec instead of std.process.Child to avoid any
-    // interference with our file descriptor inheritance. std.process.Child
-    // manipulates file descriptors internally which can conflict with our
-    // shared memory fd.
+    // We use direct fork/exec instead of std.process.Child here.
+    //
+    // std.process.Child can perform internal fd manipulations between fork and exec
+    // (e.g. setting up pipes for progress reporting on specific fd numbers).
+    // If our shared memory happens to be on one of those fd numbers, it gets
+    // clobbered before the child can use it.
+    //
+    // By using raw fork/exec, we guarantee that NO code runs between fork and
+    // exec that could interfere with our fd table. The child inherits exactly
+    // the fds we configured, regardless of what fd numbers they happen to have.
+    //
+    // This mirrors the Windows implementation which also uses direct OS APIs
+    // (CreateProcessW) rather than library abstractions.
     std.log.debug("Spawning child process via fork/exec: {s}", .{temp_exe_path});
 
     const pid = std.c.fork();
