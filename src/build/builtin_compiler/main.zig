@@ -167,12 +167,44 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         try low_level_map.put(ident, .num_is_ne);
     }
 
-    // Dec to_str operation
-    // Note: Dec is nested under Num in Builtin.roc, so the canonical identifier is
+    // Numeric to_str operations (all numeric types)
+    // Note: Types like Dec are nested under Num in Builtin.roc, so the canonical identifier is
     // "Builtin.Num.Dec.to_str". But Dec is auto-imported as "Dec", so user code
     // calling Dec.to_str looks up "Builtin.Dec.to_str". We need the canonical name here.
-    if (env.common.findIdent("Builtin.Num.Dec.to_str")) |ident| {
-        try low_level_map.put(ident, .dec_to_str);
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+        const to_str_name = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.to_str", .{num_type});
+        if (env.common.findIdent(to_str_name)) |ident| {
+            const low_level_op: CIR.Expr.LowLevel = if (std.mem.eql(u8, num_type, "U8"))
+                .u8_to_str
+            else if (std.mem.eql(u8, num_type, "I8"))
+                .i8_to_str
+            else if (std.mem.eql(u8, num_type, "U16"))
+                .u16_to_str
+            else if (std.mem.eql(u8, num_type, "I16"))
+                .i16_to_str
+            else if (std.mem.eql(u8, num_type, "U32"))
+                .u32_to_str
+            else if (std.mem.eql(u8, num_type, "I32"))
+                .i32_to_str
+            else if (std.mem.eql(u8, num_type, "U64"))
+                .u64_to_str
+            else if (std.mem.eql(u8, num_type, "I64"))
+                .i64_to_str
+            else if (std.mem.eql(u8, num_type, "U128"))
+                .u128_to_str
+            else if (std.mem.eql(u8, num_type, "I128"))
+                .i128_to_str
+            else if (std.mem.eql(u8, num_type, "Dec"))
+                .dec_to_str
+            else if (std.mem.eql(u8, num_type, "F32"))
+                .f32_to_str
+            else if (std.mem.eql(u8, num_type, "F64"))
+                .f64_to_str
+            else
+                continue;
+            try low_level_map.put(ident, low_level_op);
+        }
     }
 
     // Numeric comparison operations (all numeric types)
@@ -309,7 +341,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Create parameter patterns for the lambda
                     // Binary operations need 2 parameters, unary operations need 1
                     const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .dec_to_str => 1,
+                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
                         else => 2, // Most numeric operations are binary
                     };
 
@@ -357,15 +389,22 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // Expose Dec.to_str under the alias "Builtin.Dec.to_str" for user code lookups.
-    // The canonical name is "Builtin.Num.Dec.to_str" (since Dec is nested under Num),
+    // Expose to_str under aliases like "Builtin.Dec.to_str" for user code lookups.
+    // The canonical names are like "Builtin.Num.Dec.to_str" (since numeric types are nested under Num),
     // but user code calling Dec.to_str will look for "Builtin.Dec.to_str".
-    if (env.common.findIdent("Builtin.Num.Dec.to_str")) |canonical_ident| {
-        if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
-            // Insert the alias identifier
-            const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text("Builtin.Dec.to_str"));
-            // Expose the same node under the alias
-            try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
+    for (numeric_types) |num_type| {
+        var canonical_buf: [256]u8 = undefined;
+        var alias_buf: [256]u8 = undefined;
+        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.{s}.to_str", .{num_type});
+        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.{s}.to_str", .{num_type});
+
+        if (env.common.findIdent(canonical_name)) |canonical_ident| {
+            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
+                // Insert the alias identifier
+                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
+                // Expose the same node under the alias
+                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
+            }
         }
     }
 
