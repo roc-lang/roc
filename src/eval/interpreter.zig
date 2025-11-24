@@ -5517,9 +5517,15 @@ pub const Interpreter = struct {
         return self.module_ids.get(origin_module) orelse self.current_module_id;
     }
 
-    /// Build a fully-qualified method identifier in the form "TypeName.method".
+    /// Build a fully-qualified method identifier.
     /// Note: nominal_ident comes from the runtime type store (translated idents),
     /// while method_name comes from the current environment.
+    ///
+    /// Supports arbitrary nesting depth because type_name can itself be qualified.
+    /// Examples:
+    ///   - "Builtin.List.len" (2 levels: module + type + method)
+    ///   - "Builtin.Num.Dec.plus" (3 levels: module + nested type + method)
+    ///   - "MyModule.Foo.Bar.Baz.method" (5 levels: module + deeply nested type + method)
     fn getMethodQualifiedIdent(
         self: *const Interpreter,
         origin_module: base_pkg.Ident.Idx,
@@ -5528,6 +5534,7 @@ pub const Interpreter = struct {
         buf: []u8,
     ) ![]const u8 {
         // Build fully-qualified method name: "OriginModule.TypeName.methodName"
+        // where TypeName can itself be qualified (e.g., "Foo.Bar" for nested types)
         // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
         const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
         const origin_module_text = runtime_ident_store.getText(origin_module);
@@ -5535,7 +5542,8 @@ pub const Interpreter = struct {
         // method_name is from the current environment
         const current_ident_store = self.env.common.getIdentStore();
         const method_name_str = current_ident_store.getText(method_name);
-        // Construct: "OriginModule.TypeName.methodName" (e.g., "Builtin.List.len")
+        // Construct: "OriginModule.TypeName.methodName"
+        // Note: TypeName may already contain dots for nested types
         return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 

@@ -631,6 +631,33 @@ fn processAssociatedBlock(
     try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
     defer self.scopeExit(self.env.gpa) catch unreachable;
 
+    // NOW that we've entered the child scope, register all placeholders hierarchically
+    // This ensures that partially-qualified names are available in this scope
+    // (e.g., "Foo.bar" in module scope AND in intermediate scopes)
+    const parent_scope_idx = self.scopes.items.len - 2; // Parent scope (before we entered)
+    const parent_scope = &self.scopes.items[parent_scope_idx];
+
+    // Iterate through all identifiers in the parent scope and register hierarchically if they're placeholders
+    var parent_idents_iter = parent_scope.idents.iterator();
+    while (parent_idents_iter.next()) |entry| {
+        const ident_idx = entry.key_ptr.*;
+        const pattern_idx = entry.value_ptr.*;
+
+        // Only process placeholders that belong to this type's associated items
+        if (self.isPlaceholder(ident_idx)) {
+            const ident_text = self.env.getIdent(ident_idx);
+            const qualified_prefix = self.env.getIdent(qualified_name_idx);
+
+            // Check if this identifier starts with our qualified prefix
+            if (std.mem.startsWith(u8, ident_text, qualified_prefix) and
+                ident_text.len > qualified_prefix.len and
+                ident_text[qualified_prefix.len] == '.') {
+                // This is one of our associated items - register hierarchically
+                try self.registerIdentifierHierarchically(ident_idx, pattern_idx);
+            }
+        }
+    }
+
     // Introduce the parent type itself into this scope so it can be referenced by its unqualified name
     // For example, if we're processing MyBool's associated items, we need "MyBool" to resolve to "Test.MyBool"
     if (self.scopeLookupTypeDecl(qualified_name_idx)) |parent_type_decl_idx| {
@@ -761,7 +788,7 @@ fn processAssociatedBlock(
     }
 
     // Process the associated items (canonicalize their bodies)
-    try self.processAssociatedItemsSecondPass(qualified_name_idx, type_name, assoc.statements);
+    try self.processAssociatedItemsSecondPass(qualified_name_idx, assoc.statements);
 
     // After processing, introduce anno-only defs into the associated block scope
     // (They were just created by processAssociatedItemsSecondPass)
@@ -889,7 +916,6 @@ fn canonicalizeAssociatedDeclWithAnno(
 fn processAssociatedItemsSecondPass(
     self: *Self,
     parent_name: Ident.Idx,
-    parent_type_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
@@ -975,35 +1001,9 @@ fn processAssociatedItemsSecondPass(
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
 
-                                    // Check if the fully-qualified name is still a placeholder before updating.
-                                    // Note: We only track fully-qualified names as placeholders now.
+                                    // Update placeholder hierarchically in all scopes
                                     if (self.isPlaceholder(qualified_idx)) {
-                                        // Find and update the placeholder in whichever scope contains it
-                                        // (should be a parent scope since we're now in the inner scope)
-                                        var scope_idx: usize = 0;
-                                        while (scope_idx < self.scopes.items.len) : (scope_idx += 1) {
-                                            const scope = &self.scopes.items[scope_idx];
-                                            if (scope.idents.get(qualified_idx)) |_| {
-                                                try self.updatePlaceholder(scope, qualified_idx, pattern_idx);
-                                                break;
-                                            }
-                                        }
-
-                                        // Also update aliases in the current (inner) scope if they exist
-                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                                        // Update unqualified alias if present
-                                        if (current_scope.idents.get(decl_ident)) |_| {
-                                            try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
-                                            _ = self.placeholder_idents.remove(decl_ident);
-                                        }
-
-                                        // Update type-qualified alias if present
-                                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
-                                        if (current_scope.idents.get(type_qualified_idx)) |_| {
-                                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
-                                            _ = self.placeholder_idents.remove(type_qualified_idx);
-                                        }
+                                        try self.updatePlaceholderHierarchically(qualified_idx, pattern_idx);
                                     }
 
                                     break :blk true; // Found and processed matching decl
@@ -1034,33 +1034,9 @@ fn processAssociatedItemsSecondPass(
                     const def_cir = self.env.store.getDef(def_idx);
                     const pattern_idx = def_cir.pattern;
 
-                    // Check if the fully-qualified name is still a placeholder before updating.
+                    // Update placeholder hierarchically in all scopes
                     if (self.isPlaceholder(qualified_idx)) {
-                        // Find and update the placeholder in whichever scope contains it
-                        var scope_idx: usize = 0;
-                        while (scope_idx < self.scopes.items.len) : (scope_idx += 1) {
-                            const scope = &self.scopes.items[scope_idx];
-                            if (scope.idents.get(qualified_idx)) |_| {
-                                try self.updatePlaceholder(scope, qualified_idx, pattern_idx);
-                                break;
-                            }
-                        }
-
-                        // Also update aliases in the current (inner) scope if they exist
-                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                        // Update unqualified alias if present
-                        if (current_scope.idents.get(name_ident)) |_| {
-                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
-                            _ = self.placeholder_idents.remove(name_ident);
-                        }
-
-                        // Update type-qualified alias if present
-                        const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
-                        if (current_scope.idents.get(type_qualified_idx)) |_| {
-                            try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
-                            _ = self.placeholder_idents.remove(type_qualified_idx);
-                        }
+                        try self.updatePlaceholderHierarchically(qualified_idx, pattern_idx);
                     }
 
                     try self.env.store.addScratchDef(def_idx);
@@ -1115,6 +1091,129 @@ fn processAssociatedItemsSecondPass(
             },
         }
     }
+}
+
+/// Register an identifier hierarchically into all active scopes.
+/// For a qualified name like "Module.Foo.Bar.baz" (4 components), registers:
+/// - Into Module scope (0): "Module.Foo.Bar.baz" (skip 0)
+/// - Into Foo scope (1): "Foo.Bar.baz" (skip 1), "Bar.baz" (skip 2)
+/// - Into Bar scope (2): "baz" (skip 3)
+///
+/// The pattern: scope N gets suffixes from skipping N to skipping (components-1-scope_depth_from_end)
+/// where scope_depth_from_end = (num_scopes - 1 - scope_idx)
+fn registerIdentifierHierarchically(
+    self: *Self,
+    fully_qualified_idx: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
+
+    // Count dot-separated components
+    var component_count: usize = 1;
+    for (fully_qualified_text) |c| {
+        if (c == '.') component_count += 1;
+    }
+
+    // For each active scope, register appropriate suffixes
+    const num_scopes = self.scopes.items.len;
+    var scope_idx: usize = 0;
+    while (scope_idx < num_scopes) : (scope_idx += 1) {
+        const scope = &self.scopes.items[scope_idx];
+
+        // How many scopes deep are we from the end?
+        const depth_from_end = num_scopes - 1 - scope_idx;
+
+        // In scope N, register suffixes from skipping N to skipping (component_count - 1 - depth_from_end)
+        // This ensures innermost scope gets only unqualified, middle scopes get partially qualified, etc.
+        const min_skip = scope_idx;
+        const max_skip = if (component_count > depth_from_end + 1)
+            component_count - depth_from_end - 1
+        else
+            component_count - 1;
+
+        var components_to_skip = min_skip;
+        while (components_to_skip <= max_skip and components_to_skip < component_count) : (components_to_skip += 1) {
+            // Build the name by skipping the first N components
+            const name_for_this_suffix = if (components_to_skip == 0)
+                fully_qualified_text
+            else blk: {
+                var dots_seen: usize = 0;
+                var start_pos: usize = 0;
+                for (fully_qualified_text, 0..) |c, i| {
+                    if (c == '.') {
+                        dots_seen += 1;
+                        if (dots_seen == components_to_skip) {
+                            start_pos = i + 1;
+                            break;
+                        }
+                    }
+                }
+                break :blk fully_qualified_text[start_pos..];
+            };
+
+            const ident_for_this_suffix = try self.env.insertIdent(base.Ident.for_text(name_for_this_suffix));
+            try scope.idents.put(self.env.gpa, ident_for_this_suffix, pattern_idx);
+        }
+    }
+}
+
+/// Update a hierarchically-registered placeholder in all scopes.
+/// Updates all suffixes that were registered hierarchically.
+fn updatePlaceholderHierarchically(
+    self: *Self,
+    fully_qualified_idx: Ident.Idx,
+    new_pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
+
+    // Count components
+    var component_count: usize = 1;
+    for (fully_qualified_text) |c| {
+        if (c == '.') component_count += 1;
+    }
+
+    // Update all suffixes in each scope using the same logic as registration
+    const num_scopes = self.scopes.items.len;
+    var scope_idx: usize = 0;
+    while (scope_idx < num_scopes) : (scope_idx += 1) {
+        const scope = &self.scopes.items[scope_idx];
+
+        const depth_from_end = num_scopes - 1 - scope_idx;
+
+        const min_skip = scope_idx;
+        const max_skip = if (component_count > depth_from_end + 1)
+            component_count - depth_from_end - 1
+        else
+            component_count - 1;
+
+        var components_to_skip = min_skip;
+        while (components_to_skip <= max_skip and components_to_skip < component_count) : (components_to_skip += 1) {
+            const name_for_this_suffix = if (components_to_skip == 0)
+                fully_qualified_text
+            else blk: {
+                var dots_seen: usize = 0;
+                var start_pos: usize = 0;
+                for (fully_qualified_text, 0..) |c, i| {
+                    if (c == '.') {
+                        dots_seen += 1;
+                        if (dots_seen == components_to_skip) {
+                            start_pos = i + 1;
+                            break;
+                        }
+                    }
+                }
+                break :blk fully_qualified_text[start_pos..];
+            };
+
+            const ident_for_this_suffix = try self.env.insertIdent(base.Ident.for_text(name_for_this_suffix));
+            if (scope.idents.get(ident_for_this_suffix)) |_| {
+                try scope.idents.put(self.env.gpa, ident_for_this_suffix, new_pattern_idx);
+            }
+        }
+    }
+
+    // Remove from placeholder tracking
+    _ = self.placeholder_idents.remove(fully_qualified_idx);
 }
 
 /// First pass helper: Process associated items and introduce them into scope with qualified names
@@ -1258,12 +1357,9 @@ fn processAssociatedItemsFirstPass(
                         };
                         const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
 
-                        // Multi-scope registration: Only insert fully-qualified name in parent scope
-                        // The unqualified and type-qualified names will be added as aliases
-                        // into the inner scope later (after scopeEnter in processAssociatedBlock)
+                        // Register in parent scope only
                         try self.placeholder_idents.put(self.env.gpa, qualified_idx, {});
 
-                        // Insert only fully-qualified name into current (parent) scope
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                         try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
                     }
@@ -1283,12 +1379,9 @@ fn processAssociatedItemsFirstPass(
                     };
                     const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
 
-                    // Multi-scope registration: Only insert fully-qualified name in parent scope
-                    // The unqualified and type-qualified names will be added as aliases
-                    // into the inner scope later (after scopeEnter in processAssociatedBlock)
+                    // Register in parent scope only
                     try self.placeholder_idents.put(self.env.gpa, qualified_idx, {});
 
-                    // Insert only fully-qualified name into current (parent) scope
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
                 }
