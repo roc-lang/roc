@@ -24,7 +24,7 @@ main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This argument has the type:
-    _{ age: _field, namee: Str } where [{ age: a, namee: Str }.from_numeral : { age: a, namee: Str }]_
+    _{ age: _field, namee: _field2 } where [{ age: a, namee: b }.from_numeral : { age: a, namee: b }, { age: a, namee: b }.try_from_str : { age: a, namee: b }]_
 
 But `getName` needs the first argument to be:
     _{ age: Num.U64, name: Str }_

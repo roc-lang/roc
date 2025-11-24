@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List((a, Str)) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "List((a, b)) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)])]"))
 ~~~

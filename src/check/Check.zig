@@ -156,6 +156,8 @@ pub const CommonIdents = struct {
     builtin_module: ?*const ModuleEnv,
     /// Cached identifier for "from_numeral" (used for numeric literal constraints)
     from_numeral: ?base.Ident.Idx = null,
+    /// Cached identifier for "try_from_str" (used for string literal constraints)
+    try_from_str: ?base.Ident.Idx = null,
 };
 
 /// Init type solver
@@ -522,6 +524,8 @@ fn instantiateVarHelp(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    std.debug.assert(@intFromEnum(var_to_instantiate) < self.types.len());
+
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
 
@@ -768,6 +772,87 @@ fn mkFlexWithFromNumeralConstraint(
         .fn_var = fn_var,
         .origin = .from_numeral,
         .num_literal = num_literal_info,
+    };
+
+    // Store it in the types store
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    // Update the flex var to have the constraint attached
+    const flex_content = types_mod.Content{
+        .flex = types_mod.Flex{
+            .name = null,
+            .constraints = constraint_range,
+        },
+    };
+    try self.types.setVarContent(flex_var, flex_content);
+
+    return flex_var;
+}
+
+/// Create a flex variable with a try_from_str constraint for string literals.
+/// This constraint will be checked during deferred constraint checking to validate
+/// that the string literal can be converted to the unified type.
+/// Returns the flex var which has the constraint attached.
+fn mkFlexWithTryFromStrConstraint(
+    self: *Self,
+    str_literal_info: types_mod.StringLiteralInfo,
+    env: *Env,
+) !Var {
+    // Get or create the try_from_str identifier
+    const try_from_str_ident = blk: {
+        if (self.common_idents.try_from_str) |ident| {
+            break :blk ident;
+        }
+        // First time - create and cache it
+        const ident = try @constCast(self.cir).insertIdent(
+            base.Ident.for_text("try_from_str"),
+        );
+        self.common_idents.try_from_str = ident;
+        break :blk ident;
+    };
+
+    // Create the flex var first - this represents the target type `a`
+    const flex_var = try self.fresh(env, str_literal_info.region);
+
+    // Create the argument type: Str
+    const arg_var = try self.freshStr(env, str_literal_info.region);
+
+    // Create the error type: [InvalidStr(Str)] (closed tag union)
+    const str_var = self.str_var;
+    const invalid_str_tag_ident = try @constCast(self.cir).insertIdent(
+        base.Ident.for_text("InvalidStr"),
+    );
+    const invalid_str_tag = try self.types.mkTag(
+        invalid_str_tag_ident,
+        &.{str_var},
+    );
+    // Use empty_tag_union as extension to create a closed tag union [InvalidStr(Str)]
+    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, str_literal_info.region);
+    const err_type = try self.types.mkTagUnion(&.{invalid_str_tag}, err_ext_var);
+    const err_var = try self.freshFromContent(err_type, env, str_literal_info.region);
+
+    // Create Try(flex_var, err_var) as the return type
+    // Try is a nominal type with two type args: the success type and the error type
+    const try_type_content = try self.mkTryContent(flex_var, err_var);
+    const ret_var = try self.freshFromContent(try_type_content, env, str_literal_info.region);
+
+    const func_content = types_mod.Content{
+        .structure = types_mod.FlatType{
+            .fn_unbound = types_mod.Func{
+                .args = try self.types.appendVars(&.{arg_var}),
+                .ret = ret_var,
+                .needs_instantiation = false,
+            },
+        },
+    };
+    const fn_var = try self.freshFromContent(func_content, env, str_literal_info.region);
+
+    // Create the constraint with string literal info
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try_from_str_ident,
+        .fn_var = fn_var,
+        .origin = .try_from_str,
+        .str_literal = str_literal_info,
     };
 
     // Store it in the types store
@@ -1856,11 +1941,28 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         },
         .tuple => |tuple| {
             const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
+
+            // Validate all element indices before using them
+            // This guards against corrupted data from severely malformed code
+            const type_store_len = self.types.len();
+            var all_valid = true;
             for (elems_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                if (@intFromEnum(arg_anno_idx) >= type_store_len) {
+                    all_valid = false;
+                    break;
+                }
             }
-            const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
-            try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
+
+            if (!all_valid) {
+                // Corrupted tuple element indices - treat as error type
+                try self.unifyWith(anno_var, .err, env);
+            } else {
+                for (elems_anno_slice) |arg_anno_idx| {
+                    try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                }
+                const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+                try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
+            }
         },
         .parens => |parens| {
             try self.generateAnnoTypeInPlace(parens.anno, env, ctx);
@@ -2418,9 +2520,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     switch (expr) {
         // str //
-        .e_str_segment => |_| {
-            const str_var = try self.freshStr(env, expr_region);
-            _ = try self.unify(expr_var, str_var, env);
+        .e_str_segment => |segment| {
+            // Create a flex var with try_from_str constraint for string literals
+            // This allows string literals to be used with custom types that implement try_from_str
+            const str_literal_info = types_mod.StringLiteralInfo{
+                .string_idx = segment.literal,
+                .region = expr_region,
+            };
+
+            // Create flex var with try_from_str constraint
+            const flex_var = try self.mkFlexWithTryFromStrConstraint(str_literal_info, env);
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Get the constraint from the resolved flex var
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Record this literal for deferred validation during comptime eval
+            _ = try self.cir.deferred_string_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
         },
         .e_str => |str| {
             // Iterate over the string segments, capturing if any error'd
@@ -2438,9 +2561,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (did_err) {
                 // If any segment errored, propgate that error to the root string
                 try self.unifyWith(expr_var, .err, env);
+            } else if (segment_expr_idx_slice.len == 1) {
+                // Single segment string - unify with the segment's type
+                // This preserves the flex var with try_from_str constraint for string literals
+                const seg_var = ModuleEnv.varFrom(segment_expr_idx_slice[0]);
+                _ = try self.unify(expr_var, seg_var, env);
             } else {
-                // Otherwise, set the type of this expr to be nominal Str
+                // Multi-segment string (interpolation) - all segments must be Str
+                // and the result is Str
                 const str_var = try self.freshStr(env, expr_region);
+                for (segment_expr_idx_slice) |seg_expr_idx| {
+                    const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+                    _ = try self.unify(seg_var, str_var, env);
+                }
                 _ = try self.unify(expr_var, str_var, env);
             }
         },

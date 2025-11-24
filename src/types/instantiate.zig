@@ -73,6 +73,8 @@ pub const Instantiator = struct {
         self: *Self,
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
+        std.debug.assert(@intFromEnum(initial_var) < self.store.len());
+
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
@@ -252,6 +254,7 @@ pub const Instantiator = struct {
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
         const elems_slice = self.store.sliceVars(tuple.elems);
+
         var fresh_elems = std.ArrayList(Var).empty;
         defer fresh_elems.deinit(self.store.gpa);
 

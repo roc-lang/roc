@@ -16,30 +16,35 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
+TYPE DOES NOT HAVE METHODS - return_stmt_block_example.md:6:10:6:15
+TYPE MISMATCH - return_stmt_block_example.md:8:5:8:12
 # PROBLEMS
-**INCOMPATIBLE IF BRANCHES**
-This `if` has an `else` branch with a different type from it's `then` branch:
-**return_stmt_block_example.md:3:11:**
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `try_from_str` on a type that doesn't support methods:
+**return_stmt_block_example.md:6:10:6:15:**
 ```roc
-    str = if (num > 10) {
-        return Err(TooBig)
-    } else {
         "SMALL"
-    }
 ```
-        ^^^^^^^
+         ^^^^^
 
-The `else` branch has the type:
-    _Str_
+This type doesn't support methods:
+    _[Err([TooBig]_others)]_others2_
 
-But the `then` branch has the type:
-    _[Err([TooBig]_others)][ProvidedByCompiler]_
 
-All branches in an `if` must have compatible types.
 
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**return_stmt_block_example.md:8:5:8:12:**
+```roc
+    Ok(str)
+```
+    ^^^^^^^
+
+It has the type:
+    _[Ok([Err([TooBig]_others)][ProvidedByCompiler])][Err([TooBig])]_
+
+But the type annotation says it should have the type:
+    _Try(Str, [TooBig])_
 
 # TOKENS
 ~~~zig
@@ -150,7 +155,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64 -> Try(Error, [TooBig])")))
+		(patt (type "U64 -> Error")))
 	(expressions
-		(expr (type "U64 -> Try(Error, [TooBig])"))))
+		(expr (type "U64 -> Error"))))
 ~~~

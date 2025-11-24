@@ -155,7 +155,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: _field2 } where [{ field: Str, other: a }.from_numeral : { field: Str, other: a }]_
+    _{ field: _field2, other: _field3 } where [{ field: a, other: b }.try_from_str : { field: a, other: b }, { field: a, other: b }.from_numeral : { field: a, other: b }]_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -183,7 +183,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, _field2) where [(Str, a).from_numeral : (Str, a)]_
+    _(_field2, _field3) where [(a, b).try_from_str : (a, b), (a, b).from_numeral : (a, b)]_
 
 But the type annotation says it should have the type:
     _BadTuple_

@@ -34,7 +34,7 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:9:20:9:24
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
-TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
+MISSING METHOD - type_var_underscore_conventions.md:9:27:9:34
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -96,19 +96,16 @@ main = |x| "done"
         ^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_underscore_conventions.md:9:26:9:35:**
+**MISSING METHOD**
+This **try_from_str** method is being called on the type **$elem**, which has no method with that name:
+**type_var_underscore_conventions.md:9:27:9:34:**
 ```roc
 starting_dollar = |list| "default"
 ```
-                         ^^^^^^^^^
+                          ^^^^^^^
 
-It has the type:
-    _Str_
 
-But the type annotation says it should have the type:
-    _$elem_
+**Hint: ** Did you forget to specify **try_from_str** in the type annotation?
 
 # TOKENS
 ~~~zig
@@ -296,16 +293,16 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "List(elem) -> Str"))
-		(patt (type "List($elem) -> Error"))
+		(patt (type "List($elem) -> $elem"))
 		(patt (type "List($bad) -> Str"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]")))
 	(expressions
 		(expr (type "List(elem) -> Str"))
-		(expr (type "List($elem) -> Error"))
+		(expr (type "List($elem) -> $elem"))
 		(expr (type "List($bad) -> Str"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))))
 ~~~

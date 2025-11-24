@@ -404,7 +404,7 @@ main = |_| {
 	(defs
 		(patt (type "List(_a)"))
 		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "List(Str)"))
+		(patt (type "List(a) where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))
 		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -416,7 +416,7 @@ main = |_| {
 	(expressions
 		(expr (type "List(_a)"))
 		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "List(Str)"))
+		(expr (type "List(a) where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))
 		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Error"))

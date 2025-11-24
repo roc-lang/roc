@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(72, @sizeOf(StaticDispatchConstraint)); // Includes recursion_info + num_literal fields
+    try std.testing.expectEqual(88, @sizeOf(StaticDispatchConstraint)); // Includes recursion_info + num_literal + str_literal fields
 }
 
 /// A type variable
@@ -835,6 +835,18 @@ pub const NumeralInfo = struct {
     }
 };
 
+/// Information about a string literal for try_from_str constraint checking
+///
+/// Stores the string literal index and metadata needed to validate conversion
+/// to a specific type at compile-time.
+pub const StringLiteralInfo = struct {
+    /// Index into the string literal store
+    string_idx: base.StringLiteral.Idx,
+
+    /// Source region for error reporting
+    region: base.Region,
+};
+
 /// Information about a recursive static dispatch constraint
 ///
 /// When we detect that a constraint refers to itself (e.g., through a chain
@@ -866,13 +878,16 @@ pub const StaticDispatchConstraint = struct {
     recursion_info: ?RecursionInfo = null,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
+    /// Optional string literal info for try_from_str constraints
+    str_literal: ?StringLiteralInfo = null,
 
     /// Tracks where a static dispatch constraint originated from
-    pub const Origin = enum(u2) {
+    pub const Origin = enum(u3) {
         desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
         method_call, // From .method() syntax
         where_clause, // From where clause in type annotation
         from_numeral, // From numeric literal conversion
+        try_from_str, // From string literal conversion
     };
 
     /// A safe list of static dispatch constraints

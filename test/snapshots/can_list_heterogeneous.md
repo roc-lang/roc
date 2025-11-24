@@ -8,30 +8,26 @@ type=expr
 [1, "hello", 3.14]
 ~~~
 # EXPECTED
-MISSING METHOD - can_list_heterogeneous.md:1:2:1:3
-MISSING METHOD - can_list_heterogeneous.md:1:14:1:18
+INCOMPATIBLE LIST ELEMENTS - can_list_heterogeneous.md:1:2:1:2
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**can_list_heterogeneous.md:1:2:1:3:**
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**can_list_heterogeneous.md:1:2:**
 ```roc
 [1, "hello", 3.14]
 ```
- ^
+ ^  ^^^^^^^
 
+The first element has this type:
+    __a where [b.from_numeral : b]_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+However, the second element has this type:
+    __a where [b.try_from_str : b]_
 
-**MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**can_list_heterogeneous.md:1:14:1:18:**
-```roc
-[1, "hello", 3.14]
-```
-             ^^^^
+All elements in a list must have compatible types.
 
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -61,5 +57,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Error)"))
 ~~~

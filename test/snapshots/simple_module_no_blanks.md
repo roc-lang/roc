@@ -84,8 +84,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Str")))
+		(patt (type "a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Str"))))
+		(expr (type "a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))))
 ~~~

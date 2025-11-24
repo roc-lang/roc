@@ -122,6 +122,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
         .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
+        .deferred_string_literals = try ModuleEnv.DeferredStringLiteral.SafeList.initCapacity(deser_alloc, 0),
     };
 
     // Verify the data was preserved

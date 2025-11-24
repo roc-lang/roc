@@ -941,7 +941,7 @@ This expression produces a value, but it's not being used:
 	         ^^^^^^
 
 It has the type:
-    _Str_
+    __f where [j.try_from_str : j]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -957,7 +957,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [(j, Str, Error, [O]k, (Error, Error), List(l)).from_numeral : (j, Str, Error, [O]k, (Error, Error), List(l)), (j, Str, Error, [O]k, (Error, Error), List(l)).from_numeral : (j, Str, Error, [O]k, (Error, Error), List(l))]_
+    _(_field, _field2, Error, [O]_others, (Error, Error), List(_f)) where [(j, k, Error, [O]l, (Error, Error), List(o)).from_numeral : (j, k, Error, [O]l, (Error, Error), List(o)), (j, k, Error, [O]l, (Error, Error), List(o)).try_from_str : (j, k, Error, [O]l, (Error, Error), List(o)), (j, k, Error, [O]l, (Error, Error), List(o)).from_numeral : (j, k, Error, [O]l, (Error, Error), List(o))]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

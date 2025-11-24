@@ -2627,6 +2627,8 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
+    const extra_data_len = store.extra_data.items.items.len;
+    std.debug.assert(span.start + span.len <= extra_data_len);
     return @ptrCast(store.extra_data.items.items[span.start..][0..span.len]);
 }
 

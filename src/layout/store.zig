@@ -1359,8 +1359,17 @@ pub const Store = struct {
 
                     // Flex vars with constraints appear in REPL/eval contexts where type constraints
                     // haven't been fully solved. This is a known issue that needs proper constraint
-                    // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
-                    // This includes flex vars inside lists - they should default to Dec, not opaque_ptr.
+                    // solving before layout computation.
+                    // Check if this is a try_from_str constraint (string literal) - default to Str.
+                    // Otherwise, default to Dec for numeric literals.
+                    const constraints = self.types_store.sliceStaticDispatchConstraints(flex.constraints);
+                    for (constraints) |constraint| {
+                        if (constraint.origin == .try_from_str) {
+                            // String literal with try_from_str constraint - default to Str
+                            break :blk Layout.str();
+                        }
+                    }
+                    // Default to Dec for numeric literals or other constraints
                     break :blk Layout.default_num();
                 },
                 .rigid => |rigid| blk: {

@@ -12,32 +12,9 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:1:7:1:7
 MISSING METHOD - if_then_else_simple_file.md:1:10:1:11
+TYPE DOES NOT HAVE METHODS - if_then_else_simple_file.md:4:3:4:8
 # PROBLEMS
-**INCOMPATIBLE IF BRANCHES**
-This `if` has an `else` branch with a different type from it's `then` branch:
-**if_then_else_simple_file.md:1:7:**
-```roc
-foo = if 1 A
-
-    else {
-	"hello"
-    }
-```
- ^^^^^^^
-
-The `else` branch has the type:
-    _Str_
-
-But the `then` branch has the type:
-    _[A][ProvidedByCompiler]_
-
-All branches in an `if` must have compatible types.
-
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
 **MISSING METHOD**
 This **from_numeral** method is being called on the type **Bool**, which has no method with that name:
 **if_then_else_simple_file.md:1:10:1:11:**
@@ -48,6 +25,19 @@ foo = if 1 A
 
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**TYPE DOES NOT HAVE METHODS**
+You're calling the method `try_from_str` on a type that doesn't support methods:
+**if_then_else_simple_file.md:4:3:4:8:**
+```roc
+	"hello"
+```
+	 ^^^^^
+
+This type doesn't support methods:
+    _[A]_others_
+
+
 
 # TOKENS
 ~~~zig
@@ -99,7 +89,7 @@ foo = if 1 A
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "[A]_others")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "[A]_others"))))
 ~~~

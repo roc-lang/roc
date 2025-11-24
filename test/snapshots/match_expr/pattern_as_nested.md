@@ -156,5 +156,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Error, { city: Str }, Str)"))
+(expr (type "(Error, { city: a }, a) where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))
 ~~~

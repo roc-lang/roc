@@ -4,6 +4,9 @@ Builtin :: [].{
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
+
+		try_from_str : Str -> Try(Str, [InvalidStr(Str)])
+		try_from_str = |self| Try.Ok(self)
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

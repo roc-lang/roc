@@ -586,7 +586,7 @@ main! = |_| {
 	(defs
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(patt (type "ac -> ac"))
-		(patt (type "Str"))
+		(patt (type "ac where [ac.try_from_str : Str -> Try(ac, [InvalidStr(Str)])]"))
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(patt (type "[True]_others"))
 		(patt (type "[False]_others"))
@@ -621,7 +621,7 @@ main! = |_| {
 	(expressions
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(expr (type "ac -> ac"))
-		(expr (type "Str"))
+		(expr (type "ac where [ac.try_from_str : Str -> Try(ac, [InvalidStr(Str)])]"))
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(expr (type "[True]_others"))
 		(expr (type "[False]_others"))

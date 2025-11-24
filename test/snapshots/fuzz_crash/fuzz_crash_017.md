@@ -88,9 +88,9 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str"))
+		(patt (type "a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))
+		(expr (type "a where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)])]"))
 		(expr (type "Error"))))
 ~~~

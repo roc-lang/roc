@@ -230,6 +230,10 @@ INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
+MISSING METHOD - fuzz_crash_027.md:125:6:125:9
+MISSING METHOD - fuzz_crash_027.md:102:15:102:18
+MISSING METHOD - fuzz_crash_027.md:129:12:129:22
++ - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
@@ -954,6 +958,39 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     __d_
+
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**fuzz_crash_027.md:125:6:125:9:**
+```roc
+		),	456, # ee
+```
+		  	^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**fuzz_crash_027.md:102:15:102:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **+** operator has the type **Str**, which has no **plus** method:
+**fuzz_crash_027.md:129:12:129:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

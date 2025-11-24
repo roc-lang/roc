@@ -25,7 +25,8 @@ test "direct polymorphic identity usage" {
     ;
     // The field 'a' has the same type as the dispatcher for from_numeral, so they should share the same name
     // Note: 'c' is used because 'a' and 'b' are already identifiers in the code
-    try typeCheck(source, "{ a: c, b: Str } where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]");
+    // String literal is now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ a: c, b: d } where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.try_from_str : Str -> Try(d, [InvalidStr(Str)])]");
 }
 
 test "higher-order function with polymorphic identity" {
@@ -38,7 +39,8 @@ test "higher-order function with polymorphic identity" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: c, b: Str } where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]");
+    // String literal is now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ a: c, b: d } where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.try_from_str : Str -> Try(d, [InvalidStr(Str)])]");
 }
 
 test "let-polymorphism with function composition" {
@@ -64,7 +66,8 @@ test "polymorphic empty list" {
         \\    { empty, nums, strs }
         \\}
     ;
-    try typeCheck(source, "{ empty: List(_a), nums: List(b), strs: List(Str) } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ empty: List(_a), nums: List(b), strs: List(c) } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)])]");
 }
 
 test "polymorphic cons function" {
@@ -76,7 +79,9 @@ test "polymorphic cons function" {
         \\    { list1, list2 }
         \\}
     ;
-    try typeCheck(source, "{ list1: List(item), list2: List(Str) } where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    // Note: both lists share the same type variable due to let-polymorphism
+    try typeCheck(source, "{ list1: List(item), list2: List(item) } where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]), item.try_from_str : Str -> Try(item, [InvalidStr(Str)])]");
 }
 
 test "polymorphic record constructor" {
@@ -89,7 +94,8 @@ test "polymorphic record constructor" {
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]_others, second: [False]_others2 } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True]_others, second: [False]_others2 } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -115,7 +121,8 @@ test "nested polymorphic data structures" {
         \\    { box1, box2, nested }
         \\}
     ;
-    try typeCheck(source, "{ box1: { value: a }, box2: { value: Str }, nested: { value: { value: b } } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ box1: { value: a }, box2: { value: b }, nested: { value: { value: c } } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]");
 }
 
 test "polymorphic function in let binding" {
@@ -130,7 +137,8 @@ test "polymorphic function in let binding" {
         \\    result
         \\}
     ;
-    try typeCheck(source, "{ a: c, b: Str } where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ a: c, b: d } where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.try_from_str : Str -> Try(d, [InvalidStr(Str)])]");
 }
 
 test "polymorphic swap function" {
@@ -144,7 +152,8 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True]_others } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ swapped1: { first: a, second: b }, swapped2: { first: c, second: [True]_others } } where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]");
 }
 
 test "polymorphic option type simulation" {
@@ -158,7 +167,8 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try typeCheck(source, "{ opt1: { tag: Str, value: a }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ opt1: { tag: a, value: b }, opt2: { tag: c, value: d }, opt3: { tag: e } } where [a.try_from_str : Str -> Try(a, [InvalidStr(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.try_from_str : Str -> Try(c, [InvalidStr(Str)]), d.try_from_str : Str -> Try(d, [InvalidStr(Str)]), e.try_from_str : Str -> Try(e, [InvalidStr(Str)])]");
 }
 
 test "polymorphic const function" {
@@ -172,7 +182,8 @@ test "polymorphic const function" {
         \\    { num, str }
         \\}
     ;
-    try typeCheck(source, "{ num: a, str: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // String literals are now polymorphic with try_from_str constraint
+    try typeCheck(source, "{ num: a, str: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.try_from_str : Str -> Try(b, [InvalidStr(Str)])]");
 }
 
 test "polymorphic pipe function" {

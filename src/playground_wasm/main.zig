@@ -981,6 +981,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
                 .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+                .deferred_string_literals = try ModuleEnv.DeferredStringLiteral.SafeList.initCapacity(gpa, 0),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 

@@ -5820,10 +5820,24 @@ pub const Interpreter = struct {
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
 
-        // If we have a flex var, default it to Dec
-        // This is the interpreter-time defaulting for numeric literals
+        // If we have a flex var, check its constraints to determine the default type
+        // This is the interpreter-time defaulting for polymorphic literals
         if (resolved.desc.content == .flex) {
-            // Directly return Dec's scalar layout
+            const flex = resolved.desc.content.flex;
+            // Check if this flex var has a try_from_str constraint (string literal)
+            if (!flex.constraints.isEmpty()) {
+                const constraints = self.runtime_types.sliceStaticDispatchConstraints(flex.constraints);
+                for (constraints) |constraint| {
+                    if (constraint.origin == .try_from_str) {
+                        // String literal - default to Str layout
+                        const str_layout = layout.Layout.str();
+                        const str_layout_idx = try self.runtime_layout_store.insertLayout(str_layout);
+                        slot_ptr.* = @intFromEnum(str_layout_idx) + 1;
+                        return str_layout;
+                    }
+                }
+            }
+            // Default to Dec for numeric literals or unconstrained flex vars
             const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
             const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
             slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;
