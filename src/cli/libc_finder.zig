@@ -310,10 +310,7 @@ test "libc detection integration test" {
     defer allocs.deinit();
 
     const libc_info = findLibc(&allocs) catch |err| switch (err) {
-        error.LibcNotFound => {
-            std.log.warn("Libc not found on this system - this may be expected in some environments", .{});
-            return;
-        },
+        error.LibcNotFound => return,
         else => return err,
     };
 
