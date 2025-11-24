@@ -4763,17 +4763,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
-                // For try_from_str constraints, skip validation if the type is Str
-                // Str is the default/identity type for string literals and doesn't need try_from_str
-                if (constraint.origin == .try_from_str) {
-                    if (std.mem.eql(u8, type_name_bytes, "Str") or
-                        std.mem.eql(u8, type_name_bytes, "Builtin.Str"))
-                    {
-                        // Str is the default type - no validation needed
-                        continue;
-                    }
-                }
-
                 // Extract the function and return type from the constraint
                 const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                 const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
