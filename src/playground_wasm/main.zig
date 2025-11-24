@@ -1327,6 +1327,14 @@ fn parseReplResult(result: []const u8) ReplStepResult {
             .error_stage = .parse,
             .error_details = if (result.len > 13) result[13..] else null,
         };
+    } else if (std.mem.startsWith(u8, result, "**") and std.mem.indexOf(u8, result, "**\n") != null) {
+        // New markdown-formatted error messages (e.g., "**UNEXPECTED TOKEN IN EXPRESSION**\n...")
+        return ReplStepResult{
+            .output = result,
+            .try_type = .@"error",
+            .error_stage = .parse,
+            .error_details = extractErrorDetails(result),
+        };
     } else if (std.mem.indexOf(u8, result, "Canonicalize") != null) {
         return ReplStepResult{
             .output = result,

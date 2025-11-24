@@ -15,6 +15,7 @@ const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
 const collections = @import("collections");
+const reporting = @import("reporting");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -385,6 +386,53 @@ pub const Repl = struct {
             };
         defer parse_ast.deinit(self.allocator);
 
+        // Check for parse errors and render them
+        if (parse_ast.hasErrors()) {
+            // Render the first error as the error message
+            if (parse_ast.tokenize_diagnostics.items.len > 0) {
+                var report = try parse_ast.tokenizeDiagnosticToReport(
+                    parse_ast.tokenize_diagnostics.items[0],
+                    self.allocator,
+                    null,
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return try output.toOwnedSlice();
+            } else if (parse_ast.parse_diagnostics.items.len > 0) {
+                var report = try parse_ast.parseDiagnosticToReport(
+                    &module_env.common,
+                    parse_ast.parse_diagnostics.items[0],
+                    self.allocator,
+                    "repl",
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                // Trim trailing newlines from the output and return a properly allocated copy
+                const full_result = try output.toOwnedSlice();
+                defer self.allocator.free(full_result);
+                const trimmed = std.mem.trimRight(u8, full_result, "\n");
+                return try self.allocator.dupe(u8, trimmed);
+            }
+        }
+
         // Empty scratch space
         parse_ast.store.emptyScratch();
 
@@ -453,6 +501,25 @@ pub const Repl = struct {
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
 
         const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+            // Check for diagnostics and render them as error messages
+            const diagnostics = try module_env.getDiagnostics();
+            if (diagnostics.len > 0) {
+                // Render the first diagnostic as the error message
+                const diagnostic = diagnostics[0];
+                var report = try module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return try output.toOwnedSlice();
+            }
             return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
         };
         const final_expr_idx = canonical_expr.get_idx();

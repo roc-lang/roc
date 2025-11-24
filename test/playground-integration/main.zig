@@ -1189,9 +1189,9 @@ pub fn main() !void {
     repl_error_steps[3] = .{
         .message = .{ .type = "REPL_STEP", .input = "x +" }, // Invalid syntax - incomplete expression
         .expected_status = "SUCCESS",
-        .expected_result_output_contains = "Crash:",
+        .expected_result_output_contains = "UNEXPECTED TOKEN",
         .expected_result_type = "error",
-        .expected_result_error_stage = "evaluation",
+        .expected_result_error_stage = "parse",
     };
     repl_error_steps[4] = .{
         .message = .{ .type = "REPL_STEP", .input = "x" }, // Should still work
