@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
+const initialize_handler_mod = @import("handlers/initialize.zig");
+const shutdown_handler_mod = @import("handlers/shutdown.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -9,13 +11,21 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
         const Self = @This();
         const TransportType = makeTransport(ReaderType, WriterType);
+        const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) anyerror!void;
+        const HandlerPtr = *const HandlerFn;
+        const InitializeHandler = initialize_handler_mod.handler(Self);
+        const ShutdownHandler = shutdown_handler_mod.handler(Self);
+        const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
+            .{ "initialize", &InitializeHandler.call },
+            .{ "shutdown", &ShutdownHandler.call },
+        });
 
         allocator: std.mem.Allocator,
         transport: TransportType,
         client: protocol.ClientState = .{},
         state: State = .waiting_for_initialize,
 
-        const server_name = "roc-lsp";
+        pub const server_name = "roc-lsp";
 
         pub const State = enum {
             waiting_for_initialize,
@@ -69,6 +79,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
             const root = parsed.value;
             const obj = switch (root) {
+                .object => |o| o,
                 else => {
                     log.err("received non-object JSON-RPC message", .{});
                     return;
@@ -92,20 +103,8 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         }
 
         fn handleRequest(self: *Self, method: []const u8, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
-            if (std.mem.eql(u8, method, "initialize")) {
-                const params = maybe_params orelse return try self.sendError(id, .invalid_params, "initialize requires params");
-                try self.handleInitialize(id, params);
-                return;
-            }
-
-            if (std.mem.eql(u8, method, "shutdown")) {
-                try self.handleShutdown(id);
-                return;
-            }
-
-            if (std.mem.eql(u8, method, "workspace/configuration")) {
-                // This LSP feature is not implemented yet; respond with method not found.
-                try self.sendError(id, .method_not_found, "workspace/configuration is not implemented");
+            if (request_handlers.get(method)) |handler| {
+                try handler(self, id, maybe_params);
                 return;
             }
 
@@ -128,53 +127,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             // Other notifications are ignored until server capabilities are implemented.
         }
 
-        fn handleInitialize(self: *Self, id: *protocol.JsonId, params_value: std.json.Value) !void {
-            if (self.state != .waiting_for_initialize) {
-                try self.sendError(id, .invalid_request, "server was already initialized");
-                return;
-            }
-
-            var params = try protocol.InitializeParams.fromJson(self.allocator, params_value);
-            errdefer params.deinit(self.allocator);
-
-            self.client.deinit(self.allocator);
-            params.moveInto(&self.client);
-            self.state = .waiting_for_initialized;
-
-            const response = protocol.InitializeResult{
-                // New capabilities have to be added here for the editor to know they exist
-                .capabilities = .{},
-                .serverInfo = .{
-                    .name = server_name,
-                    .version = "0.1",
-                },
-            };
-
-            try sendResponse(&self.transport, id, response);
-        }
-
-        fn handleShutdown(self: *Self, id: *protocol.JsonId) !void {
-            switch (self.state) {
-                .waiting_for_initialize => {
-                    try self.sendError(id, .server_not_initialized, "initialize must be called before shutdown");
-                    return;
-                },
-                .exit_success, .exit_failure => {
-                    try self.sendError(id, .invalid_request, "server is already exiting");
-                    return;
-                },
-                .shutdown => {
-                    try self.sendNullResponse(id);
-                    return;
-                },
-                .running, .waiting_for_initialized => {},
-            }
-
-            self.state = .shutdown;
-            try self.sendNullResponse(id);
-        }
-
-        fn sendNullResponse(self: *Self, id: *protocol.JsonId) !void {
+        pub fn sendNullResponse(self: *Self, id: *protocol.JsonId) !void {
             const Response = struct {
                 jsonrpc: []const u8 = "2.0",
                 id: protocol.JsonId,
@@ -187,7 +140,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             });
         }
 
-        fn sendError(self: *Self, id: *protocol.JsonId, code: protocol.ErrorCode, message: []const u8) !void {
+        pub fn sendError(self: *Self, id: *protocol.JsonId, code: protocol.ErrorCode, message: []const u8) !void {
             const Response = struct {
                 jsonrpc: []const u8 = "2.0",
                 id: protocol.JsonId,
@@ -199,20 +152,20 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
                 .@"error" = .{ .code = code, .message = message },
             });
         }
-    };
-}
 
-fn sendResponse(transport: anytype, id: *protocol.JsonId, result: anytype) !void {
-    const Response = struct {
-        jsonrpc: []const u8 = "2.0",
-        id: protocol.JsonId,
-        result: @TypeOf(result),
-    };
+        pub fn sendResponse(self: *Self, id: *protocol.JsonId, result: anytype) !void {
+            const Response = struct {
+                jsonrpc: []const u8 = "2.0",
+                id: protocol.JsonId,
+                result: @TypeOf(result),
+            };
 
-    try transport.sendJson(Response{
-        .id = id.*,
-        .result = result,
-    });
+            try self.transport.sendJson(Response{
+                .id = id.*,
+                .result = result,
+            });
+        }
+    };
 }
 
 pub fn runWithStdIo(allocator: std.mem.Allocator, enable_logging: bool) !void {
