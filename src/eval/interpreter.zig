@@ -5808,11 +5808,10 @@ pub const Interpreter = struct {
             return value;
         }
 
-        // Handle e_anno_only - this should not happen if builtin_compiler replaced it
+        // e_anno_only means this method has no implementation
         if (target_expr == .e_anno_only) {
-            // This means the builtin_compiler didn't replace this annotation-only def
-            // with a low-level lambda. This is a bug in the builtin compilation process.
-            return error.MethodLookupFailed;
+            self.triggerCrash("This method has no implementation. It is only a type annotation.", false, roc_ops);
+            return error.Crash;
         }
 
         // Handle e_closure for closures with captures
