@@ -167,7 +167,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
                     try self.sendNullResponse(id);
                     return;
                 },
-                else => {},
+                .running, .waiting_for_initialized => {},
             }
 
             self.state = .shutdown;
