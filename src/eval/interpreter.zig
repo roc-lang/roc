@@ -4404,6 +4404,7 @@ pub const Interpreter = struct {
         lhs_var: types.Var,
         rhs: StackValue,
         _: types.Var, // rhs_var unused
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         // Handle scalar comparisons (numbers, strings) directly.
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
@@ -4434,19 +4435,19 @@ pub const Interpreter = struct {
         return switch (lhs_content.structure) {
             .tuple => |tuple| {
                 const elem_vars = self.runtime_types.sliceVars(tuple.elems);
-                return try self.structuralEqualTuple(lhs, rhs, elem_vars);
+                return try self.structuralEqualTuple(lhs, rhs, elem_vars, roc_ops);
             },
             .record => |record| {
-                return try self.structuralEqualRecord(lhs, rhs, record);
+                return try self.structuralEqualRecord(lhs, rhs, record, roc_ops);
             },
             .tag_union => {
-                return try self.structuralEqualTag(lhs, rhs, lhs_var);
+                return try self.structuralEqualTag(lhs, rhs, lhs_var, roc_ops);
             },
             .empty_record => true,
             .empty_tag_union => true,
             .nominal_type => |nom| {
                 // For nominal types, dispatch to their is_eq method
-                return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var);
+                return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var, roc_ops);
             },
             .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => error.NotImplemented,
         };
@@ -4457,6 +4458,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         elem_vars: []const types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         if (lhs.layout.tag != .tuple or rhs.layout.tag != .tuple) return error.TypeMismatch;
         if (elem_vars.len == 0) return true;
@@ -4477,7 +4479,7 @@ pub const Interpreter = struct {
             // getElement expects original index and converts to sorted internally
             const lhs_elem = try lhs_acc.getElement(index);
             const rhs_elem = try rhs_acc.getElement(index);
-            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_vars[index], rhs_elem, elem_vars[index]);
+            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_vars[index], rhs_elem, elem_vars[index], roc_ops);
             if (!elems_equal) {
                 return false;
             }
@@ -4491,6 +4493,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         record: types.Record,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         if (lhs.layout.tag != .record or rhs.layout.tag != .record) return error.TypeMismatch;
 
@@ -4531,7 +4534,7 @@ pub const Interpreter = struct {
             const lhs_field = try lhs_rec.getFieldByIndex(idx);
             const rhs_field = try rhs_rec.getFieldByIndex(idx);
             const field_var = field_slice.items(.var_)[idx];
-            const fields_equal = try self.valuesStructurallyEqual(lhs_field, field_var, rhs_field, field_var);
+            const fields_equal = try self.valuesStructurallyEqual(lhs_field, field_var, rhs_field, field_var, roc_ops);
             if (!fields_equal) {
                 return false;
             }
@@ -4545,6 +4548,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         elem_var: types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         const lhs_is_list = lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst;
         const rhs_is_list = rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst;
@@ -4568,7 +4572,7 @@ pub const Interpreter = struct {
         while (index < lhs_header.len()) : (index += 1) {
             const lhs_elem = try lhs_acc.getElement(index);
             const rhs_elem = try rhs_acc.getElement(index);
-            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var);
+            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
             if (!elems_equal) {
                 return false;
             }
@@ -4582,6 +4586,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         union_var: types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
         defer tag_list.deinit();
@@ -4603,7 +4608,7 @@ pub const Interpreter = struct {
         if (arg_vars.len == 1) {
             const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
             const rhs_payload = rhs_data.payload orelse return error.TypeMismatch;
-            return try self.valuesStructurallyEqual(lhs_payload, arg_vars[0], rhs_payload, arg_vars[0]);
+            return try self.valuesStructurallyEqual(lhs_payload, arg_vars[0], rhs_payload, arg_vars[0], roc_ops);
         }
 
         const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
@@ -4621,7 +4626,7 @@ pub const Interpreter = struct {
             // getElement expects original index and converts to sorted internally
             const lhs_elem = try lhs_tuple.getElement(idx);
             const rhs_elem = try rhs_tuple.getElement(idx);
-            const args_equal = try self.valuesStructurallyEqual(lhs_elem, arg_vars[idx], rhs_elem, arg_vars[idx]);
+            const args_equal = try self.valuesStructurallyEqual(lhs_elem, arg_vars[idx], rhs_elem, arg_vars[idx], roc_ops);
             if (!args_equal) {
                 return false;
             }
@@ -4637,32 +4642,120 @@ pub const Interpreter = struct {
         rhs: StackValue,
         nom: types.NominalType,
         lhs_var: types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
-        // TODO: Properly dispatch to the nominal type's is_eq method
-        // For now, use a simplified approach:
-        // - If the nominal type is a wrapper around a scalar or simple structure, compare directly
-        // - Otherwise, fall back to structural comparison of the backing type
+        _ = lhs_var;
 
-        // Get the backing var of the nominal type
-        const backing_var = self.runtime_types.getNominalBackingVar(nom);
-        const backing_resolved = self.runtime_types.resolveVar(backing_var);
-
-        // If the backing type is a structure, recursively compare
-        if (backing_resolved.desc.content == .structure) {
-            return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var);
-        }
-
-        // For other cases, fall back to attempting scalar comparison
-        // This handles cases like Bool which wraps a tag union but is represented as a scalar
+        // For scalar types (numbers, Bool), use direct comparison
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const order = self.compareNumericScalars(lhs, rhs) catch return error.NotImplemented;
+            const order = self.compareNumericScalars(lhs, rhs) catch {
+                // Not numeric scalars, try byte comparison for Bool-like types
+                const lhs_scalar = lhs.layout.data.scalar;
+                const rhs_scalar = rhs.layout.data.scalar;
+                if (lhs_scalar.tag == rhs_scalar.tag and lhs.ptr != null and rhs.ptr != null) {
+                    // Same scalar type, compare bytes directly
+                    const size = self.runtime_layout_store.layoutSize(lhs.layout);
+                    const lhs_bytes = @as([*]const u8, @ptrCast(lhs.ptr.?))[0..size];
+                    const rhs_bytes = @as([*]const u8, @ptrCast(rhs.ptr.?))[0..size];
+                    return std.mem.eql(u8, lhs_bytes, rhs_bytes);
+                }
+                return error.TypeMismatch;
+            };
             return order == .eq;
         }
 
-        // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
-        // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
-        _ = lhs_var;
-        return error.NotImplemented;
+        // Look up and call the nominal type's is_eq method
+        const method_func = self.resolveMethodFunction(
+            nom.origin_module,
+            nom.ident.ident_idx,
+            self.env.is_eq_ident,
+            roc_ops,
+        ) catch |err| {
+            // If method lookup fails, fall back to structural equality on backing type
+            if (err == error.MethodLookupFailed or err == error.MethodNotFound) {
+                const backing_var = self.runtime_types.getNominalBackingVar(nom);
+                const backing_resolved = self.runtime_types.resolveVar(backing_var);
+                if (backing_resolved.desc.content == .structure) {
+                    return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops);
+                }
+            }
+            return error.NotImplemented;
+        };
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+        // Prepare arguments: lhs (receiver) + rhs
+        var args = [2]StackValue{ lhs, rhs };
+
+        // Call the method closure
+        if (method_func.layout.tag != .closure) {
+            return error.TypeMismatch;
+        }
+
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+        // Switch to the closure's source module
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != args.len) {
+            return error.TypeMismatch;
+        }
+
+        // Provide closure context for capture lookup
+        try self.active_closures.append(method_func);
+        defer _ = self.active_closures.pop();
+
+        // Check if this is a low-level lambda - if so, dispatch to builtin
+        const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+        if (lambda_expr == .e_low_level_lambda) {
+            const low_level = lambda_expr.e_low_level_lambda;
+            const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+            // Convert result to bool
+            if (result.layout.tag == .scalar and result.ptr != null) {
+                const size = self.runtime_layout_store.layoutSize(result.layout);
+                if (size >= 1) {
+                    const bytes = @as([*]const u8, @ptrCast(result.ptr.?))[0..size];
+                    return bytes[0] != 0;
+                }
+            }
+            return error.TypeMismatch;
+        }
+
+        // Bind parameters
+        for (params, 0..) |param, i| {
+            try self.bindings.append(.{
+                .pattern_idx = param,
+                .value = args[i],
+                .expr_idx = @enumFromInt(0),
+                .source_env = self.env,
+            });
+        }
+
+        // Evaluate the method body
+        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+
+        // Clean up bindings
+        var k = params.len;
+        while (k > 0) {
+            k -= 1;
+            _ = self.bindings.pop();
+        }
+
+        // Convert result to bool
+        if (result.layout.tag == .scalar and result.ptr != null) {
+            const size = self.runtime_layout_store.layoutSize(result.layout);
+            if (size >= 1) {
+                const bytes = @as([*]const u8, @ptrCast(result.ptr.?))[0..size];
+                return bytes[0] != 0;
+            }
+        }
+        return error.TypeMismatch;
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
@@ -5482,7 +5575,7 @@ pub const Interpreter = struct {
                 .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                     // Anonymous structural types have implicit is_eq
                     if (method_ident == self.env.is_eq_ident) {
-                        const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
+                        const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var, roc_ops) catch |err| {
                             // If structural equality is not implemented for this type, return false
                             if (err == error.NotImplemented) {
                                 return try self.makeBoolValue(false);
