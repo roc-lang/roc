@@ -651,7 +651,8 @@ fn processAssociatedBlock(
             // Check if this identifier starts with our qualified prefix
             if (std.mem.startsWith(u8, ident_text, qualified_prefix) and
                 ident_text.len > qualified_prefix.len and
-                ident_text[qualified_prefix.len] == '.') {
+                ident_text[qualified_prefix.len] == '.')
+            {
                 // This is one of our associated items - register hierarchically
                 try self.registerIdentifierHierarchically(ident_idx, pattern_idx);
             }

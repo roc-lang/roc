@@ -21,19 +21,7 @@ external = Foo.defaultBaz
 # EXPECTED
 NIL
 # PROBLEMS
-**DOES NOT EXIST**
-`Foo.defaultBaz` does not exist.
-
-`Foo` is in scope, but it has no associated `defaultBaz`.
-
-It's referenced here:
-**nominal_associated_alias_within_block.md:12:12:12:26:**
-```roc
-external = Foo.defaultBaz
-```
-           ^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -104,7 +92,8 @@ external = Foo.defaultBaz
 			(ty-lookup (name "Foo.Baz") (local))))
 	(d-let
 		(p-assign (ident "external"))
-		(e-runtime-error (tag "nested_value_not_found"))
+		(e-lookup-local
+			(p-assign (ident "nominal_associated_alias_within_block.Foo.defaultBaz")))
 		(annotation
 			(ty-lookup (name "Foo.Baz") (local))))
 	(s-nominal-decl
@@ -126,7 +115,7 @@ external = Foo.defaultBaz
 (inferred-types
 	(defs
 		(patt (type "nominal_associated_alias_within_block.Foo.Baz"))
-		(patt (type "Error")))
+		(patt (type "nominal_associated_alias_within_block.Foo.Baz")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -136,5 +125,5 @@ external = Foo.defaultBaz
 			(ty-header (name "nominal_associated_alias_within_block.Foo.Baz"))))
 	(expressions
 		(expr (type "nominal_associated_alias_within_block.Foo.Baz"))
-		(expr (type "Error"))))
+		(expr (type "nominal_associated_alias_within_block.Foo.Baz"))))
 ~~~
