@@ -1648,3 +1648,32 @@ test "comptime eval - F64 negative valid" {
     _ = try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
+
+// =============================================================================
+// Bug reproduction: method call on unbound number literal
+// =============================================================================
+
+test "comptime eval - to_str on unbound number literal" {
+    // When calling a method on an unbound number literal (flex var with from_numeral
+    // constraint), constant folding should:
+    // 1. Default the flex var to Dec (the default numeric type)
+    // 2. Try to call Dec.to_str()
+    // 3. See that Dec.to_str doesn't exist
+    // 4. Trigger a roc_crashed crash that gets reported normally
+    //
+    // Note: Using (35).to_str() syntax because 35.to_str() gets parse error
+    // "expr_dot_suffix_not_allowed" in the CLI.
+    const src =
+        \\age : Str
+        \\age = (35).to_str()
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    // Should crash because Dec.to_str doesn't exist
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}

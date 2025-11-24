@@ -2320,7 +2320,16 @@ pub const Interpreter = struct {
                 };
 
                 // Find the nominal type's origin module from the receiver type
-                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                var receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+
+                // If the type is still a flex/rigid var, default to Dec
+                // (Unsuffixed numeric literals default to Dec in Roc)
+                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    receiver_resolved = self.runtime_types.resolveVar(dec_var);
+                }
+
                 const nominal_info = blk: {
                     switch (receiver_resolved.desc.content) {
                         .structure => |s| switch (s) {
@@ -2330,22 +2339,33 @@ pub const Interpreter = struct {
                             },
                             else => return error.InvalidMethodReceiver,
                         },
-                        // Flex/rigid vars should have been specialized to nominal types before runtime
-                        .flex, .rigid => {
-                            // If we reach here, the receiver wasn't properly monomorphized
-                            return error.InvalidMethodReceiver;
-                        },
                         else => return error.InvalidMethodReceiver,
                     }
                 };
 
                 // Resolve and evaluate the method function
-                const method_func = try self.resolveMethodFunction(
+                const method_func = self.resolveMethodFunction(
                     nominal_info.origin,
                     nominal_info.ident,
                     method_ident,
                     roc_ops,
-                );
+                ) catch |err| {
+                    if (err == error.MethodLookupFailed) {
+                        // Get type and method names for a helpful crash message
+                        const origin_env = self.getModuleEnvForOrigin(nominal_info.origin);
+                        const type_name = if (origin_env) |env|
+                            env.common.getIdentStore().getText(nominal_info.ident)
+                        else
+                            "Unknown";
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, field_name }) catch {
+                            self.triggerCrash("Method not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        self.triggerCrash(crash_msg, true, roc_ops);
+                        return error.Crash;
+                    }
+                    return err;
+                };
                 defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
                 // Prepare arguments: receiver + explicit args
