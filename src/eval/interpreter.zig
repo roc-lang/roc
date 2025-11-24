@@ -5465,18 +5465,33 @@ pub const Interpreter = struct {
     /// Get the module environment for a given origin module identifier.
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
-        // Check if it's the Builtin module
-        if (origin_module == self.env.builtin_module_ident) {
+        // Get the origin module name string from the runtime layout store's env
+        // (since origin_module was translated to that ident store in translateTypeVar)
+        const origin_str = self.runtime_layout_store.env.getIdent(origin_module);
+
+        // Check if it's the Builtin module (compare by string since idents are from different stores)
+        const builtin_str = self.env.getIdent(self.env.builtin_module_ident);
+        if (std.mem.eql(u8, origin_str, builtin_str)) {
             // In shim context, builtins are embedded in the main module env
             // (builtin_module_env is null), so fall back to self.env
             return self.builtin_module_env orelse self.env;
         }
-        // Check if it's the current module
-        if (self.env.module_name_idx == origin_module) {
+        // Check if it's the current module (compare by string)
+        const current_module_str = self.env.getIdent(self.env.module_name_idx);
+        if (std.mem.eql(u8, origin_str, current_module_str)) {
             return self.env;
         }
-        // Look up in imported modules
-        return self.module_envs.get(origin_module);
+        // Look up in imported modules by string comparison
+        // Each module env has its own module_name_idx in its own ident store
+        var iter = self.module_envs.iterator();
+        while (iter.next()) |entry| {
+            const module_env = entry.value_ptr.*;
+            const module_name_str = module_env.getIdent(module_env.module_name_idx);
+            if (std.mem.eql(u8, origin_str, module_name_str)) {
+                return module_env;
+            }
+        }
+        return null;
     }
 
     /// Get the numeric module ID for a given origin module identifier.
@@ -5601,7 +5616,46 @@ pub const Interpreter = struct {
             nominal_info.?.ident,
             method_ident,
             roc_ops,
-        ) catch |err| return err;
+        ) catch |err| {
+            // For is_eq, fall back to structural equality on the backing type for any error
+            // (method may not exist, or evaluation may fail for user-defined types in REPL)
+            if (method_ident == self.env.is_eq_ident) {
+                // Get the nominal type from resolved lhs
+                if (lhs_resolved.desc.content == .structure) {
+                    if (lhs_resolved.desc.content.structure == .nominal_type) {
+                        const nom = lhs_resolved.desc.content.structure.nominal_type;
+                        const backing_var = self.runtime_types.getNominalBackingVar(nom);
+                        const result = self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops) catch {
+                            return try self.makeBoolValue(false);
+                        };
+                        return try self.makeBoolValue(result);
+                    }
+                }
+            }
+            // For is_ne, fall back to negating is_eq (using user-defined or structural equality)
+            if (method_ident == self.env.is_ne_ident) {
+                // Try to use the is_eq method and negate it
+                const eq_result = self.dispatchBinaryOpMethod(self.env.is_eq_ident, lhs_expr, rhs_expr, roc_ops) catch {
+                    // If is_eq also fails, fall back to structural inequality
+                    if (lhs_resolved.desc.content == .structure) {
+                        if (lhs_resolved.desc.content.structure == .nominal_type) {
+                            const nom = lhs_resolved.desc.content.structure.nominal_type;
+                            const backing_var = self.runtime_types.getNominalBackingVar(nom);
+                            const result = self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops) catch {
+                                return try self.makeBoolValue(true);
+                            };
+                            return try self.makeBoolValue(!result);
+                        }
+                    }
+                    return err;
+                };
+                defer eq_result.decref(&self.runtime_layout_store, roc_ops);
+                // Negate the result
+                const is_equal = boolValueEquals(true, eq_result);
+                return try self.makeBoolValue(!is_equal);
+            }
+            return err;
+        };
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
         // Prepare arguments: lhs (receiver) + rhs
