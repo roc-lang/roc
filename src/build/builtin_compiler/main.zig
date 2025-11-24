@@ -293,11 +293,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create parameter patterns for the lambda
-                    // Binary operations need 2 parameters, unary operations need 1
-                    const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .str_is_empty, .list_len, .list_is_empty, .set_is_empty => 1,
-                        else => 2, // Most operations are binary
+                    // Get the number of parameters from the type annotation
+                    // The annotation must be a function type for low-level operations
+                    const annotation = env.store.getAnnotation(def.annotation.?);
+                    const type_anno = env.store.getTypeAnno(annotation.anno);
+                    const num_params: u32 = switch (type_anno) {
+                        .@"fn" => |func| func.args.span.len,
+                        else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
                     const patterns_start = env.store.scratchTop("patterns");
