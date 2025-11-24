@@ -293,7 +293,7 @@ test "check type - (a == b) desugars to exactly a.is_eq(b)" {
 }
 
 test "check type - (a != b) desugars to exactly a.is_eq(b).not()" {
-    // `a == b` desugars to `a.is_eq(b)`, so their inferred types are identical
+    // `a != b` desugars to `a.is_eq(b).not()`, so their inferred types are identical
     const src_binop =
         \\|a, b| a != b
     ;
