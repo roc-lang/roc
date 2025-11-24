@@ -848,3 +848,46 @@ test "ModuleEnv serialization and interpreter evaluation" {
         }
     }
 }
+
+// Tests for anonymous type equality (is_eq on records, tuples, and tag unions)
+
+test "anonymous record equality" {
+    // Same records should be equal
+    try runExpectBool("{ x: 1, y: 2 } == { x: 1, y: 2 }", true, .no_trace);
+    // Different values should not be equal
+    try runExpectBool("{ x: 1, y: 2 } == { x: 1, y: 3 }", false, .no_trace);
+    // Field order shouldn't matter
+    try runExpectBool("{ x: 1, y: 2 } == { y: 2, x: 1 }", true, .no_trace);
+}
+
+test "anonymous tuple equality" {
+    // Same tuples should be equal
+    try runExpectBool("(1, 2) == (1, 2)", true, .no_trace);
+    // Different values should not be equal
+    try runExpectBool("(1, 2) == (1, 3)", false, .no_trace);
+}
+
+test "empty record equality" {
+    try runExpectBool("{} == {}", true, .no_trace);
+}
+
+test "string field equality" {
+    try runExpectBool("{ name: \"hello\" } == { name: \"hello\" }", true, .no_trace);
+    try runExpectBool("{ name: \"hello\" } == { name: \"world\" }", false, .no_trace);
+}
+
+test "nested record equality" {
+    try runExpectBool("{ a: { x: 1 }, b: 2 } == { a: { x: 1 }, b: 2 }", true, .no_trace);
+    try runExpectBool("{ a: { x: 1 }, b: 2 } == { a: { x: 2 }, b: 2 }", false, .no_trace);
+    try runExpectBool("{ outer: { inner: { deep: 42 } } } == { outer: { inner: { deep: 42 } } }", true, .no_trace);
+    try runExpectBool("{ outer: { inner: { deep: 42 } } } == { outer: { inner: { deep: 99 } } }", false, .no_trace);
+}
+
+test "bool field equality" {
+    // Use comparison expressions to produce boolean values for record fields
+    try runExpectBool("{ flag: (1 == 1) } == { flag: (1 == 1) }", true, .no_trace);
+    try runExpectBool("{ flag: (1 == 1) } == { flag: (1 != 1) }", false, .no_trace);
+}
+
+// TODO: The following tests require more work on runtime handling
+// test "nested tuple equality" - needs additional work for nested tuples
