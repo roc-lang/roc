@@ -275,6 +275,73 @@ test "check type - tag union with function payload - no is_eq" {
     try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
 
+// anonymous type inequality (desugars to is_eq().not()) //
+
+test "check type - equality lambda infers is_eq constraint" {
+    // `a == b` desugars to `a.is_eq(b)`, so the lambda has an is_eq constraint
+    const source =
+        \\|a, b| a == b
+    ;
+    // Variable names may differ due to alpha-renaming
+    try checkTypesExpr(source, .pass, "c, c -> d where [c.is_eq : c, c -> d]");
+}
+
+test "check type - inequality lambda infers is_eq and not constraints" {
+    // `a != b` desugars to `a.is_eq(b).not()`, so the lambda has both is_eq and not constraints
+    const source =
+        \\|a, b| a != b
+    ;
+    // Variable names may differ; is_eq returns e, then e.not returns d
+    try checkTypesExpr(source, .pass, "c, c -> d where [c.is_eq : c, c -> e, e.not : e -> d]");
+}
+
+test "check type - record inequality - same records" {
+    // != desugars to is_eq().not(), result type is whatever not returns
+    const source =
+        \\{ x: 1, y: 2 } != { x: 1, y: 2 }
+    ;
+    // For concrete types, the constraint resolves to Bool since record.is_eq returns Bool and Bool.not returns Bool
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tuple inequality" {
+    const source =
+        \\(1, 2) != (1, 2)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - record with function field - no inequality" {
+    // Records containing functions should not support != because they don't have is_eq
+    const source =
+        \\{ x: 1, f: |a| a + 1 } != { x: 1, f: |a| a + 1 }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tuple with function element - no inequality" {
+    // Tuples containing functions should not support != because they don't have is_eq
+    const source =
+        \\(1, |a| a) != (1, |a| a)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tag union inequality" {
+    const source =
+        \\Ok(1) != Ok(1)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tag union with function payload - no inequality" {
+    // Tag unions with function payloads should not support != because they don't have is_eq
+    const source =
+        \\Fn(|x| x) != Fn(|x| x)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
 // tags //
 
 test "check type - tag" {

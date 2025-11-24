@@ -146,7 +146,13 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
 
     if (self.static_dispatch_constraints.items.len > 0) {
         _ = try self.buf.writer().write(" where [");
-        for (self.static_dispatch_constraints.items, 0..) |item, i| {
+        // Use a while loop with index instead of for loop over slice, because
+        // writeVar may discover and append new constraints while printing existing
+        // ones (e.g., `!=` desugars to `is_eq().not()` - the `not` constraint is on
+        // the return type of `is_eq`, so we discover it when printing the is_eq constraint)
+        var i: usize = 0;
+        while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
+            const item = self.static_dispatch_constraints.items[i];
             if (i > 0) {
                 _ = try self.buf.writer().write(", ");
             }

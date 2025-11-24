@@ -505,8 +505,15 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
+        // Use the runtime type from the result value if available (set by e.g. makeBoolValue),
+        // otherwise fall back to translating the compile-time type from the expression.
+        // This is important when the compile-time type is a generic constraint (e.g. from == or !=)
+        // but the runtime type is concrete (e.g. Bool).
         const output = blk: {
+            if (result.rt_var) |rt_var| {
+                break :blk try interpreter.renderValueRocWithType(result, rt_var);
+            }
+            const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
             const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
                 break :blk try interpreter.renderValueRoc(result);
             };
