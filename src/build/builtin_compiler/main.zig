@@ -12,6 +12,7 @@ const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const types = @import("types");
+const reporting = @import("reporting");
 
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
@@ -22,6 +23,25 @@ const Content = types.Content;
 const Var = types.Var;
 
 const max_builtin_bytes = 1024 * 1024;
+
+// Stderr writer for diagnostic reporting
+var stderr_buffer: [4096]u8 = undefined;
+var stderr_writer: std.fs.File.Writer = undefined;
+var stderr_initialized = false;
+
+fn stderrWriter() *std.Io.Writer {
+    if (!stderr_initialized) {
+        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        stderr_initialized = true;
+    }
+    return &stderr_writer.interface;
+}
+
+fn flushStderr() void {
+    if (stderr_initialized) {
+        stderr_writer.interface.flush() catch {};
+    }
+}
 
 /// Indices of builtin type declarations within the Builtin module.
 /// These are determined at build time via string lookup and serialized to builtin_indices.bin.
@@ -494,6 +514,7 @@ pub fn main() !void {
         gpa,
         "Builtin",
         builtin_roc_source,
+        builtin_src_path,
         &.{}, // No module dependencies
         null, // bool_stmt not available yet (will be found within Builtin)
         null, // try_stmt not available yet (will be found within Builtin)
@@ -618,6 +639,7 @@ fn compileModule(
     gpa: Allocator,
     module_name: []const u8,
     source: []const u8,
+    source_path: []const u8,
     deps: []const ModuleDep,
     bool_stmt_opt: ?CIR.Statement.Idx,
     try_stmt_opt: ?CIR.Statement.Idx,
@@ -669,22 +691,35 @@ fn compileModule(
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
-        const total_errors = parse_ast.tokenize_diagnostics.items.len + parse_ast.parse_diagnostics.items.len;
+        const stderr = stderrWriter();
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Parse failed for {s}\n", .{module_name});
-        std.debug.print("=" ** 80 ++ "\n\n", .{});
-
+        // Render tokenize diagnostics
         for (parse_ast.tokenize_diagnostics.items) |diag| {
-            std.debug.print("  Tokenize error: {any}\n", .{diag});
-        }
-        for (parse_ast.parse_diagnostics.items) |diag| {
-            std.debug.print("  Parse error: {any}\n", .{diag});
+            var report = parse_ast.tokenizeDiagnosticToReport(diag, gpa, source_path) catch |err| {
+                std.debug.print("Error creating tokenize diagnostic report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering tokenize diagnostic: {}\n", .{err});
+            };
         }
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("Builtin compiler exiting with error code due to {d} parse error(s)\n", .{total_errors});
-        std.debug.print("=" ** 80 ++ "\n", .{});
+        // Render parse diagnostics
+        for (parse_ast.parse_diagnostics.items) |diag| {
+            var report = parse_ast.parseDiagnosticToReport(&module_env.common, diag, gpa, source_path) catch |err| {
+                std.debug.print("Error creating parse diagnostic report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering parse diagnostic: {}\n", .{err});
+            };
+        }
+
+        flushStderr();
         return error.ParseError;
     }
 
@@ -707,34 +742,22 @@ fn compileModule(
     const can_diagnostics = try module_env.getDiagnostics();
     defer gpa.free(can_diagnostics);
     if (can_diagnostics.len > 0) {
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Canonicalization failed for {s}\n", .{module_name});
-        std.debug.print("=" ** 80 ++ "\n\n", .{});
+        const stderr = stderrWriter();
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
 
         for (can_diagnostics) |diag| {
-            switch (diag) {
-                .undeclared_type => |d| {
-                    const type_name = module_env.getIdentText(d.name);
-                    std.debug.print("  - Undeclared type: {s}\n", .{type_name});
-                },
-                .ident_not_in_scope => |d| {
-                    const ident_name = module_env.getIdentText(d.ident);
-                    std.debug.print("  - Ident not in scope: {s}\n", .{ident_name});
-                },
-                .nested_value_not_found => |d| {
-                    const parent = module_env.getIdentText(d.parent_name);
-                    const nested = module_env.getIdentText(d.nested_name);
-                    std.debug.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested });
-                },
-                else => {
-                    std.debug.print("  - Diagnostic: {any}\n", .{diag});
-                },
-            }
+            var report = module_env.diagnosticToReport(diag, gpa, source_path) catch |err| {
+                std.debug.print("Error creating canonicalization diagnostic report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering canonicalization diagnostic: {}\n", .{err});
+            };
         }
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("Builtin compiler exiting with error code due to {d} diagnostic(s)\n", .{can_diagnostics.len});
-        std.debug.print("=" ** 80 ++ "\n", .{});
+        flushStderr();
         return error.CanonicalizeError;
     }
 
@@ -853,20 +876,36 @@ fn compileModule(
 
     // Check for type errors
     if (checker.problems.problems.items.len > 0) {
-        const total_errors = checker.problems.problems.items.len;
+        const stderr = stderrWriter();
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Type checking failed for {s}\n", .{module_name});
-        std.debug.print("=" ** 80 ++ "\n\n", .{});
+        const problem = check.problem;
+        var report_builder = problem.ReportBuilder.init(
+            gpa,
+            module_env,
+            module_env,
+            &checker.snapshots,
+            source_path,
+            imported_envs.items,
+            &checker.import_mapping,
+        );
+        defer report_builder.deinit();
 
-        for (checker.problems.problems.items) |prob| {
-            std.debug.print("  - Problem: {any}\n", .{prob});
+        for (0..checker.problems.len()) |i| {
+            const problem_idx: problem.Problem.Idx = @enumFromInt(i);
+            const prob = checker.problems.get(problem_idx);
+            var report = report_builder.build(prob) catch |err| {
+                std.debug.print("Error creating type problem report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering type problem: {}\n", .{err});
+            };
         }
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("Builtin compiler exiting with error code due to {d} type error(s)\n", .{total_errors});
-        std.debug.print("=" ** 80 ++ "\n", .{});
-
+        flushStderr();
         return error.TypeCheckError;
     }
 

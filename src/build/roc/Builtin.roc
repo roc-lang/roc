@@ -86,12 +86,12 @@ Builtin :: [].{
 		    Ok(_) => fallback
 		}
 
-		eq : Try(ok, err), Try(ok, err) -> Bool
+		is_eq : Try(ok, err), Try(ok, err) -> Bool
 			where [
 				ok.is_eq : ok, ok -> Bool,
 				err.is_eq : ok, ok -> Bool,
 			]
-		eq = |a, b| match a {
+		is_eq = |a, b| match a {
 			Ok(a_val) => {
 				match b {
 					Ok(b_val) => a_val.is_eq(b_val)
