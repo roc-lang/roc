@@ -1201,6 +1201,119 @@ fn processAssociatedItemsSecondPass(
     }
 }
 
+/// Register progressively qualified names at each scope level.
+/// Given a fully qualified name like "module.Foo.Bar.baz", this registers:
+/// - "Foo.Bar.baz" in module scope (user-facing fully qualified)
+/// - "Bar.baz" in Foo's scope (partially qualified)
+/// - "baz" in Bar's scope (unqualified)
+///
+/// This ensures single-string lookups work correctly at any scope level.
+fn registerProgressivelyQualifiedNames(
+    self: *Self,
+    fully_qualified_idx: Ident.Idx,
+    item_name_idx: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    // Get the fully qualified text and strip the module prefix
+    const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
+    const module_prefix = self.env.module_name;
+
+    // Must start with module prefix
+    if (!std.mem.startsWith(u8, fully_qualified_text, module_prefix) or
+        fully_qualified_text.len <= module_prefix.len or
+        fully_qualified_text[module_prefix.len] != '.')
+    {
+        return; // Not a module-qualified identifier, nothing to register
+    }
+
+    // Get user-facing text (without module prefix), e.g., "Foo.Bar.baz"
+    const user_facing_start = module_prefix.len + 1;
+    const user_facing_text = fully_qualified_text[user_facing_start..];
+
+    // Copy to local buffer to avoid invalidation during insertIdent calls
+    var buf: [512]u8 = undefined;
+    if (user_facing_text.len > buf.len) return;
+    @memcpy(buf[0..user_facing_text.len], user_facing_text);
+    const user_text = buf[0..user_facing_text.len];
+
+    // Parse the user-facing text into components: ["Foo", "Bar", "baz"]
+    var components: [32][]const u8 = undefined;
+    var num_components: usize = 0;
+    var start: usize = 0;
+    for (user_text, 0..) |c, i| {
+        if (c == '.') {
+            if (num_components < components.len) {
+                components[num_components] = user_text[start..i];
+                num_components += 1;
+            }
+            start = i + 1;
+        }
+    }
+    // Add the last component (the item name)
+    if (num_components < components.len and start < user_text.len) {
+        components[num_components] = user_text[start..];
+        num_components += 1;
+    }
+
+    if (num_components == 0) return;
+
+    // Now register at each scope level.
+    // Walk through scopes from module (index 0) to current, matching with type components.
+    // For each scope with associated_type_name, we register the suffix starting from that type.
+
+    // First, register the full user-facing name in module scope (index 0)
+    const full_user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_text));
+    try self.scopes.items[0].idents.put(self.env.gpa, full_user_facing_idx, pattern_idx);
+
+    // Now walk through scopes looking for associated type scopes
+    // Each associated type scope should get the suffix starting after that type
+    var scope_idx: usize = 1;
+    while (scope_idx < self.scopes.items.len) : (scope_idx += 1) {
+        const scope = &self.scopes.items[scope_idx];
+        if (scope.associated_type_name) |type_name_ident| {
+            const type_name = self.env.getIdent(type_name_ident);
+            // Find this type name in our components
+            for (components[0..num_components], 0..) |comp, comp_idx| {
+                if (std.mem.eql(u8, comp, type_name)) {
+                    // This scope corresponds to component comp_idx
+                    // Register the suffix starting from comp_idx + 1
+                    if (comp_idx + 1 < num_components) {
+                        // Build the suffix string
+                        var suffix_buf: [512]u8 = undefined;
+                        var suffix_len: usize = 0;
+                        var first = true;
+                        for (components[comp_idx + 1 .. num_components]) |suffix_comp| {
+                            if (!first) {
+                                suffix_buf[suffix_len] = '.';
+                                suffix_len += 1;
+                            }
+                            if (suffix_len + suffix_comp.len > suffix_buf.len) break;
+                            @memcpy(suffix_buf[suffix_len..][0..suffix_comp.len], suffix_comp);
+                            suffix_len += suffix_comp.len;
+                            first = false;
+                        }
+                        if (suffix_len > 0) {
+                            const suffix_idx = try self.env.insertIdent(base.Ident.for_text(suffix_buf[0..suffix_len]));
+                            try scope.idents.put(self.env.gpa, suffix_idx, pattern_idx);
+                        }
+                    } else if (comp_idx + 1 == num_components) {
+                        // Last component is the item name itself - register unqualified
+                        try scope.idents.put(self.env.gpa, item_name_idx, pattern_idx);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Also ensure the unqualified name is in the innermost associated type scope
+    // (the scope where this item is being defined)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    if (current_scope.associated_type_name != null) {
+        try current_scope.idents.put(self.env.gpa, item_name_idx, pattern_idx);
+    }
+}
+
 /// Register an identifier hierarchically into all active scopes using scope hierarchy information.
 /// Given parent_qualified_idx (e.g., "Module.Foo.Bar") and item_name_idx (e.g., "baz"):
 /// - Walks up the scope stack, collecting associated_type_name from each scope
@@ -1476,7 +1589,7 @@ fn processAssociatedItemsFirstPass(
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                     const pattern_ident_tok = pattern.ident.ident_tok;
                     if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                        // Build qualified name (e.g., "Foo.Bar.baz")
+                        // Build qualified name (e.g., "module.Foo.Bar.baz")
                         const qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_name), self.env.getIdent(decl_ident));
 
                         // Create placeholder pattern with qualified name
@@ -1496,29 +1609,11 @@ fn processAssociatedItemsFirstPass(
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                         try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
 
-                        // Also add user-facing alias (without module prefix) so "One.Two.value" works
-                        // in addition to "module.One.Two.value"
-                        // Add to module scope (index 0) so it's accessible from anywhere in the module
-                        const fully_qualified_text = self.env.getIdent(qualified_idx);
-                        const module_prefix = self.env.module_name;
-                        if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
-                            fully_qualified_text.len > module_prefix.len and
-                            fully_qualified_text[module_prefix.len] == '.')
-                        {
-                            // Copy user-facing text to a local buffer before calling insertIdent,
-                            // because insertIdent may reallocate the string interner and invalidate
-                            // any slices pointing into it (like fully_qualified_text)
-                            const user_facing_start = module_prefix.len + 1;
-                            const user_facing_len = fully_qualified_text.len - user_facing_start;
-                            var user_facing_buf: [512]u8 = undefined;
-                            if (user_facing_len <= user_facing_buf.len) {
-                                @memcpy(user_facing_buf[0..user_facing_len], fully_qualified_text[user_facing_start..]);
-                                const user_facing_text = user_facing_buf[0..user_facing_len];
-                                const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
-                                // Add to module scope so it persists after associated block scope exits
-                                try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, placeholder_pattern_idx);
-                            }
-                        }
+                        // Register progressively qualified names at each scope level per the plan:
+                        // - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
+                        // - Foo's scope gets "Bar.baz" (partially qualified)
+                        // - Bar's scope gets "baz" (unqualified)
+                        try self.registerProgressivelyQualifiedNames(qualified_idx, decl_ident, placeholder_pattern_idx);
                     }
                 }
             },
@@ -1545,28 +1640,8 @@ fn processAssociatedItemsFirstPass(
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
 
-                    // Also add user-facing alias (without module prefix)
-                    // Add to module scope (index 0) so it's accessible from anywhere in the module
-                    const fully_qualified_text = self.env.getIdent(qualified_idx);
-                    const module_prefix = self.env.module_name;
-                    if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
-                        fully_qualified_text.len > module_prefix.len and
-                        fully_qualified_text[module_prefix.len] == '.')
-                    {
-                        // Copy user-facing text to a local buffer before calling insertIdent,
-                        // because insertIdent may reallocate the string interner and invalidate
-                        // any slices pointing into it (like fully_qualified_text)
-                        const user_facing_start = module_prefix.len + 1;
-                        const user_facing_len = fully_qualified_text.len - user_facing_start;
-                        var user_facing_buf: [512]u8 = undefined;
-                        if (user_facing_len <= user_facing_buf.len) {
-                            @memcpy(user_facing_buf[0..user_facing_len], fully_qualified_text[user_facing_start..]);
-                            const user_facing_text = user_facing_buf[0..user_facing_len];
-                            const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
-                            // Add to module scope so it persists after associated block scope exits
-                            try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, placeholder_pattern_idx);
-                        }
-                    }
+                    // Register progressively qualified names at each scope level per the plan
+                    try self.registerProgressivelyQualifiedNames(qualified_idx, anno_ident, placeholder_pattern_idx);
                 }
             },
             else => {
@@ -3609,7 +3684,8 @@ pub fn canonicalizeExpr(
                     );
                     const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
 
-                    // Try local lookup first
+                    // Single-lookup approach: look up the qualified name exactly as written.
+                    // Registration puts progressively qualified names in each scope, so this should find it.
                     switch (self.scopeLookup(.ident, qualified_ident)) {
                         .found => |found_pattern_idx| {
                             // Mark this pattern as used for unused variable checking
@@ -3625,7 +3701,7 @@ pub fn canonicalizeExpr(
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
                         },
                         .not_found => {
-                            // Not a local qualified identifier, try module-qualified lookup
+                            // Not found locally - check if first qualifier is a module alias for external lookup
                         },
                     }
 
@@ -3644,51 +3720,7 @@ pub fn canonicalizeExpr(
                             break :blk null;
                         } orelse {
                             // Not a module alias and not an auto-imported module
-                            // Check if the qualifier is a type - if so, try to lookup associated items
-                            const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
-                            const is_auto_imported_type = if (self.module_envs) |envs_map|
-                                envs_map.contains(module_alias)
-                            else
-                                false;
-
-                            if (is_type_in_scope or is_auto_imported_type) {
-                                // This is a type with a potential associated item
-                                // Build the fully qualified name and try to look it up
-                                const type_text = self.env.getIdent(module_alias);
-                                const field_text = self.env.getIdent(ident);
-                                const type_qualified_idx = try self.env.insertQualifiedIdent(type_text, field_text);
-
-                                // Try to look up the associated item in the current scope
-                                switch (self.scopeLookup(.ident, type_qualified_idx)) {
-                                    .found => |found_pattern_idx| {
-                                        // Found the associated item! Mark it as used.
-                                        try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
-
-                                        // Return a local lookup expression
-                                        const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                                            .pattern_idx = found_pattern_idx,
-                                        } }, region);
-
-                                        const free_vars_start = self.scratch_free_vars.top();
-                                        try self.scratch_free_vars.append(found_pattern_idx);
-                                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
-                                    },
-                                    .not_found => {
-                                        // Associated item not found - generate error
-                                        const diagnostic = Diagnostic{ .nested_value_not_found = .{
-                                            .parent_name = module_alias,
-                                            .nested_name = ident,
-                                            .region = region,
-                                        } };
-                                        return CanonicalizedExpr{
-                                            .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
-                                            .free_vars = null,
-                                        };
-                                    },
-                                }
-                            }
-
-                            // Not a type either - generate appropriate error
+                            // The qualified identifier doesn't exist - generate error
                             const diagnostic = Diagnostic{ .qualified_ident_does_not_exist = .{
                                 .ident = qualified_ident,
                                 .region = region,
