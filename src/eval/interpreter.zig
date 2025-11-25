@@ -482,9 +482,8 @@ pub const Interpreter = struct {
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
-            // Only copy result if it has non-zero size (skip for unit type {})
-            const result_size = self.runtime_layout_store.layoutSize(result_value.layout);
-            if (result_size > 0) {
+            // Only copy result if the result type is compatible with ret_ptr
+            if (self.shouldCopyResult(result_value, ret_ptr)) {
                 try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
             }
             return;
@@ -493,11 +492,36 @@ pub const Interpreter = struct {
         const result = try self.evalMinimal(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
-        // Only copy result if it has non-zero size (skip for unit type {})
-        const result_size = self.runtime_layout_store.layoutSize(result.layout);
-        if (result_size > 0) {
+        // Only copy result if the result type is compatible with ret_ptr
+        if (self.shouldCopyResult(result, ret_ptr)) {
             try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
         }
+    }
+
+    /// Check if we should copy the result to ret_ptr based on the result's layout.
+    /// Returns false if the result shouldn't be copied (e.g., when the evaluated result
+    /// type doesn't match what the caller expects based on pointer alignment).
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) bool {
+        const result_size = self.runtime_layout_store.layoutSize(result.layout);
+        if (result_size == 0) {
+            // Zero-sized types don't need copying
+            return false;
+        }
+
+        // Check if ret_ptr is properly aligned for the result type.
+        // This handles the case where the platform declares a function returning {}
+        // but the Roc code evaluates to a different type (e.g., Str).
+        // When the platform expects {}, the host provides a zero-sized or misaligned buffer.
+        // We detect this by checking alignment: if ret_ptr isn't aligned for the result type,
+        // the caller doesn't expect this type and we should skip the copy.
+        const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+        const ret_addr = @intFromPtr(ret_ptr);
+        if (ret_addr % required_alignment.toByteUnits() != 0) {
+            // Destination not properly aligned for result type - skip copy
+            return false;
+        }
+
+        return true;
     }
 
     fn evalExprMinimal(

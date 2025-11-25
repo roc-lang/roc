@@ -59,15 +59,6 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             .str => {
                 // Clone the RocStr into the interpreter's heap
                 std.debug.assert(self.ptr != null);
-                // Check if dest_ptr is properly aligned for RocStr
-                // If not, the caller doesn't expect a string (e.g., expected {} but got Str)
-                const dest_addr = @intFromPtr(dest_ptr);
-                const required_alignment = @alignOf(RocStr);
-                if (dest_addr % required_alignment != 0) {
-                    // Destination not aligned for RocStr - skip copy
-                    // This happens when return type is {} but evaluated result is Str
-                    return;
-                }
                 const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
                 const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
                 dest_str.* = src_str.clone(ops);
