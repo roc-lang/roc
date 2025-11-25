@@ -104,8 +104,17 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.concat")) |str_concat_ident| {
         try low_level_map.put(str_concat_ident, .str_concat);
     }
+    if (env.common.findIdent("Builtin.Str.contains")) |str_contains_ident| {
+        try low_level_map.put(str_contains_ident, .str_contains);
+    }
     if (env.common.findIdent("Builtin.Str.trim")) |str_trim_ident| {
         try low_level_map.put(str_trim_ident, .str_trim);
+    }
+    if (env.common.findIdent("Builtin.Str.trim_start")) |str_trim_start_ident| {
+        try low_level_map.put(str_trim_start_ident, .str_trim_start);
+    }
+    if (env.common.findIdent("Builtin.Str.trim_end")) |str_trim_end_ident| {
+        try low_level_map.put(str_trim_end_ident, .str_trim_end);
     }
     if (env.common.findIdent("Builtin.Str.caseless_ascii_equals")) |str_caseless_ascii_equals_ident| {
         try low_level_map.put(str_caseless_ascii_equals_ident, .str_caseless_ascii_equals);

@@ -276,6 +276,69 @@ test "e_low_level_lambda - Str.concat with longer strings" {
     try testing.expectEqualStrings("\"This is a longer string that contains about one hundred characters for testing concatenation. This is the second string that also has many characters in it for testing longer string operations.\"", value);
 }
 
+test "e_low_level_lambda - Str.contains with substring in middle" {
+    const src =
+        \\x = Str.contains("foobarbaz", "bar")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.contains with non-matching strings" {
+    const src =
+        \\x = Str.contains("apple", "orange")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.contains with empty needle" {
+    const src =
+        \\x = Str.contains("anything", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.contains with substring at start" {
+    const src =
+        \\x = Str.contains("hello world", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.contains with substring at end" {
+    const src =
+        \\x = Str.contains("hello world", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.contains with empty haystack" {
+    const src =
+        \\x = Str.contains("", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.contains with identical strings" {
+    const src =
+        \\x = Str.contains("test", "test")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
 test "e_low_level_lambda - Str.caseless_ascii_equals with equal strings" {
     const src =
         \\x = Str.caseless_ascii_equals("hello", "hello")
@@ -472,6 +535,60 @@ test "e_low_level_lambda - Str.trim with a non-whitespace string" {
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with an empty string" {
+    const src =
+        \\x = Str.trim_start("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with a whitespace string" {
+    const src =
+        \\x = Str.trim_start("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with a non-whitespace string" {
+    const src =
+        \\x = Str.trim_start("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello  \"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with an empty string" {
+    const src =
+        \\x = Str.trim_end("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with a whitespace string" {
+    const src =
+        \\x = Str.trim_end("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with a non-whitespace string" {
+    const src =
+        \\x = Str.trim_end("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"  hello\"", value);
 }
 
 test "e_low_level_lambda - List.concat with two non-empty lists" {

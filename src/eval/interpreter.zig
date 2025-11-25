@@ -2818,6 +2818,23 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_contains => {
+                // Str.contains : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const haystack_arg = args[0];
+                const needle_arg = args[1];
+
+                std.debug.assert(haystack_arg.ptr != null);
+                std.debug.assert(needle_arg.ptr != null);
+
+                const haystack: *const RocStr = @ptrCast(@alignCast(haystack_arg.ptr.?));
+                const needle: *const RocStr = @ptrCast(@alignCast(needle_arg.ptr.?));
+
+                const result = builtins.str.strContains(haystack.*, needle.*);
+
+                return try self.makeBoolValue(result);
+            },
             .str_trim => {
                 // Str.trim : Str -> Str
                 std.debug.assert(args.len == 1);
@@ -2828,6 +2845,52 @@ pub const Interpreter = struct {
                 const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
 
                 const result_str = builtins.str.strTrim(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_trim_start => {
+                // Str.trim_start : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strTrimStart(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_trim_end => {
+                // Str.trim_end : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strTrimEnd(roc_str_arg.*, roc_ops);
 
                 // Allocate space for the result string
                 const result_layout = str_arg.layout; // Str layout
