@@ -483,7 +483,7 @@ pub const Interpreter = struct {
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             // Only copy result if the result type is compatible with ret_ptr
-            if (self.shouldCopyResult(result_value, ret_ptr)) {
+            if (try self.shouldCopyResult(result_value, ret_ptr)) {
                 try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
             }
             return;
@@ -493,32 +493,31 @@ pub const Interpreter = struct {
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
         // Only copy result if the result type is compatible with ret_ptr
-        if (self.shouldCopyResult(result, ret_ptr)) {
+        if (try self.shouldCopyResult(result, ret_ptr)) {
             try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
         }
     }
 
-    /// Check if we should copy the result to ret_ptr based on the result's layout.
-    /// Returns false if the result shouldn't be copied (e.g., when the evaluated result
-    /// type doesn't match what the caller expects based on pointer alignment).
-    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) bool {
+    /// Check if the result should be copied to ret_ptr based on the result's layout.
+    /// Returns false for zero-sized types (nothing to copy).
+    /// Validates that ret_ptr is properly aligned for the result type.
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) !bool {
         const result_size = self.runtime_layout_store.layoutSize(result.layout);
         if (result_size == 0) {
             // Zero-sized types don't need copying
             return false;
         }
 
-        // Check if ret_ptr is properly aligned for the result type.
-        // This handles the case where the platform declares a function returning {}
-        // but the Roc code evaluates to a different type (e.g., Str).
-        // When the platform expects {}, the host provides a zero-sized or misaligned buffer.
-        // We detect this by checking alignment: if ret_ptr isn't aligned for the result type,
-        // the caller doesn't expect this type and we should skip the copy.
+        // Validate alignment: ret_ptr must be properly aligned for the result type.
+        // A mismatch here indicates a type error between what the platform expects
+        // and what the Roc code returns. This should have been caught at compile
+        // time, but if the type checking didn't enforce the constraint, we catch
+        // it here at runtime.
         const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
         const ret_addr = @intFromPtr(ret_ptr);
         if (ret_addr % required_alignment.toByteUnits() != 0) {
-            // Destination not properly aligned for result type - skip copy
-            return false;
+            // Type mismatch detected at runtime
+            return error.TypeMismatch;
         }
 
         return true;

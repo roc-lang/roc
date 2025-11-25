@@ -1700,6 +1700,9 @@ pub fn canonicalizeFile(
         .platform => |h| {
             self.env.module_kind = .platform;
             try self.createExposedScope(h.exposes);
+            // Extract required type signatures for type checking
+            // This stores the types in env.requires_types without creating local definitions
+            try self.processRequiresSignatures(h.requires_signatures);
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -2586,6 +2589,52 @@ fn createExposedScope(
                 _ = malformed;
             },
         }
+    }
+}
+
+/// Process the requires_signatures from a platform header.
+///
+/// This extracts the required type signatures (like `main! : () => {}`) from the platform
+/// header and stores them in `env.requires_types`. These are used during app type checking
+/// to ensure the app's provided values match the platform's expected types.
+///
+/// Note: This does NOT create local definitions for the required identifiers. The platform
+/// body can reference these identifiers as forward references that will be resolved to
+/// the app's exports at runtime.
+fn processRequiresSignatures(self: *Self, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    const requires_signatures = self.parse_ir.store.getTypeAnno(requires_signatures_idx);
+
+    // The requires_signatures should be a record type like { main! : () => {} }
+    switch (requires_signatures) {
+        .record => |record| {
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => {
+                        // Skip malformed fields
+                        continue;
+                    },
+                };
+
+                // Get the field name (e.g., "main!")
+                const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse continue;
+                const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
+
+                // Canonicalize the type annotation for this required identifier
+                var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnnoHelp(field.ty, &type_anno_ctx);
+
+                // Store the required type in the module env
+                _ = try self.env.requires_types.append(self.env.gpa, .{
+                    .ident = field_name,
+                    .type_anno = type_anno_idx,
+                    .region = field_region,
+                });
+            }
+        },
+        else => {
+            // requires_signatures should always be a record type from parsing
+            // If it's not, just skip processing (parser would have reported an error)
+        },
     }
 }
 

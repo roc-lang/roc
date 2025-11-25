@@ -1364,9 +1364,23 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     var exposed_modules = std.ArrayList([]const u8).empty;
     defer exposed_modules.deinit(allocs.gpa);
 
+    var has_platform = true;
     extractExposedModulesFromPlatform(allocs, platform_main_path, &exposed_modules) catch {
         // No platform found - that's fine, just continue with no platform modules
+        has_platform = false;
     };
+
+    // Compile platform main.roc to get requires_types (if platform exists)
+    var platform_main_env: ?*ModuleEnv = null;
+    if (has_platform) {
+        platform_main_env = compileModuleToSharedMemory(
+            allocs,
+            platform_main_path,
+            "main.roc",
+            shm_allocator,
+            &builtin_modules,
+        ) catch null;
+    }
 
     // Create header - use multi-module format
     const Header = struct {
@@ -1636,6 +1650,11 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     defer app_checker.deinit();
 
     try app_checker.checkFile();
+
+    // Check that app exports match platform requirements (if platform exists)
+    if (platform_main_env) |penv| {
+        try app_checker.checkPlatformRequirements(penv);
+    }
 
     app_env_ptr.* = app_env;
 
