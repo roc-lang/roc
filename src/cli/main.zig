@@ -27,6 +27,7 @@ const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
 const builtins = @import("builtins");
+const lsp = @import("lsp");
 const compiled_builtins = @import("compiled_builtins");
 const builtin_loading = eval.builtin_loading;
 const BuiltinTypes = eval.BuiltinTypes;
@@ -501,6 +502,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .repl => rocRepl(allocs),
         .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(allocs, docs_args),
+        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, lsp_args.debug_io),
         .help => |help_message| {
             try stdout.writeAll(help_message);
         },
