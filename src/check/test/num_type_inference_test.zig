@@ -133,3 +133,70 @@ test "infers type for octal literals" {
         try test_env.assertLastDefTypeContains("from_numeral");
     }
 }
+
+test "numeric literal in comparison unifies with typed operand" {
+    // When comparing a typed variable with a numeric literal,
+    // the literal should unify to match the variable's type.
+    // `answer == 42` desugars to `answer.is_eq(42)`, which dispatches to I64.is_eq(answer, 42),
+    // which should unify 42's flex var with I64.
+    const source =
+        \\answer : I64
+        \\answer = 42
+        \\
+        \\result = answer == 42
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // First verify no type errors
+    try test_env.assertNoErrors();
+
+    // Verify that `answer` has type I64
+    try test_env.assertDefType("answer", "I64");
+
+    // Verify that `result` has type Bool (the result of ==)
+    try test_env.assertDefType("result", "Bool");
+
+    // Now verify that the binop expression's operands both have I64 type
+    // Find the `result` definition and check the binop's operand types
+    const ModuleEnv = @import("can").ModuleEnv;
+    const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    var found_result = false;
+    for (defs_slice) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        if (ptrn == .assign) {
+            const def_name = test_env.module_env.getIdentStoreConst().getText(ptrn.assign.ident);
+            if (std.mem.eql(u8, def_name, "result")) {
+                found_result = true;
+                // Get the expression - should be a binop
+                const expr = test_env.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_binop);
+                const binop = expr.e_binop;
+
+                // Check LHS type (should be I64)
+                const lhs_var = ModuleEnv.varFrom(binop.lhs);
+                try test_env.type_writer.write(lhs_var);
+                const lhs_type = test_env.type_writer.get();
+                try testing.expectEqualStrings("I64", lhs_type);
+
+                // Check RHS type (the literal 42 - should also be I64 after unification)
+                const rhs_var = ModuleEnv.varFrom(binop.rhs);
+                try test_env.type_writer.write(rhs_var);
+                const rhs_type = test_env.type_writer.get();
+                try testing.expectEqualStrings("I64", rhs_type);
+
+                // Verify that the RHS type var is actually resolved to a nominal type, not flex
+                // This is what the interpreter's translateTypeVar should see
+                const rhs_resolved = test_env.module_env.types.resolveVar(rhs_var);
+                // After type checking, the RHS (numeric literal) should be unified to I64,
+                // which is a nominal type (structure.nominal_type), NOT a flex var
+                try testing.expect(rhs_resolved.desc.content == .structure);
+                try testing.expect(rhs_resolved.desc.content.structure == .nominal_type);
+                break;
+            }
+        }
+    }
+    try testing.expect(found_result);
+}

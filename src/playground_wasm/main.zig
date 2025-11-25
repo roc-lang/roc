@@ -133,6 +133,7 @@ const CompilerStageData = struct {
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
+    builtin_module: ?BuiltinModule = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -144,6 +145,18 @@ const CompilerStageData = struct {
     parse_reports: std.array_list.Managed(reporting.Report),
     can_reports: std.array_list.Managed(reporting.Report),
     type_reports: std.array_list.Managed(reporting.Report),
+
+    const BuiltinModule = struct {
+        env: *ModuleEnv,
+        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        gpa: Allocator,
+
+        fn deinit(self: *@This()) void {
+            self.env.imports.map.deinit(self.gpa);
+            self.gpa.free(self.buffer);
+            self.gpa.destroy(self.env);
+        }
+    };
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
         return CompilerStageData{
@@ -195,6 +208,11 @@ const CompilerStageData = struct {
         // Finally, deinit the ModuleEnv and free its memory
         self.module_env.deinit();
         allocator.destroy(self.module_env);
+
+        // Deinit the builtin module if it was loaded
+        if (self.builtin_module) |*bm| {
+            bm.deinit();
+        }
     }
 };
 
@@ -1001,8 +1019,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     logDebug("compileSource: Loading Builtin module\n", .{});
     const builtin_source = compiled_builtins.builtin_source;
-    var builtin_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_module.deinit();
+    const builtin_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    // Store in result instead of deferring deinit - we need it for test evaluation
+    result.builtin_module = .{
+        .env = builtin_module.env,
+        .buffer = builtin_module.buffer,
+        .gpa = builtin_module.gpa,
+    };
     logDebug("compileSource: Builtin module loaded\n", .{});
 
     // Get builtin statement indices from the builtin module
@@ -1575,7 +1598,9 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     };
 
     // Create interpreter infrastructure for test evaluation
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests) catch {
+    const empty_modules: []const *const ModuleEnv = &.{};
+    const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

@@ -5603,6 +5603,7 @@ pub const Interpreter = struct {
     ) Error!StackValue {
         const lhs_ct_var = can.ModuleEnv.varFrom(lhs_expr);
         const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+
         const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr);
         const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
@@ -5621,6 +5622,7 @@ pub const Interpreter = struct {
         // Evaluate both operands
         var lhs = try self.evalExprMinimal(lhs_expr, roc_ops, lhs_rt_var);
         defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
         var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
         defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
