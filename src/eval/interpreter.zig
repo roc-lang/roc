@@ -5565,6 +5565,59 @@ pub const Interpreter = struct {
         return error.MethodNotFound;
     }
 
+    /// Evaluate a numeric literal expression with a specific layout.
+    /// This is used when we know the target type from context (e.g., comparing with a typed value).
+    fn evalNumLitWithLayout(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        target_layout: layout.Layout,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        _ = roc_ops;
+        const expr = self.env.store.getExpr(expr_idx);
+        if (expr != .e_num) {
+            return error.TypeMismatch;
+        }
+        const num_lit = expr.e_num;
+
+        var value = try self.pushRaw(target_layout, 0);
+        value.is_initialized = false;
+
+        switch (target_layout.tag) {
+            .scalar => switch (target_layout.data.scalar.tag) {
+                .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
+                .frac => switch (target_layout.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        if (num_lit.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                        }
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        if (num_lit.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                        }
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
+        return value;
+    }
+
     /// Dispatch a binary operator to its corresponding method.
     /// Handles the full method dispatch including:
     /// - Type resolution with Dec default for flex/rigid vars
@@ -5595,10 +5648,29 @@ pub const Interpreter = struct {
             lhs_resolved = self.runtime_types.resolveVar(dec_var);
         }
 
-        // Evaluate both operands
+        // Evaluate LHS first
         var lhs = try self.evalExprMinimal(lhs_expr, roc_ops, lhs_rt_var);
         defer lhs.decref(&self.runtime_layout_store, roc_ops);
-        var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
+
+        // For numeric binary operations, if LHS has a scalar layout (numeric) and RHS is a flex/rigid var,
+        // we need to use the LHS's actual layout to determine RHS type
+        const rhs_resolved = self.runtime_types.resolveVar(rhs_rt_var);
+        const rhs_expr_data = self.env.store.getExpr(rhs_expr);
+
+        // Check if RHS is a numeric literal that needs to be coerced to match LHS
+        const rhs_is_flex = rhs_resolved.desc.content == .flex or rhs_resolved.desc.content == .rigid;
+        const lhs_is_numeric = lhs.layout.tag == .scalar and
+            (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
+        const should_coerce_rhs = rhs_is_flex and lhs_is_numeric and rhs_expr_data == .e_num;
+
+        // Evaluate RHS with LHS's layout if coercion is needed
+        var rhs: StackValue = undefined;
+        if (should_coerce_rhs) {
+            // Evaluate the numeric literal using the LHS's layout type
+            rhs = try self.evalNumLitWithLayout(rhs_expr, lhs.layout, roc_ops);
+        } else {
+            rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
+        }
         defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
         // Get the nominal type information from lhs, or handle anonymous structural types
@@ -5961,7 +6033,83 @@ pub const Interpreter = struct {
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
             const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
-            return self.runtime_layout_store.getLayout(layout_idx);
+            const cached_layout = self.runtime_layout_store.getLayout(layout_idx);
+
+            // Verify cache is still valid for structure types
+            // If the type was previously flex (defaulting to Dec) but is now a structure,
+            // we need to recompute the layout for nominal numeric types
+            if (resolved.desc.content == .structure) {
+                const st = resolved.desc.content.structure;
+                if (st == .nominal_type) {
+                    const nom = st.nominal_type;
+                    const ident_text = self.env.getIdent(nom.ident.ident_idx);
+                    // For nominal numeric types, we can determine the layout directly from the type name
+                    // Check if it's a known numeric type that might have been incorrectly cached as Dec
+                    if (std.mem.eql(u8, ident_text, "I64") or std.mem.eql(u8, ident_text, "Num.I64")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.i64);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "I32") or std.mem.eql(u8, ident_text, "Num.I32")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.i32);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "I16") or std.mem.eql(u8, ident_text, "Num.I16")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.i16);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "I8") or std.mem.eql(u8, ident_text, "Num.I8")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.i8);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "I128") or std.mem.eql(u8, ident_text, "Num.I128")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.i128);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "U64") or std.mem.eql(u8, ident_text, "Num.U64")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.u64);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "U32") or std.mem.eql(u8, ident_text, "Num.U32")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.u32);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "U16") or std.mem.eql(u8, ident_text, "Num.U16")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.u16);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "U8") or std.mem.eql(u8, ident_text, "Num.U8")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.u8);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "U128") or std.mem.eql(u8, ident_text, "Num.U128")) {
+                        const int_layout = layout.Layout.int(types.Int.Precision.u128);
+                        const int_layout_idx = try self.runtime_layout_store.insertLayout(int_layout);
+                        slot_ptr.* = @intFromEnum(int_layout_idx) + 1;
+                        return int_layout;
+                    } else if (std.mem.eql(u8, ident_text, "F32") or std.mem.eql(u8, ident_text, "Num.F32")) {
+                        const frac_layout = layout.Layout.frac(types.Frac.Precision.f32);
+                        const frac_layout_idx = try self.runtime_layout_store.insertLayout(frac_layout);
+                        slot_ptr.* = @intFromEnum(frac_layout_idx) + 1;
+                        return frac_layout;
+                    } else if (std.mem.eql(u8, ident_text, "F64") or std.mem.eql(u8, ident_text, "Num.F64")) {
+                        const frac_layout = layout.Layout.frac(types.Frac.Precision.f64);
+                        const frac_layout_idx = try self.runtime_layout_store.insertLayout(frac_layout);
+                        slot_ptr.* = @intFromEnum(frac_layout_idx) + 1;
+                        return frac_layout;
+                    }
+                    // For Dec or other nominal types, fall through to use cached value
+                }
+            }
+            return cached_layout;
         }
 
         const layout_idx = switch (resolved.desc.content) {

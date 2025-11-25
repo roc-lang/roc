@@ -1575,7 +1575,9 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     };
 
     // Create interpreter infrastructure for test evaluation
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests) catch {
+    // Note: playground doesn't have access to other modules or builtin module env
+    const empty_modules: []const *const ModuleEnv = &.{};
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, null) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };
