@@ -264,3 +264,38 @@ test "fx platform expect with numeric literal" {
     try testing.expectEqualStrings("", run_result.stdout);
     try testing.expectEqualStrings("", run_result.stderr);
 }
+
+test "fx platform match with wildcard" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that uses a match expression with a wildcard pattern
+    // This tests that wildcard patterns in match expressions work correctly
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/match_with_wildcard.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+}
