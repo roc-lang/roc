@@ -2814,6 +2814,70 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_caseless_ascii_equals => {
+                // Str.caseless_ascii_equals : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const str_a_arg = args[0];
+                const str_b_arg = args[1];
+
+                std.debug.assert(str_a_arg.ptr != null);
+                std.debug.assert(str_b_arg.ptr != null);
+
+                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
+                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+
+                // Call strConcat to concatenate the strings
+                const result = builtins.str.strCaselessAsciiEquals(str_a.*, str_b.*);
+
+                return try self.makeBoolValue(result);
+            },
+            .str_with_ascii_lowercased => {
+                // Str.with_ascii_lowercased : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strWithAsciiLowercased(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_with_ascii_uppercased => {
+                // Str.with_ascii_uppercased : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strWithAsciiUppercased(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
