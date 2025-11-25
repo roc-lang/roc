@@ -276,6 +276,33 @@ test "e_low_level_lambda - Str.concat with longer strings" {
     try testing.expectEqualStrings("\"This is a longer string that contains about one hundred characters for testing concatenation. This is the second string that also has many characters in it for testing longer string operations.\"", value);
 }
 
+test "e_low_level_lambda - Str.trim with an empty string" {
+    const src =
+        \\x = Str.trim("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim with a whitespace string" {
+    const src =
+        \\x = Str.trim("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim with a non-whitespace string" {
+    const src =
+        \\x = Str.trim("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
 test "e_low_level_lambda - List.concat with two non-empty lists" {
     const src =
         \\x = List.concat([1, 2], [3, 4])
