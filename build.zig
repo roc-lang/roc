@@ -93,24 +93,59 @@ const MiniCiStep = struct {
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
 
-        const b = step.owner;
-
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
-        try runSubBuild(b, "fmt", "zig build fmt");
-        try runSubBuild(b, null, "zig build");
-        try runSubBuild(b, "snapshot", "zig build snapshot");
-        try runSubBuild(b, "test", "zig build test");
-        try runSubBuild(b, "test-playground", "zig build test-playground");
-        try runSubBuild(b, "test-serialization-sizes", "zig build test-serialization-sizes");
-        try runSubBuild(b, "test-cli", "zig build test-cli");
+        try runSubBuild(step, "fmt", "zig build fmt");
+        try runSubBuild(step, null, "zig build");
+        try runSubBuild(step, "snapshot", "zig build snapshot");
+        try checkSnapshotChanges(step);
+        try runSubBuild(step, "test", "zig build test");
+        try runSubBuild(step, "test-playground", "zig build test-playground");
+        try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
+        try runSubBuild(step, "test-cli", "zig build test-cli");
+    }
+
+    fn checkSnapshotChanges(step: *Step) !void {
+        const b = step.owner;
+        std.debug.print("---- minici: checking for snapshot changes ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "git");
+        try child_argv.append(b.allocator, "diff");
+        try child_argv.append(b.allocator, "--exit-code");
+        try child_argv.append(b.allocator, "test/snapshots");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Snapshots in 'test/snapshots' have changed. " ++
+                            "Run 'zig build snapshot' locally, review the updates, and commit the changes.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("git diff terminated abnormally", .{});
+            },
+        }
     }
 
     fn runSubBuild(
-        b: *std.Build,
+        step: *Step,
         step_name: ?[]const u8,
         display: []const u8,
     ) !void {
+        const b = step.owner;
         std.debug.print("---- minici: running `{s}` ----\n", .{display});
 
         var child_argv = std.ArrayList([]const u8).empty;
@@ -134,16 +169,11 @@ const MiniCiStep = struct {
         switch (term) {
             .Exited => |code| {
                 if (code != 0) {
-                    std.debug.print(
-                        "minici: `{s}` failed with exit code {d}\n",
-                        .{ display, code },
-                    );
-                    return error.MakeFailed;
+                    return step.fail("`{s}` failed with exit code {d}", .{ display, code });
                 }
             },
             else => {
-                std.debug.print("minici: `{s}` terminated abnormally\n", .{display});
-                return error.MakeFailed;
+                return step.fail("`{s}` terminated abnormally", .{display});
             },
         }
     }

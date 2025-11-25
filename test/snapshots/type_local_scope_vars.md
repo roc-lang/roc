@@ -170,54 +170,48 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "fail"))
-		(e-closure
-			(captures
-				(capture (ident "g")))
-			(e-lambda
-				(args
-					(p-assign (ident "x")))
-				(e-block
-					(s-let
-						(p-assign (ident "g"))
-						(e-lambda
-							(args
-								(p-assign (ident "z")))
-							(e-lookup-local
-								(p-assign (ident "z")))))
-					(s-let
-						(p-assign (ident "result"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "g")))
-							(e-lookup-local
-								(p-assign (ident "x")))))
-					(e-lookup-local
-						(p-assign (ident "result"))))))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-block
+				(s-let
+					(p-assign (ident "g"))
+					(e-lambda
+						(args
+							(p-assign (ident "z")))
+						(e-lookup-local
+							(p-assign (ident "z")))))
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "g")))
+						(e-lookup-local
+							(p-assign (ident "x")))))
+				(e-lookup-local
+					(p-assign (ident "result")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "pass"))
-		(e-closure
-			(captures
-				(capture (ident "inner")))
-			(e-lambda
-				(args
-					(p-assign (ident "x")))
-				(e-block
-					(s-let
-						(p-assign (ident "inner"))
-						(e-lambda
-							(args
-								(p-assign (ident "y")))
-							(e-lookup-local
-								(p-assign (ident "y")))))
-					(e-call
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-block
+				(s-let
+					(p-assign (ident "inner"))
+					(e-lambda
+						(args
+							(p-assign (ident "y")))
 						(e-lookup-local
-							(p-assign (ident "inner")))
-						(e-lookup-local
-							(p-assign (ident "x")))))))
+							(p-assign (ident "y")))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "inner")))
+					(e-lookup-local
+						(p-assign (ident "x"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

@@ -947,51 +947,48 @@ main = {
 								(ty-rigid-var-lookup (ty-rigid-var (name "c"))))))))))
 	(d-let
 		(p-assign (ident "process_with_method"))
-		(e-closure
-			(captures
-				(capture (ident "id")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "value")))
-				(e-block
-					(s-let
-						(p-assign (ident "id"))
-						(e-lambda
-							(args
-								(p-assign (ident "x")))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "value")))
+			(e-block
+				(s-let
+					(p-assign (ident "id"))
+					(e-lambda
+						(args
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "x")))))
+				(s-let
+					(p-assign (ident "_test1"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "id")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "_test2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "id")))
+						(e-string
+							(e-literal (string "test")))))
+				(s-let
+					(p-assign (ident "result"))
+					(e-dot-access (field "map")
+						(receiver
 							(e-lookup-local
-								(p-assign (ident "x")))))
-					(s-let
-						(p-assign (ident "_test1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "id")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "_test2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "id")))
-							(e-string
-								(e-literal (string "test")))))
-					(s-let
-						(p-assign (ident "result"))
-						(e-dot-access (field "map")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(args
-								(e-closure
-									(captures
-										(capture (ident "value")))
-									(e-lambda
-										(args
-											(p-underscore))
-										(e-lookup-local
-											(p-assign (ident "value"))))))))
-					(e-lookup-local
-						(p-assign (ident "result"))))))
+								(p-assign (ident "container"))))
+						(args
+							(e-closure
+								(captures
+									(capture (ident "value")))
+								(e-lambda
+									(args
+										(p-underscore))
+									(e-lookup-local
+										(p-assign (ident "value"))))))))
+				(e-lookup-local
+					(p-assign (ident "result")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
