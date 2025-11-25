@@ -7898,6 +7898,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const cir_stmt = self.env.store.getStatement(canonicailzed_stmt.idx);
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
+                    .s_decl_gen => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
                     .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
                     else => {},
                 }

@@ -18,6 +18,17 @@ MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
 # PROBLEMS
 **MISSING METHOD**
+This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+**lambda_annotation_mismatch_error.md:3:27:3:29:**
+```roc
+string_function = |x| x + 42
+```
+                          ^^
+
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
 The value before this **+** operator has the type **Str**, which has no **plus** method:
 **lambda_annotation_mismatch_error.md:3:23:3:29:**
 ```roc
