@@ -347,46 +347,281 @@ ultimate2 = Ultimate.Branch1.b1val                              # 150
 ultimate3 = Ultimate.Branch2.b2forward                          # 50
 ultimate4 = Ultimate.Branch1.Branch1Inner.innerSum              # 250
 ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything        # 550
+
+# ============================================================================
+# INVALID LOOKUPS - These MUST produce errors
+# ============================================================================
+
+# Error 1: Module-level trying to access associated item unqualified
+# "value" is only defined inside Simple's associated block
+errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
+
+# Error 2: Outer scope trying to access inner scope item unqualified
+ErrOuterAccessInner := [ERR1].{
+    outerItem = 10
+
+    InnerScope := [ERR2].{
+        innerItem = 20
+    }
+
+    # This MUST fail - innerItem is only in InnerScope's block
+    badAccess = innerItem  # ERROR: 'innerItem' not in scope here
+}
+
+# Error 3: Sibling nested types cannot access each other's items unqualified
+ErrSiblingAccess := [ERR3].{
+    SiblingA := [ERR4].{
+        sibAVal = 100
+    }
+
+    SiblingB := [ERR5].{
+        # Cannot access sibAVal unqualified - it's in SiblingA's scope, not here
+        badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
+    }
+}
+
+# Error 4: Deeply nested trying to access cousin's items unqualified
+ErrCousinAccess := [ERR6].{
+    Branch1 := [ERR7].{
+        Leaf1 := [ERR8].{
+            leaf1Val = 1
+        }
+    }
+
+    Branch2 := [ERR9].{
+        Leaf2 := [ERR10].{
+            # Cannot access leaf1Val unqualified - it's in a different branch
+            badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
+        }
+    }
+}
+
+# Error 5: Parent trying to access grandchild's items unqualified
+ErrGrandchildAccess := [ERR11].{
+    Child := [ERR12].{
+        Grandchild := [ERR13].{
+            grandchildVal = 999
+        }
+    }
+
+    # Cannot access grandchildVal unqualified - need Child.Grandchild.grandchildVal
+    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
+}
+
+# Error 6: Three levels deep - inner trying to access outer's sibling
+ErrDeepSiblingAccess := [ERR14].{
+    outerSibling = 50
+
+    Level1 := [ERR15].{
+        Level2 := [ERR16].{
+            Level3 := [ERR17].{
+                # This works - outerSibling is in an ancestor scope
+                goodAccess = outerSibling  # OK - ancestor scope
+            }
+        }
+
+        OtherBranch := [ERR18].{
+            otherVal = 77
+        }
+    }
+
+    Level1Alt := [ERR19].{
+        # Cannot access otherVal - it's in Level1.OtherBranch, not an ancestor
+        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
+    }
+}
+
+# Error 7: Module level trying various unqualified accesses
+errTryOuter = outerItem      # ERROR: not in scope
+errTrySibA = sibAVal         # ERROR: not in scope
+errTryLeaf = leaf1Val        # ERROR: not in scope
+errTryGrand = grandchildVal  # ERROR: not in scope
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_comprehensive.md:241:21:241:26
-UNUSED VARIABLE - associated_items_comprehensive.md:241:21:241:26
-DOES NOT EXIST - associated_items_comprehensive.md:321:33:321:59
+UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
+UNUSED VARIABLE - associated_items_comprehensive.md:361:17:361:26
+UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
+UNUSED VARIABLE - associated_items_comprehensive.md:372:28:372:35
+UNDEFINED VARIABLE - associated_items_comprehensive.md:387:31:387:39
+UNUSED VARIABLE - associated_items_comprehensive.md:387:31:387:39
+UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
+UNUSED VARIABLE - associated_items_comprehensive.md:401:27:401:40
+UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
+UNUSED VARIABLE - associated_items_comprehensive.md:423:25:423:33
+UNDEFINED VARIABLE - associated_items_comprehensive.md:350:24:350:29
+UNDEFINED VARIABLE - associated_items_comprehensive.md:428:15:428:24
+UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
+UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
+UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `outer` in this scope.
+Nothing is named `innerItem` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_comprehensive.md:241:21:241:26:**
+**associated_items_comprehensive.md:361:17:361:26:**
 ```roc
-        usesOuter = outer
+    badAccess = innerItem  # ERROR: 'innerItem' not in scope here
 ```
-                    ^^^^^
+                ^^^^^^^^^
 
 
 **UNUSED VARIABLE**
-Variable `outer` is not used anywhere in your code.
+Variable `innerItem` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_outer` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_innerItem` to suppress this warning.
 The unused variable is declared here:
-**associated_items_comprehensive.md:241:21:241:26:**
+**associated_items_comprehensive.md:361:17:361:26:**
 ```roc
-        usesOuter = outer
+    badAccess = innerItem  # ERROR: 'innerItem' not in scope here
 ```
-                    ^^^^^
+                ^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Ultimate.b2forward` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `sibAVal` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-`Ultimate` is in scope, but it has no associated `b2forward`.
-
-It's referenced here:
-**associated_items_comprehensive.md:321:33:321:59:**
+**associated_items_comprehensive.md:372:28:372:35:**
 ```roc
-        b1val = Ultimate.base + Ultimate.Branch2.b2forward
+        badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
 ```
-                                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                           ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `sibAVal` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_sibAVal` to suppress this warning.
+The unused variable is declared here:
+**associated_items_comprehensive.md:372:28:372:35:**
+```roc
+        badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
+```
+                           ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `leaf1Val` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:387:31:387:39:**
+```roc
+            badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
+```
+                              ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `leaf1Val` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_leaf1Val` to suppress this warning.
+The unused variable is declared here:
+**associated_items_comprehensive.md:387:31:387:39:**
+```roc
+            badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
+```
+                              ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `grandchildVal` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:401:27:401:40:**
+```roc
+    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
+```
+                          ^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `grandchildVal` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_grandchildVal` to suppress this warning.
+The unused variable is declared here:
+**associated_items_comprehensive.md:401:27:401:40:**
+```roc
+    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
+```
+                          ^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `otherVal` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:423:25:423:33:**
+```roc
+        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
+```
+                        ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `otherVal` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_otherVal` to suppress this warning.
+The unused variable is declared here:
+**associated_items_comprehensive.md:423:25:423:33:**
+```roc
+        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
+```
+                        ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:350:24:350:29:**
+```roc
+errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
+```
+                       ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `outerItem` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:428:15:428:24:**
+```roc
+errTryOuter = outerItem      # ERROR: not in scope
+```
+              ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `sibAVal` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:429:14:429:21:**
+```roc
+errTrySibA = sibAVal         # ERROR: not in scope
+```
+             ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `leaf1Val` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:430:14:430:22:**
+```roc
+errTryLeaf = leaf1Val        # ERROR: not in scope
+```
+             ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `grandchildVal` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:431:15:431:28:**
+```roc
+errTryGrand = grandchildVal  # ERROR: not in scope
+```
+              ^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -615,6 +850,62 @@ LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,
+LowerIdent,OpAssign,LowerIdent,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+CloseCurly,
+LowerIdent,OpAssign,LowerIdent,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,LowerIdent,
+CloseCurly,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+CloseCurly,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,LowerIdent,
+CloseCurly,
+CloseCurly,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+CloseCurly,
+CloseCurly,
+LowerIdent,OpAssign,LowerIdent,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,LowerIdent,
+CloseCurly,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+CloseCurly,
+CloseCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,LowerIdent,
+CloseCurly,
+CloseCurly,
+LowerIdent,OpAssign,LowerIdent,
+LowerIdent,OpAssign,LowerIdent,
+LowerIdent,OpAssign,LowerIdent,
+LowerIdent,OpAssign,LowerIdent,
 EndOfFile,
 ~~~
 # PARSE
@@ -1385,7 +1676,194 @@ EndOfFile,
 			(e-ident (raw "Ultimate.Branch1.Branch1Inner.innerSum")))
 		(s-decl
 			(p-ident (raw "ultimate5"))
-			(e-ident (raw "Ultimate.Branch2.Branch2Inner.usesEverything")))))
+			(e-ident (raw "Ultimate.Branch2.Branch2Inner.usesEverything")))
+		(s-decl
+			(p-ident (raw "errModuleUnqualified"))
+			(e-ident (raw "value")))
+		(s-type-decl
+			(header (name "ErrOuterAccessInner")
+				(args))
+			(ty-tag-union
+				(tags
+					(ty (name "ERR1"))))
+			(associated
+				(s-decl
+					(p-ident (raw "outerItem"))
+					(e-int (raw "10")))
+				(s-type-decl
+					(header (name "InnerScope")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR2"))))
+					(associated
+						(s-decl
+							(p-ident (raw "innerItem"))
+							(e-int (raw "20")))))
+				(s-decl
+					(p-ident (raw "badAccess"))
+					(e-ident (raw "innerItem")))))
+		(s-type-decl
+			(header (name "ErrSiblingAccess")
+				(args))
+			(ty-tag-union
+				(tags
+					(ty (name "ERR3"))))
+			(associated
+				(s-type-decl
+					(header (name "SiblingA")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR4"))))
+					(associated
+						(s-decl
+							(p-ident (raw "sibAVal"))
+							(e-int (raw "100")))))
+				(s-type-decl
+					(header (name "SiblingB")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR5"))))
+					(associated
+						(s-decl
+							(p-ident (raw "badSiblingAccess"))
+							(e-ident (raw "sibAVal")))))))
+		(s-type-decl
+			(header (name "ErrCousinAccess")
+				(args))
+			(ty-tag-union
+				(tags
+					(ty (name "ERR6"))))
+			(associated
+				(s-type-decl
+					(header (name "Branch1")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR7"))))
+					(associated
+						(s-type-decl
+							(header (name "Leaf1")
+								(args))
+							(ty-tag-union
+								(tags
+									(ty (name "ERR8"))))
+							(associated
+								(s-decl
+									(p-ident (raw "leaf1Val"))
+									(e-int (raw "1")))))))
+				(s-type-decl
+					(header (name "Branch2")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR9"))))
+					(associated
+						(s-type-decl
+							(header (name "Leaf2")
+								(args))
+							(ty-tag-union
+								(tags
+									(ty (name "ERR10"))))
+							(associated
+								(s-decl
+									(p-ident (raw "badCousinAccess"))
+									(e-ident (raw "leaf1Val")))))))))
+		(s-type-decl
+			(header (name "ErrGrandchildAccess")
+				(args))
+			(ty-tag-union
+				(tags
+					(ty (name "ERR11"))))
+			(associated
+				(s-type-decl
+					(header (name "Child")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR12"))))
+					(associated
+						(s-type-decl
+							(header (name "Grandchild")
+								(args))
+							(ty-tag-union
+								(tags
+									(ty (name "ERR13"))))
+							(associated
+								(s-decl
+									(p-ident (raw "grandchildVal"))
+									(e-int (raw "999")))))))
+				(s-decl
+					(p-ident (raw "badGrandchildAccess"))
+					(e-ident (raw "grandchildVal")))))
+		(s-type-decl
+			(header (name "ErrDeepSiblingAccess")
+				(args))
+			(ty-tag-union
+				(tags
+					(ty (name "ERR14"))))
+			(associated
+				(s-decl
+					(p-ident (raw "outerSibling"))
+					(e-int (raw "50")))
+				(s-type-decl
+					(header (name "Level1")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR15"))))
+					(associated
+						(s-type-decl
+							(header (name "Level2")
+								(args))
+							(ty-tag-union
+								(tags
+									(ty (name "ERR16"))))
+							(associated
+								(s-type-decl
+									(header (name "Level3")
+										(args))
+									(ty-tag-union
+										(tags
+											(ty (name "ERR17"))))
+									(associated
+										(s-decl
+											(p-ident (raw "goodAccess"))
+											(e-ident (raw "outerSibling")))))))
+						(s-type-decl
+							(header (name "OtherBranch")
+								(args))
+							(ty-tag-union
+								(tags
+									(ty (name "ERR18"))))
+							(associated
+								(s-decl
+									(p-ident (raw "otherVal"))
+									(e-int (raw "77")))))))
+				(s-type-decl
+					(header (name "Level1Alt")
+						(args))
+					(ty-tag-union
+						(tags
+							(ty (name "ERR19"))))
+					(associated
+						(s-decl
+							(p-ident (raw "badDeepAccess"))
+							(e-ident (raw "otherVal")))))))
+		(s-decl
+			(p-ident (raw "errTryOuter"))
+			(e-ident (raw "outerItem")))
+		(s-decl
+			(p-ident (raw "errTrySibA"))
+			(e-ident (raw "sibAVal")))
+		(s-decl
+			(p-ident (raw "errTryLeaf"))
+			(e-ident (raw "leaf1Val")))
+		(s-decl
+			(p-ident (raw "errTryGrand"))
+			(e-ident (raw "grandchildVal")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1696,6 +2174,81 @@ ultimate2 = Ultimate.Branch1.b1val # 150
 ultimate3 = Ultimate.Branch2.b2forward # 50
 ultimate4 = Ultimate.Branch1.Branch1Inner.innerSum # 250
 ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
+
+# ============================================================================
+# INVALID LOOKUPS - These MUST produce errors
+# ============================================================================
+
+# Error 1: Module-level trying to access associated item unqualified
+# "value" is only defined inside Simple's associated block
+errModuleUnqualified = value # ERROR: 'value' not in scope at module level
+
+# Error 2: Outer scope trying to access inner scope item unqualified
+ErrOuterAccessInner := [ERR1].{
+	outerItem = 10
+	InnerScope := [ERR2].{
+		innerItem = 20
+	}
+	badAccess = innerItem
+}
+
+# Error 3: Sibling nested types cannot access each other's items unqualified
+ErrSiblingAccess := [ERR3].{
+	SiblingA := [ERR4].{
+		sibAVal = 100
+	}
+	SiblingB := [ERR5].{
+		badSiblingAccess = sibAVal
+	}
+}
+
+# Error 4: Deeply nested trying to access cousin's items unqualified
+ErrCousinAccess := [ERR6].{
+	Branch1 := [ERR7].{
+		Leaf1 := [ERR8].{
+			leaf1Val = 1
+		}
+	}
+	Branch2 := [ERR9].{
+		Leaf2 := [ERR10].{
+			badCousinAccess = leaf1Val
+		}
+	}
+}
+
+# Error 5: Parent trying to access grandchild's items unqualified
+ErrGrandchildAccess := [ERR11].{
+	Child := [ERR12].{
+		Grandchild := [ERR13].{
+			grandchildVal = 999
+		}
+	}
+	badGrandchildAccess = grandchildVal
+}
+
+# Error 6: Three levels deep - inner trying to access outer's sibling
+ErrDeepSiblingAccess := [ERR14].{
+	outerSibling = 50
+	Level1 := [ERR15].{
+		Level2 := [ERR16].{
+			Level3 := [ERR17].{
+				goodAccess = outerSibling
+			}
+		}
+		OtherBranch := [ERR18].{
+			otherVal = 77
+		}
+	}
+	Level1Alt := [ERR19].{
+		badDeepAccess = otherVal
+	}
+}
+
+# Error 7: Module level trying various unqualified accesses
+errTryOuter = outerItem # ERROR: not in scope
+errTrySibA = sibAVal # ERROR: not in scope
+errTryLeaf = leaf1Val # ERROR: not in scope
+errTryGrand = grandchildVal # ERROR: not in scope
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -1854,7 +2407,7 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.usesOuter"))
 		(e-lookup-local
-			(p-assign (ident "outer"))))
+			(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))
 		(e-num (value "222")))
@@ -1935,7 +2488,8 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "associated_items_comprehensive.Ultimate.base")))
-			(e-runtime-error (tag "nested_value_not_found"))))
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
 		(e-binop (op "add")
@@ -1959,6 +2513,51 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(e-num (value "100"))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.InnerScope.innerItem"))
+		(e-num (value "20")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.outerItem"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.badAccess"))
+		(e-lookup-local
+			(p-assign (ident "innerItem"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrSiblingAccess.SiblingA.sibAVal"))
+		(e-num (value "100")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrSiblingAccess.SiblingB.badSiblingAccess"))
+		(e-lookup-local
+			(p-assign (ident "sibAVal"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1.leaf1Val"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2.badCousinAccess"))
+		(e-lookup-local
+			(p-assign (ident "leaf1Val"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild.grandchildVal"))
+		(e-num (value "999")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrGrandchildAccess.badGrandchildAccess"))
+		(e-lookup-local
+			(p-assign (ident "grandchildVal"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3.goodAccess"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch.otherVal"))
+		(e-num (value "77")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt.badDeepAccess"))
+		(e-lookup-local
+			(p-assign (ident "otherVal"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))
+		(e-num (value "50")))
 	(d-let
 		(p-assign (ident "simple1"))
 		(e-lookup-local
@@ -2163,6 +2762,21 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(p-assign (ident "ultimate5"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))))
+	(d-let
+		(p-assign (ident "errModuleUnqualified"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "errTryOuter"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "errTrySibA"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "errTryLeaf"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "errTryGrand"))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-nominal-decl
 		(ty-header (name "Simple"))
 		(ty-tag-union
@@ -2243,6 +2857,26 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(ty-header (name "Ultimate"))
 		(ty-tag-union
 			(ty-tag-name (name "YY"))))
+	(s-nominal-decl
+		(ty-header (name "ErrOuterAccessInner"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR1"))))
+	(s-nominal-decl
+		(ty-header (name "ErrSiblingAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR3"))))
+	(s-nominal-decl
+		(ty-header (name "ErrCousinAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR6"))))
+	(s-nominal-decl
+		(ty-header (name "ErrGrandchildAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR11"))))
+	(s-nominal-decl
+		(ty-header (name "ErrDeepSiblingAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR14"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Outer1.Inner1"))
 		(ty-tag-union
@@ -2382,7 +3016,63 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner"))
 		(ty-tag-union
-			(ty-tag-name (name "CCC")))))
+			(ty-tag-name (name "CCC"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrOuterAccessInner.InnerScope"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR2"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingA"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR4"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingB"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR5"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR7"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR9"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR8"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR10"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR12"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR13"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR15"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR19"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR16"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR18"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR17")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -2426,28 +3116,41 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "_d"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "_d"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "_d"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "_d"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "_d"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -2496,7 +3199,12 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
-		(patt (type "U64")))
+		(patt (type "U64"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Simple")
 			(ty-header (name "Simple")))
@@ -2538,6 +3246,16 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 			(ty-header (name "Circular")))
 		(nominal (type "Ultimate")
 			(ty-header (name "Ultimate")))
+		(nominal (type "ErrOuterAccessInner")
+			(ty-header (name "ErrOuterAccessInner")))
+		(nominal (type "ErrSiblingAccess")
+			(ty-header (name "ErrSiblingAccess")))
+		(nominal (type "ErrCousinAccess")
+			(ty-header (name "ErrCousinAccess")))
+		(nominal (type "ErrGrandchildAccess")
+			(ty-header (name "ErrGrandchildAccess")))
+		(nominal (type "ErrDeepSiblingAccess")
+			(ty-header (name "ErrDeepSiblingAccess")))
 		(nominal (type "associated_items_comprehensive.Outer1.Inner1")
 			(ty-header (name "associated_items_comprehensive.Outer1.Inner1")))
 		(nominal (type "associated_items_comprehensive.Outer2.Inner2")
@@ -2607,7 +3325,35 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(nominal (type "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner")
 			(ty-header (name "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner")))
 		(nominal (type "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner")
-			(ty-header (name "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner"))))
+			(ty-header (name "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner")))
+		(nominal (type "associated_items_comprehensive.ErrOuterAccessInner.InnerScope")
+			(ty-header (name "associated_items_comprehensive.ErrOuterAccessInner.InnerScope")))
+		(nominal (type "associated_items_comprehensive.ErrSiblingAccess.SiblingA")
+			(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingA")))
+		(nominal (type "associated_items_comprehensive.ErrSiblingAccess.SiblingB")
+			(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingB")))
+		(nominal (type "associated_items_comprehensive.ErrCousinAccess.Branch1")
+			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1")))
+		(nominal (type "associated_items_comprehensive.ErrCousinAccess.Branch2")
+			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2")))
+		(nominal (type "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1")
+			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1")))
+		(nominal (type "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2")
+			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2")))
+		(nominal (type "associated_items_comprehensive.ErrGrandchildAccess.Child")
+			(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child")))
+		(nominal (type "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild")
+			(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild")))
+		(nominal (type "associated_items_comprehensive.ErrDeepSiblingAccess.Level1")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1")))
+		(nominal (type "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt")))
+		(nominal (type "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2")))
+		(nominal (type "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch")))
+		(nominal (type "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3"))))
 	(expressions
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -2647,28 +3393,41 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "_d"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "_d"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "_d"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "_d"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "_d"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -2717,5 +3476,10 @@ ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything # 550
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
-		(expr (type "U64"))))
+		(expr (type "U64"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

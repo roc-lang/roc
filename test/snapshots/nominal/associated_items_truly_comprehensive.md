@@ -479,752 +479,13 @@ anno1 = Annotated.typed                         # 888
 anno2 = Annotated.L2.alsoTyped                  # 889
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:51:20:51:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:51:20:51:28
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:75:20:75:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:75:20:75:28
-DOES NOT EXIST - associated_items_truly_comprehensive.md:106:16:106:47
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:134:20:134:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:134:20:134:24
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:155:27:155:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:155:20:155:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:155:20:155:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:155:27:155:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:167:20:167:24
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:167:27:167:31
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:167:20:167:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:167:27:167:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:200:20:200:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:200:20:200:24
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:203:41:203:45
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:203:41:203:45
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:218:27:218:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:218:20:218:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:218:20:218:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:218:27:218:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:228:20:228:24
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:228:27:228:31
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:228:20:228:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:228:27:228:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:231:16:231:20
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:231:16:231:20
-DOES NOT EXIST - associated_items_truly_comprehensive.md:246:21:246:42
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:276:38:276:42
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:276:31:276:35
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:276:24:276:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:276:24:276:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:276:31:276:35
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:276:38:276:42
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:315:24:315:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:315:24:315:28
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:312:27:312:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:312:20:312:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:312:20:312:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:312:27:312:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:334:24:334:28
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:334:31:334:35
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:334:24:334:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:334:31:334:35
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:331:27:331:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:331:20:331:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:331:20:331:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:331:27:331:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:362:49:362:53
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:362:42:362:46
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:362:35:362:39
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:362:28:362:32
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:362:28:362:32
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:362:35:362:39
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:362:42:362:46
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:362:49:362:53
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:406:49:406:53
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:406:42:406:46
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:406:35:406:39
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:406:28:406:32
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:406:28:406:32
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:406:35:406:39
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:406:42:406:46
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:406:49:406:53
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:409:24:409:28
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:409:24:409:28
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:468:21:468:26
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:468:21:468:26
+DOES NOT EXIST - associated_items_truly_comprehensive.md:451:11:451:32
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `outerVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:51:20:51:28:**
-```roc
-        innerVal = outerVal    # Forward ref to outer's val (unqualified) - should work, we're in outer's block
-```
-                   ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `outerVal` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_outerVal` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:51:20:51:28:**
-```roc
-        innerVal = outerVal    # Forward ref to outer's val (unqualified) - should work, we're in outer's block
-```
-                   ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `outerVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:75:20:75:28:**
-```roc
-        innerVal = outerVal    # Backward ref to outer's val (unqualified)
-```
-                   ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `outerVal` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_outerVal` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:75:20:75:28:**
-```roc
-        innerVal = outerVal    # Backward ref to outer's val (unqualified)
-```
-                   ^^^^^^^^
-
-
-**DOES NOT EXIST**
-`D2_Siblings_Forward.valB` does not exist.
-
-`D2_Siblings_Forward` is in scope, but it has no associated `valB`.
-
-It's referenced here:
-**associated_items_truly_comprehensive.md:106:16:106:47:**
-```roc
-        valA = D2_Siblings_Forward.InnerB.valB + 1    # Forward ref to sibling
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:134:20:134:24:**
-```roc
-        innerVal = val2 + 5                      # Forward ref to outer val (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:134:20:134:24:**
-```roc
-        innerVal = val2 + 5                      # Forward ref to outer val (unqualified)
-```
-                   ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:155:27:155:31:**
-```roc
-            val3 = val1 + val2    # Unqualified refs to L1 and L2 vals
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:155:20:155:24:**
-```roc
-            val3 = val1 + val2    # Unqualified refs to L1 and L2 vals
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:155:20:155:24:**
-```roc
-            val3 = val1 + val2    # Unqualified refs to L1 and L2 vals
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:155:27:155:31:**
-```roc
-            val3 = val1 + val2    # Unqualified refs to L1 and L2 vals
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:167:20:167:24:**
-```roc
-            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-```
-                   ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:167:27:167:31:**
-```roc
-            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-```
-                          ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:167:20:167:24:**
-```roc
-            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:167:27:167:31:**
-```roc
-            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:200:20:200:24:**
-```roc
-            val3 = val1 * 10                    # Unqualified ref to L1
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:200:20:200:24:**
-```roc
-            val3 = val1 * 10                    # Unqualified ref to L1
-```
-                   ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:203:41:203:45:**
-```roc
-        val2 = D3_Pattern4.L2.L3.val3 + val1    # Backward ref to L3 (qualified), unqualified to L1
-```
-                                        ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:203:41:203:45:**
-```roc
-        val2 = D3_Pattern4.L2.L3.val3 + val1    # Backward ref to L3 (qualified), unqualified to L1
-```
-                                        ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:218:27:218:31:**
-```roc
-            val3 = val1 + val2                  # Backward refs (unqualified)
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:218:20:218:24:**
-```roc
-            val3 = val1 + val2                  # Backward refs (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:218:20:218:24:**
-```roc
-            val3 = val1 + val2                  # Backward refs (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:218:27:218:31:**
-```roc
-            val3 = val1 + val2                  # Backward refs (unqualified)
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:228:20:228:24:**
-```roc
-            val3 = val2 + val1                  # Forward refs (unqualified)
-```
-                   ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:228:27:228:31:**
-```roc
-            val3 = val2 + val1                  # Forward refs (unqualified)
-```
-                          ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:228:20:228:24:**
-```roc
-            val3 = val2 + val1                  # Forward refs (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:228:27:228:31:**
-```roc
-            val3 = val2 + val1                  # Forward refs (unqualified)
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:231:16:231:20:**
-```roc
-        val2 = val1 * 2                         # Forward ref (unqualified)
-```
-               ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:231:16:231:20:**
-```roc
-        val2 = val1 * 2                         # Forward ref (unqualified)
-```
-               ^^^^
-
-
-**DOES NOT EXIST**
-`D3_Siblings.val2b` does not exist.
-
-`D3_Siblings` is in scope, but it has no associated `val2b`.
-
-It's referenced here:
-**associated_items_truly_comprehensive.md:246:21:246:42:**
-```roc
-            val3a = D3_Siblings.L2b.val2b       # Cross-sibling at parent level (qualified)
-```
-                    ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:276:38:276:42:**
-```roc
-                val4 = val1 + val2 + val3       # Unqualified refs to all ancestors
-```
-                                     ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:276:31:276:35:**
-```roc
-                val4 = val1 + val2 + val3       # Unqualified refs to all ancestors
-```
-                              ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:276:24:276:28:**
-```roc
-                val4 = val1 + val2 + val3       # Unqualified refs to all ancestors
-```
-                       ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:276:24:276:28:**
-```roc
-                val4 = val1 + val2 + val3       # Unqualified refs to all ancestors
-```
-                       ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:276:31:276:35:**
-```roc
-                val4 = val1 + val2 + val3       # Unqualified refs to all ancestors
-```
-                              ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:276:38:276:42:**
-```roc
-                val4 = val1 + val2 + val3       # Unqualified refs to all ancestors
-```
-                                     ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:315:24:315:28:**
-```roc
-                val4 = val3 * 2                 # Unqualified ref
-```
-                       ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:315:24:315:28:**
-```roc
-                val4 = val3 * 2                 # Unqualified ref
-```
-                       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:312:27:312:31:**
-```roc
-            val3 = val1 + val2                  # Unqualified refs
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:312:20:312:24:**
-```roc
-            val3 = val1 + val2                  # Unqualified refs
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:312:20:312:24:**
-```roc
-            val3 = val1 + val2                  # Unqualified refs
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:312:27:312:31:**
-```roc
-            val3 = val1 + val2                  # Unqualified refs
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:334:24:334:28:**
-```roc
-                val4 = val3 + val2              # Unqualified refs
-```
-                       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:334:31:334:35:**
-```roc
-                val4 = val3 + val2              # Unqualified refs
-```
-                              ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:334:24:334:28:**
-```roc
-                val4 = val3 + val2              # Unqualified refs
-```
-                       ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:334:31:334:35:**
-```roc
-                val4 = val3 + val2              # Unqualified refs
-```
-                              ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:331:27:331:31:**
-```roc
-            val3 = val1 + val2                  # Forward ref to val2 (unqualified)
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:331:20:331:24:**
-```roc
-            val3 = val1 + val2                  # Forward ref to val2 (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:331:20:331:24:**
-```roc
-            val3 = val1 + val2                  # Forward ref to val2 (unqualified)
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:331:27:331:31:**
-```roc
-            val3 = val1 + val2                  # Forward ref to val2 (unqualified)
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val4` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:362:49:362:53:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                                                ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:362:42:362:46:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                                         ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:362:35:362:39:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                                  ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:362:28:362:32:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                           ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:362:28:362:32:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                           ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:362:35:362:39:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                                  ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:362:42:362:46:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                                         ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val4` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val4` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:362:49:362:53:**
-```roc
-                    val5 = val1 + val2 + val3 + val4    # All unqualified
-```
-                                                ^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -1270,142 +531,17 @@ The unused variable is declared here:
            ^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `val4` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Shadowing.useL2` does not exist.
 
-**associated_items_truly_comprehensive.md:406:49:406:53:**
+`Shadowing` is in scope, but it has no associated `useL2`.
+
+It's referenced here:
+**associated_items_truly_comprehensive.md:451:11:451:32:**
 ```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
+shadow7 = Shadowing.L2.L3.useL2                 # 2
 ```
-                                                ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:406:42:406:46:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                                         ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:406:35:406:39:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                                  ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:406:28:406:32:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                           ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val1` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:406:28:406:32:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                           ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:406:35:406:39:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                                  ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:406:42:406:46:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                                         ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val4` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val4` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:406:49:406:53:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                                                ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:409:24:409:28:**
-```roc
-                val4 = val3 * 2                             # Unqualified
-```
-                       ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:409:24:409:28:**
-```roc
-                val4 = val3 * 2                             # Unqualified
-```
-                       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `typed` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:468:21:468:26:**
-```roc
-        alsoTyped = typed + 1                   # Unqualified ref to outer
-```
-                    ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `typed` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_typed` to suppress this warning.
-The unused variable is declared here:
-**associated_items_truly_comprehensive.md:468:21:468:26:**
-```roc
-        alsoTyped = typed + 1                   # Unqualified ref to outer
-```
-                    ^^^^^
+          ^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -3384,7 +2520,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.Inner.innerVal"))
 		(e-lookup-local
-			(p-assign (ident "outerVal"))))
+			(p-assign (ident "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.outerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.outerVal"))
 		(e-num (value "43")))
@@ -3398,7 +2534,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner.innerVal"))
 		(e-lookup-local
-			(p-assign (ident "outerVal"))))
+			(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.outerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.outerVal"))
 		(e-num (value "45")))
@@ -3419,7 +2555,8 @@ anno2 = Annotated.L2.alsoTyped # 889
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA.valA"))
 		(e-binop (op "add")
-			(e-runtime-error (tag "nested_value_not_found"))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB")))
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB"))
@@ -3437,7 +2574,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val2")))
+				(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val1"))
@@ -3452,9 +2589,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val1")))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.val2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.val2"))
 		(e-num (value "200")))
@@ -3465,9 +2602,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val2")))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")))
 			(e-lookup-local
-				(p-assign (ident "val1")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2"))
 		(e-binop (op "add")
@@ -3499,7 +2636,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val1")))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1")))
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.val2"))
@@ -3507,7 +2644,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(e-lookup-local
 				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3")))
 			(e-lookup-local
-				(p-assign (ident "val1")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1"))
 		(e-num (value "5")))
@@ -3515,9 +2652,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val1")))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.val2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.val2"))
 		(e-num (value "2")))
@@ -3528,21 +2665,22 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val2")))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2")))
 			(e-lookup-local
-				(p-assign (ident "val1")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val1")))
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1")))
 			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1"))
 		(e-num (value "7")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a.val3a"))
-		(e-runtime-error (tag "nested_value_not_found")))
+		(e-lookup-local
+			(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.val2b"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.val2a"))
 		(e-num (value "10")))
@@ -3558,11 +2696,11 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-binop (op "add")
 			(e-binop (op "add")
 				(e-lookup-local
-					(p-assign (ident "val1")))
+					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.val2"))))
 			(e-lookup-local
-				(p-assign (ident "val3")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.val3")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.val3"))
 		(e-num (value "3")))
@@ -3597,15 +2735,15 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4.val4"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val3")))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3")))
 			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val1")))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))
 		(e-num (value "10")))
@@ -3619,16 +2757,16 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4.val4"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val3")))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val1")))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2"))
 		(e-num (value "5")))
@@ -3641,13 +2779,13 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(e-binop (op "add")
 				(e-binop (op "add")
 					(e-lookup-local
-						(p-assign (ident "val1")))
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1")))
 					(e-lookup-local
-						(p-assign (ident "val2"))))
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.val2"))))
 				(e-lookup-local
-					(p-assign (ident "val3"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.val3"))))
 			(e-lookup-local
-				(p-assign (ident "val4")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.val4"))
 		(e-num (value "4")))
@@ -3693,18 +2831,18 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(e-binop (op "add")
 				(e-binop (op "add")
 					(e-lookup-local
-						(p-assign (ident "val1")))
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1")))
 					(e-lookup-local
-						(p-assign (ident "val2"))))
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))))
 				(e-lookup-local
-					(p-assign (ident "val3"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
 			(e-lookup-local
-				(p-assign (ident "val4")))))
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val3")))
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3")))
 			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))
@@ -3757,7 +2895,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "typed")))
+				(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed")))
 			(e-num (value "1")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
@@ -4048,8 +3186,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.L3.useL1"))))
 	(d-let
 		(p-assign (ident "shadow7"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.L3.useL2"))))
+		(e-runtime-error (tag "nested_value_not_found")))
 	(d-let
 		(p-assign (ident "shadow8"))
 		(e-lookup-local
@@ -4413,62 +3550,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
@@ -4478,7 +3559,63 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
@@ -4505,66 +3642,66 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "_e"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_e"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "U64"))
@@ -4747,62 +3884,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
@@ -4812,7 +3893,63 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
@@ -4839,66 +3976,66 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "_e"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_e"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "U64"))
