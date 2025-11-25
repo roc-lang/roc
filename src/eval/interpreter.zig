@@ -2216,6 +2216,7 @@ pub const Interpreter = struct {
             },
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
+
                 const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
                 var receiver_value = try self.evalExprMinimal(dot_access.receiver, roc_ops, receiver_rt_var);
                 defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
@@ -5798,14 +5799,6 @@ pub const Interpreter = struct {
                 break :blk ident;
             }
 
-            // Try with "Builtin." prefix for builtin module methods
-            // (Associated items in builtin module are stored with full "Builtin.Type.method" names)
-            var builtin_buf: [256]u8 = undefined;
-            const builtin_qualified = try std.fmt.bufPrint(&builtin_buf, "Builtin.{s}", .{qualified_name});
-            if (origin_env.common.findIdent(builtin_qualified)) |ident| {
-                break :blk ident;
-            }
-
             // Try unqualified name as fallback
             if (origin_env.common.findIdent(method_name_str)) |ident| {
                 break :blk ident;
@@ -6013,6 +6006,12 @@ pub const Interpreter = struct {
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
+
+        // DEBUG: Print content type for debugging method dispatch issues
+        // std.debug.print("translateTypeVar: content = {s}\n", .{@tagName(resolved.desc.content)});
+        // if (resolved.desc.content == .structure) {
+        //     std.debug.print("  structure = {s}\n", .{@tagName(resolved.desc.content.structure)});
+        // }
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
         if (self.translate_cache.get(key)) |found| {

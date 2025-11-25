@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» List.fold_rev([1, 2, 3], 0, |x, acc| x - acc)
+» List.fold_rev([10, 11], 54, |x, acc| x - acc)
 ~~~
 # OUTPUT
-2
+53
 # PROBLEMS
 NIL

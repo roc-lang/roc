@@ -41,7 +41,7 @@ Builtin :: [].{
 		fold_rev : List(item), state, (item, state -> state) -> state
 		fold_rev = |list, init, step| {
 			var $state = init
-			var $index = List.len(list)
+			var $index = list.len()
 
 			while $index > 0 {
 				$index = $index - 1
