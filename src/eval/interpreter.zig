@@ -5565,59 +5565,6 @@ pub const Interpreter = struct {
         return error.MethodNotFound;
     }
 
-    /// Evaluate a numeric literal expression with a specific layout.
-    /// This is used when we know the target type from context (e.g., comparing with a typed value).
-    fn evalNumLitWithLayout(
-        self: *Interpreter,
-        expr_idx: can.CIR.Expr.Idx,
-        target_layout: layout.Layout,
-        roc_ops: *RocOps,
-    ) Error!StackValue {
-        _ = roc_ops;
-        const expr = self.env.store.getExpr(expr_idx);
-        if (expr != .e_num) {
-            return error.TypeMismatch;
-        }
-        const num_lit = expr.e_num;
-
-        var value = try self.pushRaw(target_layout, 0);
-        value.is_initialized = false;
-
-        switch (target_layout.tag) {
-            .scalar => switch (target_layout.data.scalar.tag) {
-                .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
-                .frac => switch (target_layout.data.scalar.data.frac) {
-                    .f32 => {
-                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
-                        if (num_lit.value.kind == .u128) {
-                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
-                        } else {
-                            ptr.* = @floatFromInt(num_lit.value.toI128());
-                        }
-                    },
-                    .f64 => {
-                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
-                        if (num_lit.value.kind == .u128) {
-                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
-                        } else {
-                            ptr.* = @floatFromInt(num_lit.value.toI128());
-                        }
-                    },
-                    .dec => {
-                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
-                    },
-                },
-                else => return error.TypeMismatch,
-            },
-            else => return error.TypeMismatch,
-        }
-        value.is_initialized = true;
-        return value;
-    }
-
     /// Dispatch a binary operator to its corresponding method.
     /// Handles the full method dispatch including:
     /// - Type resolution with Dec default for flex/rigid vars
@@ -5633,6 +5580,7 @@ pub const Interpreter = struct {
     ) Error!StackValue {
         const lhs_ct_var = can.ModuleEnv.varFrom(lhs_expr);
         const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+
         const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr);
         const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
@@ -5648,29 +5596,11 @@ pub const Interpreter = struct {
             lhs_resolved = self.runtime_types.resolveVar(dec_var);
         }
 
-        // Evaluate LHS first
+        // Evaluate both operands
         var lhs = try self.evalExprMinimal(lhs_expr, roc_ops, lhs_rt_var);
         defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-        // For numeric binary operations, if LHS has a scalar layout (numeric) and RHS is a flex/rigid var,
-        // we need to use the LHS's actual layout to determine RHS type
-        const rhs_resolved = self.runtime_types.resolveVar(rhs_rt_var);
-        const rhs_expr_data = self.env.store.getExpr(rhs_expr);
-
-        // Check if RHS is a numeric literal that needs to be coerced to match LHS
-        const rhs_is_flex = rhs_resolved.desc.content == .flex or rhs_resolved.desc.content == .rigid;
-        const lhs_is_numeric = lhs.layout.tag == .scalar and
-            (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
-        const should_coerce_rhs = rhs_is_flex and lhs_is_numeric and rhs_expr_data == .e_num;
-
-        // Evaluate RHS with LHS's layout if coercion is needed
-        var rhs: StackValue = undefined;
-        if (should_coerce_rhs) {
-            // Evaluate the numeric literal using the LHS's layout type
-            rhs = try self.evalNumLitWithLayout(rhs_expr, lhs.layout, roc_ops);
-        } else {
-            rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
-        }
+        var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
         defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
         // Get the nominal type information from lhs, or handle anonymous structural types
