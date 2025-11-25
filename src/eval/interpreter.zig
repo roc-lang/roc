@@ -2841,6 +2841,52 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_trim_start => {
+                // Str.trim_start : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strTrimStart(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_trim_end => {
+                // Str.trim_end : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strTrimEnd(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .str_caseless_ascii_equals => {
                 // Str.caseless_ascii_equals : Str, Str -> Bool
                 std.debug.assert(args.len == 2);

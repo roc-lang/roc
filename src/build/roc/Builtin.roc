@@ -4,6 +4,8 @@ Builtin :: [].{
 		concat : Str, Str -> Str
 		contains : Str, Str -> Bool
 		trim : Str -> Str
+		trim_start : Str -> Str
+		trim_end : Str -> Str
 		caseless_ascii_equals : Str, Str -> Bool
 		with_ascii_lowercased : Str -> Str
 		with_ascii_uppercased : Str -> Str
