@@ -2,6 +2,7 @@ Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
 		is_empty : Str -> Bool
 		concat : Str, Str -> Str
+		trim : Str -> Str
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
