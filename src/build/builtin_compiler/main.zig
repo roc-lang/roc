@@ -137,12 +137,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
         try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
     }
-    if (env.common.findIdent("Builtin.Try.is_eq")) |try_is_eq_ident| {
-        try low_level_map.put(try_is_eq_ident, .try_is_eq);
-    }
-    if (env.common.findIdent("Builtin.Try.is_ne")) |try_is_ne_ident| {
-        try low_level_map.put(try_is_ne_ident, .try_is_ne);
-    }
 
     // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };

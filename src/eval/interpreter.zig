@@ -3074,39 +3074,6 @@ pub const Interpreter = struct {
                 const rhs = args[1].asBool();
                 return try self.makeBoolValue(lhs != rhs);
             },
-
-            // Try operations
-            .try_is_eq => {
-                // Try.is_eq : Try(ok, err), Try(ok, err) -> Bool
-                // Uses structural equality on the backing tag union
-                std.debug.assert(args.len == 2);
-                const receiver_var = self.method_receiver_type orelse {
-                    return error.TypeMismatch;
-                };
-                const result = self.valuesStructurallyEqual(args[0], receiver_var, args[1], receiver_var) catch |err| {
-                    if (err == error.NotImplemented) {
-                        return try self.makeBoolValue(false);
-                    }
-                    return err;
-                };
-                return try self.makeBoolValue(result);
-            },
-            .try_is_ne => {
-                // Try.is_ne : Try(ok, err), Try(ok, err) -> Bool
-                // Uses structural equality on the backing tag union and negates
-                std.debug.assert(args.len == 2);
-                const receiver_var = self.method_receiver_type orelse {
-                    return error.TypeMismatch;
-                };
-                const result = self.valuesStructurallyEqual(args[0], receiver_var, args[1], receiver_var) catch |err| {
-                    if (err == error.NotImplemented) {
-                        return try self.makeBoolValue(true); // If can't compare, assume not equal
-                    }
-                    return err;
-                };
-                return try self.makeBoolValue(!result);
-            },
-
             // Numeric type checking operations
             .num_is_zero => {
                 // num.is_zero : num -> Bool
