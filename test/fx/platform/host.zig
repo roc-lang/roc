@@ -54,7 +54,8 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: 
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    @panic(message);
+    std.fs.File.stderr().deprecatedWriter().print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
+    std.process.exit(1);
 }
 
 // External symbols provided by the Roc runtime object file

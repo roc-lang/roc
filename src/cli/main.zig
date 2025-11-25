@@ -1246,7 +1246,8 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             if (exit_code == 0) {
                 std.log.debug("Child process completed successfully", .{});
             } else {
-                std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+                // The host exited with an error - it should have printed any error messages
+                std.log.debug("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
                 return error.ProcessExitedWithError;
             }
         },
@@ -2745,15 +2746,31 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     env.module_name = module_name;
     try env.common.calcLineStarts(allocs.gpa);
 
+    // Load builtin modules required by the type checker and interpreter
+    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocs.gpa, compiled_builtins.builtin_indices_bin) catch |err| {
+        try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
+        return err;
+    };
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source) catch |err| {
+        try stderr.print("Failed to load Builtin module: {}\n", .{err});
+        return err;
+    };
+    defer builtin_module.deinit();
+
+    // Populate module_envs with Bool, Try, Dict, Set from builtin module
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs.deinit();
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
-        .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
-        .try_stmt = @enumFromInt(0), // TODO: load from builtin modules
-        .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
-        .builtin_module = null,
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_module.env,
     };
 
     // Parse the source code as a full module
@@ -2769,8 +2786,16 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(allocs.gpa, module_name);
 
+    // Populate module_envs with Bool, Try, Dict, Set using shared function
+    try Can.populateModuleEnvs(
+        &module_envs,
+        &env,
+        builtin_module.env,
+        builtin_indices,
+    );
+
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, &module_envs) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
         return err;
     };
@@ -2788,8 +2813,11 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         return err;
     };
 
+    // Build imported_envs array with builtin module
+    const imported_envs: []const *const ModuleEnv = &.{builtin_module.env};
+
     // Type check the module
-    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, null, &env.store.regions, module_common_idents) catch |err| {
+    var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}\n", .{err});
         return err;
     };
@@ -2801,20 +2829,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Evaluate all top-level declarations at compile time
-    // Load builtin modules required by the interpreter
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocs.gpa, compiled_builtins.builtin_indices_bin) catch |err| {
-        try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
-        return err;
-    };
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source) catch |err| {
-        try stderr.print("Failed to load Builtin module: {}\n", .{err});
-        return err;
-    };
-    defer builtin_module.deinit();
-
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -2827,7 +2843,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
-    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval) catch |err| {
+    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         return err;
     };
