@@ -1128,9 +1128,15 @@ pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) st
             // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
             const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
 
-            // Unify the app export's type with the platform's required type
-            // The platform type is the "expected" type, app export is "actual"
-            _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+            // Create a copy of the export's type for unification.
+            // This prevents unification failure from corrupting the app's actual types
+            // (which would cause the interpreter to fail when trying to get layouts).
+            const export_copy = try self.copyVar(export_var, self.cir, required_type.region);
+            const instantiated_export_copy = try self.instantiateVar(export_copy, &env, .{ .explicit = required_type.region });
+
+            // Unify the platform's required type with the COPY of the app's export type.
+            // The platform type is the "expected" type, app export copy is "actual".
+            _ = try self.unifyFromAnno(instantiated_required_var, instantiated_export_copy, &env);
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }
@@ -3226,8 +3232,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // without doing any additional work
                         try self.unifyWith(expr_var, .err, env);
                     } else {
-                        // From the base function type, extract the actual function  info
-                        const mb_func: ?types_mod.Func = inner_blk: {
+                        // From the base function type, extract the actual function info
+                        // and also track whether the function is effectful
+                        const FuncInfo = struct { func: types_mod.Func, is_effectful: bool };
+                        const mb_func_info: ?FuncInfo = inner_blk: {
                             // Here, we unwrap the function, following aliases, to get
                             // the actual function we want to check against
                             var var_ = func_var;
@@ -3235,9 +3243,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 switch (self.types.resolveVar(var_).desc.content) {
                                     .structure => |flat_type| {
                                         switch (flat_type) {
-                                            .fn_pure => |func| break :inner_blk func,
-                                            .fn_unbound => |func| break :inner_blk func,
-                                            .fn_effectful => |func| break :inner_blk func,
+                                            .fn_pure => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
+                                            .fn_unbound => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
+                                            .fn_effectful => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = true },
                                             else => break :inner_blk null,
                                         }
                                     },
@@ -3248,6 +3256,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 }
                             }
                         };
+                        const mb_func = if (mb_func_info) |info| info.func else null;
+
+                        // If the function being called is effectful, mark this expression as effectful
+                        if (mb_func_info) |info| {
+                            if (info.is_effectful) {
+                                does_fx = true;
+                            }
+                        }
 
                         // Get the name of the function (for error messages)
                         const func_name: ?Ident.Idx = inner_blk: {

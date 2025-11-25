@@ -1370,19 +1370,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         has_platform = false;
     };
 
-    // Compile platform main.roc to get requires_types (if platform exists)
-    var platform_main_env: ?*ModuleEnv = null;
-    if (has_platform) {
-        platform_main_env = compileModuleToSharedMemory(
-            allocs,
-            platform_main_path,
-            "main.roc",
-            shm_allocator,
-            &builtin_modules,
-        ) catch null;
-    }
-
-    // Create header - use multi-module format
+    // IMPORTANT: Create header FIRST before any module compilation.
+    // The interpreter_shim expects the Header to be at FIRST_ALLOC_OFFSET (504).
+    // If we compile modules first, they would occupy that offset and break
+    // shared memory layout assumptions.
     const Header = struct {
         parent_base_addr: u64,
         module_count: u32,
@@ -1394,6 +1385,20 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const header_ptr = try shm_allocator.create(Header);
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
+
+    // Compile platform main.roc to get requires_types (if platform exists)
+    // This must come AFTER header allocation to preserve memory layout.
+    var platform_main_env: ?*ModuleEnv = null;
+    if (has_platform) {
+        platform_main_env = compileModuleToSharedMemory(
+            allocs,
+            platform_main_path,
+            "main.roc",
+            shm_allocator,
+            &builtin_modules,
+            &.{},
+        ) catch null;
+    }
 
     // Module count = 1 (app) + number of platform modules
     const total_module_count: u32 = 1 + @as(u32, @intCast(exposed_modules.items.len));
@@ -1421,6 +1426,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
             module_filename,
             shm_allocator,
             &builtin_modules,
+            &.{},
         );
 
         // Add exposed item aliases with "pf." prefix for import resolution
@@ -1570,6 +1576,11 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         builtin_modules.builtin_module.env,
         builtin_modules.builtin_indices,
     );
+
+    for (platform_env_ptrs) |mod_env| {
+        const name = try app_env.insertIdent(base.Ident.for_text(mod_env.module_name));
+        try app_module_envs_map.put(name, .{ .env = mod_env });
+    }
 
     // Add platform modules to the module envs map for canonicalization
     // Two keys are needed for each platform module:
@@ -1726,6 +1737,7 @@ fn compileModuleToSharedMemory(
     module_name_arg: []const u8,
     shm_allocator: std.mem.Allocator,
     builtin_modules: *eval.BuiltinModules,
+    additional_modules: []const *ModuleEnv,
 ) !*ModuleEnv {
     // Read file
     const file = try std.fs.cwd().openFile(file_path, .{});
@@ -1761,6 +1773,11 @@ fn compileModuleToSharedMemory(
         builtin_modules.builtin_module.env,
         builtin_modules.builtin_indices,
     );
+
+    for (additional_modules) |mod_env| {
+        const name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
+        try module_envs_map.put(name, .{ .env = mod_env });
+    }
 
     // Canonicalize (without root_is_platform - we'll run HostedCompiler separately)
     var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);

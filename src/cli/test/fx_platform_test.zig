@@ -300,8 +300,8 @@ test "fx platform match returning string" {
     }
 
     // The app should run successfully and exit with code 0
-    // It produces no output since it just returns a string that is discarded
-    try testing.expectEqualStrings("", run_result.stdout);
+    // It outputs "0" from the match expression
+    try testing.expectEqualStrings("0\n", run_result.stdout);
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
