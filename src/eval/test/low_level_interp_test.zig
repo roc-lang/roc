@@ -222,6 +222,258 @@ test "e_low_level_lambda - Str.is_empty in conditional" {
     try testing.expectEqualStrings("True", value);
 }
 
+test "e_low_level_lambda - Str.concat with two non-empty strings" {
+    const src =
+        \\x = Str.concat("hello", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"helloworld\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with empty and non-empty string" {
+    const src =
+        \\x = Str.concat("", "test")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"test\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with non-empty and empty string" {
+    const src =
+        \\x = Str.concat("test", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"test\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with two empty strings" {
+    const src =
+        \\x = Str.concat("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with special characters" {
+    const src =
+        \\x = Str.concat("hello ", "world!")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world!\"", value);
+}
+
+test "e_low_level_lambda - Str.concat with longer strings" {
+    const src =
+        \\x = Str.concat("This is a longer string that contains about one hundred characters for testing concatenation.", " This is the second string that also has many characters in it for testing longer string operations.")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"This is a longer string that contains about one hundred characters for testing concatenation. This is the second string that also has many characters in it for testing longer string operations.\"", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals with equal strings" {
+    const src =
+        \\x = Str.caseless_ascii_equals("hello", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals with different case" {
+    const src =
+        \\x = Str.caseless_ascii_equals("hello", "HELLO")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals with different strings" {
+    const src =
+        \\x = Str.caseless_ascii_equals("hello", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals with empty strings" {
+    const src =
+        \\x = Str.caseless_ascii_equals("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals with empty and non-empty string" {
+    const src =
+        \\x = Str.caseless_ascii_equals("", "test")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals with longer strings" {
+    const src =
+        \\x = Str.caseless_ascii_equals("This is a longer string that contains about one hundred characters for testing purposes.", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals long and small strings" {
+    const src =
+        \\x = Str.caseless_ascii_equals("THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.", "This")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals small and long strings" {
+    const src =
+        \\x = Str.caseless_ascii_equals("This", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals eq with non-ascii chars" {
+    const src =
+        \\x = Str.caseless_ascii_equals("COFFÉ", "coffÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.caseless_ascii_equals non-ascii casing difference" {
+    const src =
+        \\x = Str.caseless_ascii_equals("coffé", "coffÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with mixed case" {
+    const src =
+        \\x = Str.with_ascii_lowercased("HeLLo")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with already lowercase" {
+    const src =
+        \\x = Str.with_ascii_lowercased("hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with empty string" {
+    const src =
+        \\x = Str.with_ascii_lowercased("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with non-ascii chars" {
+    const src =
+        \\x = Str.with_ascii_lowercased("COFFÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"coffÉ\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with mixed case" {
+    const src =
+        \\x = Str.with_ascii_uppercased("HeLLo")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"HELLO\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with already uppercase" {
+    const src =
+        \\x = Str.with_ascii_uppercased("HELLO")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"HELLO\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with empty string" {
+    const src =
+        \\x = Str.with_ascii_uppercased("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with non-ascii chars" {
+    const src =
+        \\x = Str.with_ascii_uppercased("coffÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"COFFÉ\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased long text" {
+    const src =
+        \\x = Str.with_ascii_uppercased("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ\"", value);
+}
+
+test "e_low_level_lambda - Str.trim with an empty string" {
+    const src =
+        \\x = Str.trim("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim with a whitespace string" {
+    const src =
+        \\x = Str.trim("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim with a non-whitespace string" {
+    const src =
+        \\x = Str.trim("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
 test "e_low_level_lambda - List.concat with two non-empty lists" {
     const src =
         \\x = List.concat([1, 2], [3, 4])

@@ -141,11 +141,13 @@ pub const TestRunner = struct {
         allocator: std.mem.Allocator,
         cir: *ModuleEnv,
         builtin_types_param: BuiltinTypes,
+        other_modules: []const *const can.ModuleEnv,
+        builtin_module_env: ?*const can.ModuleEnv,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, null, &[_]*const can.ModuleEnv{}),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.array_list.Managed(TestResult).init(allocator),

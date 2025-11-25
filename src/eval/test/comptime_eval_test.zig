@@ -979,6 +979,102 @@ test "comptime eval - multiple associated items with dependencies" {
     return error.TestExpectedDefNotFound;
 }
 
+test "comptime eval - deeply nested associated items (5+ levels)" {
+    // Test that arbitrarily deep nesting works correctly
+    // This creates a 5-level hierarchy: Module.One.Two.Three.Four.value
+    const src =
+        \\One := [A].{
+        \\    Two := [B].{
+        \\        Three := [C].{
+        \\            Four := [D].{
+        \\                value = 123
+        \\            }
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\# Access the deeply nested value
+        \\result = One.Two.Three.Four.value
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate: One.Two.Three.Four.value and result
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'result' was folded to 123
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "result")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 123), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - deeply nested with multiple items at each level" {
+    // Test multiple associated items at various nesting levels
+    const src =
+        \\Outer := [X].{
+        \\    a = 10
+        \\    Middle := [Y].{
+        \\        b = 20
+        \\        Inner := [Z].{
+        \\            c = 30
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\sum = Outer.a + Outer.Middle.b + Outer.Middle.Inner.c
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate: Outer.a, Outer.Middle.b, Outer.Middle.Inner.c, and sum
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'sum' was folded to 60
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "sum")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 60), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
 // Numeric literal validation tests (validated during comptime eval)
 
 test "comptime eval - U8: 256 does not fit" {

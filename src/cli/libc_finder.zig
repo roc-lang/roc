@@ -305,6 +305,9 @@ fn getMultiarchTriplet(arena: std.mem.Allocator, arch: []const u8) ![]const u8 {
 }
 
 test "libc detection integration test" {
+    // This test is not relevant on Windows (`uname` not available)
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
     var allocs: Allocators = undefined;
     allocs.initInPlace(std.testing.allocator);
     defer allocs.deinit();

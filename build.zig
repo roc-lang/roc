@@ -823,7 +823,7 @@ pub fn build(b: *std.Build) void {
     if (!is_native) {
         std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
     } else if (is_windows) {
-        std.log.warn("Windows does not support fuzzing (Only building repro executables)", .{});
+        // Windows does not support fuzzing - only build repro executables
     } else if (use_system_afl) {
         // If we have system afl, no need for llvm-config.
         build_afl = true;

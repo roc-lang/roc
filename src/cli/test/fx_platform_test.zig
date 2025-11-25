@@ -184,3 +184,83 @@ test "fx platform stdin simple" {
     // stdin_simple reads from stdin and prints to stderr
     try testing.expect(std.mem.indexOf(u8, result.stderr, "simple test") != null);
 }
+
+test "fx platform expect with main" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run `roc test` on the app that has both main! and an expect
+    // Note: `roc test` only evaluates expect statements, it does not run main!
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test",
+            "test/fx/expect_with_main.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // When all tests pass without --verbose, roc test produces no output
+    try testing.expectEqualStrings("", run_result.stdout);
+    try testing.expectEqualStrings("", run_result.stderr);
+}
+
+test "fx platform expect with numeric literal" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run `roc test` on an app that compares a typed variable with a numeric literal
+    // This tests that numeric literals in top-level expects are properly typed
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test",
+            "test/fx/expect_with_literal.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // When all tests pass without --verbose, roc test produces no output
+    try testing.expectEqualStrings("", run_result.stdout);
+    try testing.expectEqualStrings("", run_result.stderr);
+}

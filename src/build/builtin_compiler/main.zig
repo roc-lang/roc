@@ -98,6 +98,21 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
     }
+    if (env.common.findIdent("Builtin.Str.concat")) |str_concat_ident| {
+        try low_level_map.put(str_concat_ident, .str_concat);
+    }
+    if (env.common.findIdent("Builtin.Str.trim")) |str_trim_ident| {
+        try low_level_map.put(str_trim_ident, .str_trim);
+    }
+    if (env.common.findIdent("Builtin.Str.caseless_ascii_equals")) |str_caseless_ascii_equals_ident| {
+        try low_level_map.put(str_caseless_ascii_equals_ident, .str_caseless_ascii_equals);
+    }
+    if (env.common.findIdent("Builtin.Str.with_ascii_lowercased")) |str_with_ascii_lowercased_ident| {
+        try low_level_map.put(str_with_ascii_lowercased_ident, .str_with_ascii_lowercased);
+    }
+    if (env.common.findIdent("Builtin.Str.with_ascii_uppercased")) |str_with_ascii_uppercased_ident| {
+        try low_level_map.put(str_with_ascii_uppercased_ident, .str_with_ascii_uppercased);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

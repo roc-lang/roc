@@ -681,6 +681,15 @@ pub const Interpreter = struct {
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
                         },
+                        .s_dbg => |dbg_stmt| {
+                            const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
+                            const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                            const value = try self.evalExprMinimal(dbg_stmt.expr, roc_ops, inner_rt_var);
+                            defer value.decref(&self.runtime_layout_store, roc_ops);
+                            const rendered = try self.renderValueRocWithType(value, inner_rt_var);
+                            defer self.allocator.free(rendered);
+                            roc_ops.dbg(rendered);
+                        },
                         .s_for => |for_stmt| {
                             // Evaluate the list expression
                             const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
@@ -2216,7 +2225,6 @@ pub const Interpreter = struct {
             },
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
-
                 const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
                 var receiver_value = try self.evalExprMinimal(dot_access.receiver, roc_ops, receiver_rt_var);
                 defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
@@ -2755,6 +2763,121 @@ pub const Interpreter = struct {
 
                 return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
             },
+            .str_concat => {
+                // Str.concat : Str, Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const str_a_arg = args[0];
+                const str_b_arg = args[1];
+
+                std.debug.assert(str_a_arg.ptr != null);
+                std.debug.assert(str_b_arg.ptr != null);
+
+                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
+                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+
+                // Call strConcat to concatenate the strings
+                const result_str = builtins.str.strConcat(str_a.*, str_b.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_a_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_trim => {
+                // Str.trim : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strTrim(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_caseless_ascii_equals => {
+                // Str.caseless_ascii_equals : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const str_a_arg = args[0];
+                const str_b_arg = args[1];
+
+                std.debug.assert(str_a_arg.ptr != null);
+                std.debug.assert(str_b_arg.ptr != null);
+
+                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
+                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+
+                // Call strConcat to concatenate the strings
+                const result = builtins.str.strCaselessAsciiEquals(str_a.*, str_b.*);
+
+                return try self.makeBoolValue(result);
+            },
+            .str_with_ascii_lowercased => {
+                // Str.with_ascii_lowercased : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strWithAsciiLowercased(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_with_ascii_uppercased => {
+                // Str.with_ascii_uppercased : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+
+                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_str = builtins.str.strWithAsciiUppercased(roc_str_arg.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
@@ -3075,7 +3198,7 @@ pub const Interpreter = struct {
                     .int => |l| try out.setInt(l + rhs.int),
                     .f32 => |l| out.setF32(l + rhs.f32),
                     .f64 => |l| out.setF64(l + rhs.f64),
-                    .dec => |l| out.setDec(RocDec{ .num = l.num + rhs.dec.num }),
+                    .dec => |l| out.setDec(RocDec.add(l, rhs.dec, roc_ops)),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3093,7 +3216,7 @@ pub const Interpreter = struct {
                     .int => |l| try out.setInt(l - rhs.int),
                     .f32 => |l| out.setF32(l - rhs.f32),
                     .f64 => |l| out.setF64(l - rhs.f64),
-                    .dec => |l| out.setDec(RocDec{ .num = l.num - rhs.dec.num }),
+                    .dec => |l| out.setDec(RocDec.sub(l, rhs.dec, roc_ops)),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3111,7 +3234,7 @@ pub const Interpreter = struct {
                     .int => |l| try out.setInt(l * rhs.int),
                     .f32 => |l| out.setF32(l * rhs.f32),
                     .f64 => |l| out.setF64(l * rhs.f64),
-                    .dec => |l| out.setDec(RocDec{ .num = @divTrunc(l.num * rhs.dec.num, RocDec.one_point_zero_i128) }),
+                    .dec => |l| out.setDec(RocDec.mul(l, rhs.dec, roc_ops)),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3140,8 +3263,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| {
                         if (rhs.dec.num == 0) return error.DivisionByZero;
-                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
-                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                        out.setDec(RocDec.div(l, rhs.dec, roc_ops));
                     },
                 }
                 out.is_initialized = true;
@@ -3170,9 +3292,9 @@ pub const Interpreter = struct {
                         out.setF64(@trunc(l / rhs.f64));
                     },
                     .dec => |l| {
+                        // For Dec, div and div_trunc are the same since it's already integer-like
                         if (rhs.dec.num == 0) return error.DivisionByZero;
-                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
-                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                        out.setDec(RocDec.div(l, rhs.dec, roc_ops));
                     },
                 }
                 out.is_initialized = true;
@@ -3202,7 +3324,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| {
                         if (rhs.dec.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec{ .num = @rem(l.num, rhs.dec.num) });
+                        out.setDec(RocDec.rem(l, rhs.dec, roc_ops));
                     },
                 }
                 out.is_initialized = true;
@@ -4244,22 +4366,22 @@ pub const Interpreter = struct {
         result_layout: Layout,
         lhs: StackValue,
         rhs: StackValue,
+        roc_ops: *RocOps,
     ) !StackValue {
         const lhs_dec = try self.stackValueToDecimal(lhs);
         const rhs_dec = try self.stackValueToDecimal(rhs);
 
         const result_dec: RocDec = switch (op) {
-            .add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
-            .sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
-            .mul => RocDec{ .num = @divTrunc(lhs_dec.num * rhs_dec.num, RocDec.one_point_zero_i128) },
+            .add => RocDec.add(lhs_dec, rhs_dec, roc_ops),
+            .sub => RocDec.sub(lhs_dec, rhs_dec, roc_ops),
+            .mul => RocDec.mul(lhs_dec, rhs_dec, roc_ops),
             .div, .div_trunc => blk: {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
-                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                break :blk RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                break :blk RocDec.div(lhs_dec, rhs_dec, roc_ops);
             },
             .rem => blk: {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                break :blk RocDec.rem(lhs_dec, rhs_dec, roc_ops);
             },
             else => return error.NotImplemented,
         };
@@ -5490,17 +5612,34 @@ pub const Interpreter = struct {
         return self.module_ids.get(origin_module) orelse self.current_module_id;
     }
 
-    /// Build a fully-qualified method identifier in the form "TypeName.method".
+    /// Build a fully-qualified method identifier.
     /// Note: nominal_ident comes from the runtime type store (translated idents),
     /// while method_name comes from the current environment.
-    fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
+    ///
+    /// Supports arbitrary nesting depth because type_name can itself be qualified.
+    /// Examples:
+    ///   - "Builtin.List.len" (2 levels: module + type + method)
+    ///   - "Builtin.Num.Dec.plus" (3 levels: module + nested type + method)
+    ///   - "MyModule.Foo.Bar.Baz.method" (5 levels: module + deeply nested type + method)
+    fn getMethodQualifiedIdent(
+        self: *const Interpreter,
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name: base_pkg.Ident.Idx,
+        buf: []u8,
+    ) ![]const u8 {
+        // Build fully-qualified method name: "OriginModule.TypeName.methodName"
+        // where TypeName can itself be qualified (e.g., "Foo.Bar" for nested types)
         // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
         const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        const origin_module_text = runtime_ident_store.getText(origin_module);
         const type_name = runtime_ident_store.getText(nominal_ident);
-        // method_name is from the current environment (e.g., plus_ident)
+        // method_name is from the current environment
         const current_ident_store = self.env.common.getIdentStore();
         const method_name_str = current_ident_store.getText(method_name);
-        return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
+        // Construct: "OriginModule.TypeName.methodName"
+        // Note: TypeName may already contain dots for nested types
+        return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
@@ -5544,6 +5683,7 @@ pub const Interpreter = struct {
     ) Error!StackValue {
         const lhs_ct_var = can.ModuleEnv.varFrom(lhs_expr);
         const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+
         const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr);
         const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
@@ -5562,6 +5702,7 @@ pub const Interpreter = struct {
         // Evaluate both operands
         var lhs = try self.evalExprMinimal(lhs_expr, roc_ops, lhs_rt_var);
         defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
         var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
         defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
@@ -5787,22 +5928,13 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Build the qualified method name: "TypeName.method"
+        // Build the fully-qualified method name: "OriginModule.TypeName.method"
+        // e.g., "Builtin.List.len" or "Builtin.Num.Dec.plus"
         var qualified_name_buf: [256]u8 = undefined;
-        const qualified_name = try self.getMethodQualifiedIdent(nominal_ident, method_name, &qualified_name_buf);
+        const qualified_name = try self.getMethodQualifiedIdent(origin_module, nominal_ident, method_name, &qualified_name_buf);
 
-        const method_name_str = self.env.common.getIdentStore().getText(method_name);
-
-        // Try to find the method in the origin module's exposed items
-        const method_ident = blk: {
-            if (origin_env.common.findIdent(qualified_name)) |ident| {
-                break :blk ident;
-            }
-
-            // Try unqualified name as fallback
-            if (origin_env.common.findIdent(method_name_str)) |ident| {
-                break :blk ident;
-            }
+        // Single lookup with the fully-qualified method name - no fallbacks, no retries
+        const method_ident = origin_env.common.findIdent(qualified_name) orelse {
             return error.MethodLookupFailed;
         };
 
@@ -6006,12 +6138,6 @@ pub const Interpreter = struct {
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
-
-        // DEBUG: Print content type for debugging method dispatch issues
-        // std.debug.print("translateTypeVar: content = {s}\n", .{@tagName(resolved.desc.content)});
-        // if (resolved.desc.content == .structure) {
-        //     std.debug.print("  structure = {s}\n", .{@tagName(resolved.desc.content.structure)});
-        // }
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
         if (self.translate_cache.get(key)) |found| {

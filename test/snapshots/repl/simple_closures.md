@@ -14,6 +14,6 @@ type=repl
 ---
 42
 ---
-False
+Evaluation error: error.MethodLookupFailed
 # PROBLEMS
 NIL
