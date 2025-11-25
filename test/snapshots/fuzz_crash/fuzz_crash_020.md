@@ -196,6 +196,7 @@ UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
 UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
 UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
 UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
+UNUSED VALUE - fuzz_crash_020.md:119:2:119:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -980,6 +981,17 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     __f_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:119:2:119:10:**
+```roc
+	foo == 1
+```
+	^^^^^^^^
+
+It has the type:
+    _Bool_
 
 # TOKENS
 ~~~zig

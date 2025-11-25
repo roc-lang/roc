@@ -2,7 +2,11 @@ Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
 		is_empty : Str -> Bool
 		concat : Str, Str -> Str
-		
+		trim : Str -> Str
+		caseless_ascii_equals : Str, Str -> Bool
+		with_ascii_lowercased : Str -> Str
+		with_ascii_uppercased : Str -> Str
+
 		is_eq : Str, Str -> Bool
 
 		contains : Str, Str -> Bool

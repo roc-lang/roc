@@ -25,12 +25,21 @@ const CrashState = eval_mod.CrashState;
 const TestHost = struct {
     allocator: std.mem.Allocator,
     crash: CrashContext,
+    dbg_messages: std.array_list.AlignedManaged([]u8, null),
 
     fn init(allocator: std.mem.Allocator) TestHost {
-        return TestHost{ .allocator = allocator, .crash = CrashContext.init(allocator) };
+        return TestHost{
+            .allocator = allocator,
+            .crash = CrashContext.init(allocator),
+            .dbg_messages = std.array_list.AlignedManaged([]u8, null).init(allocator),
+        };
     }
 
     fn deinit(self: *TestHost) void {
+        for (self.dbg_messages.items) |msg| {
+            self.allocator.free(msg);
+        }
+        self.dbg_messages.deinit();
         self.crash.deinit();
     }
 
@@ -50,6 +59,11 @@ const TestHost = struct {
 
     fn crashState(self: *TestHost) CrashState {
         return self.crash.state;
+    }
+
+    fn recordDbg(self: *TestHost, msg: []const u8) !void {
+        const copy = try self.allocator.dupe(u8, msg);
+        try self.dbg_messages.append(copy);
     }
 };
 
@@ -95,7 +109,12 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
+fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
+    const host: *TestHost = @ptrCast(@alignCast(env));
+    host.recordDbg(dbg_args.utf8_bytes[0..dbg_args.len]) catch |err| {
+        std.debug.panic("failed to record dbg message: {}", .{err});
+    };
+}
 fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
 
 fn recordCrashCallback(args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
@@ -1408,6 +1427,70 @@ test "interpreter: singleton list [1] has list of Dec layout" {
     // Check that the element layout is Dec
     const elem_layout_idx = result.layout.data.list;
     try std.testing.expectEqual(layout.Idx.dec, elem_layout_idx);
+}
+
+test "interpreter: dbg statement in block" {
+    // Test that dbg statement works and calls the roc_dbg callback
+    const roc_src =
+        \\{
+        \\    x = 42
+        \\    dbg x
+        \\    x + 1
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Verify the block evaluates to x + 1 = 43
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("43", rendered);
+
+    // Verify dbg was called with the value of x (42)
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "interpreter: dbg statement with string" {
+    // Test dbg with a string value
+    const roc_src =
+        \\{
+        \\    msg = "hello"
+        \\    dbg msg
+        \\    msg
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Verify the block evaluates to msg
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("\"hello\"", rendered);
+
+    // Verify dbg was called with the string value
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"hello\"", host.dbg_messages.items[0]);
 }
 
 // Boolean/if support intentionally omitted for now

@@ -92,6 +92,8 @@ MISSING METHOD - Color.md:22:15:22:26
 MISSING METHOD - Color.md:29:13:29:26
 TYPE MISMATCH - Color.md:32:5:45:6
 MISSING METHOD - Color.md:62:8:62:28
+MISSING METHOD - Color.md:56:8:56:34
+MISSING METHOD - Color.md:57:8:57:40
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -265,6 +267,28 @@ This **is_named_color** method is being called on the type **Str**, which has no
 
 
 **Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **to_str** method is being called on the type **Color**, which has no method with that name:
+**Color.md:56:8:56:34:**
+```roc
+expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **to_str** method is being called on the type **Color**, which has no method with that name:
+**Color.md:57:8:57:40:**
+```roc
+expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

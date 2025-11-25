@@ -403,6 +403,10 @@ pub const Expr = union(enum) {
         str_is_empty,
         str_is_eq,
         str_concat,
+        str_trim,
+        str_caseless_ascii_equals,
+        str_with_ascii_lowercased,
+        str_with_ascii_uppercased,
 
         // Numeric to_str operations
         u8_to_str,

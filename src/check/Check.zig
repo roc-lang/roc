@@ -1022,6 +1022,43 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.checkDef(def_idx, &env);
     }
 
+    // Finally, type-check top-level statements (like expect)
+    // These are separate from defs and need to be checked after all defs are processed
+    // so that lookups can find their definitions
+    for (stmts_slice) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+        const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
+
+        switch (stmt) {
+            .s_expect => |expr_stmt| {
+                env.reset();
+
+                // Enter a new rank for this expect
+                try env.var_pool.pushRank();
+                defer env.var_pool.popRank();
+
+                // Check the body expression
+                _ = try self.checkExpr(expr_stmt.body, &env, .no_expectation);
+                const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
+
+                // Unify with Bool (expects must be bool expressions)
+                const bool_var = try self.freshBool(&env, stmt_region);
+                _ = try self.unify(bool_var, body_var, &env);
+
+                // Unify statement var with body var
+                _ = try self.unify(stmt_var, body_var, &env);
+
+                // Generalize and check deferred constraints
+                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                try self.checkDeferredStaticDispatchConstraints(&env);
+            },
+            else => {
+                // Other statement types are handled elsewhere (type decls, defs, etc.)
+            },
+        }
+    }
+
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
     // before type inference
