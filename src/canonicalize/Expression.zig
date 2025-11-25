@@ -404,6 +404,7 @@ pub const Expr = union(enum) {
         str_concat,
         str_trim,
         str_caseless_ascii_equals,
+        str_with_ascii_lowercased,
 
         // Numeric to_str operations
         u8_to_str,

@@ -366,6 +366,42 @@ test "e_low_level_lambda - Str.caseless_ascii_equals non-ascii casing difference
     try testing.expectEqualStrings("False", value);
 }
 
+test "e_low_level_lambda - Str.with_ascii_lowercased with mixed case" {
+    const src =
+        \\x = Str.with_ascii_lowercased("HeLLo")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with already lowercase" {
+    const src =
+        \\x = Str.with_ascii_lowercased("hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with empty string" {
+    const src =
+        \\x = Str.with_ascii_lowercased("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_lowercased with non-ascii chars" {
+    const src =
+        \\x = Str.with_ascii_lowercased("COFFÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"coffÉ\"", value);
+}
+
 test "e_low_level_lambda - Str.trim with an empty string" {
     const src =
         \\x = Str.trim("")

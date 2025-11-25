@@ -4,6 +4,7 @@ Builtin :: [].{
 		concat : Str, Str -> Str
 		trim : Str -> Str
 		caseless_ascii_equals : Str, Str -> Bool
+		with_ascii_lowercased : Str -> Str
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
