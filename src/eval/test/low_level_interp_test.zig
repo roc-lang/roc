@@ -402,6 +402,51 @@ test "e_low_level_lambda - Str.with_ascii_lowercased with non-ascii chars" {
     try testing.expectEqualStrings("\"coffÉ\"", value);
 }
 
+test "e_low_level_lambda - Str.with_ascii_uppercased with mixed case" {
+    const src =
+        \\x = Str.with_ascii_uppercased("HeLLo")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"HELLO\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with already uppercase" {
+    const src =
+        \\x = Str.with_ascii_uppercased("HELLO")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"HELLO\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with empty string" {
+    const src =
+        \\x = Str.with_ascii_uppercased("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased with non-ascii chars" {
+    const src =
+        \\x = Str.with_ascii_uppercased("coffÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"COFFÉ\"", value);
+}
+
+test "e_low_level_lambda - Str.with_ascii_uppercased long text" {
+    const src =
+        \\x = Str.with_ascii_uppercased("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ\"", value);
+}
+
 test "e_low_level_lambda - Str.trim with an empty string" {
     const src =
         \\x = Str.trim("")
