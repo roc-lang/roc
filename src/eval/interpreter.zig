@@ -105,7 +105,6 @@ pub const Interpreter = struct {
         MethodLookupFailed,
         MethodNotFound,
         NoSpaceLeft,
-        NotImplemented,
         NotNumeric,
         NullStackPointer,
         RecordIndexOutOfBounds,
@@ -416,7 +415,7 @@ pub const Interpreter = struct {
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
-                return error.NotImplemented;
+                @panic("evalEntry: expected closure layout, got something else");
             }
 
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
@@ -660,7 +659,7 @@ pub const Interpreter = struct {
                         },
                         .s_reassign => |r| {
                             const patt = self.env.store.getPattern(r.pattern_idx);
-                            if (patt != .assign) return error.NotImplemented;
+                            if (patt != .assign) @panic("s_reassign: pattern is not an assign pattern");
                             const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
                             // Search through all bindings, not just current block scope
                             // This allows reassigning variables from outer scopes (e.g., in for loops)
@@ -797,7 +796,7 @@ pub const Interpreter = struct {
 
                             // While loop completes and returns {} (implicitly)
                         },
-                        else => return error.NotImplemented,
+                        else => @panic("e_block: unhandled statement type"),
                     }
                 }
 
@@ -1354,7 +1353,9 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
                 const resolved = self.runtime_types.resolveVar(rt_var);
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    @panic("e_zero_argument_tag: expected tag_union structure type");
+                }
                 const tu = resolved.desc.content.structure.tag_union;
                 const tags = self.runtime_types.getTagsSlice(tu.tags);
                 // Find index by name
@@ -1387,19 +1388,19 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
-                    return error.NotImplemented;
+                    @panic("e_zero_argument_tag: scalar layout is not int");
                 } else if (layout_val.tag == .record) {
                     // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse @panic("e_zero_argument_tag: record has no 'tag' field");
                     const tag_field = try acc.getFieldByIndex(tag_idx);
                     // write tag as int
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else @panic("e_zero_argument_tag: record tag field is not scalar int");
                     return dest;
                 } else if (layout_val.tag == .tuple) {
                     // Tuple (payload, tag) - tag unions are now represented as tuples
@@ -1412,10 +1413,10 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else @panic("e_zero_argument_tag: tuple tag field is not scalar int");
                     return dest;
                 }
-                return error.NotImplemented;
+                @panic("e_zero_argument_tag: unexpected layout type");
             },
             .e_tag => |tag| {
                 // Construct a tag union value with payloads
@@ -1425,7 +1426,9 @@ pub const Interpreter = struct {
                 };
                 // Unwrap nominal types and aliases to get the base tag union
                 const resolved = self.resolveBaseVar(rt_var);
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    @panic("e_tag: expected tag_union structure type");
+                }
                 const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
@@ -1459,20 +1462,20 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
-                    return error.NotImplemented;
+                    @panic("e_tag: scalar layout is not int");
                 } else if (layout_val.tag == .record) {
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse @panic("e_tag: record has no 'tag' field");
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse @panic("e_tag: record has no 'payload' field");
                     // write tag discriminant
                     const tag_field = try acc.getFieldByIndex(tag_field_idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else @panic("e_tag: record tag field is not scalar int");
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -1547,7 +1550,7 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else @panic("e_tag: tuple tag field is not scalar int");
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -1679,7 +1682,7 @@ pub const Interpreter = struct {
                         return dest;
                     }
                 }
-                return error.NotImplemented;
+                @panic("e_tag: unexpected layout type");
             },
             .e_match => |m| {
                 // Evaluate scrutinee once and protect from stack corruption
@@ -1780,7 +1783,7 @@ pub const Interpreter = struct {
                 };
                 const closure_layout = try self.getRuntimeLayout(rt_var);
                 // Expect a closure layout from type-to-layout translation
-                if (closure_layout.tag != .closure) return error.NotImplemented;
+                if (closure_layout.tag != .closure) @panic("e_lambda: expected closure layout");
                 const value = try self.pushRaw(closure_layout, 0);
                 self.registerDefValue(expr_idx, value);
                 // Initialize the closure header
@@ -1863,7 +1866,7 @@ pub const Interpreter = struct {
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
                 const lam_expr = self.env.store.getExpr(cls.lambda_idx);
-                if (lam_expr != .e_lambda) return error.NotImplemented;
+                if (lam_expr != .e_lambda) @panic("e_closure: lambda_idx does not point to e_lambda");
                 const lam = lam_expr.e_lambda;
 
                 // Collect capture layouts and names from current bindings
@@ -1978,8 +1981,8 @@ pub const Interpreter = struct {
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                     for (caps) |cap_idx2| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
-                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse return error.NotImplemented;
-                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse return error.NotImplemented;
+                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse @panic("e_closure: failed to resolve capture value");
+                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse @panic("e_closure: capture field not found in record");
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
                     }
                 }
@@ -2234,7 +2237,7 @@ pub const Interpreter = struct {
                     return try self.evalExprMinimal(lambda.body, roc_ops, null);
                 }
 
-                return error.NotImplemented;
+                @panic("e_call: func is neither closure nor lambda");
             },
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
@@ -2556,12 +2559,12 @@ pub const Interpreter = struct {
                     }
                 }
 
-                return error.NotImplemented;
+                @panic("e_lookup_local: definition not found in current scope");
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
                 const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    return error.NotImplemented;
+                    @panic("e_lookup_external: module not found in import_envs");
                 };
 
                 // The target_node_idx is a Def.Idx in the other module
@@ -2591,7 +2594,7 @@ pub const Interpreter = struct {
             },
             // no if handling in minimal evaluator
             // no second e_binop case; handled above
-            else => return error.NotImplemented,
+            else => @panic("evalExprMinimal: unhandled expression type"),
         }
     }
 
@@ -3502,8 +3505,8 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse @panic("num_from_int_digits: record has no 'tag' field");
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse @panic("num_from_int_digits: record has no 'payload' field");
 
                     // Write tag discriminant
                     const tag_field = try acc.getFieldByIndex(tag_field_idx);
@@ -3512,7 +3515,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
+                    } else @panic("num_from_int_digits: tag field is not scalar int");
 
                     // Clear payload area
                     const payload_field = try acc.getFieldByIndex(payload_field_idx);
@@ -3828,8 +3831,8 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse return error.NotImplemented;
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse @panic("num_from_numeral: record has no 'tag' field");
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse @panic("num_from_numeral: record has no 'payload' field");
 
                     // Write tag discriminant
                     const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
@@ -3838,7 +3841,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
+                    } else @panic("num_from_numeral: tag field is not scalar int");
 
                     // Clear payload area
                     const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
@@ -4073,7 +4076,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
+                    } else @panic("num_from_numeral: tuple tag field is not scalar int");
 
                     // Clear payload area (element 0)
                     const payload_field = try result_acc.getElement(0);
@@ -4453,7 +4456,7 @@ pub const Interpreter = struct {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
                 break :blk RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
             },
-            else => return error.NotImplemented,
+            else => @panic("evalDecBinop: unhandled decimal operation"),
         };
 
         var out = try self.pushRaw(result_layout, 0);
@@ -4493,7 +4496,7 @@ pub const Interpreter = struct {
                 if (rhs_float == 0) return error.DivisionByZero;
                 break :blk @rem(lhs_float, rhs_float);
             },
-            else => return error.NotImplemented,
+            else => @panic("evalFloatBinop: unhandled float operation"),
         };
 
         var out = try self.pushRaw(result_layout, 0);
@@ -4707,14 +4710,14 @@ pub const Interpreter = struct {
                     const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
                     return std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
                 },
-                else => return error.NotImplemented,
+                else => @panic("valuesStructurallyEqual: unhandled scalar type"),
             }
         }
 
         // Ensure runtime vars resolve to the same descriptor before structural comparison.
         const lhs_resolved = self.resolveBaseVar(lhs_var);
         const lhs_content = lhs_resolved.desc.content;
-        if (lhs_content != .structure) return error.NotImplemented;
+        if (lhs_content != .structure) @panic("valuesStructurallyEqual: lhs is not a structure type");
 
         return switch (lhs_content.structure) {
             .tuple => |tuple| {
@@ -4733,7 +4736,7 @@ pub const Interpreter = struct {
                 // For nominal types, dispatch to their is_eq method
                 return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var);
             },
-            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => error.NotImplemented,
+            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => @panic("valuesStructurallyEqual: cannot compare functions or unbound records"),
         };
     }
 
@@ -4782,7 +4785,7 @@ pub const Interpreter = struct {
         if (@intFromEnum(record.ext) != 0) {
             const ext_resolved = self.resolveBaseVar(record.ext);
             if (ext_resolved.desc.content != .structure or ext_resolved.desc.content.structure != .empty_record) {
-                return error.NotImplemented;
+                @panic("structuralEqualRecord: record extension is not empty_record");
             }
         }
 
@@ -4940,14 +4943,14 @@ pub const Interpreter = struct {
         // For other cases, fall back to attempting scalar comparison
         // This handles cases like Bool which wraps a tag union but is represented as a scalar
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const order = self.compareNumericScalars(lhs, rhs) catch return error.NotImplemented;
+            const order = self.compareNumericScalars(lhs, rhs) catch @panic("dispatchNominalIsEq: failed to compare scalars");
             return order == .eq;
         }
 
         // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
         // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
         _ = lhs_var;
-        return error.NotImplemented;
+        @panic("dispatchNominalIsEq: cannot compare non-scalar nominal types without is_eq method");
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
@@ -5786,13 +5789,7 @@ pub const Interpreter = struct {
                 .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                     // Anonymous structural types have implicit is_eq
                     if (method_ident == self.env.is_eq_ident) {
-                        const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
-                            // If structural equality is not implemented for this type, return false
-                            if (err == error.NotImplemented) {
-                                return try self.makeBoolValue(false);
-                            }
-                            return err;
-                        };
+                        const result = try self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var);
                         return try self.makeBoolValue(result);
                     }
                     break :blk null;

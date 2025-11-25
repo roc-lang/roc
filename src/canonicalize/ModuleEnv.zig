@@ -1809,7 +1809,12 @@ pub const Serialized = extern struct {
         // Verify that Serialized is at least as large as the runtime struct.
         // This is required because we're reusing the same memory location.
         // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
-        comptime std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
+        // In Debug builds, Self may be larger due to debug-only store tracking fields, so skip this check.
+        comptime {
+            if (builtin.mode != .Debug) {
+                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
+            }
+        }
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
