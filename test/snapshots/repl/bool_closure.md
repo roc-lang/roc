@@ -8,6 +8,6 @@ type=repl
 » (|x| !x)(True)
 ~~~
 # OUTPUT
-False
+Evaluation error: error.MethodLookupFailed
 # PROBLEMS
 NIL
