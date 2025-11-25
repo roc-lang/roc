@@ -7,3 +7,9 @@ pub const server = @import("server.zig");
 pub fn runWithStdIo(allocator: std.mem.Allocator, debug_transport: bool) !void {
     try server.runWithStdIo(allocator, debug_transport);
 }
+
+test "lsp tests" {
+    std.testing.refAllDecls(@import("test/protocol_test.zig"));
+    std.testing.refAllDecls(@import("test/server_test.zig"));
+    std.testing.refAllDecls(@import("test/transport_test.zig"));
+}
