@@ -483,7 +483,6 @@ UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
-DOES NOT EXIST - associated_items_truly_comprehensive.md:451:11:451:32
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -529,19 +528,6 @@ The unused variable is declared here:
     val1 = val2 + 1                                         # Unqualified
 ```
            ^^^^
-
-
-**DOES NOT EXIST**
-`Shadowing.useL2` does not exist.
-
-`Shadowing` is in scope, but it has no associated `useL2`.
-
-It's referenced here:
-**associated_items_truly_comprehensive.md:451:11:451:32:**
-```roc
-shadow7 = Shadowing.L2.L3.useL2                 # 2
-```
-          ^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -3186,7 +3172,8 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.L3.useL1"))))
 	(d-let
 		(p-assign (ident "shadow7"))
-		(e-runtime-error (tag "nested_value_not_found")))
+		(e-lookup-local
+			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.L3.useL2"))))
 	(d-let
 		(p-assign (ident "shadow8"))
 		(e-lookup-local
@@ -3701,7 +3688,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
+		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "U64"))
@@ -4035,7 +4022,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
+		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "U64"))

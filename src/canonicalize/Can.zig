@@ -1498,15 +1498,26 @@ fn processAssociatedItemsFirstPass(
 
                         // Also add user-facing alias (without module prefix) so "One.Two.value" works
                         // in addition to "module.One.Two.value"
+                        // Add to module scope (index 0) so it's accessible from anywhere in the module
                         const fully_qualified_text = self.env.getIdent(qualified_idx);
                         const module_prefix = self.env.module_name;
                         if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
                             fully_qualified_text.len > module_prefix.len and
                             fully_qualified_text[module_prefix.len] == '.')
                         {
-                            const user_facing_text = fully_qualified_text[module_prefix.len + 1 ..];
-                            const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
-                            try current_scope.idents.put(self.env.gpa, user_facing_idx, placeholder_pattern_idx);
+                            // Copy user-facing text to a local buffer before calling insertIdent,
+                            // because insertIdent may reallocate the string interner and invalidate
+                            // any slices pointing into it (like fully_qualified_text)
+                            const user_facing_start = module_prefix.len + 1;
+                            const user_facing_len = fully_qualified_text.len - user_facing_start;
+                            var user_facing_buf: [512]u8 = undefined;
+                            if (user_facing_len <= user_facing_buf.len) {
+                                @memcpy(user_facing_buf[0..user_facing_len], fully_qualified_text[user_facing_start..]);
+                                const user_facing_text = user_facing_buf[0..user_facing_len];
+                                const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
+                                // Add to module scope so it persists after associated block scope exits
+                                try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, placeholder_pattern_idx);
+                            }
                         }
                     }
                 }
@@ -1535,15 +1546,26 @@ fn processAssociatedItemsFirstPass(
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
 
                     // Also add user-facing alias (without module prefix)
+                    // Add to module scope (index 0) so it's accessible from anywhere in the module
                     const fully_qualified_text = self.env.getIdent(qualified_idx);
                     const module_prefix = self.env.module_name;
                     if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
                         fully_qualified_text.len > module_prefix.len and
                         fully_qualified_text[module_prefix.len] == '.')
                     {
-                        const user_facing_text = fully_qualified_text[module_prefix.len + 1 ..];
-                        const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
-                        try current_scope.idents.put(self.env.gpa, user_facing_idx, placeholder_pattern_idx);
+                        // Copy user-facing text to a local buffer before calling insertIdent,
+                        // because insertIdent may reallocate the string interner and invalidate
+                        // any slices pointing into it (like fully_qualified_text)
+                        const user_facing_start = module_prefix.len + 1;
+                        const user_facing_len = fully_qualified_text.len - user_facing_start;
+                        var user_facing_buf: [512]u8 = undefined;
+                        if (user_facing_len <= user_facing_buf.len) {
+                            @memcpy(user_facing_buf[0..user_facing_len], fully_qualified_text[user_facing_start..]);
+                            const user_facing_text = user_facing_buf[0..user_facing_len];
+                            const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_facing_text));
+                            // Add to module scope so it persists after associated block scope exits
+                            try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, placeholder_pattern_idx);
+                        }
                     }
                 }
             },
@@ -8724,11 +8746,8 @@ fn scopeContains(
         const scope = &self.scopes.items[scope_idx];
         const map = scope.itemsConst(item_kind);
 
-        var iter = map.iterator();
-        while (iter.next()) |entry| {
-            if (name.idx == entry.key_ptr.idx) {
-                return entry.value_ptr.*;
-            }
+        if (map.get(name)) |pattern_idx| {
+            return pattern_idx;
         }
     }
     return null;
@@ -8938,15 +8957,10 @@ pub fn scopeIntroduceInternal(
                 const scope = &self.scopes.items[scope_idx];
                 const map = scope.itemsConst(item_kind);
 
-                var iter = map.iterator();
-                while (iter.next()) |entry| {
-                    if (ident_idx.idx == entry.key_ptr.idx) {
-                        declaration_scope_idx = scope_idx;
-                        break;
-                    }
+                if (map.get(ident_idx) != null) {
+                    declaration_scope_idx = scope_idx;
+                    break;
                 }
-
-                if (declaration_scope_idx != null) break;
             }
 
             // Now check if there are function boundaries between declaration and current scope
