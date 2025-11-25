@@ -14,6 +14,7 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
+MISSING METHOD - lambda_annotation_mismatch_error.md:3:27:3:29
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
 # PROBLEMS
