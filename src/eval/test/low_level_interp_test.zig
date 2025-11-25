@@ -537,6 +537,60 @@ test "e_low_level_lambda - Str.trim with a non-whitespace string" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
+test "e_low_level_lambda - Str.trim_start with an empty string" {
+    const src =
+        \\x = Str.trim_start("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with a whitespace string" {
+    const src =
+        \\x = Str.trim_start("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with a non-whitespace string" {
+    const src =
+        \\x = Str.trim_start("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello  \"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with an empty string" {
+    const src =
+        \\x = Str.trim_end("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with a whitespace string" {
+    const src =
+        \\x = Str.trim_end("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with a non-whitespace string" {
+    const src =
+        \\x = Str.trim_end("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"  hello\"", value);
+}
+
 test "e_low_level_lambda - List.concat with two non-empty lists" {
     const src =
         \\x = List.concat([1, 2], [3, 4])
