@@ -186,6 +186,14 @@ test "numeric literal in comparison unifies with typed operand" {
                 try test_env.type_writer.write(rhs_var);
                 const rhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", rhs_type);
+
+                // Verify that the RHS type var is actually resolved to a nominal type, not flex
+                // This is what the interpreter's translateTypeVar should see
+                const rhs_resolved = test_env.module_env.types.resolveVar(rhs_var);
+                // After type checking, the RHS (numeric literal) should be unified to I64,
+                // which is a nominal type (structure.nominal_type), NOT a flex var
+                try testing.expect(rhs_resolved.desc.content == .structure);
+                try testing.expect(rhs_resolved.desc.content.structure == .nominal_type);
                 break;
             }
         }
