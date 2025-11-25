@@ -323,7 +323,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with empty and non-empty st
 
 test "e_low_level_lambda - Str.caseless_ascii_equals with longer strings" {
     const src =
-        \\x = Str.caseless_ascii_equals("This is a longer string that contains about one hundred characters for testing purpuses.", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purpuses.")
+        \\x = Str.caseless_ascii_equals("This is a longer string that contains about one hundred characters for testing purposes.", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.")
     ;
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
@@ -332,7 +332,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with longer strings" {
 
 test "e_low_level_lambda - Str.caseless_ascii_equals long and small strings" {
     const src =
-        \\x = Str.caseless_ascii_equals("THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purpuses.", "This")
+        \\x = Str.caseless_ascii_equals("THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.", "This")
     ;
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
@@ -341,7 +341,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals long and small strings" {
 
 test "e_low_level_lambda - Str.caseless_ascii_equals small and long strings" {
     const src =
-        \\x = Str.caseless_ascii_equals("This", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purpuses.")
+        \\x = Str.caseless_ascii_equals("This", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.")
     ;
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
