@@ -295,7 +295,7 @@ pub const Repl = struct {
                             // Extract the identifier name from the pattern
                             const ident_tok = pattern.ident.ident_tok;
                             const token_region = ast.tokens.resolve(ident_tok);
-                            const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
+                            const ident_name = module_env.common.source.toSlice()[token_region.start.offset..token_region.end.offset];
 
                             // Return borrowed strings (no duplication needed)
                             return ParseResult{ .assignment = .{

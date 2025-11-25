@@ -36,8 +36,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env.* = try ModuleEnv.init(gpa, src);
     errdefer module_env.deinit();
 
-    module_env.common.source = src;
-    module_env.module_name = "TestModule";
+    module_env.common.source = collections.SafeSlice(u8).fromSlice(src);
+    module_env.module_name = collections.SafeSlice(u8).fromSlice("TestModule");
     try module_env.common.calcLineStarts(module_env.gpa);
 
     var parse_ast = try parse.parse(&module_env.common, module_env.gpa);

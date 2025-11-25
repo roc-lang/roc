@@ -39,8 +39,8 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     module_env.* = try ModuleEnv.init(gpa, src);
     errdefer module_env.deinit();
 
-    module_env.common.source = src;
-    module_env.module_name = module_name;
+    module_env.common.source = collections.SafeSlice(u8).fromSlice(src);
+    module_env.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code
@@ -116,8 +116,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     module_env.* = try ModuleEnv.init(gpa, src);
     errdefer module_env.deinit();
 
-    module_env.common.source = src;
-    module_env.module_name = "TestModule";
+    module_env.common.source = collections.SafeSlice(u8).fromSlice(src);
+    module_env.module_name = collections.SafeSlice(u8).fromSlice("TestModule");
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code

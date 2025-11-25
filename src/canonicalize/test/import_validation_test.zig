@@ -257,7 +257,7 @@ test "import interner - Import.Idx functionality" {
     var found_dict = false;
     var found_json_decode = false;
     var found_set = false;
-    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+    for (result.parse_env.imports.imports.items.toSlice()) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
@@ -277,7 +277,7 @@ test "import interner - Import.Idx functionality" {
     // Test the lookup functionality
     // Get the Import.Idx for "List" (should be used twice)
     var list_import_idx: ?CIR.Import.Idx = null;
-    for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
+    for (result.parse_env.imports.imports.items.toSlice(), 0..) |import_string_idx, idx| {
         if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "List")) {
             list_import_idx = @enumFromInt(idx);
             break;
@@ -327,7 +327,7 @@ test "import interner - comprehensive usage example" {
     var found_list = false;
     var found_dict = false;
     var found_result = false;
-    for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
+    for (result.parse_env.imports.imports.items.toSlice(), 0..) |import_string_idx, idx| {
         if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "List")) {
             found_list = true;
             // Note: We can't verify exposed items count here as Import.Store only stores module names
@@ -398,7 +398,7 @@ test "module scopes - imports work in module scope" {
     try testing.expect(imports.len() >= 2); // List and Dict
     var has_list = false;
     var has_dict = false;
-    for (imports.items.items) |import_string_idx| {
+    for (imports.items.toSlice()) |import_string_idx| {
         const import_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
@@ -448,7 +448,7 @@ test "module-qualified lookups with e_lookup_external" {
     // Verify the module names are correct
     var has_list = false;
     var has_dict = false;
-    for (imports_list.items.items) |import_string_idx| {
+    for (imports_list.items.toSlice()) |import_string_idx| {
         const import_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
@@ -536,7 +536,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // For now, let's verify the imports were registered
     const imports_list = result.parse_env.imports.imports;
     var has_mathutils = false;
-    for (imports_list.items.items) |import_string_idx| {
+    for (imports_list.items.toSlice()) |import_string_idx| {
         const import_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "MathUtils")) {
             has_mathutils = true;
@@ -587,7 +587,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // Verify EmptyModule was imported
     const imports_list2 = result2.parse_env.imports.imports;
     var has_empty_module = false;
-    for (imports_list2.items.items) |import_string_idx| {
+    for (imports_list2.items.toSlice()) |import_string_idx| {
         const import_name = result2.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "EmptyModule")) {
             has_empty_module = true;
@@ -621,7 +621,7 @@ test "export count safety - ensures safe u16 casting" {
             .region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
         },
     };
-    const diag_idx1 = try env1.store.addDiagnostic(diag_at_limit);
+    const diag_idx1 = try env1.store.addDiagnostic(env1.gpa, diag_at_limit);
     const retrieved1 = env1.store.getDiagnostic(diag_idx1);
     switch (retrieved1) {
         .too_many_exports => |d| {
@@ -639,7 +639,7 @@ test "export count safety - ensures safe u16 casting" {
             .region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
         },
     };
-    const diag_idx2 = try env2.store.addDiagnostic(diag_over_limit);
+    const diag_idx2 = try env2.store.addDiagnostic(env2.gpa, diag_over_limit);
     const retrieved2 = env2.store.getDiagnostic(diag_idx2);
     switch (retrieved2) {
         .too_many_exports => |d| {

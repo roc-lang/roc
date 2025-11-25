@@ -238,7 +238,7 @@ pub fn init(
 
     const scratch_statements_start = result.env.store.scratch.?.statements.top();
 
-    result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
+    result.env.builtin_statements = try result.env.store.statementSpanFrom(result.env.gpa, scratch_statements_start);
 
     // Assert that the node store is completely empty
     env.debugAssertArraysInSync();
@@ -534,7 +534,7 @@ fn processTypeDeclFirstPass(
     };
 
     // Create the real statement and add it to scratch statements
-    try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
+    try self.env.store.setStatementNode(self.env.gpa, type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
     // For type modules, associate the node index with the exposed type
@@ -932,7 +932,7 @@ fn processAssociatedItemsSecondPass(
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
-                    break :blk try self.env.store.whereClauseSpanFrom(where_start);
+                    break :blk try self.env.store.whereClauseSpanFrom(self.env.gpa, where_start);
                 } else null;
 
                 // Now, check the next stmt to see if it matches this anno
@@ -1144,7 +1144,7 @@ fn processAssociatedItemsFirstPass(
                     // Build user-facing qualified name by stripping module prefix
                     // Re-fetch strings since insertQualifiedIdent may have reallocated
                     const fully_qualified_text = self.env.getIdent(fully_qualified_ident_idx);
-                    const module_prefix = self.env.module_name;
+                    const module_prefix = self.env.module_name.toSliceConst();
 
                     // Check if the fully qualified name starts with the module name
                     const user_facing_text = if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
@@ -1195,7 +1195,7 @@ fn processAssociatedItemsFirstPass(
 
                     // Build user-facing qualified name by stripping module prefix
                     const fully_qualified_text = self.env.getIdent(fully_qualified_ident_idx);
-                    const module_prefix = self.env.module_name;
+                    const module_prefix = self.env.module_name.toSliceConst();
 
                     const user_facing_text = if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
                         fully_qualified_text.len > module_prefix.len and
@@ -1496,7 +1496,7 @@ pub fn canonicalizeFile(
                             const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
                             try self.env.store.addScratchWhereClause(canonicalized_where);
                         }
-                        break :blk try self.env.store.whereClauseSpanFrom(where_start);
+                        break :blk try self.env.store.whereClauseSpanFrom(self.env.gpa, where_start);
                     } else null;
 
                     // Create the anno-only def immediately
@@ -1545,7 +1545,7 @@ pub fn canonicalizeFile(
                 // Build fully qualified name (e.g., "Builtin.Str")
                 // For type-modules where the main type name equals the module name,
                 // use just the module name to avoid "Builtin.Builtin"
-                const module_name_text = self.env.module_name;
+                const module_name_text = self.env.module_name.toSliceConst();
                 const type_name_text = self.env.getIdent(type_ident);
                 const qualified_type_ident = if (std.mem.eql(u8, module_name_text, type_name_text))
                     type_ident // Type-module: use unqualified name
@@ -1753,7 +1753,7 @@ pub fn canonicalizeFile(
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
-                    break :blk try self.env.store.whereClauseSpanFrom(where_start);
+                    break :blk try self.env.store.whereClauseSpanFrom(self.env.gpa, where_start);
                 } else null;
 
                 // Now, check the next non-malformed stmt to see if it matches this anno
@@ -1851,8 +1851,8 @@ pub fn canonicalizeFile(
     try self.checkExposedButNotImplemented();
 
     // Create the span of all top-level defs and statements
-    self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
-    self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
+    self.env.all_defs = try self.env.store.defSpanFrom(self.env.gpa, scratch_defs_start);
+    self.env.all_statements = try self.env.store.statementSpanFrom(self.env.gpa, scratch_statements_start);
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
@@ -2027,7 +2027,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
     if (pattern == .ident) {
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
-        const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+        const ident_text = self.parse_ir.env.source.toSliceConst()[token_region.start.offset..token_region.end.offset];
 
         // Top-level associated items (identifiers ending with '!') are automatically exposed
         const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
@@ -2140,7 +2140,7 @@ fn createExposedScope(
             .lower_ident => |ident| {
                 // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
-                const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                const ident_text = self.parse_ir.env.source.toSliceConst()[token_region.start.offset..token_region.end.offset];
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
@@ -2173,7 +2173,7 @@ fn createExposedScope(
             .upper_ident => |type_name| {
                 // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
-                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                const type_text = self.parse_ir.env.source.toSliceConst()[token_region.start.offset..token_region.end.offset];
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
@@ -2206,7 +2206,7 @@ fn createExposedScope(
             .upper_ident_star => |type_with_constructors| {
                 // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
-                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                const type_text = self.parse_ir.env.source.toSliceConst()[token_region.start.offset..token_region.end.offset];
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
@@ -2266,7 +2266,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     }
 
     // Create the exports span from the scratch space
-    self.env.exports = try self.env.store.defSpanFrom(scratch_exports_start);
+    self.env.exports = try self.env.store.defSpanFrom(self.env.gpa, scratch_exports_start);
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
@@ -2307,7 +2307,7 @@ fn bringImportIntoScope(
     import: *const AST.Statement,
 ) void {
     // const gpa = self.env.gpa;
-    // const import_name: []u8 = &.{}; // import.module_name_tok;
+    // const import_name: []u8 = &.{}; // import.module_name.toSliceConst()_tok;
     // const shorthand: []u8 = &.{}; // import.qualifier_tok;
     // const region = Region{
     //     .start = Region.Position.zero(),
@@ -2612,7 +2612,7 @@ fn canonicalizeImportStatement(
             // Slice from original source to get "qualifier.ModuleName"
             const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
             const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
-            const full_name = self.parse_ir.env.source[qualifier_region.start.offset..module_region.end.offset];
+            const full_name = self.parse_ir.env.source.toSliceConst()[qualifier_region.start.offset..module_region.end.offset];
 
             // Validate the full_name using Ident.from_bytes
             if (base.Ident.from_bytes(full_name)) |valid_ident| {
@@ -2644,7 +2644,7 @@ fn canonicalizeImportStatement(
     // 2. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
     try self.convertASTExposesToCIR(import_stmt.exposes);
-    const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
+    const cir_exposes = try self.env.store.exposedItemSpanFrom(self.env.gpa, scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
 
     // 3. Dispatch to the appropriate handler based on whether this is a nested import
@@ -3293,7 +3293,7 @@ pub fn canonicalizeExpr(
             }
 
             // Create span from scratch expressions
-            const args_span = try self.env.store.exprSpanFrom(scratch_top);
+            const args_span = try self.env.store.exprSpanFrom(self.env.gpa, scratch_top);
 
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_call = .{
@@ -3421,7 +3421,7 @@ pub fn canonicalizeExpr(
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             const lookup_module_name = if (self.module_envs) |envs_map| blk_lookup: {
                                 if (envs_map.get(module_name)) |auto_imported_type| {
-                                    break :blk_lookup auto_imported_type.env.module_name;
+                                    break :blk_lookup auto_imported_type.env.module_name.toSliceConst();
                                 } else {
                                     break :blk_lookup module_text;
                                 }
@@ -3433,7 +3433,7 @@ pub fn canonicalizeExpr(
                                 if (self.module_envs) |envs_map| {
                                     if (envs_map.get(module_name)) |auto_imported_type| {
                                         // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
-                                        const actual_module_name = auto_imported_type.env.module_name;
+                                        const actual_module_name = auto_imported_type.env.module_name.toSliceConst();
                                         break :blk try self.getOrCreateAutoImport(actual_module_name);
                                     }
                                 }
@@ -3461,7 +3461,7 @@ pub fn canonicalizeExpr(
                                     const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
                                         // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
                                         // Associated items are stored with the full qualified parent type name
-                                        const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
+                                        const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name.toSliceConst(), module_text);
                                         const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
                                         const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
                                         break :blk_name self.env.getIdent(fully_qualified_idx);
@@ -3915,7 +3915,7 @@ pub fn canonicalizeExpr(
             }
 
             // Create span of the new scratch expressions
-            const elems_span = try self.env.store.exprSpanFrom(scratch_top);
+            const elems_span = try self.env.store.exprSpanFrom(self.env.gpa, scratch_top);
 
             // If all elements failed to canonicalize, treat as empty list
             if (elems_span.span.len == 0) {
@@ -3994,7 +3994,7 @@ pub fn canonicalizeExpr(
                 }
 
                 // Create span of the new scratch expressions
-                const elems_span = try self.env.store.exprSpanFrom(scratch_top);
+                const elems_span = try self.env.store.exprSpanFrom(self.env.gpa, scratch_top);
 
                 // Then insert the tuple expr
                 const expr_idx = try self.env.addExpr(CIR.Expr{
@@ -4087,7 +4087,7 @@ pub fn canonicalizeExpr(
             self.scratch_seen_record_fields.clearFrom(seen_fields_top);
 
             // Create span of the new scratch record fields
-            const fields_span = try self.env.store.recordFieldSpanFrom(scratch_top);
+            const fields_span = try self.env.store.recordFieldSpanFrom(self.env.gpa, scratch_top);
 
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_record = .{
@@ -4124,7 +4124,7 @@ pub fn canonicalizeExpr(
                     try self.env.store.scratch.?.patterns.append(malformed_idx);
                 }
             }
-            const args_span = try self.env.store.patternSpanFrom(args_start);
+            const args_span = try self.env.store.patternSpanFrom(self.env.gpa, args_start);
 
             // Define the set of captures
             const captures_top = self.scratch_captures.top();
@@ -4201,7 +4201,7 @@ pub fn canonicalizeExpr(
                     try self.env.store.addScratchCapture(capture_idx);
                 }
 
-                break :blk try self.env.store.capturesSpanFrom(scratch_start);
+                break :blk try self.env.store.capturesSpanFrom(self.env.gpa, scratch_start);
             };
 
             // Now, create the closure that captures the environment
@@ -4408,7 +4408,7 @@ pub fn canonicalizeExpr(
                 }
             }
 
-            const branches_span = try self.env.store.ifBranchSpanFrom(scratch_top);
+            const branches_span = try self.env.store.ifBranchSpanFrom(self.env.gpa, scratch_top);
 
             // Get the first branch's body to redirect to it
             const branches = self.env.store.sliceIfBranches(branches_span);
@@ -4474,7 +4474,7 @@ pub fn canonicalizeExpr(
             };
             const if_branch_idx = try self.env.addIfBranch(if_branch, region);
             try self.env.store.addScratchIfBranch(if_branch_idx);
-            const branches_span = try self.env.store.ifBranchSpanFrom(scratch_top);
+            const branches_span = try self.env.store.ifBranchSpanFrom(self.env.gpa, scratch_top);
 
             // Create if expression with empty record as final else
             const expr_idx = try self.env.addExpr(CIR.Expr{
@@ -4564,7 +4564,7 @@ pub fn canonicalizeExpr(
                 }
 
                 // Get the pattern span
-                const branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+                const branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(self.env.gpa, branch_pat_scratch_top);
 
                 // Canonicalize the branch's body
                 const can_body = try self.canonicalizeExpr(ast_branch.body) orelse {
@@ -4596,7 +4596,7 @@ pub fn canonicalizeExpr(
             }
 
             // Create span from scratch branches
-            const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
+            const branches_span = try self.env.store.matchBranchSpanFrom(self.env.gpa, scratch_top);
 
             // Create the match expression
             const match_expr = Expr.Match{
@@ -4681,7 +4681,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 }
             }
 
-            args_span = try self.env.store.exprSpanFrom(scratch_top);
+            args_span = try self.env.store.exprSpanFrom(self.env.gpa, scratch_top);
         }
     }
 
@@ -4792,7 +4792,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 // Regular module imports and primitive types (Str) don't have statement_idx
                 if (auto_imported_type.statement_idx) |stmt_idx| {
                     // This is an auto-imported type with a statement_idx - create the import and return e_nominal_external
-                    const module_name_text = auto_imported_type.env.module_name;
+                    const module_name_text = auto_imported_type.env.module_name.toSliceConst();
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
                     const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
@@ -5108,7 +5108,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
         }
     }
 
-    return try self.env.store.exprSpanFrom(start);
+    return try self.env.store.exprSpanFrom(self.env.gpa, start);
 }
 
 /// Extract string segments from parsed multiline string parts, adding newlines between consecutive string parts
@@ -5139,7 +5139,7 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
         }
     }
 
-    return try self.env.store.exprSpanFrom(start);
+    return try self.env.store.exprSpanFrom(self.env.gpa, start);
 }
 
 fn canonicalizePatternOrMalformed(
@@ -5499,7 +5499,7 @@ fn canonicalizePattern(
                     try self.env.store.scratch.?.patterns.append(malformed_idx);
                 }
             }
-            const args = try self.env.store.patternSpanFrom(patterns_start);
+            const args = try self.env.store.patternSpanFrom(self.env.gpa, patterns_start);
 
             // Create the pattern node with type var
             const tag_pattern_idx = try self.env.addPattern(Pattern{
@@ -5728,7 +5728,7 @@ fn canonicalizePattern(
             }
 
             // Create span of the new scratch record destructs
-            const destructs_span = try self.env.store.recordDestructSpanFrom(scratch_top);
+            const destructs_span = try self.env.store.recordDestructSpanFrom(self.env.gpa, scratch_top);
 
             // Create the record destructure pattern
             const pattern_idx = try self.env.addPattern(Pattern{
@@ -5756,7 +5756,7 @@ fn canonicalizePattern(
             }
 
             // Create span of the new scratch patterns
-            const patterns_span = try self.env.store.patternSpanFrom(scratch_top);
+            const patterns_span = try self.env.store.patternSpanFrom(self.env.gpa, scratch_top);
 
             const pattern_idx = try self.env.addPattern(Pattern{
                 .tuple = .{
@@ -5856,7 +5856,7 @@ fn canonicalizePattern(
             }
 
             // Create span of the canonicalized non-rest patterns
-            const patterns_span = try self.env.store.patternSpanFrom(scratch_top);
+            const patterns_span = try self.env.store.patternSpanFrom(self.env.gpa, scratch_top);
 
             // Handle empty list patterns specially
             if (patterns_span.span.len == 0 and rest_index == null) {
@@ -6703,7 +6703,7 @@ fn canonicalizeTypeAnnoBasicType(
                 if (envs_map.get(type_name_ident)) |auto_imported_type| {
                     // This is an auto-imported type like Bool or Try
                     // We need to create an import for it and return the type annotation
-                    const module_name_text = auto_imported_type.env.module_name;
+                    const module_name_text = auto_imported_type.env.module_name.toSliceConst();
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
                     // Get the target node index using the pre-computed statement_idx
@@ -6912,7 +6912,7 @@ fn canonicalizeTypeAnnoTypeApplication(
         const apply_arg_anno_idx = try self.canonicalizeTypeAnnoHelp(arg_idx, type_anno_ctx);
         try self.env.store.addScratchTypeAnno(apply_arg_anno_idx);
     }
-    const args_span = try self.env.store.typeAnnoSpanFrom(scratch_top);
+    const args_span = try self.env.store.typeAnnoSpanFrom(self.env.gpa, scratch_top);
 
     // Extract the root type symbol for the type application
     // Then, we must instantiate the type from the base declaration *with* the
@@ -6967,7 +6967,7 @@ fn canonicalizeTypeAnnoTuple(
             const elem_var = ModuleEnv.varFrom(canonicalized_elem_idx);
             try self.scratch_vars.append(elem_var);
         }
-        const annos = try self.env.store.typeAnnoSpanFrom(scratch_top);
+        const annos = try self.env.store.typeAnnoSpanFrom(self.env.gpa, scratch_top);
 
         return try self.env.addTypeAnno(.{ .tuple = .{
             .elems = annos,
@@ -7044,7 +7044,7 @@ fn canonicalizeTypeAnnoRecord(
         });
     }
 
-    const field_anno_idxs = try self.env.store.annoRecordFieldSpanFrom(scratch_top);
+    const field_anno_idxs = try self.env.store.annoRecordFieldSpanFrom(self.env.gpa, scratch_top);
 
     // Should we be sorting here?
     const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
@@ -7077,7 +7077,7 @@ fn canonicalizeTypeAnnoTagUnion(
         try self.env.store.addScratchTypeAnno(canonicalized_tag_idx);
     }
 
-    const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
+    const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(self.env.gpa, scratch_annos_top);
 
     // Canonicalize the ext, if it exists
     const mb_ext_anno = if (tag_union.open_anno) |open_idx| blk: {
@@ -7149,7 +7149,7 @@ fn canonicalizeTypeAnnoTag(
                 try self.env.store.addScratchTypeAnno(canonicalized);
             }
 
-            const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
+            const args = try self.env.store.typeAnnoSpanFrom(self.env.gpa, scratch_top);
             return try self.env.addTypeAnno(.{ .tag = .{
                 .name = type_name,
                 .args = args,
@@ -7178,7 +7178,7 @@ fn canonicalizeTypeAnnoFunc(
         try self.env.store.addScratchTypeAnno(arg_anno_idx);
     }
 
-    const args_span = try self.env.store.typeAnnoSpanFrom(scratch_top);
+    const args_span = try self.env.store.typeAnnoSpanFrom(self.env.gpa, scratch_top);
 
     // Canonicalize return type
     const ret_anno_idx = try self.canonicalizeTypeAnnoHelp(func.ret, type_anno_ctx);
@@ -7224,7 +7224,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     // (e.g., Str := ... within Builtin.roc)
     // TODO: Can we compare idents or something here? The byte slice comparison is ineffecient
     if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(name_ident))) |_| {
-        const is_builtin_module = std.mem.eql(u8, self.env.module_name, "Builtin");
+        const is_builtin_module = std.mem.eql(u8, self.env.module_name.toSliceConst(), "Builtin");
         if (!is_builtin_module) {
             return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
                 .ident = name_ident,
@@ -7337,7 +7337,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
         }
     }
 
-    const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
+    const args = try self.env.store.typeAnnoSpanFrom(self.env.gpa, scratch_top);
 
     return try self.env.addTypeHeader(.{
         .name = name_ident,
@@ -7508,7 +7508,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const block_free_vars = self.scratch_free_vars.spanFrom(block_captures_start);
 
     // Create statement span
-    const stmt_span = try self.env.store.statementSpanFrom(stmt_start);
+    const stmt_span = try self.env.store.statementSpanFrom(self.env.gpa, stmt_start);
 
     // Create and return block expression
     const block_expr = CIR.Expr{
@@ -7737,7 +7737,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
                     try self.env.store.addScratchWhereClause(canonicalized_where);
                 }
-                break :inner_blk try self.env.store.whereClauseSpanFrom(where_start);
+                break :inner_blk try self.env.store.whereClauseSpanFrom(self.env.gpa, where_start);
             } else null;
 
             // Now, check the next stmt to see if it matches this anno
@@ -9365,7 +9365,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, type_anno_ctx);
                 try self.env.store.addScratchTypeAnno(canonicalized_arg);
             }
-            const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
+            const args_span = try self.env.store.typeAnnoSpanFrom(self.env.gpa, args_start);
 
             // Canonicalize return type
             const ret = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
@@ -9521,7 +9521,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                 // This is an auto-imported module (like Bool, Try, Str, List, etc.)
                 // Use the ACTUAL module name from the environment, not the alias
                 // This ensures all auto-imported types from the same module share the same Import.Idx
-                const actual_module_name = auto_imported_type.env.module_name;
+                const actual_module_name = auto_imported_type.env.module_name.toSliceConst();
                 break :blk try self.getOrCreateAutoImport(actual_module_name);
             }
         }
@@ -9551,7 +9551,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                 // This is an auto-imported nominal type with a statement index
                 // Treat field access as tag access (e.g., Bool.True)
                 // Create e_nominal_external to properly track the module origin
-                const module_name_text = auto_imported_type.env.module_name;
+                const module_name_text = auto_imported_type.env.module_name.toSliceConst();
                 const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
 
                 const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
@@ -9699,7 +9699,7 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
             return .{ field_name, null };
         }
     }
-    const args = try self.env.store.exprSpanFrom(scratch_top);
+    const args = try self.env.store.exprSpanFrom(self.env.gpa, scratch_top);
 
     return .{ field_name, args };
 }
@@ -9775,7 +9775,7 @@ fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
 /// Find the type declaration matching the module name and return its ident
 fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     const file = self.parse_ir.store.getFile();
-    const module_name_text = self.env.module_name;
+    const module_name_text = self.env.module_name.toSliceConst();
 
     // Look through all statements for a type declaration matching the module name
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -9870,7 +9870,7 @@ fn hasAnyTypeDeclarations(self: *Self) bool {
 /// Report smart error when neither type module nor default-app is valid (checking mode)
 fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
     const file = self.parse_ir.store.getFile();
-    const module_name_text = self.env.module_name;
+    const module_name_text = self.env.module_name.toSliceConst();
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
     const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 

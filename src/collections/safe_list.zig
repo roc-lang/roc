@@ -6,6 +6,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
+const SafeSlice = @import("SafeSlice.zig").SafeSlice;
 
 /// Represents a type safe range in a list; [start, end)
 ///
@@ -93,15 +94,22 @@ pub fn SafeRange(comptime Idx: type) type {
 /// (barring manual usage of macros). An Idx can only be used for lists
 /// that hold T's, giving type safety. Also, out-of-bounds errors are
 /// less likely since indices are only created for valid list entries.
+///
+/// SafeList is an extern struct, which guarantees consistent field layout
+/// across optimization levels. This is important for serialization and
+/// shared memory scenarios where the same memory may be interpreted as
+/// both a Serialized struct and a SafeList.
 pub fn SafeList(comptime T: type) type {
-    return struct {
-        items: std.ArrayList(T) = .{},
+    return extern struct {
+        /// The underlying storage. Using SafeSlice instead of std.ArrayList
+        /// makes this struct extern-compatible.
+        items: SafeSlice(T) = SafeSlice(T).empty(),
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) { _ };
 
         /// A non-type-safe slice of the list.
-        pub const Slice = std.ArrayList(T).Slice;
+        pub const Slice = []T;
 
         /// A type-safe range of the list.
         pub const Range = SafeRange(Idx);
@@ -111,12 +119,18 @@ pub fn SafeList(comptime T: type) type {
             nonempty: Range,
         };
 
-        /// Serialized representation of a SafeList
-        /// Uses extern struct to guarantee consistent field layout across optimization levels.
+        /// Deserialize this SafeList in place
+        pub noinline fn deserialize(self: *SafeList(T), offset: i64) *SafeList(T) {
+            self.items.deserialize(offset);
+            return self;
+        }
+
+        /// Serialized representation of a SafeList.
+        /// Since SafeList is now extern and wraps SafeSlice (also extern),
+        /// the Serialized type is the same as SafeList itself.
+        /// This type alias is kept for API compatibility.
         pub const Serialized = extern struct {
-            offset: i64,
-            len: u64,
-            capacity: u64,
+            items: SafeSlice(T),
 
             /// Serialize a SafeList into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -125,65 +139,20 @@ pub fn SafeList(comptime T: type) type {
                 allocator: Allocator,
                 writer: *CompactWriter,
             ) Allocator.Error!void {
-                const items = safe_list.items.items;
-
-                // Pad to the alignment of the slice elements.
-                try writer.padToAlignment(allocator, @alignOf(T));
-
-                // Now that we are aligned, this is the correct offset for our data.
-                const data_offset = writer.total_bytes;
-
-                // Append the raw data without further padding.
-                if (items.len > 0) {
-                    try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(items.ptr),
-                        .iov_len = items.len * @sizeOf(T),
-                    });
-                    writer.total_bytes += items.len * @sizeOf(T);
-                }
-
-                self.offset = @intCast(data_offset);
-                self.len = items.len;
-                self.capacity = items.len;
+                try self.items.serialize(&safe_list.items, allocator, writer);
             }
 
             /// Deserialize this Serialized struct into a SafeList
             pub noinline fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
-                // CRITICAL: Read ALL fields from self BEFORE casting and writing to safe_list.
-                // Since safe_list aliases self (they point to the same memory), we must complete
-                // all reads before any writes to avoid corruption in Release mode.
-                const serialized_offset = self.offset;
-                const serialized_len = self.len;
-                const serialized_capacity = self.capacity;
-
-                // Now we can cast and write to the destination
-                const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
-
-                // Handle empty list case
-                if (serialized_len == 0) {
-                    safe_list.* = SafeList(T){
-                        .items = .{},
-                    };
-                } else {
-                    // Apply the offset to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(serialized_offset + offset)));
-
-                    safe_list.* = SafeList(T){
-                        .items = .{
-                            .items = items_ptr[0..@intCast(serialized_len)],
-                            .capacity = @intCast(serialized_capacity),
-                        },
-                    };
-                }
-
-                return safe_list;
+                self.items.deserialize(offset);
+                return @ptrCast(self);
             }
         };
 
         /// Initialize the `SafeList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
             return .{
-                .items = try std.ArrayList(T).initCapacity(gpa, capacity),
+                .items = try SafeSlice(T).initCapacity(gpa, capacity),
             };
         }
 
@@ -194,14 +163,13 @@ pub fn SafeList(comptime T: type) type {
 
         /// Get the length of this list.
         pub fn len(self: *const SafeList(T)) u64 {
-            return @intCast(self.items.items.len);
+            return self.items.len;
         }
 
         /// Add an item to the end of this list.
         pub fn append(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
             try self.items.append(gpa, item);
-
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
@@ -209,7 +177,6 @@ pub fn SafeList(comptime T: type) type {
         pub fn appendAssumeCapacity(self: *SafeList(T), item: T) Idx {
             const length = self.len();
             self.items.appendAssumeCapacity(item);
-
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
@@ -221,9 +188,9 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Add all the items in a slice to the end of this list.
-        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
+        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, slice: []const T) std.mem.Allocator.Error!Range {
             const start_length = self.len();
-            try self.items.appendSlice(gpa, items);
+            try self.items.appendSlice(gpa, slice);
             const end_length = self.len();
             return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
         }
@@ -244,19 +211,19 @@ pub fn SafeList(comptime T: type) type {
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
-            std.debug.assert(end <= self.items.items.len);
+            std.debug.assert(end <= self.items.len);
 
-            return self.items.items[start..end];
+            return self.items.toSlice()[start..end];
         }
 
         /// Get an item from this list without worrying about out-of-bounds errors.
         pub fn get(self: *const SafeList(T), id: Idx) *T {
-            return &self.items.items[@as(usize, @intFromEnum(id))];
+            return self.items.get(@as(usize, @intFromEnum(id)));
         }
 
         /// Set the value of an item in this list without worrying about out-of-bounds errors.
         pub fn set(self: *const SafeList(T), id: Idx, value: T) void {
-            self.items.items[@as(usize, @intFromEnum(id))] = value;
+            self.items.get(@as(usize, @intFromEnum(id))).* = value;
         }
 
         /// Returns a SafeList that has had its pointer converted to an offset.
@@ -268,29 +235,14 @@ pub fn SafeList(comptime T: type) type {
             allocator: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeList(T) {
-            const items = self.items.items;
-
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
-
-            const slice = try writer.appendSlice(allocator, items);
-
-            offset_self.* = .{
-                .items = .{
-                    .items = slice,
-                    .capacity = items.len,
-                },
-            };
-
+            try offset_self.items.serialize(&self.items, allocator, writer);
             return @constCast(offset_self);
         }
 
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *SafeList(T), offset: isize) void {
-            if (self.items.capacity == 0) return;
-
-            const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
-            const new_addr = @as(usize, @intCast(old_addr + offset));
-            self.items.items.ptr = @as([*]T, @ptrFromInt(new_addr));
+            self.items.relocate(offset);
         }
 
         /// An iterator over all the indices in this list.
@@ -361,7 +313,7 @@ pub fn SafeList(comptime T: type) type {
         pub fn iter(self: *const SafeList(T)) Iterator {
             return Iterator{
                 .array = self,
-                .len = self.len(),
+                .len = @intCast(self.len()),
                 .current = @enumFromInt(0),
             };
         }
@@ -386,8 +338,10 @@ pub fn SafeList(comptime T: type) type {
 /// that hold T's, giving type safety. Also, out-of-bounds errors are
 /// less likely since indices are only created for valid list entries.
 pub fn SafeMultiList(comptime T: type) type {
-    return struct {
-        items: std.MultiArrayList(T) = .{},
+    return extern struct {
+        bytes: [*]align(@alignOf(T)) u8 = undefined,
+        len_value: usize = 0,
+        cap_value: usize = 0,
 
         /// Index of an item in the list.
         pub const Idx = enum(u32) { zero = 0, _ };
@@ -401,14 +355,39 @@ pub fn SafeMultiList(comptime T: type) type {
         /// One of the comptime fields in the list's wrapped type.
         pub const Field = std.MultiArrayList(T).Field;
 
+        /// Helper to get a temporary MultiArrayList view for accessing items
+        inline fn asMultiArrayList(self: *const SafeMultiList(T)) std.MultiArrayList(T) {
+            return .{
+                .bytes = self.bytes,
+                .len = self.len_value,
+                .capacity = self.cap_value,
+            };
+        }
+
+        /// Helper to get a mutable temporary MultiArrayList view
+        inline fn asMultiArrayListMut(self: *SafeMultiList(T)) std.MultiArrayList(T) {
+            return .{
+                .bytes = self.bytes,
+                .len = self.len_value,
+                .capacity = self.cap_value,
+            };
+        }
+
+        /// Helper to update from a MultiArrayList
+        inline fn updateFrom(self: *SafeMultiList(T), items: std.MultiArrayList(T)) void {
+            self.bytes = items.bytes;
+            self.len_value = items.len;
+            self.cap_value = items.capacity;
+        }
+
         /// A slice of all values for a specific field of the wrapped type.
         pub fn field(self: *const SafeMultiList(T), comptime field_name: Field) []@FieldType(T, @tagName(field_name)) {
-            return self.items.items(field_name);
+            return self.asMultiArrayList().items(field_name);
         }
 
         /// The value for a specific field at a specific index in the list.
         pub fn fieldItem(self: *const SafeMultiList(T), comptime field_name: Field, idx: Idx) @FieldType(T, @tagName(field_name)) {
-            return self.items.items(field_name)[@as(usize, @intFromEnum(idx))];
+            return self.asMultiArrayList().items(field_name)[@as(usize, @intFromEnum(idx))];
         }
 
         /// Initialize the `SafeMultiList` with the specified capacity.
@@ -416,18 +395,37 @@ pub fn SafeMultiList(comptime T: type) type {
             var items = std.MultiArrayList(T){};
             try items.ensureTotalCapacity(gpa, capacity);
             return .{
-                .items = items,
+                .bytes = items.bytes,
+                .len_value = items.len,
+                .cap_value = items.capacity,
             };
         }
 
         /// Deinitialize the memory of a `SafeMultiList`.
         pub fn deinit(self: *SafeMultiList(T), gpa: Allocator) void {
-            self.items.deinit(gpa);
+            var items = self.asMultiArrayListMut();
+            items.deinit(gpa);
+            self.updateFrom(items);
         }
 
         /// Get the length of this list.
         pub fn len(self: *const SafeMultiList(T)) u32 {
-            return @intCast(self.items.len);
+            return @intCast(self.len_value);
+        }
+
+        /// Get the capacity of this list.
+        pub fn getCapacity(self: *const SafeMultiList(T)) u32 {
+            return @intCast(self.cap_value);
+        }
+
+        /// Get the underlying MultiArrayList (for testing/serialization).
+        fn asMultiArrayListConst(self: *const SafeMultiList(T)) std.MultiArrayList(T) {
+            if (self.cap_value == 0) return .{};
+            return std.MultiArrayList(T){
+                .bytes = self.bytes,
+                .len = self.len_value,
+                .capacity = self.cap_value,
+            };
         }
 
         /// Create a range from the provided idx to the end of the list
@@ -440,7 +438,9 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Add a new item to the end of this list.
         pub fn append(self: *SafeMultiList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
-            try self.items.append(gpa, item);
+            var items = self.asMultiArrayListMut();
+            try items.append(gpa, item);
+            self.updateFrom(items);
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
@@ -448,7 +448,9 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
         pub fn appendAssumeCapacity(self: *SafeMultiList(T), item: T) Idx {
             const length = self.len();
-            self.items.appendAssumeCapacity(item);
+            var items = self.asMultiArrayListMut();
+            items.appendAssumeCapacity(item);
+            self.updateFrom(items);
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
@@ -458,10 +460,12 @@ pub fn SafeMultiList(comptime T: type) type {
                 return .{ .start = .zero, .count = 0 };
             }
             const start_length = self.len();
-            try self.items.ensureUnusedCapacity(gpa, elems.len);
+            var items = self.asMultiArrayListMut();
+            try items.ensureUnusedCapacity(gpa, elems.len);
             for (elems) |elem| {
-                self.items.appendAssumeCapacity(elem);
+                items.appendAssumeCapacity(elem);
             }
+            self.updateFrom(items);
             const end_length = self.len();
             return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
         }
@@ -472,9 +476,9 @@ pub fn SafeMultiList(comptime T: type) type {
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
-            std.debug.assert(end <= self.items.len);
+            std.debug.assert(end <= self.len_value);
 
-            const base = self.items.slice();
+            const base = self.asMultiArrayList().slice();
 
             var new_ptrs: [base.ptrs.len][*]u8 = undefined;
 
@@ -500,17 +504,21 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Set the value of an element in this list.
         pub fn set(self: *SafeMultiList(T), idx: Idx, value: T) void {
-            self.items.set(@intFromEnum(idx), value);
+            var items = self.asMultiArrayListMut();
+            items.set(@intFromEnum(idx), value);
+            self.updateFrom(items);
         }
 
         // TODO: consider removing this, or at least renaming to imply this is not a zero-cost operation
         pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
-            return self.items.get(@intFromEnum(idx));
+            return self.asMultiArrayList().get(@intFromEnum(idx));
         }
 
         /// Make sure that the backing array has at least capacity for the specified number of elements.
         pub fn ensureTotalCapacity(self: *SafeMultiList(T), gpa: Allocator, capacity: usize) std.mem.Allocator.Error!void {
-            try self.items.ensureTotalCapacity(gpa, capacity);
+            var items = self.asMultiArrayListMut();
+            try items.ensureTotalCapacity(gpa, capacity);
+            self.updateFrom(items);
         }
 
         /// An iterator over the indices of all elements in a list.
@@ -554,37 +562,43 @@ pub fn SafeMultiList(comptime T: type) type {
             allocator: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeMultiList(T) {
+            // Write the SafeMultiList struct first (required by CompactWriter - never call appendSlice first)
+            // We'll set the bytes pointer after we write the data
+            const offset_self = try writer.appendAlloc(allocator, SafeMultiList(T));
+
             // Write only len elements, not capacity, to avoid storing garbage memory.
-            const data_offset = if (self.items.len > 0) blk: {
-                const slice = self.items.slice();
+            const data_offset = if (self.len_value > 0) blk: {
+                const slice = self.asMultiArrayList().slice();
                 const fields = std.meta.fields(T);
 
                 // MultiArrayList lays out fields in order, with alignment padding as
                 // necessary between the end of one field's elements and the beginning of
-                // the next. So we need to append entries to the writer for all fields.
-                const first_field_offset = writer.total_bytes;
-
+                // the next. appendSlice will take care of alignment padding automatically.
+                var first_field_offset: usize = 0;
                 inline for (fields, 0..) |_, i| {
                     const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
 
+                    // For the first field, capture the offset BEFORE writing
+                    if (i == 0) {
+                        // appendSlice will pad first, so we need to account for that
+                        const FieldType = @TypeOf(field_ptr[0]);
+                        const padded_offset = std.mem.alignForward(usize, writer.total_bytes, @alignOf(FieldType));
+                        first_field_offset = padded_offset;
+                    }
+
                     // Write the field data (only len elements' worth).
-                    // appendSlice will take care of alignment padding.
-                    _ = try writer.appendSlice(allocator, field_ptr[0..self.items.len]);
+                    // appendSlice handles alignment padding automatically
+                    _ = try writer.appendSlice(allocator, field_ptr[0..self.len_value]);
                 }
 
                 break :blk first_field_offset;
-            } else writer.total_bytes;
-
-            // Write the SafeMultiList struct
-            const offset_self = try writer.appendAlloc(allocator, SafeMultiList(T));
+            } else @alignOf(T); // Use aligned sentinel for empty lists (0 would create null pointer)
 
             // Initialize with offsets
             offset_self.* = .{
-                .items = .{
-                    .bytes = @ptrFromInt(data_offset),
-                    .len = self.items.len,
-                    .capacity = self.items.len, // capacity = len for compacted data
-                },
+                .bytes = @ptrFromInt(data_offset),
+                .len_value = self.len_value,
+                .cap_value = self.len_value, // capacity = len for compacted data
             };
 
             return @constCast(offset_self);
@@ -592,10 +606,22 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *SafeMultiList(T), offset: isize) void {
-            if (self.items.capacity == 0) return;
+            if (self.cap_value == 0) return;
 
-            const old_addr: isize = @intCast(@intFromPtr(self.items.bytes));
-            self.items.bytes = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
+            const old_addr: isize = @intCast(@intFromPtr(self.bytes));
+            self.bytes = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
+        }
+
+        /// Deserialize this SafeMultiList in place
+        pub noinline fn deserialize(self: *SafeMultiList(T), offset: i64) *SafeMultiList(T) {
+            if (self.cap_value == 0) return self;
+
+            const old_addr: i64 = @intCast(@intFromPtr(self.bytes));
+            const new_addr = old_addr + offset;
+            const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(@as([*]u8, @ptrFromInt(@as(usize, @intCast(new_addr)))))));
+            self.bytes = bytes_ptr;
+
+            return self;
         }
 
         /// Serialized representation of a SafeMultiList
@@ -610,11 +636,11 @@ pub fn SafeMultiList(comptime T: type) type {
             // output non-deterministic. The one-time zeroing cost is negligible next to writing
             // the same memory to disk.
             fn zeroUnusedCapacity(list: *SafeMultiList(T)) void {
-                const list_len = list.items.len;
-                const total_capacity = list.items.capacity;
+                const list_len = list.len_value;
+                const total_capacity = list.cap_value;
                 if (total_capacity == 0 or total_capacity <= list_len) return;
 
-                const slice = list.items.slice();
+                const slice = list.asMultiArrayList().slice();
                 inline for (std.meta.fields(T), 0..) |field_info, field_index| {
                     const field_size = @sizeOf(field_info.type);
                     if (field_size == 0) continue;
@@ -642,11 +668,11 @@ pub fn SafeMultiList(comptime T: type) type {
                 // We need to copy the raw bytes exactly as they are laid out.
                 zeroUnusedCapacity(@constCast(safe_multi_list));
 
-                const data_offset = if (safe_multi_list.items.len > 0) blk: {
+                const data_offset = if (safe_multi_list.len_value > 0) blk: {
                     const MultiArrayListType = std.MultiArrayList(T);
                     // We need to write all the bytes up to where the actual data is stored
                     // This includes gaps due to the capacity being larger than the length
-                    const used_bytes = MultiArrayListType.capacityInBytes(safe_multi_list.items.capacity);
+                    const used_bytes = MultiArrayListType.capacityInBytes(safe_multi_list.cap_value);
 
                     // Ensure proper alignment
                     try writer.padToAlignment(allocator, @alignOf(T));
@@ -656,7 +682,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
                     // Add the MultiArrayList bytes directly to iovecs
                     try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(safe_multi_list.items.bytes),
+                        .iov_base = @ptrCast(safe_multi_list.bytes),
                         .iov_len = used_bytes,
                     });
                     writer.total_bytes += used_bytes;
@@ -666,42 +692,30 @@ pub fn SafeMultiList(comptime T: type) type {
 
                 // Store the offset, len, and capacity
                 self.offset = @intCast(data_offset);
-                self.len = safe_multi_list.items.len;
-                self.capacity = safe_multi_list.items.capacity;
+                self.len = safe_multi_list.len_value;
+                self.capacity = safe_multi_list.cap_value;
             }
 
             /// Deserialize this Serialized struct into a SafeMultiList
             pub noinline fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
-                // CRITICAL: Read ALL fields from self BEFORE casting and writing to multi_list.
-                // Since multi_list aliases self (they point to the same memory), we must complete
-                // all reads before any writes to avoid corruption in Release mode.
-                const serialized_offset = self.offset;
-                const serialized_len = self.len;
-                const serialized_capacity = self.capacity;
-
-                // Now we can cast and write to the destination
                 const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty list case
-                if (serialized_len == 0) {
-                    multi_list.* = SafeMultiList(T){
-                        .items = .{},
-                    };
+                if (self.len == 0) {
+                    multi_list.bytes = undefined;
+                    multi_list.len_value = 0;
+                    multi_list.cap_value = 0;
                 } else {
                     // We need to reconstruct the MultiArrayList from the serialized field arrays
                     // MultiArrayList stores fields separately by type, and we serialized them in field order
-                    const current_ptr = @as([*]u8, @ptrFromInt(@as(usize, @intCast(serialized_offset + offset))));
+                    const current_ptr = @as([*]u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
 
                     // Allocate aligned memory for the MultiArrayList bytes
                     const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));
 
-                    multi_list.* = SafeMultiList(T){
-                        .items = .{
-                            .bytes = bytes_ptr,
-                            .len = @as(usize, @intCast(serialized_len)),
-                            .capacity = @as(usize, @intCast(serialized_capacity)),
-                        },
-                    };
+                    multi_list.bytes = bytes_ptr;
+                    multi_list.len_value = @as(usize, @intCast(self.len));
+                    multi_list.cap_value = @as(usize, @intCast(self.capacity));
                 }
 
                 return multi_list;
@@ -990,11 +1004,12 @@ test "SafeList CompactWriter verify offset calculation" {
     const serialized = try writer.appendAlloc(gpa, SafeList(u16).Serialized);
     try serialized.serialize(&list, gpa, &writer);
 
-    // The offset should be the size of the Serialized struct itself
+    // The data offset should be the size of the Serialized struct itself
     // since the slice data comes after it in the buffer
-    // Serialized has: offset (i64=8) + len (u64=8) + capacity (u64=8) = 24 bytes
+    // Serialized wraps SafeSlice which has: ptr ([*]T=8) + len (u64=8) + capacity (u64=8) = 24 bytes
     const expected_offset = @sizeOf(SafeList(u16).Serialized);
-    try testing.expectEqual(expected_offset, serialized.offset);
+    // After serialization, the ptr field contains the data offset (as a fake pointer value)
+    try testing.expectEqual(expected_offset, @intFromPtr(serialized.items.ptr));
 }
 
 test "SafeList CompactWriter complete roundtrip example" {
@@ -1028,7 +1043,8 @@ test "SafeList CompactWriter complete roundtrip example" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Verify the offset is correct - it should be the size of the Serialized struct
-    try testing.expectEqual(@sizeOf(SafeList(u32).Serialized), serialized.offset);
+    // After serialization, the ptr field contains the data offset (as a fake pointer value)
+    try testing.expectEqual(@sizeOf(SafeList(u32).Serialized), @intFromPtr(serialized.items.ptr));
 
     // Step 4: Write to file using vectored I/O
     try writer.writeGather(gpa, file);
@@ -1764,7 +1780,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         }
 
         // Verify we have extra capacity that shouldn't be serialized
-        try testing.expect(list.items.capacity >= length + 5);
+        try testing.expect(list.getCapacity() >= length + 5);
 
         // Add another list to test alignment between lists
         var list2 = SafeMultiList(TestType){};
@@ -1942,7 +1958,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
         }
 
         // Manually create the expected memory layout
-        const expected_bytes = try gpa.alloc(u8, std.MultiArrayList(TestStruct).capacityInBytes(original.items.capacity));
+        const expected_bytes = try gpa.alloc(u8, std.MultiArrayList(TestStruct).capacityInBytes(original.asMultiArrayListConst().capacity));
         defer gpa.free(expected_bytes);
 
         // Sort fields by alignment (descending) then by name (ascending)
@@ -1979,7 +1995,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
             offset = std.mem.alignForward(usize, offset, field_info.alignment);
 
             // Copy field data based on field index
-            const field_capacity_bytes = field_info.size * original.items.capacity;
+            const field_capacity_bytes = field_info.size * original.asMultiArrayListConst().capacity;
             const field_dest = expected_bytes[offset..][0..field_capacity_bytes];
 
             switch (field_info.field_idx) {
@@ -2022,7 +2038,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
                 else => unreachable,
             }
 
-            offset += field_info.size * original.items.capacity;
+            offset += field_info.size * original.asMultiArrayListConst().capacity;
         }
 
         // Fill remaining space with zeros to match serialization sanitization
@@ -2053,7 +2069,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
         _ = try file.read(buffer);
 
         // Extract the data portion (after the Serialized struct)
-        const data_size = std.MultiArrayList(TestStruct).capacityInBytes(original.items.capacity);
+        const data_size = std.MultiArrayList(TestStruct).capacityInBytes(original.asMultiArrayListConst().capacity);
         const serialized_offset = @sizeOf(SafeMultiList(TestStruct).Serialized);
 
         // Account for alignment padding
@@ -2186,7 +2202,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
     defer list.deinit(gpa);
 
     // Verify it has capacity but no elements
-    try testing.expect(list.items.capacity >= 50);
+    try testing.expect(list.getCapacity() >= 50);
     try testing.expectEqual(@as(usize, 0), list.len());
 
     var tmp_dir = testing.tmpDir(.{});
@@ -2217,7 +2233,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
     // Verify it's still empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
     // Capacity should be 0 after compaction
-    try testing.expectEqual(@as(usize, 0), deserialized.items.capacity);
+    try testing.expectEqual(@as(u32, 0), deserialized.getCapacity());
 }
 
 test "SafeMultiList.Serialized roundtrip" {

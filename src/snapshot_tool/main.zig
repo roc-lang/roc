@@ -1190,7 +1190,7 @@ fn processSnapshotContent(
                         // Manually track scratch statements because we aren't using the file entrypoint
                         const scratch_statements_start = can_ir.store.scratch.?.statements.top();
                         try can_ir.store.addScratchStatement(can_stmt.idx);
-                        can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+                        can_ir.all_statements = try can_ir.store.statementSpanFrom(can_ir.gpa, scratch_statements_start);
                     }
                 },
                 else => unreachable,
@@ -1236,8 +1236,8 @@ fn processSnapshotContent(
 
     // Build builtin_modules array in the same order as can_ir.imports
     // Dict and Set are now nested inside Builtin, so we only have one module to add
-    const import_count = can_ir.imports.imports.items.items.len;
-    for (can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
+    const import_count: usize = @intCast(can_ir.imports.imports.items.len);
+    for (can_ir.imports.imports.items.toSlice()[0..import_count]) |str_idx| {
         const import_name = can_ir.getString(str_idx);
 
         // Match the import name to the corresponding loaded builtin module
@@ -2155,7 +2155,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
-            if (source_contains_newline_in_range(parse_ast.env.source, @min(region.end.offset, next_region.start.offset), @max(region.end.offset, next_region.start.offset))) {
+            if (source_contains_newline_in_range(parse_ast.env.source.toSlice(), @min(region.end.offset, next_region.start.offset), @max(region.end.offset, next_region.start.offset))) {
                 try output.md_writer.writer.writeAll("\n");
             }
         }

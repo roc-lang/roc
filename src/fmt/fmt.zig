@@ -190,7 +190,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast);
+        try printParseErrors(gpa, module_env.common.source.toSlice(), parse_ast);
         return error.ParsingFailed;
     }
 
@@ -199,7 +199,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         var formatted: std.Io.Writer.Allocating = .init(gpa);
         defer formatted.deinit();
         try formatAst(parse_ast, &formatted.writer);
-        if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
+        if (!std.mem.eql(u8, formatted.written(), module_env.common.source.toSlice())) {
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
@@ -229,7 +229,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast);
+        try printParseErrors(gpa, module_env.common.source.toSlice(), parse_ast);
         return error.ParsingFailed;
     }
 
@@ -253,8 +253,8 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
-        const column = region.start.offset - line_offsets.items.items[line];
+        const line = binarySearch(line_offsets.items.toSlice(), region.start.offset) orelse unreachable;
+        const column = region.start.offset - line_offsets.items.toSlice()[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
         try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
@@ -336,7 +336,7 @@ const Formatter = struct {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
         const header = fmt.ast.store.getHeader(file.header);
-        const header_region = fmt.ast.store.nodes.items.items(.region)[@intFromEnum(file.header)];
+        const header_region = fmt.ast.store.nodes.field(.region)[@intFromEnum(file.header)];
         // Only flush comments before the header if it has its own tokens.
         // type_module, default_app, and malformed headers share the first statement's token,
         // so flushing here would duplicate the whitespace handling.
@@ -1727,7 +1727,7 @@ const Formatter = struct {
     }
 
     fn nodeRegion(fmt: *Formatter, idx: u32) AST.TokenizedRegion {
-        return fmt.ast.store.nodes.items.items(.region)[idx];
+        return fmt.ast.store.nodes.field(.region)[idx];
     }
 
     fn formatBlock(fmt: *Formatter, block: AST.Block) !void {
@@ -1999,20 +1999,21 @@ const Formatter = struct {
     fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end]);
+        return fmt.flushComments(fmt.ast.env.source.toSlice()[start..end]);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end]);
+        return fmt.flushComments(fmt.ast.env.source.toSlice()[start..end]);
     }
 
     fn flushCommentsEOF(fmt: *Formatter) !void {
         const last_token_idx = if (fmt.ast.tokens.tokens.len >= 2) fmt.ast.tokens.tokens.len - 2 else 0;
         const start = fmt.ast.tokens.resolve(last_token_idx).end.offset;
-        const end = fmt.ast.env.source.len;
-        const between_text = fmt.ast.env.source[start..end];
+        const source = fmt.ast.env.source.toSlice();
+        const end = source.len;
+        const between_text = source[start..end];
 
         var newline_count_to_apply: usize = 0;
         var i: usize = 0;
@@ -2134,7 +2135,7 @@ const Formatter = struct {
             else => {},
         }
 
-        const text = fmt.ast.env.source[start..region.end.offset];
+        const text = fmt.ast.env.source.toSlice()[start..region.end.offset];
         try fmt.pushAll(text);
     }
 
@@ -2144,8 +2145,8 @@ const Formatter = struct {
         }
         const first: usize = @intFromEnum(slice[0]);
         const last: usize = @intFromEnum(slice[slice.len - 1]);
-        const first_region = fmt.ast.store.nodes.items.items(.region)[first];
-        const last_region = fmt.ast.store.nodes.items.items(.region)[last];
+        const first_region = fmt.ast.store.nodes.field(.region)[first];
+        const last_region = fmt.ast.store.nodes.field(.region)[last];
         return first_region.spanAcross(last_region);
     }
 

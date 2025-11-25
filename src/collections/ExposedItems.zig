@@ -20,8 +20,9 @@ const CompactWriter = @import("CompactWriter.zig");
 // This is critical because foo, foo!, and _foo are different identifiers
 const IdentIdx = u32;
 
-/// A collection that tracks exposed items by their names and associated CIR node indices
-pub const ExposedItems = struct {
+/// A collection that tracks exposed items by their names and associated CIR node indices.
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const ExposedItems = extern struct {
     /// Maps item name (as interned ID) -> CIR node index (0 means exposed but not defined)
     items: SortedArrayBuilder(IdentIdx, u16),
 
@@ -59,7 +60,7 @@ pub const ExposedItems = struct {
         self.items.ensureSorted(allocator);
 
         // Find the existing entry and update its value
-        const entries = self.items.entries.items;
+        const entries = self.items.entries.items.toSlice();
         for (entries) |*entry| {
             if (entry.key == ident_idx) {
                 entry.value = node_idx;
@@ -105,38 +106,24 @@ pub const ExposedItems = struct {
         self.items.relocate(offset);
     }
 
-    /// Serialized representation of ExposedItems
-    /// Uses extern struct to guarantee consistent field layout across optimization levels.
-    pub const Serialized = extern struct {
-        items: SortedArrayBuilder(IdentIdx, u16).Serialized,
+    /// Serialized representation of ExposedItems.
+    /// Since ExposedItems wraps a SortedArrayBuilder which is now extern, we can use it directly.
+    pub const Serialized = ExposedItems;
 
-        /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
-        pub fn serialize(
-            self: *Serialized,
-            exposed_items: *const ExposedItems,
-            allocator: Allocator,
-            writer: *CompactWriter,
-        ) Allocator.Error!void {
-            try self.items.serialize(&exposed_items.items, allocator, writer);
-        }
+    /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
+    pub fn serializeTo(
+        self: *Self,
+        source: *const ExposedItems,
+        allocator: Allocator,
+        writer: *CompactWriter,
+    ) Allocator.Error!void {
+        try self.items.serialize(&source.items, allocator, writer);
+    }
 
-        /// Deserialize this Serialized struct into an ExposedItems
-        pub noinline fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // CRITICAL: Deserialize nested struct BEFORE casting and writing to exposed_items.
-            // Since exposed_items aliases self (they point to the same memory), we must complete
-            // all reads before any writes to avoid corruption in Release mode.
-            const deserialized_items = self.items.deserialize(offset).*;
-
-            // Now we can cast and write to the destination
-            const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
-
-            exposed_items.* = ExposedItems{
-                .items = deserialized_items,
-            };
-
-            return exposed_items;
-        }
-    };
+    /// Deserialize this ExposedItems in place
+    pub fn deserializeInPlace(self: *Self, offset: i64) void {
+        _ = self.items.deserialize(offset);
+    }
 
     /// Serialize this ExposedItems to the given CompactWriter. The resulting ExposedItems
     /// in the writer's buffer will have offsets instead of pointers. Calling any
@@ -154,24 +141,8 @@ pub const ExposedItems = struct {
         // First, write the ExposedItems struct itself
         const offset_self = try writer.appendAlloc(allocator, Self);
 
-        // Serialize the SortedArrayBuilder's entries
-        const entries = self.items.entries.items;
-        const entries_offset = if (entries.len > 0) blk: {
-            // Write the entries array
-            const offset = try writer.appendSlice(allocator, entries);
-            break :blk offset;
-        } else null;
-
-        // Update the struct with serialized data
-        offset_self.* = .{
-            .items = .{
-                .entries = .{
-                    .items = if (entries_offset) |offset| offset else entries[0..0],
-                    .capacity = entries.len,
-                },
-                .sorted = self.items.sorted,
-            },
-        };
+        // Serialize using the SortedArrayBuilder's serialize method
+        try offset_self.items.serialize(&self.items, allocator, writer);
 
         return @constCast(offset_self);
     }
@@ -193,7 +164,7 @@ pub const ExposedItems = struct {
 
     /// Get an iterator over all exposed items
     pub fn iterator(self: *const Self) Iterator {
-        return .{ .items = self.items.entries.items, .index = 0 };
+        return .{ .items = self.items.entries.items.toSlice(), .index = 0 };
     }
 };
 
@@ -329,7 +300,8 @@ test "ExposedItems basic CompactWriter roundtrip" {
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
     const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    serialized_ptr.deserializeInPlace(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr;
 
     // Verify the items are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.count());
@@ -386,7 +358,8 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    serialized_ptr.deserializeInPlace(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr;
 
     // After deduplication, should have only 2 items
     try testing.expectEqual(@as(usize, 2), deserialized.count());
@@ -452,7 +425,8 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
 
     // Cast to Serialized type and deserialize
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    serialized_ptr.deserializeInPlace(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr;
 
     // Verify all items
     try testing.expectEqual(@as(usize, test_items.len), deserialized.count());
@@ -482,7 +456,8 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try writer.writeToBuffer(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        serialized_ptr.deserializeInPlace(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr;
 
         try testing.expectEqual(@as(usize, 0), deserialized.count());
     }
@@ -519,7 +494,8 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try file.read(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        serialized_ptr.deserializeInPlace(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr;
 
         try testing.expectEqual(@as(usize, 1), deserialized.count());
         try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, 100));

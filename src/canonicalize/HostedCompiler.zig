@@ -24,7 +24,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
-            _ = env.types.fresh() catch unreachable;
+            _ = env.types.fresh(env.gpa) catch unreachable;
         }
     }
 
@@ -94,7 +94,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 // Ensure types array has entries for all new expressions
                 const body_int = @intFromEnum(body_idx);
                 while (env.types.len() <= body_int) {
-                    _ = try env.types.fresh();
+                    _ = try env.types.fresh(env.gpa);
                 }
 
                 // Create e_hosted_lambda expression
@@ -110,7 +110,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 // Ensure types array has an entry for this new expression
                 const expr_int = @intFromEnum(expr_idx);
                 while (env.types.len() <= expr_int) {
-                    _ = try env.types.fresh();
+                    _ = try env.types.fresh(env.gpa);
                 }
 
                 // Now replace the e_anno_only expression with the e_hosted_lambda
@@ -120,7 +120,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 const def_node = env.store.nodes.get(def_node_idx);
                 const extra_start = def_node.data_1;
 
-                env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+                env.store.extra_data.items.toSlice()[extra_start + 1] = @intFromEnum(expr_idx);
 
                 // Verify the def still has its annotation after modification
                 const modified_def = env.store.getDef(def_idx);
@@ -169,7 +169,7 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
 
             // Build fully-qualified name: "ModuleName.functionName"
             // Strip the .roc extension from module name (e.g., "Stdout.roc" -> "Stdout")
-            var module_name = env.module_name;
+            var module_name = env.module_name.toSliceConst();
 
             if (std.mem.endsWith(u8, module_name, ".roc")) {
                 module_name = module_name[0 .. module_name.len - 4];

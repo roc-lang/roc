@@ -10,7 +10,7 @@ const serialization = @import("serialization");
 const collections = @import("collections");
 
 const Region = @import("Region.zig");
-const SmallStringInterner = @import("SmallStringInterner.zig");
+const SmallStringInterner = @import("SmallStringInterner.zig").SmallStringInterner;
 
 const CompactWriter = collections.CompactWriter;
 
@@ -95,10 +95,12 @@ pub const Attributes = packed struct(u3) {
 };
 
 /// An interner for identifier names.
-pub const Store = struct {
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Store = extern struct {
     interner: SmallStringInterner,
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
+    _padding: u32 = 0, // Padding for 8-byte alignment
 
     /// Serialized representation of an Ident.Store
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
@@ -121,11 +123,9 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub noinline fn deserialize(self: *Serialized, offset: i64) *Store {
-            // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
-            // output struct. This is because Store is a regular struct (not extern), so Zig may
-            // reorder its fields differently than Serialized (which is extern). If we read from self
-            // while writing to store (which aliases self), we may read corrupted data in Release mode
-            // when field orderings differ.
+            // NOTE: Ident.Store is now an extern struct, but we still deserialize to locals
+            // because Serialized uses SmallStringInterner.Serialized while the runtime type uses
+            // SmallStringInterner. Once the sub-components have Serialized = Self, this can be simplified.
 
             // Step 1: Deserialize all fields into local variables first
             const deserialized_interner = self.interner.deserialize(offset).*;

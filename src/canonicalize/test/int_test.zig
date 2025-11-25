@@ -747,7 +747,7 @@ test "pattern numeric literal value edge cases" {
                 .kind = .num_unbound,
             },
         };
-        const max_idx = try env.store.addPattern(max_pattern, base.Region.zero());
+        const max_idx = try env.store.addPattern(env.gpa, max_pattern, base.Region.zero());
         const stored_max = env.store.getPattern(max_idx);
         try std.testing.expectEqual(std.math.maxInt(i128), @as(i128, @bitCast(stored_max.num_literal.value.bytes)));
 
@@ -758,7 +758,7 @@ test "pattern numeric literal value edge cases" {
                 .kind = .num_unbound,
             },
         };
-        const min_idx = try env.store.addPattern(min_pattern, base.Region.zero());
+        const min_idx = try env.store.addPattern(env.gpa, min_pattern, base.Region.zero());
         const stored_min = env.store.getPattern(min_idx);
         try std.testing.expectEqual(std.math.minInt(i128), @as(i128, @bitCast(stored_min.num_literal.value.bytes)));
     }
@@ -780,7 +780,7 @@ test "pattern numeric literal value edge cases" {
             },
         };
 
-        const pattern_idx = try env.store.addPattern(small_dec_pattern, base.Region.zero());
+        const pattern_idx = try env.store.addPattern(env.gpa, small_dec_pattern, base.Region.zero());
         const stored = env.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .small_dec_literal);
@@ -802,7 +802,7 @@ test "pattern numeric literal value edge cases" {
             },
         };
 
-        const pattern_idx = try env.store.addPattern(dec_pattern, base.Region.zero());
+        const pattern_idx = try env.store.addPattern(env.gpa, dec_pattern, base.Region.zero());
         const stored = env.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .dec_literal);
@@ -823,7 +823,7 @@ test "pattern numeric literal value edge cases" {
                 .has_suffix = false,
             },
         };
-        const neg_zero_idx = try env.store.addPattern(neg_zero_pattern, base.Region.zero());
+        const neg_zero_idx = try env.store.addPattern(env.gpa, neg_zero_pattern, base.Region.zero());
         const stored_neg_zero = env.store.getPattern(neg_zero_idx);
         try std.testing.expect(stored_neg_zero == .dec_literal);
         try std.testing.expectEqual(@as(i128, 0), stored_neg_zero.dec_literal.value.num);

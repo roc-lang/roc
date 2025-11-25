@@ -235,8 +235,8 @@ pub const Interpreter = struct {
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
         // Safely access import count
-        const import_count = if (env.imports.imports.items.items.len > 0)
-            env.imports.imports.items.items.len
+        const import_count = if (env.imports.imports.items.len > 0)
+            env.imports.imports.items.len
         else
             0;
 
@@ -247,8 +247,8 @@ pub const Interpreter = struct {
             try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
 
             // Process ALL imports, matching each to the appropriate module from other_envs
-            for (0..import_count) |i| {
-                const str_idx = env.imports.imports.items.items[i];
+            for (0..@as(usize, @intCast(import_count))) |i| {
+                const str_idx = env.imports.imports.items.toSliceConst()[i];
                 const import_name = env.common.getString(str_idx);
 
                 // Find matching module in other_envs
@@ -261,7 +261,7 @@ pub const Interpreter = struct {
                 if (std.mem.indexOf(u8, import_name, "Builtin") != null) {
                     // Match Builtin
                     for (other_envs) |module_env| {
-                        if (std.mem.indexOf(u8, module_env.module_name, "Builtin") != null) {
+                        if (std.mem.indexOf(u8, module_env.module_name.toSliceConst(), "Builtin") != null) {
                             matched_module = module_env;
                             break;
                         }
@@ -285,10 +285,10 @@ pub const Interpreter = struct {
                         const platform_module_name = platform_env.module_name;
 
                         // Strip .roc extension if present for exact matching
-                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
-                            platform_module_name[0 .. platform_module_name.len - 4]
+                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name.toSliceConst(), ".roc"))
+                            platform_module_name.toSliceConst()[0 .. platform_module_name.toSliceConst().len - 4]
                         else
-                            platform_module_name;
+                            platform_module_name.toSliceConst();
 
                         // Match "Stdout" to "Stdout.roc" via exact match, not substring
                         if (std.mem.eql(u8, name_without_ext, module_name)) {
@@ -2330,7 +2330,7 @@ pub const Interpreter = struct {
                 // (Unsuffixed numeric literals default to Dec in Roc)
                 if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
                     const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    const dec_var = try self.runtime_types.freshFromContent(self.allocator, dec_content);
                     receiver_resolved = self.runtime_types.resolveVar(dec_var);
                 }
 
@@ -5286,7 +5286,7 @@ pub const Interpreter = struct {
         self.import_envs.deinit(self.allocator);
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
-        self.runtime_types.deinit();
+        self.runtime_types.deinit(self.allocator);
         self.allocator.destroy(self.runtime_types);
         self.snapshots.deinit();
         self.problems.deinit(self.allocator);
@@ -5392,7 +5392,7 @@ pub const Interpreter = struct {
         if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
             // Create Dec nominal type content
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+            const dec_var = try self.runtime_types.freshFromContent(self.allocator, dec_content);
             lhs_resolved = self.runtime_types.resolveVar(dec_var);
         }
 
@@ -5523,7 +5523,7 @@ pub const Interpreter = struct {
         if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
             // Create Dec nominal type content
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+            const dec_var = try self.runtime_types.freshFromContent(self.allocator, dec_content);
             operand_resolved = self.runtime_types.resolveVar(dec_var);
         }
 
@@ -5718,19 +5718,18 @@ pub const Interpreter = struct {
 
         // Number types backing is [] (empty tag union with closed extension)
         const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
-        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+        const ext_var = try self.runtime_types.freshFromContent(self.allocator, empty_tag_union_content);
         const empty_tag_union = types.TagUnion{
             .tags = types.Tag.SafeMultiList.Range.empty(),
             .ext = ext_var,
         };
         const backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
-        const backing_var = try self.runtime_types.freshFromContent(backing_content);
+        const backing_var = try self.runtime_types.freshFromContent(self.allocator, backing_content);
 
         // Number types have no type arguments
         const no_type_args: []const types.Var = &.{};
 
-        return try self.runtime_types.mkNominal(
-            type_ident,
+        return try self.runtime_types.mkNominal(self.allocator, type_ident,
             backing_var,
             no_type_args,
             origin_module_id,
@@ -5865,7 +5864,7 @@ pub const Interpreter = struct {
 
         // Insert a placeholder to break cycles during recursive type translation.
         // If we recurse back to this type, we'll return the placeholder instead of infinite looping.
-        const placeholder = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+        const placeholder = try self.runtime_types.freshFromContent(self.allocator, .{ .flex = types.Flex.init() });
         try self.translate_cache.put(key, placeholder);
 
         const out_var = blk: {
@@ -5885,7 +5884,7 @@ pub const Interpreter = struct {
                                 for (ct_args) |ct_arg_var| {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
-                                const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
+                                const rt_args_range = try self.runtime_types.appendVars(self.allocator, rt_tag_args.items);
                                 // Translate the tag name identifier from the source module to the runtime layout store env
                                 // This ensures tag names are consistent when looked up during e_tag evaluation
                                 const name_str = module.getIdent(tag.name);
@@ -5896,12 +5895,12 @@ pub const Interpreter = struct {
                                 };
                             }
 
-                            const rt_ext = try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                            const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const rt_ext = try self.runtime_types.register(self.allocator, .{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const content = try self.runtime_types.mkTagUnion(self.allocator, rt_tags.items, rt_ext);
+                            break :blk try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .empty_tag_union => {
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
+                            break :blk try self.runtime_types.freshFromContent(self.allocator, .{ .structure = .empty_tag_union });
                         },
                         .tuple => |t| {
                             const ct_elems = module.types.sliceVars(t.elems);
@@ -5910,8 +5909,8 @@ pub const Interpreter = struct {
                             for (ct_elems, 0..) |ct_elem, i| {
                                 buf[i] = try self.translateTypeVar(module, ct_elem);
                             }
-                            const range = try self.runtime_types.appendVars(buf);
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
+                            const range = try self.runtime_types.appendVars(self.allocator, buf);
+                            break :blk try self.runtime_types.freshFromContent(self.allocator, .{ .structure = .{ .tuple = .{ .elems = range } } });
                         },
                         .record => |rec| {
                             var acc = try FieldAccumulator.init(self.allocator);
@@ -5939,8 +5938,8 @@ pub const Interpreter = struct {
                                     .var_ = try self.translateTypeVar(module, ct_field.var_),
                                 };
                             }
-                            const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
+                            const rt_fields = try self.runtime_types.appendRecordFields(self.allocator, runtime_fields);
+                            break :blk try self.runtime_types.freshFromContent(self.allocator, .{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                         },
                         .record_unbound => |fields_range| {
                             // TODO: Recursively unwrap record fields via ext, like tag unions
@@ -5955,12 +5954,12 @@ pub const Interpreter = struct {
                                     .var_ = try self.translateTypeVar(module, f.var_),
                                 };
                             }
-                            const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
-                            const ext_empty = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = ext_empty } } });
+                            const rt_fields = try self.runtime_types.appendRecordFields(self.allocator, runtime_fields);
+                            const ext_empty = try self.runtime_types.freshFromContent(self.allocator, .{ .structure = .empty_record });
+                            break :blk try self.runtime_types.freshFromContent(self.allocator, .{ .structure = .{ .record = .{ .fields = rt_fields, .ext = ext_empty } } });
                         },
                         .empty_record => {
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
+                            break :blk try self.runtime_types.freshFromContent(self.allocator, .{ .structure = .empty_record });
                         },
                         .fn_pure => |f| {
                             const ct_args = module.types.sliceVars(f.args);
@@ -5970,8 +5969,8 @@ pub const Interpreter = struct {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
-                            const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const content = try self.runtime_types.mkFuncPure(self.allocator, buf, rt_ret);
+                            break :blk try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .fn_effectful => |f| {
                             const ct_args = module.types.sliceVars(f.args);
@@ -5981,8 +5980,8 @@ pub const Interpreter = struct {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
-                            const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const content = try self.runtime_types.mkFuncEffectful(self.allocator, buf, rt_ret);
+                            break :blk try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .fn_unbound => |f| {
                             const ct_args = module.types.sliceVars(f.args);
@@ -5992,8 +5991,8 @@ pub const Interpreter = struct {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
-                            const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const content = try self.runtime_types.mkFuncUnbound(self.allocator, buf, rt_ret);
+                            break :blk try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .nominal_type => |nom| {
                             const ct_backing = module.types.getNominalBackingVar(nom);
@@ -6020,8 +6019,8 @@ pub const Interpreter = struct {
                                 const origin_str = module.getIdent(nom.origin_module);
                                 break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             } else nom.origin_module;
-                            const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const content = try self.runtime_types.mkNominal(self.allocator, translated_ident, rt_backing, buf, translated_origin);
+                            break :blk try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                     }
                 },
@@ -6034,8 +6033,8 @@ pub const Interpreter = struct {
                     for (ct_args, 0..) |ct_arg, i| {
                         buf[i] = try self.translateTypeVar(module, ct_arg);
                     }
-                    const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
-                    break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    const content = try self.runtime_types.mkAlias(self.allocator, alias.ident, rt_backing, buf);
+                    break :blk try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
                 .recursion_var => |rec_var| {
                     // Translate the structure variable that the recursion var points to
@@ -6044,7 +6043,7 @@ pub const Interpreter = struct {
                         .structure = rt_structure,
                         .name = rec_var.name,
                     } };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    break :blk try self.runtime_types.freshFromContent(self.allocator, content);
                 },
                 .flex => |flex| {
                     // Translate static dispatch constraints if present
@@ -6063,12 +6062,12 @@ pub const Interpreter = struct {
                             });
                         }
 
-                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(self.allocator, rt_constraints.items);
                         break :blk_flex flex.withConstraints(rt_constraints_range);
                     } else flex;
 
                     const content: types.Content = .{ .flex = rt_flex };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    break :blk try self.runtime_types.freshFromContent(self.allocator, content);
                 },
                 .rigid => |rigid| {
                     // Translate static dispatch constraints if present
@@ -6087,12 +6086,12 @@ pub const Interpreter = struct {
                             });
                         }
 
-                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(self.allocator, rt_constraints.items);
                         break :blk_rigid rigid.withConstraints(rt_constraints_range);
                     } else rigid;
 
                     const content: types.Content = .{ .rigid = rt_rigid };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    break :blk try self.runtime_types.freshFromContent(self.allocator, content);
                 },
                 .err => {
                     // Handle generic type parameters from compiled builtin modules.
@@ -6101,7 +6100,7 @@ pub const Interpreter = struct {
                     // because no concrete type was known at compile time.
                     // Create a fresh unbound variable to represent this generic parameter.
                     // This will be properly instantiated/unified when the function is called.
-                    break :blk try self.runtime_types.fresh();
+                    break :blk try self.runtime_types.fresh(self.allocator);
                 },
             }
         };
@@ -6142,7 +6141,7 @@ pub const Interpreter = struct {
         const instantiated = switch (resolved.desc.content) {
             .rigid => blk: {
                 // Replace rigid with fresh flex that can be unified
-                const fresh = try self.runtime_types.fresh();
+                const fresh = try self.runtime_types.fresh(self.allocator);
                 try subst_map.put(resolved.var_, fresh);
                 break :blk fresh;
             },
@@ -6157,8 +6156,8 @@ pub const Interpreter = struct {
                             new_args[i] = try self.instantiateType(arg_var, subst_map);
                         }
                         const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncPure(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        const content = try self.runtime_types.mkFuncPure(self.allocator, new_args, new_ret);
+                        break :blk_fn try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .fn_effectful => |f| blk_fn: {
                         const arg_vars = self.runtime_types.sliceVars(f.args);
@@ -6168,8 +6167,8 @@ pub const Interpreter = struct {
                             new_args[i] = try self.instantiateType(arg_var, subst_map);
                         }
                         const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncEffectful(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        const content = try self.runtime_types.mkFuncEffectful(self.allocator, new_args, new_ret);
+                        break :blk_fn try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .fn_unbound => |f| blk_fn: {
                         const arg_vars = self.runtime_types.sliceVars(f.args);
@@ -6179,8 +6178,8 @@ pub const Interpreter = struct {
                             new_args[i] = try self.instantiateType(arg_var, subst_map);
                         }
                         const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        const content = try self.runtime_types.mkFuncUnbound(self.allocator, new_args, new_ret);
+                        break :blk_fn try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .tuple => |tuple| blk_tuple: {
                         // Recursively instantiate tuple element types
@@ -6190,9 +6189,9 @@ pub const Interpreter = struct {
                         for (elem_vars, 0..) |elem_var, i| {
                             new_elems[i] = try self.instantiateType(elem_var, subst_map);
                         }
-                        const new_elems_range = try self.runtime_types.appendVars(new_elems);
+                        const new_elems_range = try self.runtime_types.appendVars(self.allocator, new_elems);
                         const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
-                        break :blk_tuple try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        break :blk_tuple try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     .record => |record| blk_record: {
                         // Recursively instantiate record field types
@@ -6207,10 +6206,10 @@ pub const Interpreter = struct {
                                 .var_ = try self.instantiateType(field.var_, subst_map),
                             };
                         }
-                        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
+                        const new_fields_range = try self.runtime_types.appendRecordFields(self.allocator, new_fields);
                         const new_ext = try self.instantiateType(record.ext, subst_map);
                         const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = new_ext } } };
-                        break :blk_record try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        break :blk_record try self.runtime_types.register(self.allocator, .{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                     },
                     // For other structures (str, num, empty_record, etc.), return as-is
                     else => type_var,
@@ -6480,18 +6479,18 @@ test "interpreter: translateTypeVar for alias of Str" {
     // Create nominal Str type
     const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
     const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const str_backing_var = try env.types.freshFromContent(env.gpa, .{ .structure = .empty_record });
     const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
+    const str_vars_range = try env.types.appendVars(env.gpa, &str_vars);
     const str_nominal = types.NominalType{
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
     };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+    const ct_str = try env.types.freshFromContent(env.gpa, .{ .structure = .{ .nominal_type = str_nominal } });
 
-    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
-    const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const ct_alias_content = try env.types.mkAlias(env.gpa, type_ident, ct_str, &.{});
+    const ct_alias_var = try env.types.register(env.gpa, .{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -6532,19 +6531,19 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     // Create nominal Str type
     const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
     const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const str_backing_var = try env.types.freshFromContent(env.gpa, .{ .structure = .empty_record });
     const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
+    const str_vars_range = try env.types.appendVars(env.gpa, &str_vars);
     const str_nominal = types.NominalType{
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
     };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+    const ct_str = try env.types.freshFromContent(env.gpa, .{ .structure = .{ .nominal_type = str_nominal } });
 
     // backing type is Str for simplicity
-    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal);
-    const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const ct_nominal_content = try env.types.mkNominal(env.gpa, type_ident, ct_str, &.{}, name_nominal);
+    const ct_nominal_var = try env.types.register(env.gpa, .{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -6583,7 +6582,7 @@ test "interpreter: translateTypeVar for flex var" {
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
-    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
+    const ct_flex = try env.types.freshFromContent(env.gpa, .{ .flex = types.Flex.init() });
     const rt_var = try interp.translateTypeVar(&env, ct_flex);
     const resolved = interp.runtime_types.resolveVar(rt_var);
     try std.testing.expect(resolved.desc.content == .flex);
@@ -6612,7 +6611,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
-    const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(name_a) });
+    const ct_rigid = try env.types.freshFromContent(env.gpa, .{ .rigid = types.Rigid.init(name_a) });
     const rt_var = try interp.translateTypeVar(&env, ct_rigid);
     const resolved = interp.runtime_types.resolveVar(rt_var);
     try std.testing.expect(resolved.desc.content == .rigid);
@@ -6652,15 +6651,15 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     // Create nominal Str type (no constraints)
     const str_ident = try env.insertIdent(base_pkg.Ident.for_text("Str"));
     const builtin_ident = try env.insertIdent(base_pkg.Ident.for_text("Builtin"));
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const str_backing_var = try env.types.freshFromContent(env.gpa, .{ .structure = .empty_record });
     const str_vars = [_]types.Var{str_backing_var};
-    const str_vars_range = try env.types.appendVars(&str_vars);
+    const str_vars_range = try env.types.appendVars(env.gpa, &str_vars);
     const str_nominal = types.NominalType{
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
     };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+    const ct_str = try env.types.freshFromContent(env.gpa, .{ .structure = .{ .nominal_type = str_nominal } });
     const rt_var = try interp.translateTypeVar(&env, ct_str);
 
     // Try to get a constraint from a non-flex/rigid type
@@ -6699,9 +6698,9 @@ test "interpreter: unification constrains (a->a) with Str" {
 
     const func_id: u32 = 42;
     // runtime flex var 'a'
-    const a = try interp.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
-    const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
-    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const a = try interp.runtime_types.freshFromContent(interp.allocator, .{ .flex = types.Flex.init() });
+    const func_content = try interp.runtime_types.mkFuncPure(interp.allocator, &.{a}, a);
+    const func_var = try interp.runtime_types.register(interp.allocator, .{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     // Call with Str
     // Get the real Str type from the loaded builtin module and translate to runtime

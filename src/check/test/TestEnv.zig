@@ -72,7 +72,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*, // Deserialize types in-place
         .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
@@ -80,10 +80,10 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
-        .module_name = module_name,
+        .module_name = collections.SafeSlice(u8).fromSlice(module_name),
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr))).*,
         .evaluation_order = null,
         .try_ident = common.findIdent("Try") orelse unreachable,
         .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
@@ -165,8 +165,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    module_env.common.source = source;
-    module_env.module_name = module_name;
+    module_env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    module_env.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
@@ -242,8 +242,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     try imported_envs.append(gpa, other_test_env.builtin_module.env);
 
     // Process explicit imports
-    const import_count = module_env.imports.imports.items.items.len;
-    for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+    const import_count = module_env.imports.imports.items.len;
+    for (module_env.imports.imports.items.toSlice()[0..import_count]) |str_idx| {
         const import_name = module_env.getString(str_idx);
         if (std.mem.eql(u8, import_name, other_module_name)) {
             // Cross-module import - append the other test module's env
@@ -308,8 +308,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    module_env.common.source = source;
-    module_env.module_name = module_name;
+    module_env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    module_env.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
@@ -580,7 +580,7 @@ fn assertNoParseProblems(self: *TestEnv) !void {
         }
 
         for (self.parse_ast.parse_diagnostics.items) |diag| {
-            var report = try self.parse_ast.parseDiagnosticToReport(&self.module_env.common, diag, self.gpa, self.module_env.module_name);
+            var report = try self.parse_ast.parseDiagnosticToReport(&self.module_env.common, diag, self.gpa, self.module_env.module_name.toSlice());
             defer report.deinit();
 
             try renderReportToMarkdownBuffer(&report_buf, &report);
@@ -597,7 +597,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
     defer self.gpa.free(diagnostics);
 
     for (diagnostics) |d| {
-        var report = try self.module_env.diagnosticToReport(d, self.gpa, self.module_env.module_name);
+        var report = try self.module_env.diagnosticToReport(d, self.gpa, self.module_env.module_name.toSlice());
         defer report.deinit();
 
         try renderReportToMarkdownBuffer(&report_buf, &report);

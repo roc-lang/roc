@@ -2073,7 +2073,7 @@ test "top-level: type annotation followed by body should not create duplicate de
 
     var duplicate_def_found = false;
     for (can_diagnostics) |diagnostic| {
-        var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
+        var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name.toSlice());
         defer report.deinit();
 
         if (std.mem.indexOf(u8, report.title, "DUPLICATE DEFINITION") != null) {

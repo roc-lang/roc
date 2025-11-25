@@ -400,7 +400,7 @@ pub const ComptimeEvaluator = struct {
                 };
 
                 // Replace the expression with e_num in-place
-                try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+                try self.env.store.replaceExprWithNum(self.env.gpa, expr_idx, int_value, num_kind);
             },
             .frac => {
                 // Handle fractional/decimal types (Dec, F32, F64)
@@ -422,7 +422,7 @@ pub const ComptimeEvaluator = struct {
                         .kind = .i128,
                     };
 
-                    try self.env.store.replaceExprWithNum(expr_idx, int_value, .dec);
+                    try self.env.store.replaceExprWithNum(self.env.gpa, expr_idx, int_value, .dec);
                 } else {
                     // For F32/F64, we don't fold yet
                     return error.NotImplemented;
@@ -455,7 +455,7 @@ pub const ComptimeEvaluator = struct {
 
         // Replace the expression with e_zero_argument_tag
         try self.env.store.replaceExprWithZeroArgumentTag(
-            expr_idx,
+            self.env.gpa, expr_idx,
             tag_name_ident, // closure_name
             variant_var,
             ext_var,
@@ -502,6 +502,7 @@ pub const ComptimeEvaluator = struct {
 
         // Replace the expression with e_zero_argument_tag
         try self.env.store.replaceExprWithZeroArgumentTag(
+            self.env.gpa,
             expr_idx,
             tag_info.name, // closure_name
             variant_var,
@@ -562,7 +563,7 @@ pub const ComptimeEvaluator = struct {
 
         // Replace the expression with e_zero_argument_tag
         try self.env.store.replaceExprWithZeroArgumentTag(
-            expr_idx,
+            self.env.gpa, expr_idx,
             closure_name,
             variant_var,
             ext_var,
@@ -645,7 +646,7 @@ pub const ComptimeEvaluator = struct {
     /// For now, validation is skipped - literals are allowed without validation.
     /// This preserves current behavior while the infrastructure is in place.
     fn validateDeferredNumericLiterals(self: *ComptimeEvaluator) !void {
-        const literals = self.env.deferred_numeric_literals.items.items;
+        const literals = self.env.deferred_numeric_literals.items.toSliceConst();
 
         for (literals) |literal| {
             // Step 1: Resolve the type variable to get the concrete type
@@ -737,7 +738,7 @@ pub const ComptimeEvaluator = struct {
             const qualified_name = try std.fmt.bufPrint(
                 &qualified_name_buf,
                 "{s}.{s}.{s}",
-                .{ origin_env.module_name, type_name_bytes, method_name_bytes },
+                .{ origin_env.module_name.toSliceConst(), type_name_bytes, method_name_bytes },
             );
 
             // Look up the identifier in the origin module
@@ -888,7 +889,7 @@ pub const ComptimeEvaluator = struct {
                 .bytes = num_lit_info.bytes,
                 .kind = if (num_lit_info.is_u128) .u128 else .i128,
             };
-            try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+            try self.env.store.replaceExprWithNum(self.env.gpa, expr_idx, int_value, num_kind);
         }
         // For Dec type, keep the original e_dec/e_dec_small expression
     }

@@ -252,7 +252,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     const region_nodes: usize = @intCast(self.regions.len());
     const type_nodes: usize = @intCast(self.types.len());
-    try self.types.ensureTotalCapacity(region_nodes);
+    try self.types.ensureTotalCapacity(self.gpa, region_nodes);
     for (type_nodes..region_nodes) |_| {
         _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, @enumFromInt(15));
     }
@@ -396,7 +396,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     // Note that we choose `b`s region here, since `b` is the "actual" type
     // (whereas `a` is the "expected" type, like from an annotation)
     const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(b));
-    for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
+    for (self.unify_scratch.fresh_vars.items.toSlice()) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
         try env.var_pool.addVarToRank(fresh_var, fresh_rank);
@@ -407,7 +407,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     }
 
     // Copy any constraints created during unification into our own array
-    for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
+    for (self.unify_scratch.deferred_constraints.items.toSlice()) |deferred_constraint| {
         _ = try env.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
     }
 
@@ -467,7 +467,7 @@ fn instantiateVar(
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
-
+        .gpa = self.gpa,
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_flex,
     };
@@ -488,7 +488,7 @@ fn instantiateVarPreserveRigids(
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
-
+        .gpa = self.gpa,
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_rigid,
     };
@@ -507,7 +507,7 @@ fn instantiateVarWithSubs(
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
-
+        .gpa = self.gpa,
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
     };
@@ -605,7 +605,7 @@ fn fresh(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 
 /// Create fresh var with the provided content
 fn freshFromContent(self: *Self, content: Content, env: *Env, new_region: Region) Allocator.Error!Var {
-    const var_ = try self.types.freshFromContentWithRank(content, env.rank());
+    const var_ = try self.types.freshFromContentWithRank(self.gpa, content, env.rank());
     try self.fillInRegionsThrough(var_);
     self.setRegionAt(var_, new_region);
     try env.var_pool.addVarToRank(var_, env.rank());
@@ -644,10 +644,10 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 
     // Create the [ProvidedByCompiler] tag
     const provided_tag_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("ProvidedByCompiler"));
-    const provided_tag = try self.types.mkTag(provided_tag_ident, &.{});
+    const provided_tag = try self.types.mkTag(self.gpa, provided_tag_ident, &.{});
 
     const tag_union = types_mod.TagUnion{
-        .tags = try self.types.appendTags(&[_]types_mod.Tag{provided_tag}),
+        .tags = try self.types.appendTags(self.gpa, &[_]types_mod.Tag{provided_tag}),
         .ext = ext_var,
     };
     const backing_content = Content{ .structure = .{ .tag_union = tag_union } };
@@ -656,7 +656,8 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
     const type_args = [_]Var{elem_var};
 
     return try self.types.mkNominal(
-        list_ident,
+            self.gpa,
+            list_ident,
         backing_var,
         &type_args,
         origin_module_id,
@@ -694,7 +695,8 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     const no_type_args: []const Var = &.{};
 
     return try self.types.mkNominal(
-        type_ident,
+            self.gpa,
+            type_ident,
         backing_var,
         no_type_args,
         origin_module_id,
@@ -737,13 +739,13 @@ fn mkFlexWithFromNumeralConstraint(
     const invalid_numeral_tag_ident = try @constCast(self.cir).insertIdent(
         base.Ident.for_text("InvalidNumeral"),
     );
-    const invalid_numeral_tag = try self.types.mkTag(
+    const invalid_numeral_tag = try self.types.mkTag(self.gpa, 
         invalid_numeral_tag_ident,
         &.{str_var},
     );
     // Use empty_tag_union as extension to create a closed tag union [InvalidNumeral(Str)]
     const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, num_literal_info.region);
-    const err_type = try self.types.mkTagUnion(&.{invalid_numeral_tag}, err_ext_var);
+    const err_type = try self.types.mkTagUnion(self.gpa, &.{invalid_numeral_tag}, err_ext_var);
     const err_var = try self.freshFromContent(err_type, env, num_literal_info.region);
 
     // Create Try(flex_var, err_var) as the return type
@@ -754,7 +756,7 @@ fn mkFlexWithFromNumeralConstraint(
     const func_content = types_mod.Content{
         .structure = types_mod.FlatType{
             .fn_unbound = types_mod.Func{
-                .args = try self.types.appendVars(&.{arg_var}),
+                .args = try self.types.appendVars(self.gpa, &.{arg_var}),
                 .ret = ret_var,
                 .needs_instantiation = false,
             },
@@ -771,7 +773,7 @@ fn mkFlexWithFromNumeralConstraint(
     };
 
     // Store it in the types store
-    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    const constraint_range = try self.types.appendStaticDispatchConstraints(self.gpa, &.{constraint});
 
     // Update the flex var to have the constraint attached
     const flex_content = types_mod.Content{
@@ -803,7 +805,8 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const type_args = [_]Var{elem_var};
 
     return try self.types.mkNominal(
-        box_ident,
+            self.gpa,
+            box_ident,
         backing_var,
         &type_args,
         origin_module_id,
@@ -836,7 +839,8 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     const type_args = [_]Var{ ok_var, err_var };
 
     return try self.types.mkNominal(
-        try_ident,
+            self.gpa,
+            try_ident,
         backing_var,
         &type_args,
         origin_module_id,
@@ -875,7 +879,8 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
 
     return try self.types.mkNominal(
-        numeral_ident,
+            self.gpa,
+            numeral_ident,
         backing_var,
         &.{}, // No type args
         origin_module_id,
@@ -1209,6 +1214,7 @@ fn generateAliasDecl(
     try self.unifyWith(
         decl_var,
         try self.types.mkAlias(
+            self.gpa,
             .{ .ident_idx = header.name },
             backing_var,
             header_vars,
@@ -1247,6 +1253,7 @@ fn generateNominalDecl(
     try self.unifyWith(
         decl_var,
         try self.types.mkNominal(
+            self.gpa,
             .{ .ident_idx = header.name },
             backing_var,
             header_vars,
@@ -1364,7 +1371,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
             const ret_var = ModuleEnv.varFrom(method.ret);
 
             // Create the function var
-            const func_content = try self.types.mkFuncUnbound(anno_arg_vars, ret_var);
+            const func_content = try self.types.mkFuncUnbound(self.gpa, anno_arg_vars, ret_var);
             const func_var = try self.freshFromContent(func_content, env, where_region);
 
             // Add to scratch list
@@ -1421,7 +1428,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     for (self.scratch_static_dispatch_constraints.items.items) |scratch_constraint| {
                         const resolved_scratch_var = self.types.resolveVar(scratch_constraint.var_).var_;
                         if (resolved_scratch_var == anno_var) {
-                            _ = try self.types.static_dispatch_constraints.append(self.types.gpa, scratch_constraint.constraint);
+                            _ = try self.types.static_dispatch_constraints.append(self.gpa, scratch_constraint.constraint);
                         }
                     }
                 },
@@ -1481,14 +1488,16 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                             // error, but we should proactively
                                             // emit on here too
                                             break :blk try self.types.mkAlias(
-                                                .{ .ident_idx = this_decl.name },
+            self.gpa,
+            .{ .ident_idx = this_decl.name },
                                                 this_decl.backing_var,
                                                 &.{},
                                             );
                                         },
                                         .nominal => {
                                             break :blk try self.types.mkNominal(
-                                                .{ .ident_idx = this_decl.name },
+            self.gpa,
+            .{ .ident_idx = this_decl.name },
                                                 this_decl.backing_var,
                                                 &.{},
                                                 self.common_idents.module_name,
@@ -1575,14 +1584,16 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                             // error, but we should proactively
                                             // emit on here too
                                             break :blk try self.types.mkAlias(
-                                                .{ .ident_idx = this_decl.name },
+            self.gpa,
+            .{ .ident_idx = this_decl.name },
                                                 this_decl.backing_var,
                                                 anno_arg_vars,
                                             );
                                         },
                                         .nominal => {
                                             break :blk try self.types.mkNominal(
-                                                .{ .ident_idx = this_decl.name },
+            self.gpa,
+            .{ .ident_idx = this_decl.name },
                                                 this_decl.backing_var,
                                                 anno_arg_vars,
                                                 self.common_idents.module_name,
@@ -1746,9 +1757,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             const fn_type = inner_blk: {
                 if (func.effectful) {
-                    break :inner_blk try self.types.mkFuncEffectful(args_var_slice, ModuleEnv.varFrom(func.ret));
+                    break :inner_blk try self.types.mkFuncEffectful(self.gpa, args_var_slice, ModuleEnv.varFrom(func.ret));
                 } else {
-                    break :inner_blk try self.types.mkFuncPure(args_var_slice, ModuleEnv.varFrom(func.ret));
+                    break :inner_blk try self.types.mkFuncPure(self.gpa, args_var_slice, ModuleEnv.varFrom(func.ret));
                 }
             };
             try self.unifyWith(anno_var, fn_type, env);
@@ -1779,7 +1790,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
 
                 // Add the processed tag to scratch
-                try self.scratch_tags.append(try self.types.mkTag(
+                try self.scratch_tags.append(try self.types.mkTag(self.gpa, 
                     tag.name,
                     tag_vars_slice,
                 ));
@@ -1800,7 +1811,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             };
 
             // Set the anno's type
-            try self.unifyWith(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), env);
+            try self.unifyWith(anno_var, try self.types.mkTagUnion(self.gpa, tags_slice, ext_var), env);
         },
         .tag => {
             // This indicates a malformed type annotation. Tags should only
@@ -1830,7 +1841,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // Get the slice of record_fields
             const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
             std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
-            const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
+            const fields_type_range = try self.types.appendRecordFields(self.gpa, record_fields_slice);
 
             // Process the ext if it exists. Absence means it's a closed union
             // TODO: Capture ext in record field CIR
@@ -1859,7 +1870,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             for (elems_anno_slice) |arg_anno_idx| {
                 try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
             }
-            const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+            const elems_range = try self.types.appendVars(self.gpa, @ptrCast(elems_anno_slice));
             try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
         },
         .parens => |parens| {
@@ -2019,7 +2030,7 @@ fn checkPatternHelp(
                         }
 
                         // Add to types store
-                        break :blk try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+                        break :blk try self.types.appendVars(self.gpa, self.scratch_vars.sliceFromStart(scratch_vars_top));
                     },
                     .in_place => {
                         // Check tuple elements
@@ -2030,7 +2041,7 @@ fn checkPatternHelp(
 
                         // Add to types store
                         // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
-                        break :blk try self.types.appendVars(@ptrCast(elems_slice));
+                        break :blk try self.types.appendVars(self.gpa, @ptrCast(elems_slice));
                     },
                 }
             };
@@ -2116,7 +2127,7 @@ fn checkPatternHelp(
                         }
 
                         // Add to types store
-                        break :blk try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+                        break :blk try self.types.appendVars(self.gpa, self.scratch_vars.sliceFromStart(scratch_vars_top));
                     },
 
                     .in_place => {
@@ -2128,7 +2139,7 @@ fn checkPatternHelp(
 
                         // Add to types store
                         // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
-                        break :blk try self.types.appendVars(@ptrCast(arg_ptrn_idx_slice));
+                        break :blk try self.types.appendVars(self.gpa, @ptrCast(arg_ptrn_idx_slice));
                     },
                 }
             };
@@ -2137,7 +2148,7 @@ fn checkPatternHelp(
             const ext_var = try self.fresh(env, pattern_region);
 
             const tag = types_mod.Tag{ .name = applied_tag.name, .args = arg_vars_slice };
-            const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+            const tag_union_content = try self.types.mkTagUnion(self.gpa, &[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
             try self.unifyWith(pattern_var, tag_union_content, env);
@@ -2294,7 +2305,7 @@ fn checkPatternHelp(
             // Copy the scratch record fields into the types store
             const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_records_top);
             std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
-            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
+            const record_fields_range = try self.types.appendRecordFields(self.gpa, record_fields_scratch);
 
             // Update the pattern var
             try self.unifyWith(pattern_var, .{ .structure = .{
@@ -2656,7 +2667,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
-            const elem_vars_slice = try self.types.appendVars(@ptrCast(elems_slice));
+            const elem_vars_slice = try self.types.appendVars(self.gpa, @ptrCast(elems_slice));
 
             // Set the type in the store
             try self.unifyWith(expr_var, .{ .structure = .{
@@ -2688,7 +2699,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Copy the scratch fields into the types store
             const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
             std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
-            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
+            const record_fields_range = try self.types.appendRecordFields(self.gpa, record_fields_scratch);
 
             // Check if this is a record update
             if (e.ext) |record_being_updated_expr| {
@@ -2721,8 +2732,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_zero_argument_tag => |e| {
             const ext_var = try self.fresh(env, expr_region);
 
-            const tag = try self.types.mkTag(e.name, &.{});
-            const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+            const tag = try self.types.mkTag(self.gpa, e.name, &.{});
+            const tag_union_content = try self.types.mkTagUnion(self.gpa, &[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
             try self.unifyWith(expr_var, tag_union_content, env);
@@ -2739,8 +2750,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Create the type
             const ext_var = try self.fresh(env, expr_region);
 
-            const tag = try self.types.mkTag(e.name, @ptrCast(arg_expr_idx_slice));
-            const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+            const tag = try self.types.mkTag(self.gpa, e.name, @ptrCast(arg_expr_idx_slice));
+            const tag_union_content = try self.types.mkTagUnion(self.gpa, &[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
             try self.unifyWith(expr_var, tag_union_content, env);
@@ -3065,9 +3076,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                 // Create the function type
                 if (does_fx) {
-                    _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
+                    _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(self.gpa, arg_vars, body_var), env);
                 } else {
-                    _ = try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
+                    _ = try self.unifyWith(expr_var, try self.types.mkFuncUnbound(self.gpa, arg_vars, body_var), env);
                 }
 
                 // Now that we are existing the scope, we must generalize then pop this rank
@@ -3246,7 +3257,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // type to get  the regulare error message
                                 const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
                                 const call_func_ret = try self.fresh(env, expr_region);
-                                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
+                                const call_func_content = try self.types.mkFuncUnbound(self.gpa, call_arg_vars, call_func_ret);
                                 const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
                                 _ = try self.unify(func_var, call_func_var, env);
@@ -3267,7 +3278,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                             const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
                             const call_func_ret = try self.fresh(env, expr_region);
-                            const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
+                            const call_func_content = try self.types.mkFuncUnbound(self.gpa, call_arg_vars, call_func_ret);
                             const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
                             _ = try self.unify(func_var, call_func_var, env);
@@ -3336,8 +3347,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // For static dispatch to be used like `thing.dispatch(...)` the
                     // method being dispatched on must accept the type of `thing` as
                     // it's first arg. So, we prepend the `receiver_var` to the args list
-                    const first_arg_range = try self.types.appendVars(&.{receiver_var});
-                    const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
+                    const first_arg_range = try self.types.appendVars(self.gpa, &.{receiver_var});
+                    const rest_args_range = try self.types.appendVars(self.gpa, @ptrCast(dispatch_arg_expr_idxs));
                     const dispatch_arg_vars_range = Var.SafeList.Range{
                         .start = first_arg_range.start,
                         .count = rest_args_range.count + 1,
@@ -3363,7 +3374,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .fn_var = constraint_fn_var,
                         .origin = .method_call,
                     };
-                    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                    const constraint_range = try self.types.appendStaticDispatchConstraints(self.gpa, &.{constraint});
 
                     // Create our constrained flex, and unify it with the receiver
                     const constrained_var = try self.freshFromContent(
@@ -3383,7 +3394,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Create a type for the inferred type of this record access
                 // E.g. foo.bar -> { bar: flex } a
                 const record_field_var = try self.fresh(env, expr_region);
-                const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                const record_field_range = try self.types.appendRecordFields(self.gpa, &.{types_mod.RecordField{
                     .name = dot_access.field_name,
                     .var_ = record_field_var,
                 }});
@@ -3955,7 +3966,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     const method_name = self.cir.negate_ident;
 
     // Create the function type: operand_type -> ret_type
-    const args_range = try self.types.appendVars(&.{operand_var});
+    const args_range = try self.types.appendVars(self.gpa, &.{operand_var});
 
     // The return type is unknown, so create a fresh variable
     const ret_var = try self.fresh(env, expr_region);
@@ -3975,7 +3986,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
         .fn_var = constraint_fn_var,
         .origin = .desugared_binop,
     };
-    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    const constraint_range = try self.types.appendStaticDispatchConstraints(self.gpa, &.{constraint});
 
     // Create a constrained flex and unify it with the operand
     const constrained_var = try self.freshFromContent(
@@ -4060,7 +4071,7 @@ fn checkBinopExpr(
                 const method_name = self.cir.plus_ident;
 
                 // Create the function type: lhs_type, rhs_type -> ret_type
-                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+                const args_range = try self.types.appendVars(self.gpa, &.{ lhs_var, rhs_var });
 
                 // The return type is unknown, so create a fresh variable
                 const ret_var = try self.fresh(env, expr_region);
@@ -4080,7 +4091,7 @@ fn checkBinopExpr(
                     .fn_var = constraint_fn_var,
                     .origin = .desugared_binop,
                 };
-                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                const constraint_range = try self.types.appendStaticDispatchConstraints(self.gpa, &.{constraint});
 
                 // Create a constrained flex and unify it with the lhs (receiver)
                 const constrained_var = try self.freshFromContent(
@@ -4181,7 +4192,7 @@ fn checkBinopExpr(
                 const method_name = if (binop.op == .eq) self.cir.is_eq_ident else self.cir.is_ne_ident;
 
                 // Create the function type: lhs_type, rhs_type -> Bool
-                const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
+                const args_range = try self.types.appendVars(self.gpa, &.{ lhs_var, rhs_var });
 
                 // The return type is Bool
                 const ret_var = try self.freshBool(env, expr_region);
@@ -4200,7 +4211,7 @@ fn checkBinopExpr(
                     .fn_var = constraint_fn_var,
                     .origin = .desugared_binop,
                 };
-                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                const constraint_range = try self.types.appendStaticDispatchConstraints(self.gpa, &.{constraint});
 
                 // Create a constrained flex and unify it with the lhs (receiver)
                 const constrained_var = try self.freshFromContent(
@@ -4427,7 +4438,7 @@ fn handleRecursiveConstraint(
 
     // Create a new type variable to represent the recursion point
     // Use the current environment's rank for the recursion var
-    const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
+    const recursion_var = try self.types.freshFromContentWithRank(self.gpa, rec_var_content, env.rank());
 
     // Create RecursionInfo to track the recursion metadata
     const recursion_info = types_mod.RecursionInfo{
@@ -4478,13 +4489,13 @@ fn checkNumeralConstraint(
 }
 
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
+    var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.len;
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
         deferred_constraint_index += 1;
-        deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
+        deferred_constraint_len = env.deferred_static_dispatch_constraints.items.len;
     }) {
-        const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
+        const deferred_constraint = env.deferred_static_dispatch_constraints.items.toSlice()[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
 
@@ -4639,12 +4650,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
 
                 // Check if type_name_bytes already starts with "module_name."
-                const module_prefix = original_env.module_name;
+                const module_prefix = original_env.module_name.toSlice();
                 const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
                     std.mem.startsWith(u8, type_name_bytes, module_prefix) and
                     type_name_bytes[module_prefix.len] == '.';
 
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+                if (std.mem.eql(u8, type_name_bytes, module_prefix)) {
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}",
@@ -4661,7 +4672,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}.{s}",
-                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
+                        .{ module_prefix, type_name_bytes, constraint_fn_name_bytes },
                     );
                 }
                 const qualified_name_bytes = self.static_dispatch_method_name_buf.items;

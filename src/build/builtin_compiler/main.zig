@@ -631,7 +631,7 @@ fn compileModule(
         const total_errors = parse_ast.tokenize_diagnostics.items.len + parse_ast.parse_diagnostics.items.len;
 
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Parse failed for {s}\n", .{module_name});
+        std.debug.print("ERROR: Parse failed for {s}\n", .{module_name.toSliceConst()});
         std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (parse_ast.tokenize_diagnostics.items) |diag| {
@@ -667,7 +667,7 @@ fn compileModule(
     defer gpa.free(can_diagnostics);
     if (can_diagnostics.len > 0) {
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Canonicalization failed for {s}\n", .{module_name});
+        std.debug.print("ERROR: Canonicalization failed for {s}\n", .{module_name.toSliceConst()});
         std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (can_diagnostics) |diag| {
@@ -815,7 +815,7 @@ fn compileModule(
         const total_errors = checker.problems.problems.items.len;
 
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Type checking failed for {s}\n", .{module_name});
+        std.debug.print("ERROR: Type checking failed for {s}\n", .{module_name.toSliceConst()});
         std.debug.print("=" ** 80 ++ "\n\n", .{});
 
         for (checker.problems.problems.items) |prob| {
@@ -866,7 +866,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     // Construct the qualified name (e.g., "Builtin.Bool")
     // Types in nested declarations are stored with their full qualified names
     var qualified_name_buf: [256]u8 = undefined;
-    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ env.module_name, type_name });
+    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ env.module_name.toSliceConst(), type_name });
 
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);
@@ -894,7 +894,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
 fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, type_name: []const u8) !CIR.Statement.Idx {
     // Construct the qualified name (e.g., "Builtin.Num.U8")
     var qualified_name_buf: [256]u8 = undefined;
-    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}.{s}", .{ env.module_name, parent_name, type_name });
+    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}.{s}", .{ env.module_name.toSliceConst(), parent_name, type_name });
 
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);

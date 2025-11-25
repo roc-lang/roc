@@ -69,7 +69,7 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.io.Writ
         try writer.print("<span class=\"token {s}\">", .{css_class});
         try writer.print("<span class=\"token-type\">{s}</span>", .{@tagName(tag)});
         try writer.writeAll(" ");
-        try writeSourceRangeSpan(writer, region, env.source, env.line_starts.items.items);
+        try writeSourceRangeSpan(writer, region, env.source.toSlice(), env.line_starts.items.toSlice());
         try writer.writeAll("</span>");
     }
     try writer.writeAll("</div>");

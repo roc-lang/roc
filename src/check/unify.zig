@@ -422,7 +422,7 @@ const Unifier = struct {
 
     /// Create a new type variable *in this pool*
     fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!Var {
-        const var_ = try self.types_store.register(.{
+        const var_ = try self.types_store.register(self.module_env.gpa, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
             .mark = Mark.none,
@@ -1185,15 +1185,15 @@ const Unifier = struct {
     ) error{AllocatorError}!?Ident.Idx {
         const ident_store = origin_env.getIdentStoreConst();
 
-        const primary = self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name) catch return error.AllocatorError;
+        const primary = self.buildQualifiedMethodName(origin_env.module_name.toSliceConst(), type_name, method_name) catch return error.AllocatorError;
         defer self.scratch.gpa.free(primary);
         if (ident_store.findByString(primary)) |ident| return ident;
 
-        const module_type = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name }) catch return error.AllocatorError;
+        const module_type = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ origin_env.module_name.toSliceConst(), type_name, method_name }) catch return error.AllocatorError;
         defer self.scratch.gpa.free(module_type);
         if (ident_store.findByString(module_type)) |ident| return ident;
 
-        const module_method = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ origin_env.module_name, method_name }) catch return error.AllocatorError;
+        const module_method = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ origin_env.module_name.toSliceConst(), method_name }) catch return error.AllocatorError;
         defer self.scratch.gpa.free(module_method);
         if (ident_store.findByString(module_method)) |ident| return ident;
 
@@ -1216,7 +1216,7 @@ const Unifier = struct {
 
     fn createListU8Var(self: *Self) Error!Var {
         const start_slots = self.types_store.len();
-        const u8_var = self.types_store.register(.{
+        const u8_var = self.types_store.register(self.module_env.gpa, .{
             .content = .{ .err = {} },
             .rank = Rank.generalized,
             .mark = Mark.none,
@@ -1237,7 +1237,7 @@ const Unifier = struct {
         // List's backing is [ProvidedByCompiler] with closed extension (empty_tag_union)
         // The element type (u8_var) is a type parameter, not the backing
         const empty_tag_union_content = Content{ .structure = .empty_tag_union };
-        const ext_var = self.types_store.register(.{
+        const ext_var = self.types_store.register(self.module_env.gpa, .{
             .content = empty_tag_union_content,
             .rank = Rank.generalized,
             .mark = Mark.none,
@@ -1248,11 +1248,11 @@ const Unifier = struct {
         const provided_tag = self.types_store.mkTag(provided_tag_ident, &.{}) catch return error.AllocatorError;
 
         const tag_union = TagUnion{
-            .tags = self.types_store.appendTags(&[_]Tag{provided_tag}) catch return error.AllocatorError,
+            .tags = self.types_store.appendTags(self.module_env.gpa, &[_]Tag{provided_tag}) catch return error.AllocatorError,
             .ext = ext_var,
         };
         const backing_content = Content{ .structure = .{ .tag_union = tag_union } };
-        const backing_var = self.types_store.register(.{
+        const backing_var = self.types_store.register(self.module_env.gpa, .{
             .content = backing_content,
             .rank = Rank.generalized,
             .mark = Mark.none,
@@ -1265,7 +1265,7 @@ const Unifier = struct {
             origin_module,
         ) catch return error.AllocatorError;
 
-        const list_var = self.types_store.register(.{
+        const list_var = self.types_store.register(self.module_env.gpa, .{
             .content = list_content,
             .rank = Rank.generalized,
             .mark = Mark.none,
@@ -1278,7 +1278,7 @@ const Unifier = struct {
     fn createNominalInstanceVar(self: *Self, nominal_type: NominalType) Error!Var {
         const start_slots = self.types_store.len();
 
-        const self_var = self.types_store.register(.{
+        const self_var = self.types_store.register(self.module_env.gpa, .{
             .content = .{ .structure = .{ .nominal_type = nominal_type } },
             .rank = Rank.generalized,
             .mark = Mark.none,
@@ -1310,14 +1310,14 @@ const Unifier = struct {
             .name = self.module_env.out_of_range_ident,
             .args = Var.SafeList.Range.empty(),
         };
-        const tags_range = self.types_store.appendTags(&[_]Tag{tag}) catch return error.AllocatorError;
-        const empty_ext = self.types_store.register(.{
+        const tags_range = self.types_store.appendTags(self.module_env.gpa, &[_]Tag{tag}) catch return error.AllocatorError;
+        const empty_ext = self.types_store.register(self.module_env.gpa, .{
             .content = .{ .structure = .empty_tag_union },
             .rank = Rank.generalized,
             .mark = Mark.none,
         }) catch return error.AllocatorError;
 
-        const tag_union_var = self.types_store.register(.{
+        const tag_union_var = self.types_store.register(self.module_env.gpa, .{
             .content = .{ .structure = .{ .tag_union = .{ .tags = tags_range, .ext = empty_ext } } },
             .rank = Rank.generalized,
             .mark = Mark.none,
@@ -1626,7 +1626,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = self.types_store.appendRecordFields(
+                const only_in_a_fields_range = self.types_store.appendRecordFields(self.module_env.gpa, 
                     self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1650,7 +1650,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = self.types_store.appendRecordFields(
+                const only_in_b_fields_range = self.types_store.appendRecordFields(self.module_env.gpa, 
                     self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1674,7 +1674,7 @@ const Unifier = struct {
             .both_extend => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = self.types_store.appendRecordFields(
+                const only_in_a_fields_range = self.types_store.appendRecordFields(self.module_env.gpa, 
                     self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1684,7 +1684,7 @@ const Unifier = struct {
 
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = self.types_store.appendRecordFields(
+                const only_in_b_fields_range = self.types_store.appendRecordFields(self.module_env.gpa, 
                     self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1924,7 +1924,7 @@ const Unifier = struct {
         const range_start: u32 = self.types_store.record_fields.len();
 
         for (shared_fields) |shared| {
-            _ = self.types_store.appendRecordFields(&[_]RecordField{.{
+            _ = self.types_store.appendRecordFields(self.module_env.gpa, &[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
             }}) catch return Error.AllocatorError;
@@ -1932,10 +1932,10 @@ const Unifier = struct {
 
         // Append combined fields
         if (mb_a_extended_fields) |extended_fields| {
-            _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
+            _ = self.types_store.appendRecordFields(self.module_env.gpa, extended_fields) catch return Error.AllocatorError;
         }
         if (mb_b_extended_fields) |extended_fields| {
-            _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
+            _ = self.types_store.appendRecordFields(self.module_env.gpa, extended_fields) catch return Error.AllocatorError;
         }
 
         // Merge vars - now the range correctly contains only THIS record's fields
@@ -2076,7 +2076,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = self.types_store.appendTags(
+                const only_in_a_tags_range = self.types_store.appendTags(self.module_env.gpa, 
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2100,7 +2100,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = self.types_store.appendTags(
+                const only_in_b_tags_range = self.types_store.appendTags(self.module_env.gpa, 
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2124,7 +2124,7 @@ const Unifier = struct {
             .both_extend => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = self.types_store.appendTags(
+                const only_in_a_tags_range = self.types_store.appendTags(self.module_env.gpa, 
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2134,7 +2134,7 @@ const Unifier = struct {
 
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = self.types_store.appendTags(
+                const only_in_b_tags_range = self.types_store.appendTags(self.module_env.gpa, 
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2327,7 +2327,7 @@ const Unifier = struct {
                 try self.unifyGuarded(a_arg, b_arg);
             }
 
-            _ = self.types_store.appendTags(&[_]Tag{.{
+            _ = self.types_store.appendTags(self.module_env.gpa, &[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
             }}) catch return Error.AllocatorError;
@@ -2335,10 +2335,10 @@ const Unifier = struct {
 
         // Append combined tags
         if (mb_a_extended_tags) |extended_tags| {
-            _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
+            _ = self.types_store.appendTags(self.module_env.gpa, extended_tags) catch return Error.AllocatorError;
         }
         if (mb_b_extended_tags) |extended_tags| {
-            _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
+            _ = self.types_store.appendTags(self.module_env.gpa, extended_tags) catch return Error.AllocatorError;
         }
 
         // Merge vars
@@ -2383,7 +2383,7 @@ const Unifier = struct {
         // Ensure we have enough memory for the new contiguous list
         const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
         self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
-            self.types_store.gpa,
+            self.module_env.gpa,
             capacity,
         ) catch return Error.AllocatorError;
 

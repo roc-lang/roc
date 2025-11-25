@@ -56,7 +56,7 @@ test "NodeStore round trip - Statements" {
     const gpa = testing.allocator;
 
     var store = try NodeStore.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
     var statements = std.ArrayList(CIR.Statement).empty;
     defer statements.deinit(gpa);
@@ -171,7 +171,7 @@ test "NodeStore round trip - Statements" {
 
     for (statements.items, 0..) |stmt, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
-        const idx = try store.addStatement(stmt, region);
+        const idx = try store.addStatement(gpa, stmt, region);
         const retrieved = store.getStatement(idx);
 
         try testing.expectEqualDeep(stmt, retrieved);
@@ -187,7 +187,7 @@ test "NodeStore round trip - Expressions" {
     const gpa = testing.allocator;
 
     var store = try NodeStore.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
     var expressions = std.ArrayList(CIR.Expr).empty;
     defer expressions.deinit(gpa);
@@ -393,7 +393,7 @@ test "NodeStore round trip - Expressions" {
 
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
-        const idx = try store.addExpr(expr, region);
+        const idx = try store.addExpr(gpa, expr, region);
         const retrieved = store.getExpr(idx);
 
         try testing.expectEqualDeep(expr, retrieved);
@@ -409,7 +409,7 @@ test "NodeStore round trip - Diagnostics" {
     const gpa = testing.allocator;
 
     var store = try NodeStore.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
     var diagnostics = std.ArrayList(CIR.Diagnostic).empty;
     defer diagnostics.deinit(gpa);
@@ -830,7 +830,7 @@ test "NodeStore round trip - Diagnostics" {
 
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
-        const idx = try store.addDiagnostic(diagnostic);
+        const idx = try store.addDiagnostic(gpa, diagnostic);
         const retrieved = store.getDiagnostic(idx);
 
         try testing.expectEqualDeep(diagnostic, retrieved);
@@ -846,7 +846,7 @@ test "NodeStore round trip - TypeAnno" {
     const gpa = testing.allocator;
 
     var store = try NodeStore.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
     var type_annos = std.ArrayList(CIR.TypeAnno).empty;
     defer type_annos.deinit(gpa);
@@ -963,7 +963,7 @@ test "NodeStore round trip - TypeAnno" {
     // Test the round-trip for all type annotations
     for (type_annos.items, 0..) |type_anno, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
-        const idx = try store.addTypeAnno(type_anno, region);
+        const idx = try store.addTypeAnno(gpa, type_anno, region);
         const retrieved = store.getTypeAnno(idx);
 
         try testing.expectEqualDeep(type_anno, retrieved);
@@ -984,7 +984,7 @@ test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
 
     var store = try NodeStore.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
     var patterns = std.ArrayList(CIR.Pattern).empty;
     defer patterns.deinit(gpa);
@@ -1091,7 +1091,7 @@ test "NodeStore round trip - Pattern" {
     }
 
     for (patterns.items, regions) |pattern, region| {
-        const idx = try store.addPattern(pattern, region);
+        const idx = try store.addPattern(gpa, pattern, region);
         const retrieved = store.getPattern(idx);
 
         try testing.expectEqualDeep(pattern, retrieved);

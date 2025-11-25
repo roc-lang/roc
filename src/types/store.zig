@@ -76,10 +76,8 @@ pub const Slot = union(enum) {
 /// A Slot either redirects to a different slot or contains type `Content`
 ///
 /// Var maps to a SlotStore.Idx internally
-pub const Store = struct {
+pub const Store = extern struct {
     const Self = @This();
-
-    gpa: Allocator,
 
     /// Type variable storage
     slots: SlotStore,
@@ -100,8 +98,6 @@ pub const Store = struct {
     /// Init the unification table
     pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .gpa = gpa,
-
             // slots & descriptors
             .descs = try DescStore.init(gpa, root_capacity),
             .slots = try SlotStore.init(gpa, root_capacity),
@@ -115,22 +111,22 @@ pub const Store = struct {
     }
 
     /// Ensure that slots & descriptor arrays have at least the provided capacity
-    pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
-        try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
-        try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+    pub fn ensureTotalCapacity(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
+        try self.descs.backing.ensureTotalCapacity(gpa, capacity);
+        try self.slots.backing.items.ensureTotalCapacity(gpa, capacity);
     }
 
     /// Deinit the unification table
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, gpa: Allocator) void {
         // slots & descriptors
-        self.descs.deinit(self.gpa);
-        self.slots.deinit(self.gpa);
+        self.descs.deinit(gpa);
+        self.slots.deinit(gpa);
 
         // everything else
-        self.vars.deinit(self.gpa);
-        self.record_fields.deinit(self.gpa);
-        self.tags.deinit(self.gpa);
-        self.static_dispatch_constraints.deinit(self.gpa);
+        self.vars.deinit(gpa);
+        self.record_fields.deinit(gpa);
+        self.tags.deinit(gpa);
+        self.static_dispatch_constraints.deinit(gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -142,42 +138,42 @@ pub const Store = struct {
 
     /// Create a new unbound, flexible type variable without a name
     /// Used in canonicalization when creating type slots
-    pub fn fresh(self: *Self) std.mem.Allocator.Error!Var {
-        return try self.freshFromContent(Content{ .flex = Flex.init() });
+    pub fn fresh(self: *Self, gpa: Allocator) std.mem.Allocator.Error!Var {
+        return try self.freshFromContent(gpa, Content{ .flex = Flex.init() });
     }
 
     /// Create a new unbound, flexible type variable without a name
     /// Used in canonicalization when creating type slots
-    pub fn freshWithRank(self: *Self, rank: Rank) std.mem.Allocator.Error!Var {
-        return try self.freshFromContentWithRank(Content{ .flex = Flex.init() }, rank);
+    pub fn freshWithRank(self: *Self, gpa: Allocator, rank: Rank) std.mem.Allocator.Error!Var {
+        return try self.freshFromContentWithRank(gpa, Content{ .flex = Flex.init() }, rank);
     }
 
     /// Create a new variable with the provided desc
     /// Used in tests
-    pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
-        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
+    pub fn freshFromContent(self: *Self, gpa: Allocator, content: Content) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const slot_idx = try self.slots.insert(gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the given content and rank
-    pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank, .mark = Mark.none });
-        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
+    pub fn freshFromContentWithRank(self: *Self, gpa: Allocator, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(gpa, .{ .content = content, .rank = rank, .mark = Mark.none });
+        const slot_idx = try self.slots.insert(gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a variable redirecting to the provided var
     /// Used in tests
-    pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
-        const slot_idx = try self.slots.insert(self.gpa, .{ .redirect = var_ });
+    pub fn freshRedirect(self: *Self, gpa: Allocator, var_: Var) std.mem.Allocator.Error!Var {
+        const slot_idx = try self.slots.insert(gpa, .{ .redirect = var_ });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the given descriptor
-    pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
-        const desc_idx = try self.descs.insert(self.gpa, desc);
-        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
+    pub fn register(self: *Self, gpa: Allocator, desc: Desc) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(gpa, desc);
+        const slot_idx = try self.slots.insert(gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
@@ -247,24 +243,24 @@ pub const Store = struct {
 
     /// Make a tag union data type
     /// Does not insert content into the types store
-    pub fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!Content {
-        const tags_range = try self.appendTags(tags);
+    pub fn mkTagUnion(self: *Self, gpa: Allocator, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!Content {
+        const tags_range = try self.appendTags(gpa, tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return Content{ .structure = .{ .tag_union = tag_union } };
     }
 
     /// Make a tag data type
     /// Does not insert content into the types store
-    pub fn mkTag(self: *Self, name: base.Ident.Idx, args: []const Var) std.mem.Allocator.Error!Tag {
-        const args_range = try self.appendVars(args);
+    pub fn mkTag(self: *Self, gpa: Allocator, name: base.Ident.Idx, args: []const Var) std.mem.Allocator.Error!Tag {
+        const args_range = try self.appendVars(gpa, args);
         return Tag{ .name = name, .args = args_range };
     }
 
     /// Make alias data type
     /// Does not insert content into the types store
-    pub fn mkAlias(self: *Self, ident: TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        const backing_idx = try self.appendVar(backing_var);
-        var span = try self.appendVars(args);
+    pub fn mkAlias(self: *Self, gpa: Allocator, ident: TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+        const backing_idx = try self.appendVar(gpa, backing_var);
+        var span = try self.appendVars(gpa, args);
 
         // Adjust args span to include backing  var
         span.start = backing_idx;
@@ -282,13 +278,14 @@ pub const Store = struct {
     /// Does not insert content into the types store
     pub fn mkNominal(
         self: *Self,
+        gpa: Allocator,
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
         origin_module: base.Ident.Idx,
     ) std.mem.Allocator.Error!Content {
-        const backing_idx = try self.appendVar(backing_var);
-        var span = try self.appendVars(args);
+        const backing_idx = try self.appendVar(gpa, backing_var);
+        var span = try self.appendVars(gpa, args);
 
         // Adjust args span to include backing  var
         span.start = backing_idx;
@@ -305,8 +302,8 @@ pub const Store = struct {
 
     // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
-    pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
+    pub fn mkFuncUnbound(self: *Self, gpa: Allocator, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        const args_range = try self.appendVars(gpa, args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -331,8 +328,8 @@ pub const Store = struct {
 
     // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
-    pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
+    pub fn mkFuncPure(self: *Self, gpa: Allocator, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        const args_range = try self.appendVars(gpa, args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -353,8 +350,8 @@ pub const Store = struct {
 
     // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
-    pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
+    pub fn mkFuncEffectful(self: *Self, gpa: Allocator, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        const args_range = try self.appendVars(gpa, args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -447,38 +444,38 @@ pub const Store = struct {
     // sub list setters //
 
     /// Append a var to the backing list, returning the idx
-    pub fn appendVar(self: *Self, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
-        return try self.vars.append(self.gpa, v);
+    pub fn appendVar(self: *Self, gpa: Allocator, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
+        return try self.vars.append(gpa, v);
     }
 
     /// Append a var to the backing list, returning the idx
-    pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.vars.appendSlice(self.gpa, s);
+    pub fn appendVars(self: *Self, gpa: Allocator, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        return try self.vars.appendSlice(gpa, s);
     }
 
     /// Append a record field to the backing list, returning the idx
-    pub fn appendRecordField(self: *Self, field: RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Idx {
-        return try self.record_fields.append(self.gpa, field);
+    pub fn appendRecordField(self: *Self, gpa: Allocator, field: RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Idx {
+        return try self.record_fields.append(gpa, field);
     }
 
     /// Append a slice of record fields to the backing list, returning the range
-    pub fn appendRecordFields(self: *Self, slice: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Range {
-        return try self.record_fields.appendSlice(self.gpa, slice);
+    pub fn appendRecordFields(self: *Self, gpa: Allocator, slice: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Range {
+        return try self.record_fields.appendSlice(gpa, slice);
     }
 
     /// Append a tag to the backing list, returning the idx
-    pub fn appendTag(self: *Self, tag: Tag) Allocator.Error!TagSafeMultiList.Idx {
-        return try self.tags.append(self.gpa, tag);
+    pub fn appendTag(self: *Self, gpa: Allocator, tag: Tag) Allocator.Error!TagSafeMultiList.Idx {
+        return try self.tags.append(gpa, tag);
     }
 
     /// Append a slice of tags to the backing list, returning the range
-    pub fn appendTags(self: *Self, slice: []const Tag) std.mem.Allocator.Error!TagSafeMultiList.Range {
-        return try self.tags.appendSlice(self.gpa, slice);
+    pub fn appendTags(self: *Self, gpa: Allocator, slice: []const Tag) std.mem.Allocator.Error!TagSafeMultiList.Range {
+        return try self.tags.appendSlice(gpa, slice);
     }
 
     /// Append static dispatch constraints to the backing list, returning the range
-    pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
-        return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
+    pub fn appendStaticDispatchConstraints(self: *Self, gpa: Allocator, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+        return try self.static_dispatch_constraints.appendSlice(gpa, s);
     }
 
     // sub list getters //
@@ -719,65 +716,8 @@ pub const Store = struct {
 
     // serialization //
 
-    /// Serialized representation of types store
-    /// Uses extern struct to guarantee consistent field layout across optimization levels.
-    pub const Serialized = extern struct {
-        gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
-        slots: SlotStore.Serialized,
-        descs: DescStore.Serialized,
-        vars: VarSafeList.Serialized,
-        record_fields: RecordFieldSafeMultiList.Serialized,
-        tags: TagSafeMultiList.Serialized,
-        static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
-
-        /// Serialize a Store into this Serialized struct, appending data to the writer
-        pub fn serialize(
-            self: *Serialized,
-            store: *const Store,
-            allocator: Allocator,
-            writer: *collections.CompactWriter,
-        ) Allocator.Error!void {
-            // Serialize each component
-            try self.slots.serialize(&store.slots, allocator, writer);
-            try self.descs.serialize(&store.descs, allocator, writer);
-            try self.vars.serialize(&store.vars, allocator, writer);
-            try self.record_fields.serialize(&store.record_fields, allocator, writer);
-            try self.tags.serialize(&store.tags, allocator, writer);
-            try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
-
-            // Set gpa to all zeros; the space needs to be here,
-            // but the value will be set separately during deserialization.
-            self.gpa = .{ 0, 0 };
-        }
-
-        /// Deserialize this Serialized struct into a Store
-        pub noinline fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *Store {
-            // CRITICAL: Deserialize ALL nested structs BEFORE casting and writing to store.
-            // Since store aliases self (they point to the same memory), we must complete
-            // all reads before any writes to avoid corruption in Release mode.
-            const deserialized_slots = self.slots.deserialize(offset).*;
-            const deserialized_descs = self.descs.deserialize(offset).*;
-            const deserialized_vars = self.vars.deserialize(offset).*;
-            const deserialized_record_fields = self.record_fields.deserialize(offset).*;
-            const deserialized_tags = self.tags.deserialize(offset).*;
-            const deserialized_static_dispatch_constraints = self.static_dispatch_constraints.deserialize(offset).*;
-
-            // Now we can cast and write to the destination
-            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-            store.* = Store{
-                .gpa = gpa,
-                .slots = deserialized_slots,
-                .descs = deserialized_descs,
-                .vars = deserialized_vars,
-                .record_fields = deserialized_record_fields,
-                .tags = deserialized_tags,
-                .static_dispatch_constraints = deserialized_static_dispatch_constraints,
-            };
-
-            return store;
-        }
-    };
+    /// Serialized representation matches Store exactly since Store is extern
+    pub const Serialized = Store;
 
     /// Serialize this Store to the given CompactWriter
     pub fn serialize(
@@ -790,7 +730,6 @@ pub const Store = struct {
 
         // Then serialize each component and update the struct
         offset_self.* = .{
-            .gpa = allocator,
             .slots = (try self.slots.serialize(allocator, writer)).*,
             .descs = (try self.descs.serialize(allocator, writer)).*,
             .vars = (try self.vars.serialize(allocator, writer)).*,
@@ -800,6 +739,19 @@ pub const Store = struct {
         };
 
         return @constCast(offset_self);
+    }
+
+    /// Deserialize this Store in place
+    pub noinline fn deserialize(self: *Store, offset: i64) *Store {
+        // Since Store is extern, we can deserialize in place without needing locals
+        _ = self.slots.deserialize(offset);
+        _ = self.descs.deserialize(offset);
+        _ = self.vars.deserialize(offset);
+        _ = self.record_fields.deserialize(offset);
+        _ = self.tags.deserialize(offset);
+        _ = self.static_dispatch_constraints.deserialize(offset);
+
+        return self;
     }
 
     /// Add the given offset to the memory addresses of all pointers in `self`.
@@ -916,7 +868,7 @@ pub const Store = struct {
 };
 
 /// Represents a store of slots
-const SlotStore = struct {
+const SlotStore = extern struct {
     const Self = @This();
 
     backing: collections.SafeList(Slot),
@@ -929,36 +881,14 @@ const SlotStore = struct {
         self.backing.deinit(gpa);
     }
 
-    /// Serialized representation of SlotStore
-    /// Uses extern struct to guarantee consistent field layout across optimization levels.
-    pub const Serialized = extern struct {
-        backing: collections.SafeList(Slot).Serialized,
+    /// Serialized representation matches SlotStore exactly since it's extern
+    pub const Serialized = SlotStore;
 
-        /// Serialize a SlotStore into this Serialized struct, appending data to the writer
-        pub fn serialize(
-            self: *Serialized,
-            slot_store: *const SlotStore,
-            allocator: Allocator,
-            writer: *collections.CompactWriter,
-        ) Allocator.Error!void {
-            try self.backing.serialize(&slot_store.backing, allocator, writer);
-        }
-
-        /// Deserialize this Serialized struct into a SlotStore
-        pub noinline fn deserialize(self: *Serialized, offset: i64) *SlotStore {
-            // CRITICAL: Deserialize nested struct BEFORE casting and writing to slot_store
-            // to avoid aliasing issues in Release mode.
-            const deserialized_backing = self.backing.deserialize(offset).*;
-
-            const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
-
-            slot_store.* = SlotStore{
-                .backing = deserialized_backing,
-            };
-
-            return slot_store;
-        }
-    };
+    /// Deserialize this SlotStore in place
+    pub noinline fn deserialize(self: *SlotStore, offset: i64) *SlotStore {
+        _ = self.backing.deserialize(offset);
+        return self;
+    }
 
     /// Insert a new slot into the store
     fn insert(self: *Self, gpa: Allocator, typ: Slot) std.mem.Allocator.Error!Idx {
@@ -1018,7 +948,7 @@ const SlotStore = struct {
 /// Represents a store of descriptors
 ///
 /// Indexes into the list are typesafe
-const DescStore = struct {
+const DescStore = extern struct {
     const Self = @This();
     const DescSafeMultiList = collections.SafeMultiList(Desc);
 
@@ -1034,36 +964,14 @@ const DescStore = struct {
         self.backing.deinit(gpa);
     }
 
-    /// Serialized representation of DescStore
-    /// Uses extern struct to guarantee consistent field layout across optimization levels.
-    pub const Serialized = extern struct {
-        backing: DescSafeMultiList.Serialized,
+    /// Serialized representation matches DescStore exactly since it's extern
+    pub const Serialized = DescStore;
 
-        /// Serialize a DescStore into this Serialized struct, appending data to the writer
-        pub fn serialize(
-            self: *Serialized,
-            desc_store: *const DescStore,
-            allocator: Allocator,
-            writer: *collections.CompactWriter,
-        ) Allocator.Error!void {
-            try self.backing.serialize(&desc_store.backing, allocator, writer);
-        }
-
-        /// Deserialize this Serialized struct into a DescStore
-        pub noinline fn deserialize(self: *Serialized, offset: i64) *DescStore {
-            // CRITICAL: Deserialize nested struct BEFORE casting and writing to desc_store
-            // to avoid aliasing issues in Release mode.
-            const deserialized_backing = self.backing.deserialize(offset).*;
-
-            const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
-
-            desc_store.* = DescStore{
-                .backing = deserialized_backing,
-            };
-
-            return desc_store;
-        }
-    };
+    /// Deserialize this DescStore in place
+    pub noinline fn deserialize(self: *DescStore, offset: i64) *DescStore {
+        _ = self.backing.deserialize(offset);
+        return self;
+    }
 
     /// Insert a value into the store
     fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
@@ -1129,11 +1037,11 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     const gpa = std.testing.allocator;
 
     var store = try Store.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
-    const c = try store.fresh();
-    const b = try store.freshRedirect(c);
-    const a = try store.freshRedirect(b);
+    const c = try store.fresh(gpa, );
+    const b = try store.freshRedirect(gpa, c);
+    const a = try store.freshRedirect(gpa, b);
 
     const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, result.desc.content);
@@ -1148,7 +1056,7 @@ test "Store empty CompactWriter roundtrip" {
 
     // Create an empty Store
     var original = try Store.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1188,14 +1096,14 @@ test "Store basic CompactWriter roundtrip" {
 
     // Create original Store and add some types
     var original = try Store.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Create some type variables
-    const flex = try original.fresh();
-    const rigid = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 42))) });
+    const flex = try original.fresh(gpa, );
+    const rigid = try original.freshFromContent(gpa, Content{ .rigid = Rigid.init(@bitCast(@as(u32, 42))) });
 
     // Create a redirect
-    const redirect_var = try original.freshRedirect(flex);
+    const redirect_var = try original.freshRedirect(gpa, flex);
 
     // Verify original values
     const flex_resolved = original.resolveVar(flex);
@@ -1255,46 +1163,46 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer idents.deinit(gpa);
 
     var original = try Store.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Create various types
-    const flex = try original.fresh();
-    const str_var = try original.freshFromContent(Content{ .structure = .empty_record });
-    const list_elem = try original.fresh();
+    const flex = try original.fresh(gpa, );
+    const str_var = try original.freshFromContent(gpa, Content{ .structure = .empty_record });
+    const list_elem = try original.fresh(gpa);
     const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 999 };
     const builtin_module_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 998 };
-    const list_content = try original.mkNominal(
+    const list_content = try original.mkNominal(gpa, 
         .{ .ident_idx = list_ident_idx },
         list_elem,
         &[_]Var{list_elem},
         builtin_module_idx,
     );
-    const list_var = try original.freshFromContent(list_content);
+    const list_var = try original.freshFromContent(gpa, list_content);
 
     // Create a function type
-    const arg1 = try original.fresh();
-    const arg2 = try original.fresh();
-    const ret = try original.fresh();
-    const func_content = try original.mkFuncPure(&[_]Var{ arg1, arg2 }, ret);
-    const func_var = try original.freshFromContent(func_content);
+    const arg1 = try original.fresh(gpa);
+    const arg2 = try original.fresh(gpa);
+    const ret = try original.fresh(gpa);
+    const func_content = try original.mkFuncPure(gpa, &[_]Var{ arg1, arg2 }, ret);
+    const func_var = try original.freshFromContent(gpa, func_content);
 
     // Create a record type
-    const field1_var = try original.fresh();
-    const field2_var = try original.fresh();
-    const record_fields = try original.appendRecordFields(&[_]RecordField{
+    const field1_var = try original.fresh(gpa);
+    const field2_var = try original.fresh(gpa);
+    const record_fields = try original.appendRecordFields(gpa, &[_]RecordField{
         .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 }, .var_ = field1_var },
         .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 }, .var_ = field2_var },
     });
-    const record_ext = try original.fresh();
+    const record_ext = try original.fresh(gpa);
     const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
-    const record_var = try original.freshFromContent(record_content);
+    const record_var = try original.freshFromContent(gpa, record_content);
 
     // Create a tag union
-    const tag1 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 300 }, &[_]Var{flex});
-    const tag2 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 400 }, &[_]Var{ arg1, arg2 });
-    const tag_union_ext = try original.fresh();
-    const tag_union_content = try original.mkTagUnion(&[_]Tag{ tag1, tag2 }, tag_union_ext);
-    const tag_union_var = try original.freshFromContent(tag_union_content);
+    const tag1 = try original.mkTag(gpa, base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 300 }, &[_]Var{flex});
+    const tag2 = try original.mkTag(gpa, base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 400 }, &[_]Var{ arg1, arg2 });
+    const tag_union_ext = try original.fresh(gpa);
+    const tag_union_content = try original.mkTagUnion(gpa, &[_]Tag{ tag1, tag2 }, tag_union_ext);
+    const tag_union_var = try original.freshFromContent(gpa, tag_union_content);
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1414,8 +1322,7 @@ test "SlotStore.Serialized roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized_ptr = try writer.appendAlloc(arena_allocator, SlotStore.Serialized);
-    try serialized_ptr.serialize(&slot_store, arena_allocator, &writer);
+    _ = try slot_store.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1478,8 +1385,7 @@ test "DescStore.Serialized roundtrip" {
     };
     defer writer.deinit(arena_allocator);
 
-    const serialized_ptr = try writer.appendAlloc(arena_allocator, DescStore.Serialized);
-    try serialized_ptr.serialize(&desc_store, arena_allocator, &writer);
+    _ = try desc_store.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1493,11 +1399,12 @@ test "DescStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+
     const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
     // Note: deserialize already handles relocation, don't call relocate again
 
     // Verify
-    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.items.len);
+    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.len());
     try std.testing.expectEqual(desc1, deserialized.get(@enumFromInt(0)));
     try std.testing.expectEqual(desc2, deserialized.get(@enumFromInt(1)));
 }
@@ -1507,12 +1414,12 @@ test "Store.Serialized roundtrip" {
     const CompactWriter = collections.CompactWriter;
 
     var store = try Store.init(gpa);
-    defer store.deinit();
+    defer store.deinit(gpa, );
 
     // Create some type variables
-    const flex = try store.fresh();
-    const str_var = try store.freshFromContent(Content{ .structure = .empty_record });
-    const redirect_var = try store.freshRedirect(flex);
+    const flex = try store.fresh(gpa, );
+    const str_var = try store.freshFromContent(gpa, Content{ .structure = .empty_record });
+    const redirect_var = try store.freshRedirect(gpa, flex);
 
     // Create temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1528,8 +1435,7 @@ test "Store.Serialized roundtrip" {
     };
     defer writer.deinit(gpa);
 
-    const serialized_ptr = try writer.appendAlloc(gpa, Store.Serialized);
-    try serialized_ptr.serialize(&store, gpa, &writer);
+    _ = try store.serialize(gpa, &writer);
 
     // Write to file
     try writer.writeGather(gpa, file);
@@ -1543,7 +1449,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());
@@ -1564,23 +1470,23 @@ test "Store multiple instances CompactWriter roundtrip" {
 
     // Create multiple stores
     var store1 = try Store.init(gpa);
-    defer store1.deinit();
+    defer store1.deinit(gpa, );
 
     var store2 = try Store.init(gpa);
-    defer store2.deinit();
+    defer store2.deinit(gpa, );
 
     var store3 = try Store.init(gpa);
-    defer store3.deinit();
+    defer store3.deinit(gpa);
 
     // Populate differently
-    const var1_1 = try store1.fresh();
-    const var1_2 = try store1.freshFromContent(Content{ .structure = .empty_record });
-    _ = try store1.freshRedirect(var1_1);
+    const var1_1 = try store1.fresh(gpa);
+    const var1_2 = try store1.freshFromContent(gpa, Content{ .structure = .empty_record });
+    _ = try store1.freshRedirect(gpa, var1_1);
 
-    const var2_1 = try store2.fresh();
-    const var2_2 = try store2.fresh();
-    const func_content = try store2.mkFuncEffectful(&[_]Var{var2_1}, var2_2);
-    _ = try store2.freshFromContent(func_content);
+    const var2_1 = try store2.fresh(gpa);
+    const var2_2 = try store2.fresh(gpa);
+    const func_content = try store2.mkFuncEffectful(gpa, &[_]Var{var2_1}, var2_2);
+    _ = try store2.freshFromContent(gpa, func_content);
 
     // store3 left empty
 
@@ -1646,23 +1552,23 @@ test "SlotStore and DescStore serialization and deserialization" {
     const CompactWriter = collections.CompactWriter;
 
     var original = try Store.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Create several variables to populate SlotStore with roots
-    const var1 = try original.freshFromContent(Content{ .flex = Flex.init() });
-    const var2 = try original.freshFromContent(Content{ .structure = .empty_record });
-    const var3 = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) });
+    const var1 = try original.freshFromContent(gpa, Content{ .flex = Flex.init() });
+    const var2 = try original.freshFromContent(gpa, Content{ .structure = .empty_record });
+    const var3 = try original.freshFromContent(gpa, Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) });
 
     // Create redirects to populate SlotStore with redirects
-    const redirect1 = try original.freshRedirect(var1);
-    _ = try original.freshRedirect(var2);
-    const redirect3 = try original.freshRedirect(redirect1); // Chain of redirects
+    const redirect1 = try original.freshRedirect(gpa, var1);
+    _ = try original.freshRedirect(gpa, var2);
+    const redirect3 = try original.freshRedirect(gpa, redirect1); // Chain of redirects
 
     // Verify SlotStore has both root and redirect entries
     try std.testing.expectEqual(@as(usize, 6), original.slots.backing.len());
 
     // Verify DescStore has the descriptors
-    try std.testing.expectEqual(@as(usize, 3), original.descs.backing.items.len);
+    try std.testing.expectEqual(@as(usize, 3), original.descs.backing.len());
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1700,7 +1606,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     try std.testing.expectEqual(@as(usize, 6), deserialized.slots.backing.len());
 
     // Verify DescStore was correctly deserialized
-    try std.testing.expectEqual(@as(usize, 3), deserialized.descs.backing.items.len);
+    try std.testing.expectEqual(@as(usize, 3), deserialized.descs.backing.len());
 
     // Verify we can resolve variables correctly
     const resolved1 = deserialized.resolveVar(var1);
@@ -1725,12 +1631,12 @@ test "Store with path compression CompactWriter roundtrip" {
     const CompactWriter = collections.CompactWriter;
 
     var original = try Store.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Create a redirect chain
-    const c = try original.fresh();
-    const b = try original.freshRedirect(c);
-    const a = try original.freshRedirect(b);
+    const c = try original.fresh(gpa, );
+    const b = try original.freshRedirect(gpa, c);
+    const a = try original.freshRedirect(gpa, b);
 
     // Compress the path
     _ = original.resolveVarAndCompressPath(a);

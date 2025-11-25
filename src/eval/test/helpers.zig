@@ -420,7 +420,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 /// Rewrite deferred numeric literals to match their inferred types
 /// This is similar to what ComptimeEvaluator does but for test expressions
 fn rewriteDeferredNumericLiterals(env: *ModuleEnv, types_store: *types.Store) !void {
-    const literals = env.deferred_numeric_literals.items.items;
+    const literals = env.deferred_numeric_literals.items.toSlice();
 
     for (literals) |literal| {
         // Resolve the type variable to get the concrete type
@@ -523,7 +523,7 @@ fn rewriteNumericLiteralExpr(
             .bytes = num_lit_info.bytes,
             .kind = if (num_lit_info.is_u128) .u128 else .i128,
         };
-        try env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+        try env.store.replaceExprWithNum(env.gpa, expr_idx, int_value, num_kind);
     }
     // For Dec type, keep the original e_dec/e_dec_small expression
 }
@@ -549,7 +549,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
 
-    module_env.common.source = source;
+    module_env.common.source = collections.SafeSlice(u8).fromSlice(source);
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression (following REPL pattern)
@@ -649,7 +649,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
-        const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
+        const diagnostic_idx = try module_env.store.addDiagnostic(module_env.gpa, .{ .not_implemented = .{
             .feature = try module_env.insertString("canonicalization failed"),
             .region = base.Region.zero(),
         } });
@@ -663,7 +663,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .parse_ast = parse_ast,
             .can = czer,
             .checker = checker,
-            .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
+            .expr_idx = try module_env.store.addExpr(module_env.gpa, .{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
             .bool_stmt = bool_stmt_in_bool_module,

@@ -50,12 +50,13 @@ test "instantiate - flex var creates new flex var" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(.{ .flex = Flex.init() });
+    const original = try env.types.freshFromContent(env.gpa, .{ .flex = Flex.init() });
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -74,12 +75,13 @@ test "instantiate - rigid var with fresh_flex creates flex var" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const original = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -98,12 +100,13 @@ test "instantiate - rigid var with fresh_rigid creates new rigid var" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const original = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_rigid,
     };
 
@@ -123,14 +126,15 @@ test "instantiate - preserves rigid var structure in function" {
     defer env.deinit();
 
     // Create a -> a function
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
     const func_content = try env.mkFuncPure(&[_]Var{rigid_a}, rigid_a);
-    const original = try env.types.freshFromContent(func_content);
+    const original = try env.types.freshFromContent(env.gpa, func_content);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -155,15 +159,16 @@ test "instantiate - tuple with multiple vars" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
-    const rigid_b = try env.types.freshFromContent(try env.mkRigidVar("b"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
+    const rigid_b = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("b"));
     const tuple_content = try env.mkTuple(&[_]Var{ rigid_a, rigid_b, rigid_a });
-    const original = try env.types.freshFromContent(tuple_content);
+    const original = try env.types.freshFromContent(env.gpa, tuple_content);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -185,20 +190,21 @@ test "instantiate - record with multiple fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
-    const rigid_b = try env.types.freshFromContent(try env.mkRigidVar("b"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
+    const rigid_b = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("b"));
 
     const record_info = try env.mkRecordClosed(&[_]RecordField{
         try env.mkRecordField("x", rigid_a),
         try env.mkRecordField("y", rigid_b),
         try env.mkRecordField("z", rigid_a),
     });
-    const original = try env.types.freshFromContent(record_info.content);
+    const original = try env.types.freshFromContent(env.gpa, record_info.content);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -225,18 +231,19 @@ test "instantiate - tag union preserves structure" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
 
     const tag_union_info = try env.mkTagUnionClosed(&[_]Tag{
         try env.mkTag("Some", &[_]Var{rigid_a}),
         try env.mkTag("None", &[_]Var{}),
     });
-    const original = try env.types.freshFromContent(tag_union_info.content);
+    const original = try env.types.freshFromContent(env.gpa, tag_union_info.content);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -263,23 +270,24 @@ test "instantiate - alias preserves structure" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
     const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
     const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
-    const backing_content = try env.types.mkNominal(
+    const backing_content = try env.types.mkNominal(env.gpa, 
         .{ .ident_idx = list_ident_idx },
         rigid_a,
         &[_]Var{rigid_a},
         builtin_module_idx,
     );
-    const backing = try env.types.freshFromContent(backing_content);
+    const backing = try env.types.freshFromContent(env.gpa, backing_content);
     const alias_content = try env.mkAlias("MyList", backing, &[_]Var{rigid_a});
-    const original = try env.types.freshFromContent(alias_content);
+    const original = try env.types.freshFromContent(env.gpa, alias_content);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -308,24 +316,25 @@ test "instantiate - box and list" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
 
     // Test Box a
     {
         const box_ident_idx = try env.idents.insert(gpa, .for_text("Box"));
         const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
-        const box_content = try env.types.mkNominal(
+        const box_content = try env.types.mkNominal(env.gpa, 
             .{ .ident_idx = box_ident_idx },
             rigid_a,
             &[_]Var{rigid_a},
             builtin_module_idx,
         );
-        const box_var = try env.types.freshFromContent(box_content);
+        const box_var = try env.types.freshFromContent(env.gpa, box_content);
 
         var instantiator = Instantiator{
             .store = &env.types,
             .idents = &env.idents,
             .var_map = &env.var_map,
+        .gpa = env.gpa,
             .rigid_behavior = .fresh_flex,
         };
 
@@ -343,18 +352,19 @@ test "instantiate - box and list" {
     {
         const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
         const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
-        const list_content = try env.types.mkNominal(
+        const list_content = try env.types.mkNominal(env.gpa, 
             .{ .ident_idx = list_ident_idx },
             rigid_a,
             &[_]Var{rigid_a},
             builtin_module_idx,
         );
-        const list_var = try env.types.freshFromContent(list_content);
+        const list_var = try env.types.freshFromContent(env.gpa, list_content);
 
         var instantiator = Instantiator{
             .store = &env.types,
             .idents = &env.idents,
             .var_map = &env.var_map,
+        .gpa = env.gpa,
             .rigid_behavior = .fresh_flex,
         };
 
@@ -373,9 +383,9 @@ test "instantiate - multiple instantiations are independent" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContent(env.gpa, try env.mkRigidVar("a"));
     const func_content = try env.mkFuncPure(&[_]Var{rigid_a}, rigid_a);
-    const original = try env.types.freshFromContent(func_content);
+    const original = try env.types.freshFromContent(env.gpa, func_content);
 
     // First instantiation
     var var_map1 = std.AutoHashMap(Var, Var).init(gpa);
@@ -385,6 +395,7 @@ test "instantiate - multiple instantiations are independent" {
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &var_map1,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -398,6 +409,7 @@ test "instantiate - multiple instantiations are independent" {
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &var_map2,
+        .gpa = env.gpa,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -439,7 +451,7 @@ const TestEnv = struct {
 
     /// Deinit the test env, including deallocing the module_env from the heap
     fn deinit(self: *Self) void {
-        self.types.deinit();
+        self.types.deinit(self.gpa, );
         self.idents.deinit(self.gpa);
         self.var_map.deinit();
     }
@@ -452,7 +464,7 @@ const TestEnv = struct {
     // helpers - alias //
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.types.mkAlias(try self.mkTypeIdent(name), backing_var, args);
+        return try self.types.mkAlias(self.gpa, try self.mkTypeIdent(name), backing_var, args);
     }
 
     // helpers - rigid var //
@@ -469,7 +481,7 @@ const TestEnv = struct {
     // helpers - tuple //
 
     fn mkTuple(self: *Self, slice: []const Var) std.mem.Allocator.Error!Content {
-        const elems_range = try self.types.appendVars(slice);
+        const elems_range = try self.types.appendVars(self.gpa, slice);
         return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
     }
 
@@ -487,7 +499,7 @@ const TestEnv = struct {
     const RecordInfo = struct { record: Record, content: Content };
 
     fn mkRecord(self: *Self, fields: []const RecordField, ext_var: Var) std.mem.Allocator.Error!RecordInfo {
-        const fields_range = try self.types.appendRecordFields(fields);
+        const fields_range = try self.types.appendRecordFields(self.gpa, fields);
         const record = Record{ .fields = fields_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .record = record } }, .record = record };
     }
@@ -498,14 +510,14 @@ const TestEnv = struct {
     }
 
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.types.freshFromContent(.{ .structure = .empty_record });
+        const ext_var = try self.types.freshFromContent(self.gpa, .{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
     }
 
     // helpers - func //
 
     fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        return try self.types.mkFuncPure(args, ret);
+        return try self.types.mkFuncPure(self.gpa, args, ret);
     }
 
     // helpers - tag union //
@@ -513,16 +525,16 @@ const TestEnv = struct {
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
 
     fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.types.appendVars(args);
+        return try self.types.appendVars(self.gpa, args);
     }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
         const ident_idx = try self.idents.insert(self.gpa, Ident.for_text(name));
-        return Tag{ .name = ident_idx, .args = try self.types.appendVars(args) };
+        return Tag{ .name = ident_idx, .args = try self.types.appendVars(self.gpa, args) };
     }
 
     fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!TagUnionInfo {
-        const tags_range = try self.types.appendTags(tags);
+        const tags_range = try self.types.appendTags(self.gpa, tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .tag_union = tag_union } }, .tag_union = tag_union };
     }
@@ -533,7 +545,7 @@ const TestEnv = struct {
     }
 
     fn mkTagUnionClosed(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.types.freshFromContent(.{ .structure = .empty_tag_union });
+        const ext_var = try self.types.freshFromContent(self.gpa, .{ .structure = .empty_tag_union });
         return self.mkTagUnion(tags, ext_var);
     }
 };

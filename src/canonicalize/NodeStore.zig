@@ -31,7 +31,6 @@ const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
 const NodeStore = @This();
 
-gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
 extra_data: collections.SafeList(u32),
@@ -111,7 +110,6 @@ pub fn init(gpa: Allocator) Allocator.Error!NodeStore {
 /// Initializes the NodeStore with a specified capacity.
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     return .{
-        .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
@@ -120,12 +118,12 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
 }
 
 /// Deinitializes the NodeStore, freeing any allocated resources.
-pub fn deinit(store: *NodeStore) void {
-    store.nodes.deinit(store.gpa);
-    store.regions.deinit(store.gpa);
-    store.extra_data.deinit(store.gpa);
+pub fn deinit(store: *NodeStore, gpa: Allocator) void {
+    store.nodes.deinit(gpa);
+    store.regions.deinit(gpa);
+    store.extra_data.deinit(gpa);
     if (store.scratch) |scratch| {
-        scratch.deinit(store.gpa);
+        scratch.deinit(gpa);
     }
 }
 
@@ -235,7 +233,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .expr = @enumFromInt(node.data_2),
                 .anno = blk: {
                     const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items.toSlice()[extra_start..];
                     const has_anno = extra_data[0] != 0;
                     if (has_anno) {
                         break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
@@ -251,7 +249,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .expr = @enumFromInt(node.data_2),
                 .anno = blk: {
                     const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items.toSlice()[extra_start..];
                     const has_anno = extra_data[0] != 0;
                     if (has_anno) {
                         break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
@@ -295,7 +293,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         } },
         .statement_import => {
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const alias_data = extra_data[0];
             const qualifier_data = extra_data[1];
@@ -333,7 +331,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         },
         .statement_type_anno => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const name: Ident.Idx = @bitCast(extra_data[1]);
@@ -391,7 +389,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             // Read i128 from extra_data (stored as 4 u32s in data_1)
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
-            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+            const value_as_u32s = store.extra_data.items.toSlice()[node.data_3..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
             return CIR.Expr{
@@ -418,7 +416,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_call => {
             // Retrieve args span from extra_data
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -446,7 +444,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_dec => {
             // Get value from extra_data
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.toSlice()[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Expr{
@@ -509,7 +507,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const target_node_idx: u16 = @intCast(node.data_2);
 
             const extra_data_idx = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const extra_data = store.extra_data.items.toSlice()[extra_data_idx..][0..2];
             const backing_expr: CIR.Expr.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
@@ -534,7 +532,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_closure => {
             // Retrieve closure data from extra_data
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const lambda_idx = extra_data[0];
             const capture_start = extra_data[1];
@@ -550,7 +548,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_lambda => {
             // Retrieve lambda data from extra_data
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -579,7 +577,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_record => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const fields_start = extra_data[0];
             const fields_len = extra_data[1];
@@ -596,7 +594,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_match => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
             const branches_start = extra_data[1];
@@ -613,7 +611,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_zero_argument_tag => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
             const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -670,7 +668,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
             const index = node.data_2;
             const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -687,7 +685,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // Retrieve low-level lambda data from extra_data
             const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -706,7 +704,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_if_then_else => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const branches_span_start: u32 = extra_data[0];
             const branches_span_end: u32 = extra_data[1];
@@ -756,13 +754,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 /// This is used for constant folding during compile-time evaluation.
 /// Note: This modifies only the CIR node and should only be called after type-checking
 /// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
+pub fn replaceExprWithNum(store: *NodeStore, gpa: Allocator, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     const extra_data_start = store.extra_data.len();
     const value_as_i128: i128 = @bitCast(value.bytes);
     const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-    _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
+    _ = try store.extra_data.appendSlice(gpa, &value_as_u32s);
 
     store.nodes.set(node_idx, .{
         .tag = .expr_num,
@@ -778,6 +776,7 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
 /// is complete. Type information is stored separately and remains unchanged.
 pub fn replaceExprWithZeroArgumentTag(
     store: *NodeStore,
+    gpa: Allocator,
     expr_idx: CIR.Expr.Idx,
     closure_name: Ident.Idx,
     variant_var: types.Var,
@@ -787,10 +786,10 @@ pub fn replaceExprWithZeroArgumentTag(
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
-    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+    _ = try store.extra_data.append(gpa, @bitCast(closure_name));
+    _ = try store.extra_data.append(gpa, @intFromEnum(variant_var));
+    _ = try store.extra_data.append(gpa, @intFromEnum(ext_var));
+    _ = try store.extra_data.append(gpa, @bitCast(name));
 
     store.nodes.set(node_idx, .{
         .tag = .expr_zero_argument_tag,
@@ -825,7 +824,7 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
 
     // Retrieve when branch data from extra_data
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
     const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
     const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
@@ -855,7 +854,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
 /// Returns a slice of match branches from the given span.
 pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
-    const slice = store.extra_data.items.items[span.span.start..(span.span.start + span.span.len)];
+    const slice = store.extra_data.items.toSlice()[span.span.start..(span.span.start + span.span.len)];
     const result: []CIR.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
@@ -871,7 +870,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             const method_name = @as(Ident.Idx, @bitCast(node.data_2));
 
             const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -951,7 +950,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const target_node_idx: u16 = @intCast(node.data_2);
 
             const extra_data_idx = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const extra_data = store.extra_data.items.toSlice()[extra_data_idx..][0..2];
             const backing_pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
@@ -976,7 +975,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_list => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
             const patterns_start = extra_data[0];
             const patterns_len = extra_data[1];
@@ -1014,7 +1013,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
 
             const extra_data_idx = node.data_3;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.toSlice()[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Pattern{
@@ -1038,7 +1037,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_dec_literal => {
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.toSlice()[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             const has_suffix = node.data_2 != 0;
@@ -1103,7 +1102,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const name: Ident.Idx = @bitCast(node.data_1);
             const args_start = node.data_2;
 
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items.toSlice()[node.data_3..];
             const args_len = extra_data[0];
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(extra_data[1]);
             const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
@@ -1140,7 +1139,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const name: Ident.Idx = @bitCast(node.data_1);
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(node.data_2);
 
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items.toSlice()[node.data_3..];
             const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
                 switch (base_enum) {
                     .builtin => {
@@ -1179,8 +1178,8 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         } },
         .ty_fn => {
             const extra_data_idx = node.data_3;
-            const effectful = store.extra_data.items.items[extra_data_idx] != 0;
-            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[extra_data_idx + 1]);
+            const effectful = store.extra_data.items.toSlice()[extra_data_idx] != 0;
+            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items.toSlice()[extra_data_idx + 1]);
             return CIR.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 .ret = ret,
@@ -1237,7 +1236,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const where_flag = node.data_2;
     const where_clause = if (where_flag == 1) blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..];
+        const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
         const where_start = extra_data[0];
         const where_len = extra_data[1];
@@ -1271,10 +1270,10 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) Allocator.Error!CIR.Statement.Idx {
-    const node = try store.makeStatementNode(statement);
-    const node_idx = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+pub fn addStatement(store: *NodeStore, gpa: Allocator, statement: CIR.Statement, region: base.Region) Allocator.Error!CIR.Statement.Idx {
+    const node = try store.makeStatementNode(gpa, statement);
+    const node_idx = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -1285,8 +1284,8 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 /// 2. Introduce to scope
 /// 3. Canonicalize the annotation
 /// 4. Update the placeholder node with the actual annotation
-pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statement: CIR.Statement) Allocator.Error!void {
-    const node = try store.makeStatementNode(statement);
+pub fn setStatementNode(store: *NodeStore, gpa: Allocator, stmt_idx: CIR.Statement.Idx, statement: CIR.Statement) Allocator.Error!void {
+    const node = try store.makeStatementNode(gpa, statement);
     store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
 }
 
@@ -1294,7 +1293,7 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
 /// IMPORTANT: It *does* append to extra_data though
 ///
 /// See `setStatementNode` to see why this exists
-fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Error!Node {
+fn makeStatementNode(store: *NodeStore, gpa: Allocator, statement: CIR.Statement) Allocator.Error!Node {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1306,10 +1305,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_decl => |s| {
             const extra_data_start: u32 = @intCast(store.extra_data.len());
             if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+                _ = try store.extra_data.append(gpa, @intFromBool(true));
+                _ = try store.extra_data.append(gpa, @intFromEnum(anno));
             } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+                _ = try store.extra_data.append(gpa, @intFromBool(false));
             }
 
             node.tag = .statement_decl;
@@ -1320,10 +1319,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_decl_gen => |s| {
             const extra_data_start: u32 = @intCast(store.extra_data.len());
             if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+                _ = try store.extra_data.append(gpa, @intFromBool(true));
+                _ = try store.extra_data.append(gpa, @intFromEnum(anno));
             } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+                _ = try store.extra_data.append(gpa, @intFromBool(false));
             }
 
             node.tag = .statement_decl_gen;
@@ -1381,23 +1380,23 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 
             // Store alias_tok (nullable)
             const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
-            _ = try store.extra_data.append(store.gpa, alias_data);
+            _ = try store.extra_data.append(gpa, alias_data);
 
             // Store qualifier_tok (nullable)
             const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
-            _ = try store.extra_data.append(store.gpa, qualifier_data);
+            _ = try store.extra_data.append(gpa, qualifier_data);
 
             // Store flags indicating which fields are present
             var flags: u32 = 0;
             if (s.alias_tok != null) flags |= 1;
             if (s.qualifier_tok != null) flags |= 2;
-            _ = try store.extra_data.append(store.gpa, flags);
+            _ = try store.extra_data.append(gpa, flags);
 
             // Store extra_start in one of the remaining data fields
             // We need to reorganize data storage since all 3 data fields are used
             // Let's put extra_start where exposes span is, and move span to extra_data
-            _ = try store.extra_data.append(store.gpa, s.exposes.span.start);
-            _ = try store.extra_data.append(store.gpa, s.exposes.span.len);
+            _ = try store.extra_data.append(gpa, s.exposes.span.start);
+            _ = try store.extra_data.append(gpa, s.exposes.span.len);
 
             node.data_2 = @intCast(extra_start); // Point to extra_data
             node.data_3 = 0; // SPARE
@@ -1420,19 +1419,19 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             const extra_start = store.extra_data.len();
 
             // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
+            _ = try store.extra_data.append(gpa, @intFromEnum(s.anno));
             // Store name
-            _ = try store.extra_data.append(store.gpa, @bitCast(s.name));
+            _ = try store.extra_data.append(gpa, @bitCast(s.name));
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store flag indicating where clause is present
-                _ = try store.extra_data.append(store.gpa, 1);
+                _ = try store.extra_data.append(gpa, 1);
                 // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
+                _ = try store.extra_data.append(gpa, where_clause.span.start);
+                _ = try store.extra_data.append(gpa, where_clause.span.len);
             } else {
                 // Store flag indicating where clause is not present
-                _ = try store.extra_data.append(store.gpa, 0);
+                _ = try store.extra_data.append(gpa, 0);
             }
 
             // Store the extra data start position in the node
@@ -1451,7 +1450,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator.Error!CIR.Expr.Idx {
+pub fn addExpr(store: *NodeStore, gpa: Allocator, expr: CIR.Expr, region: base.Region) Allocator.Error!CIR.Expr.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1484,7 +1483,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const value_as_i128: i128 = @bitCast(e.value.bytes);
             const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(gpa, word);
             }
 
             // Store the extra_data index in data_1
@@ -1523,7 +1522,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const value_as_i128: i128 = e.value.num;
             const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(gpa, word);
             }
 
             // Store the extra_data index in data_1
@@ -1566,8 +1565,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = @intCast(e.target_node_idx);
             node.data_3 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.backing_expr));
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.backing_type));
         },
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;
@@ -1608,9 +1607,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_2 = hosted.index;
 
             const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
-            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
+            _ = try store.extra_data.append(gpa, hosted.args.span.start);
+            _ = try store.extra_data.append(gpa, hosted.args.span.len);
+            _ = try store.extra_data.append(gpa, @intFromEnum(hosted.body));
 
             node.data_3 = @intCast(extra_data_start);
         },
@@ -1622,11 +1621,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const extra_data_start = store.extra_data.len();
 
             // Store args span start
-            _ = try store.extra_data.append(store.gpa, low_level.args.span.start);
+            _ = try store.extra_data.append(gpa, low_level.args.span.start);
             // Store args span length
-            _ = try store.extra_data.append(store.gpa, low_level.args.span.len);
+            _ = try store.extra_data.append(gpa, low_level.args.span.len);
             // Store body index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(low_level.body));
+            _ = try store.extra_data.append(gpa, @intFromEnum(low_level.body));
 
             node.data_2 = @intCast(extra_data_start);
         },
@@ -1635,10 +1634,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             // Store when data in extra_data
             const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.cond));
-            _ = try store.extra_data.append(store.gpa, e.branches.span.start);
-            _ = try store.extra_data.append(store.gpa, e.branches.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive));
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.cond));
+            _ = try store.extra_data.append(gpa, e.branches.span.start);
+            _ = try store.extra_data.append(gpa, e.branches.span.len);
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.exhaustive));
             node.data_1 = @intCast(extra_data_start);
         },
         .e_if => |e| {
@@ -1648,9 +1647,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             // 3. Final else expr idx
             const extra_start = store.extra_data.len();
             const num_extra_items = 3;
-            _ = try store.extra_data.append(store.gpa, e.branches.span.start);
-            _ = try store.extra_data.append(store.gpa, e.branches.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.final_else));
+            _ = try store.extra_data.append(gpa, e.branches.span.start);
+            _ = try store.extra_data.append(gpa, e.branches.span.len);
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.final_else));
 
             node.tag = .expr_if_then_else;
             node.data_1 = @intCast(extra_start);
@@ -1665,9 +1664,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const extra_data_start = store.extra_data.len();
 
             // Store args span start
-            _ = try store.extra_data.append(store.gpa, e.args.span.start);
+            _ = try store.extra_data.append(gpa, e.args.span.start);
             // Store args span length
-            _ = try store.extra_data.append(store.gpa, e.args.span.len);
+            _ = try store.extra_data.append(gpa, e.args.span.len);
 
             node.data_1 = @intFromEnum(e.func);
             node.data_2 = @intCast(extra_data_start);
@@ -1679,12 +1678,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const extra_data_start = store.extra_data.len();
 
             // Store fields span start
-            _ = try store.extra_data.append(store.gpa, e.fields.span.start);
+            _ = try store.extra_data.append(gpa, e.fields.span.start);
             // Store fields span length
-            _ = try store.extra_data.append(store.gpa, e.fields.span.len);
+            _ = try store.extra_data.append(gpa, e.fields.span.len);
             // Store extension (0 if null)
             const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
-            _ = try store.extra_data.append(store.gpa, ext_value);
+            _ = try store.extra_data.append(gpa, ext_value);
 
             node.data_1 = @intCast(extra_data_start);
             node.data_2 = 0; // Unused
@@ -1697,10 +1696,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             // Store zero argument tag data in extra_data
             const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.closure_name));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.variant_var));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.ext_var));
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.name));
+            _ = try store.extra_data.append(gpa, @bitCast(e.closure_name));
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.variant_var));
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.ext_var));
+            _ = try store.extra_data.append(gpa, @bitCast(e.name));
             node.data_1 = @intCast(extra_data_start);
         },
         .e_closure => |e| {
@@ -1708,9 +1707,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             const extra_data_start = store.extra_data.len();
 
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
-            _ = try store.extra_data.append(store.gpa, e.captures.span.start);
-            _ = try store.extra_data.append(store.gpa, e.captures.span.len);
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.lambda_idx));
+            _ = try store.extra_data.append(gpa, e.captures.span.start);
+            _ = try store.extra_data.append(gpa, e.captures.span.len);
 
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1721,11 +1720,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const extra_data_start = store.extra_data.len();
 
             // Store args span start
-            _ = try store.extra_data.append(store.gpa, e.args.span.start);
+            _ = try store.extra_data.append(gpa, e.args.span.start);
             // Store args span length
-            _ = try store.extra_data.append(store.gpa, e.args.span.len);
+            _ = try store.extra_data.append(gpa, e.args.span.len);
             // Store body index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.body));
+            _ = try store.extra_data.append(gpa, @intFromEnum(e.body));
 
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1755,13 +1754,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
     }
 
-    const node_idx = try store.nodes.append(store.gpa, node);
+    const node_idx = try store.nodes.append(gpa, node);
     // For e_lookup_external, use the region from the expression itself
     const actual_region = switch (expr) {
         .e_lookup_external => |e| e.region,
         else => region,
     };
-    _ = try store.regions.append(store.gpa, actual_region);
+    _ = try store.regions.append(gpa, actual_region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -1769,7 +1768,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) Allocator.Error!CIR.RecordField.Idx {
+pub fn addRecordField(store: *NodeStore, gpa: Allocator, recordField: CIR.RecordField, region: base.Region) Allocator.Error!CIR.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(recordField.name),
         .data_2 = @intFromEnum(recordField.value),
@@ -1777,8 +1776,8 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
         .tag = .record_field,
     };
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1786,7 +1785,7 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
+pub fn addRecordDestruct(store: *NodeStore, gpa: Allocator, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
     const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
     const node = Node{
         .data_1 = @bitCast(record_destruct.label),
@@ -1799,20 +1798,20 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
     switch (record_destruct.kind) {
         .Required => |pattern_idx| {
             // Store kind tag (0 for Required)
-            _ = try store.extra_data.append(store.gpa, 0);
+            _ = try store.extra_data.append(gpa, 0);
             // Store pattern index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+            _ = try store.extra_data.append(gpa, @intFromEnum(pattern_idx));
         },
         .SubPattern => |pattern_idx| {
             // Store kind tag (1 for SubPattern)
-            _ = try store.extra_data.append(store.gpa, 1);
+            _ = try store.extra_data.append(gpa, 1);
             // Store sub-pattern index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+            _ = try store.extra_data.append(gpa, @intFromEnum(pattern_idx));
         },
     }
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1820,7 +1819,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Region) Allocator.Error!CIR.Expr.Capture.Idx {
+pub fn addCapture(store: *NodeStore, gpa: Allocator, capture: CIR.Expr.Capture, region: base.Region) Allocator.Error!CIR.Expr.Capture.Idx {
     const node = Node{
         .tag = .lambda_capture,
         .data_1 = @bitCast(capture.name),
@@ -1828,8 +1827,8 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
         .data_3 = @intFromEnum(capture.pattern_idx),
     };
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1837,7 +1836,7 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) Allocator.Error!CIR.Expr.Match.Branch.Idx {
+pub fn addMatchBranch(store: *NodeStore, gpa: Allocator, branch: CIR.Expr.Match.Branch, region: base.Region) Allocator.Error!CIR.Expr.Match.Branch.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1847,16 +1846,16 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 
     // Store when branch data in extra_data
     const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, branch.patterns.span.start);
-    _ = try store.extra_data.append(store.gpa, branch.patterns.span.len);
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.value));
+    _ = try store.extra_data.append(gpa, branch.patterns.span.start);
+    _ = try store.extra_data.append(gpa, branch.patterns.span.len);
+    _ = try store.extra_data.append(gpa, @intFromEnum(branch.value));
     const guard_idx = if (branch.guard) |g| @intFromEnum(g) else 0;
-    _ = try store.extra_data.append(store.gpa, guard_idx);
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.redundant));
+    _ = try store.extra_data.append(gpa, guard_idx);
+    _ = try store.extra_data.append(gpa, @intFromEnum(branch.redundant));
     node.data_1 = @intCast(extra_data_start);
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1864,15 +1863,15 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
+pub fn addMatchBranchPattern(store: *NodeStore, gpa: Allocator, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
     const node = Node{
         .data_1 = @intFromEnum(branchPattern.pattern),
         .data_2 = @as(u32, @intFromBool(branchPattern.degenerate)),
         .data_3 = 0,
         .tag = .match_branch_pattern,
     };
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1880,7 +1879,7 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.Br
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: base.Region) Allocator.Error!CIR.WhereClause.Idx {
+pub fn addWhereClause(store: *NodeStore, gpa: Allocator, whereClause: CIR.WhereClause, region: base.Region) Allocator.Error!CIR.WhereClause.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1899,9 +1898,9 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
             node.data_2 = @bitCast(where_method.method_name);
             node.data_3 = @intCast(extra_data_start);
 
-            _ = try store.extra_data.append(store.gpa, where_method.args.span.start);
-            _ = try store.extra_data.append(store.gpa, where_method.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(where_method.ret));
+            _ = try store.extra_data.append(gpa, where_method.args.span.start);
+            _ = try store.extra_data.append(gpa, where_method.args.span.len);
+            _ = try store.extra_data.append(gpa, @intFromEnum(where_method.ret));
         },
         .w_alias => |mod_alias| {
             node.tag = .where_alias;
@@ -1916,8 +1915,8 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         },
     }
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1925,7 +1924,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) Allocator.Error!CIR.Pattern.Idx {
+pub fn addPattern(store: *NodeStore, gpa: Allocator, pattern: CIR.Pattern, region: base.Region) Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1960,8 +1959,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.data_1 = @intFromEnum(n.module_idx);
             node.data_2 = @intCast(n.target_node_idx);
             node.data_3 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_pattern));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_type));
+            _ = try store.extra_data.append(gpa, @intFromEnum(n.backing_pattern));
+            _ = try store.extra_data.append(gpa, @intFromEnum(n.backing_type));
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
@@ -1974,21 +1973,21 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
 
             // Store list pattern data in extra_data
             const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, p.patterns.span.start);
-            _ = try store.extra_data.append(store.gpa, p.patterns.span.len);
+            _ = try store.extra_data.append(gpa, p.patterns.span.start);
+            _ = try store.extra_data.append(gpa, p.patterns.span.len);
 
             // Store rest_info
             if (p.rest_info) |rest| {
-                _ = try store.extra_data.append(store.gpa, 1); // has rest_info
-                _ = try store.extra_data.append(store.gpa, rest.index);
+                _ = try store.extra_data.append(gpa, 1); // has rest_info
+                _ = try store.extra_data.append(gpa, rest.index);
                 if (rest.pattern) |pattern_idx| {
-                    _ = try store.extra_data.append(store.gpa, 1); // has pattern
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+                    _ = try store.extra_data.append(gpa, 1); // has pattern
+                    _ = try store.extra_data.append(gpa, @intFromEnum(pattern_idx));
                 } else {
-                    _ = try store.extra_data.append(store.gpa, 0); // no pattern
+                    _ = try store.extra_data.append(gpa, 0); // no pattern
                 }
             } else {
-                _ = try store.extra_data.append(store.gpa, 0); // no rest_info
+                _ = try store.extra_data.append(gpa, 0); // no rest_info
             }
 
             node.data_1 = @intCast(extra_data_start);
@@ -2007,7 +2006,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
 
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
             for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(gpa, word);
             }
         },
         .small_dec_literal => |p| {
@@ -2025,7 +2024,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             const extra_data_start = store.extra_data.len();
             const value_as_u32s: [4]u32 = @bitCast(p.value.num);
             for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
             node.data_2 = @intFromBool(p.has_suffix);
@@ -2055,8 +2054,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
     }
 
-    const node_idx = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const node_idx = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -2072,7 +2071,7 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternR
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Region) Allocator.Error!CIR.TypeAnno.Idx {
+pub fn addTypeAnno(store: *NodeStore, gpa: Allocator, typeAnno: CIR.TypeAnno, region: base.Region) Allocator.Error!CIR.TypeAnno.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -2086,18 +2085,18 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.data_2 = a.args.span.start;
 
             const ed_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, a.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(a.base))));
+            _ = try store.extra_data.append(gpa, a.args.span.len);
+            _ = try store.extra_data.append(gpa, @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(a.base))));
             switch (a.base) {
                 .builtin => |builtin_type| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
+                    _ = try store.extra_data.append(gpa, @intFromEnum(builtin_type));
                 },
                 .local => |local| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
+                    _ = try store.extra_data.append(gpa, @intFromEnum(local.decl_idx));
                 },
                 .external => |ext| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
-                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
+                    _ = try store.extra_data.append(gpa, @intFromEnum(ext.module_idx));
+                    _ = try store.extra_data.append(gpa, @intCast(ext.target_node_idx));
                 },
             }
 
@@ -2123,14 +2122,14 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             const ed_start = store.extra_data.len();
             switch (t.base) {
                 .builtin => |builtin_type| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
+                    _ = try store.extra_data.append(gpa, @intFromEnum(builtin_type));
                 },
                 .local => |local| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
+                    _ = try store.extra_data.append(gpa, @intFromEnum(local.decl_idx));
                 },
                 .external => |ext| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
-                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
+                    _ = try store.extra_data.append(gpa, @intFromEnum(ext.module_idx));
+                    _ = try store.extra_data.append(gpa, @intCast(ext.target_node_idx));
                 },
             }
             node.data_3 = @intCast(ed_start);
@@ -2163,8 +2162,8 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.data_1 = f.args.span.start;
             node.data_2 = f.args.span.len;
             const ed_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, if (f.effectful) @as(u32, 1) else 0);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(f.ret));
+            _ = try store.extra_data.append(gpa, if (f.effectful) @as(u32, 1) else 0);
+            _ = try store.extra_data.append(gpa, @intFromEnum(f.ret));
             node.data_3 = @intCast(ed_start);
             node.tag = .ty_fn;
         },
@@ -2178,8 +2177,8 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         },
     }
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2187,7 +2186,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
+pub fn addTypeHeader(store: *NodeStore, gpa: Allocator, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
     const node = Node{
         .data_1 = @bitCast(typeHeader.name),
         .data_2 = typeHeader.args.span.start,
@@ -2195,8 +2194,8 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
         .tag = .type_header,
     };
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2204,7 +2203,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) Allocator.Error!CIR.TypeAnno.RecordField.Idx {
+pub fn addAnnoRecordField(store: *NodeStore, gpa: Allocator, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) Allocator.Error!CIR.TypeAnno.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(annoRecordField.name),
         .data_2 = @intFromEnum(annoRecordField.ty),
@@ -2212,8 +2211,8 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
         .tag = .ty_record_field,
     };
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2221,7 +2220,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
+pub fn addAnnotation(store: *NodeStore, gpa: Allocator, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -2237,16 +2236,16 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
         node.data_2 = 1;
         // Store where clause span start and len
         const extra_start = store.extra_data.len();
-        _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-        _ = try store.extra_data.append(store.gpa, where_clause.span.len);
+        _ = try store.extra_data.append(gpa, where_clause.span.start);
+        _ = try store.extra_data.append(gpa, where_clause.span.len);
         node.data_3 = @intCast(extra_start);
     } else {
         // Store flag indicating where clause is not present
         node.data_2 = 0;
     }
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2254,7 +2253,7 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) Allocator.Error!CIR.ExposedItem.Idx {
+pub fn addExposedItem(store: *NodeStore, gpa: Allocator, exposedItem: CIR.ExposedItem, region: base.Region) Allocator.Error!CIR.ExposedItem.Idx {
     const node = Node{
         .data_1 = @bitCast(exposedItem.name),
         .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
@@ -2262,8 +2261,8 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
         .tag = .exposed_item,
     };
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2271,7 +2270,7 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Error!CIR.Def.Idx {
+pub fn addDef(store: *NodeStore, gpa: Allocator, def: CIR.Def, region: base.Region) Allocator.Error!CIR.Def.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -2283,23 +2282,23 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
     const extra_start = store.extra_data.len();
 
     // Store pattern idx
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.pattern));
+    _ = try store.extra_data.append(gpa, @intFromEnum(def.pattern));
     // Store expr idx
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.expr));
+    _ = try store.extra_data.append(gpa, @intFromEnum(def.expr));
     // Store kind tag as two u32's
     const kind_encoded = def.kind.encode();
-    _ = try store.extra_data.append(store.gpa, kind_encoded[0]);
-    _ = try store.extra_data.append(store.gpa, kind_encoded[1]);
+    _ = try store.extra_data.append(gpa, kind_encoded[0]);
+    _ = try store.extra_data.append(gpa, kind_encoded[1]);
     // Store annotation idx (0 if null)
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
-    _ = try store.extra_data.append(store.gpa, anno_idx);
+    _ = try store.extra_data.append(gpa, anno_idx);
 
     // Store the extra data range in the node
     node.data_1 = @intCast(extra_start);
     node.data_2 = 5; // Number of extra data items
 
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const nid = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2311,7 +2310,7 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     std.debug.assert(node.tag == .def);
 
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const extra_data = store.extra_data.items.toSlice()[extra_start..];
 
     const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
@@ -2339,7 +2338,7 @@ pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Id
     const extra_start = node.data_1;
     // The expr field is at offset 1 in the extra_data layout for Def
     // Layout: [0]=pattern, [1]=expr, [2-3]=kind, [4]=annotation
-    store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr);
+    store.extra_data.items.toSlice()[extra_start + 1] = @intFromEnum(new_expr);
 }
 
 /// Retrieves a capture from the store.
@@ -2375,7 +2374,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
     // Retrieve kind from extra_data if it exists
     const kind = blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..][0..2];
+        const extra_data = store.extra_data.items.toSlice()[extra_start..][0..2];
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
@@ -2429,7 +2428,7 @@ pub fn clearScratchFrom(store: *NodeStore, comptime field_name: []const u8, star
 }
 
 /// Generic function to create a span from any scratch buffer
-pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime SpanType: type, start: u32) Allocator.Error!SpanType {
+pub fn spanFrom(store: *NodeStore, gpa: Allocator, comptime field_name: []const u8, comptime SpanType: type, start: u32) Allocator.Error!SpanType {
     const scratch_field = &@field(store.scratch.?, field_name);
     const end = scratch_field.top();
     defer scratch_field.clearFrom(start);
@@ -2437,7 +2436,7 @@ pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime Spa
     const ed_start = store.extra_data.len();
     std.debug.assert(end >= i);
     while (i < end) {
-        _ = try store.extra_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
+        _ = try store.extra_data.append(gpa, @intFromEnum(scratch_field.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = @intCast(ed_start), .len = @as(u32, @intCast(end)) - start } };
@@ -2464,18 +2463,18 @@ pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) Allocator.
 }
 
 /// Computes the span of an expression starting from a given index.
-pub fn exprSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Span {
-    return try store.spanFrom("exprs", CIR.Expr.Span, start);
+pub fn exprSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Expr.Span {
+    return try store.spanFrom(gpa, "exprs", CIR.Expr.Span, start);
 }
 
 /// Computes the span of captures starting from a given index.
-pub fn capturesSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Capture.Span {
-    return try store.spanFrom("captures", CIR.Expr.Capture.Span, start);
+pub fn capturesSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Expr.Capture.Span {
+    return try store.spanFrom(gpa, "captures", CIR.Expr.Capture.Span, start);
 }
 
 /// Creates a statement span from the given start position to the current top of scratch statements.
-pub fn statementSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Statement.Span {
-    return try store.spanFrom("statements", CIR.Statement.Span, start);
+pub fn statementSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Statement.Span {
+    return try store.spanFrom(gpa, "statements", CIR.Statement.Span, start);
 }
 
 /// Clears scratch expressions starting from a specified index.
@@ -2529,23 +2528,23 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
-pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.TypeAnno.Span {
-    return try store.spanFrom("type_annos", CIR.TypeAnno.Span, start);
+pub fn typeAnnoSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.TypeAnno.Span {
+    return try store.spanFrom(gpa, "type_annos", CIR.TypeAnno.Span, start);
 }
 
 /// Returns a span from the scratch anno record fields starting at the given index.
-pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.TypeAnno.RecordField.Span {
-    return try store.spanFrom("anno_record_fields", CIR.TypeAnno.RecordField.Span, start);
+pub fn annoRecordFieldSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.TypeAnno.RecordField.Span {
+    return try store.spanFrom(gpa, "anno_record_fields", CIR.TypeAnno.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch record fields starting at the given index.
-pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.RecordField.Span {
-    return try store.spanFrom("record_fields", CIR.RecordField.Span, start);
+pub fn recordFieldSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.RecordField.Span {
+    return try store.spanFrom(gpa, "record_fields", CIR.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch where clauses starting at the given index.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.WhereClause.Span {
-    return try store.spanFrom("where_clauses", CIR.WhereClause.Span, start);
+pub fn whereClauseSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.WhereClause.Span {
+    return try store.spanFrom(gpa, "where_clauses", CIR.WhereClause.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
@@ -2559,8 +2558,8 @@ pub fn addScratchExposedItem(store: *NodeStore, idx: CIR.ExposedItem.Idx) Alloca
 }
 
 /// Creates a span from the scratch exposed items starting at the given index.
-pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.ExposedItem.Span {
-    return try store.spanFrom("exposed_items", CIR.ExposedItem.Span, start);
+pub fn exposedItemSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.ExposedItem.Span {
+    return try store.spanFrom(gpa, "exposed_items", CIR.ExposedItem.Span, start);
 }
 
 /// Clears scratch exposed items from the given index.
@@ -2590,13 +2589,13 @@ pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.TypeAnno.RecordField.Sp
 }
 
 /// Computes the span of a definition starting from a given index.
-pub fn defSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Def.Span {
-    return try store.spanFrom("defs", CIR.Def.Span, start);
+pub fn defSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Def.Span {
+    return try store.spanFrom(gpa, "defs", CIR.Def.Span, start);
 }
 
 /// Retrieves a slice of record destructures from the store.
-pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Pattern.RecordDestruct.Span {
-    return try store.spanFrom("record_destructs", CIR.Pattern.RecordDestruct.Span, start);
+pub fn recordDestructSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Pattern.RecordDestruct.Span {
+    return try store.spanFrom(gpa, "record_destructs", CIR.Pattern.RecordDestruct.Span, start);
 }
 
 /// Returns the current top of the scratch patterns buffer.
@@ -2620,8 +2619,8 @@ pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.Pattern.RecordDestru
 }
 
 /// Creates a pattern span from the given start position to the current top of scratch patterns.
-pub fn patternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Pattern.Span {
-    return try store.spanFrom("patterns", CIR.Pattern.Span, start);
+pub fn patternSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Pattern.Span {
+    return try store.spanFrom(gpa, "patterns", CIR.Pattern.Span, start);
 }
 
 /// Clears scratch definitions starting from a specified index.
@@ -2631,7 +2630,7 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
-    return @ptrCast(store.extra_data.items.items[span.start..][0..span.len]);
+    return @ptrCast(store.extra_data.items.toSlice()[span.start..][0..span.len]);
 }
 
 /// Returns a slice of definitions from the store.
@@ -2681,12 +2680,12 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.Br
 
 /// Creates a slice corresponding to a span.
 pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items.items[span.start]));
+    return @as(T, @enumFromInt(store.extra_data.items.toSlice()[span.start]));
 }
 
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items.items[span.start + span.len - 1]));
+    return @as(T, @enumFromInt(store.extra_data.items.toSlice()[span.start + span.len - 1]));
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -2710,23 +2709,23 @@ pub fn addScratchIfBranch(store: *NodeStore, if_branch_idx: CIR.Expr.IfBranch.Id
 }
 
 /// Creates an if branch span from the given start position to the current top of scratch if branches.
-pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.IfBranch.Span {
-    return try store.spanFrom("if_branches", CIR.Expr.IfBranch.Span, start);
+pub fn ifBranchSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Expr.IfBranch.Span {
+    return try store.spanFrom(gpa, "if_branches", CIR.Expr.IfBranch.Span, start);
 }
 
 /// Adds an if branch to the store and returns its index.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) Allocator.Error!CIR.Expr.IfBranch.Idx {
+pub fn addIfBranch(store: *NodeStore, gpa: Allocator, if_branch: CIR.Expr.IfBranch, region: base.Region) Allocator.Error!CIR.Expr.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),
         .data_2 = @intFromEnum(if_branch.body),
         .data_3 = 0,
         .tag = .if_branch,
     };
-    const node_idx = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
+    const node_idx = try store.nodes.append(gpa, node);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -2772,7 +2771,7 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!CIR.Diagnostic.Idx {
+pub fn addDiagnostic(store: *NodeStore, gpa: Allocator, reason: CIR.Diagnostic) Allocator.Error!CIR.Diagnostic.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -2812,8 +2811,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
 
             // Store original region in extra_data
             const extra_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            _ = try store.extra_data.append(gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(gpa, r.original_region.end.offset);
             node.data_2 = @intCast(extra_start);
         },
         .ident_not_in_scope => |r| {
@@ -3033,8 +3032,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
 
             // Store original region in extra_data
             const extra_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            _ = try store.extra_data.append(gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(gpa, r.original_region.end.offset);
             node.data_3 = @intCast(extra_start);
         },
         .type_parameter_conflict => |r| {
@@ -3043,8 +3042,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.parameter_name);
             const extra_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            _ = try store.extra_data.append(gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(gpa, r.original_region.end.offset);
             node.data_3 = @intCast(extra_start);
         },
         .unused_variable => |r| {
@@ -3097,8 +3096,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         },
     }
 
-    const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
-    _ = try store.regions.append(store.gpa, region);
+    const nid = @intFromEnum(try store.nodes.append(gpa, node));
+    _ = try store.regions.append(gpa, region);
 
     // append to our scratch so we can get a span later of all our diagnostics
     try store.addScratch("diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
@@ -3122,15 +3121,15 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) Allocator.Error!Node.Idx {
+pub fn addMalformed(store: *NodeStore, gpa: Allocator, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) Allocator.Error!Node.Idx {
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
         .data_3 = 0,
         .tag = .malformed,
     };
-    const malformed_nid = try store.nodes.append(store.gpa, malformed_node);
-    _ = try store.regions.append(store.gpa, region);
+    const malformed_nid = try store.nodes.append(gpa, malformed_node);
+    _ = try store.regions.append(gpa, region);
     return malformed_nid;
 }
 
@@ -3162,7 +3161,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_redundant_exposed => {
-            const extra_data = store.extra_data.items.items[node.data_2..];
+            const extra_data = store.extra_data.items.toSlice()[node.data_2..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return CIR.Diagnostic{ .redundant_exposed = .{
@@ -3350,7 +3349,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             },
         } },
         .diag_type_shadowed_warning => {
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items.toSlice()[node.data_3..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return CIR.Diagnostic{ .type_shadowed_warning = .{
@@ -3364,7 +3363,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_type_parameter_conflict => {
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items.toSlice()[node.data_3..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return CIR.Diagnostic{ .type_parameter_conflict = .{
@@ -3425,15 +3424,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
 }
 
 /// Computes the span of a diagnostic starting from a given index.
-pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Diagnostic.Span {
-    return try store.spanFrom("diagnostics", CIR.Diagnostic.Span, start);
+pub fn diagnosticSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Diagnostic.Span {
+    return try store.spanFrom(gpa, "diagnostics", CIR.Diagnostic.Span, start);
 }
 
 /// Ensure the node store has capacity for at least the requested number of
 /// slots. Then return the *final* index.
-pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx {
+pub fn predictNodeIndex(store: *NodeStore, gpa: Allocator, count: u32) Allocator.Error!Node.Idx {
     const start_idx = store.nodes.len();
-    try store.nodes.ensureTotalCapacity(store.gpa, start_idx + count);
+    try store.nodes.ensureTotalCapacity(gpa, start_idx + count);
     // Return where the LAST node will actually be placed
     return @enumFromInt(start_idx + count - 1);
 }
@@ -3442,14 +3441,14 @@ pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx 
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
-    const nid = try store.nodes.append(store.gpa, .{
+pub fn addTypeVarSlot(store: *NodeStore, gpa: Allocator, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
+    const nid = try store.nodes.append(gpa, .{
         .tag = .type_var_slot,
         .data_1 = @intFromEnum(parent_node_idx),
         .data_2 = 0,
         .data_3 = 0,
     });
-    _ = try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -3457,17 +3456,17 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
 /// If it is, do nothing
 /// If it's not, then fill in the store with type_var_slots for all missing
 /// intervening nodes, *up to and including* the provided node
-pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) Allocator.Error!void {
+pub fn fillInTypeVarSlotsThru(store: *NodeStore, gpa: Allocator, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) Allocator.Error!void {
     const idx = @intFromEnum(target_idx);
-    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
-    while (store.nodes.items.len <= idx) {
-        store.nodes.items.appendAssumeCapacity(.{
+    try store.nodes.ensureTotalCapacity(gpa, idx);
+    while (store.nodes.len() <= idx) {
+        _ = store.nodes.appendAssumeCapacity(.{
             .tag = .type_var_slot,
             .data_1 = @intFromEnum(parent_node_idx),
             .data_2 = 0,
             .data_3 = 0,
         });
-        _ = try store.regions.append(store.gpa, region);
+        _ = try store.regions.append(gpa, region);
     }
 }
 
@@ -3482,8 +3481,8 @@ pub fn addScratchMatchBranch(store: *NodeStore, branch_idx: CIR.Expr.Match.Branc
 }
 
 /// Create a span from the scratch match branches starting at the given index.
-pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Match.Branch.Span {
-    return try store.spanFrom("match_branches", CIR.Expr.Match.Branch.Span, start);
+pub fn matchBranchSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Expr.Match.Branch.Span {
+    return try store.spanFrom(gpa, "match_branches", CIR.Expr.Match.Branch.Span, start);
 }
 
 /// Return the current top index for scratch match branch patterns.
@@ -3497,8 +3496,8 @@ pub fn addScratchMatchBranchPattern(store: *NodeStore, pattern_idx: CIR.Expr.Mat
 }
 
 /// Create a span from the scratch match branch patterns starting at the given index.
-pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Match.BranchPattern.Span {
-    return try store.spanFrom("match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
+pub fn matchBranchPatternSpanFrom(store: *NodeStore, gpa: Allocator, start: u32) Allocator.Error!CIR.Expr.Match.BranchPattern.Span {
+    return try store.spanFrom(gpa, "match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
 }
 
 /// Serialized representation of NodeStore
@@ -3526,7 +3525,7 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub noinline fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
+    pub noinline fn deserialize(self: *Serialized, offset: i64) *NodeStore {
         // Note: Serialized may be smaller than the runtime struct.
         // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
@@ -3541,7 +3540,6 @@ pub const Serialized = extern struct {
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
 
         store.* = NodeStore{
-            .gpa = gpa,
             .nodes = deserialized_nodes,
             .regions = deserialized_regions,
             .extra_data = deserialized_extra_data,
@@ -3558,7 +3556,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 
     // Create an empty NodeStore
     var original = try NodeStore.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -3587,7 +3585,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
@@ -3601,7 +3599,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Create NodeStore and add some nodes
     var original = try NodeStore.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Add a simple expression node
     const node1 = Node{
@@ -3654,7 +3652,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
@@ -3664,7 +3662,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify extra_data
     try testing.expectEqual(@as(usize, 4), deserialized.extra_data.len());
-    const retrieved_u32s = deserialized.extra_data.items.items[0..4];
+    const retrieved_u32s = deserialized.extra_data.items.toSlice()[0..4];
     const retrieved_bytes: [16]u8 = @bitCast(retrieved_u32s.*);
     const retrieved_value: i128 = @bitCast(retrieved_bytes);
     try testing.expectEqual(@as(i128, 42), retrieved_value);
@@ -3682,7 +3680,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
 
     // Create NodeStore with various node types
     var original = try NodeStore.init(gpa);
-    defer original.deinit();
+    defer original.deinit(gpa, );
 
     // Add expression variable node
     const var_node = Node{
@@ -3756,7 +3754,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
@@ -3775,7 +3773,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify float node and extra data
     const retrieved_float = deserialized.nodes.get(@enumFromInt(2));
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
-    const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
+    const retrieved_float_u32s = deserialized.extra_data.items.toSlice()[0..2];
     const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);
     const retrieved_float_value: f64 = @bitCast(retrieved_float_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);

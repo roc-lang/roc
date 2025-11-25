@@ -15,7 +15,9 @@ pub const Idx = enum(u32) { _ };
 /// We avoid using the SmallStringInterner for string literals since
 /// they are expected to be almost all unique and also larger, meaning
 /// not worth the equality checking cost for depuplicating.
-pub const Store = struct {
+///
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Store = extern struct {
     /// An Idx points to the
     /// first byte of the string. The previous
     /// 4 bytes encode it's length.
@@ -67,8 +69,8 @@ pub const Store = struct {
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
-        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.items[idx_u32 - 4 .. idx_u32]).*;
-        return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
+        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.toSlice()[idx_u32 - 4 .. idx_u32]).*;
+        return self.buffer.items.toSlice()[idx_u32 .. idx_u32 + str_len];
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -114,8 +116,9 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub noinline fn deserialize(self: *Serialized, offset: i64) *Store {
-            // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
-            // output struct to avoid aliasing issues in Release mode.
+            // NOTE: StringLiteral.Store is now an extern struct, but we still deserialize to locals
+            // because Serialized uses SafeList.Serialized while the runtime type uses SafeList.
+            // Once SafeList.Serialized = SafeList (as an alias), this pattern can be simplified.
 
             // Step 1: Deserialize all fields into local variables first
             const deserialized_buffer = self.buffer.deserialize(offset).*;

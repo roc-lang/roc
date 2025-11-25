@@ -64,7 +64,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
         .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
@@ -72,10 +72,10 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
-        .module_name = module_name,
+        .module_name = collections.SafeSlice(u8).fromSlice(module_name),
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr))).*,
         .evaluation_order = null,
         // Well-known identifiers for type checking - look them up in the deserialized common env
         // These must exist in the Builtin module which defines them

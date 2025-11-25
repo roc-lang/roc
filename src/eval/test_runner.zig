@@ -280,7 +280,7 @@ pub const TestRunner = struct {
                     region_info,
                     .error_highlight,
                     filename,
-                    self.env.common.source,
+                    self.env.common.source.toSlice(),
                     self.env.getLineStarts(),
                 );
                 try report.document.addLineBreak();
@@ -306,7 +306,7 @@ pub const TestRunner = struct {
                     region_info,
                     .error_highlight,
                     filename,
-                    self.env.common.source,
+                    self.env.common.source.toSlice(),
                     self.env.getLineStarts(),
                 );
                 try report.document.addLineBreak();
@@ -347,7 +347,7 @@ pub const TestRunner = struct {
                     region_info,
                     .error_highlight,
                     filename,
-                    self.env.common.source,
+                    self.env.common.source.toSlice(),
                     self.env.getLineStarts(),
                 );
                 try report.document.addLineBreak();

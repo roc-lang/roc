@@ -1478,7 +1478,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         // and scopeLookupModule returns "pf.Stdout" which becomes part of the qualified name.
         // We need to add aliases that match this pattern.
         module_env_ptr.common.exposed_items.ensureSorted(shm_allocator);
-        const exposed_entries = module_env_ptr.common.exposed_items.items.entries.items;
+        const exposed_entries = module_env_ptr.common.exposed_items.items.entries.items.toSlice();
         for (exposed_entries) |entry| {
             const key_ident: base.Ident.Idx = @bitCast(entry.key);
             const key_text = module_env_ptr.common.getIdent(key_ident);
@@ -1557,7 +1557,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
                     const hosted = expr.e_hosted_lambda;
                     const local_name = platform_env.getIdent(hosted.symbol_name);
 
-                    var plat_module_name = platform_env.module_name;
+                    var plat_module_name = platform_env.module_name.toSliceConst();
                     if (std.mem.endsWith(u8, plat_module_name, ".roc")) {
                         plat_module_name = plat_module_name[0 .. plat_module_name.len - 4];
                     }
@@ -1600,8 +1600,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const app_module_name = try shm_allocator.dupe(u8, app_basename);
 
     var app_env = try ModuleEnv.init(shm_allocator, app_source);
-    app_env.common.source = app_source;
-    app_env.module_name = app_module_name;
+    app_env.common.source = collections.SafeSlice(u8).fromSlice(app_source);
+    app_env.module_name = collections.SafeSlice(u8).fromSlice(app_module_name);
     try app_env.common.calcLineStarts(shm_allocator);
 
     var app_parse_ast = try parse.parse(&app_env.common, allocs.gpa);
@@ -1725,8 +1725,8 @@ fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const
     var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
     defer env.deinit();
 
-    env.common.source = source;
-    env.module_name = module_name;
+    env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    env.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     try env.common.calcLineStarts(allocs.gpa);
 
     // Parse the source code as a full module
@@ -1783,8 +1783,8 @@ fn compileModuleToSharedMemory(
 
     // Initialize ModuleEnv
     var env = try ModuleEnv.init(shm_allocator, source);
-    env.common.source = source;
-    env.module_name = module_name_copy;
+    env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    env.module_name = collections.SafeSlice(u8).fromSlice(module_name_copy);
     try env.common.calcLineStarts(shm_allocator);
 
     // Parse
@@ -2153,8 +2153,8 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
     var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
     defer env.deinit();
 
-    env.common.source = source;
-    env.module_name = module_name;
+    env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    env.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     try env.common.calcLineStarts(allocs.gpa);
 
     // Parse the source code as a full module
@@ -2808,8 +2808,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
     defer env.deinit();
 
-    env.common.source = source;
-    env.module_name = module_name;
+    env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    env.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     try env.common.calcLineStarts(allocs.gpa);
 
     const module_common_idents: Check.CommonIdents = .{

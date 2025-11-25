@@ -12,25 +12,33 @@ const serialization = @import("serialization");
 
 const Region = @import("Region.zig");
 const CompactWriter = collections.CompactWriter;
-
-const SmallStringInterner = @This();
-
-/// The raw underlying bytes for all strings.
-/// Since strings are small, they are simply null terminated.
-/// This uses only 1 byte to encode the size and is cheap to scan.
-bytes: collections.SafeList(u8) = .{},
-/// A hash table using linear probing to map hashes to string indices.
-/// Each slot contains an Idx pointing to the start of a string in bytes.
-/// A value of .unused (0) indicates an empty slot.
-hash_table: collections.SafeList(Idx) = .{},
-/// The current number of entries in the hash table.
-entry_count: u32 = 0,
+const SafeList = collections.SafeList;
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
     unused = 0,
     _,
 };
+
+/// SmallStringInterner is now an extern struct for consistent memory layout
+/// across optimization levels, enabling direct pointer casting during deserialization.
+const FileLevelIdx = Idx;
+
+pub const SmallStringInterner = extern struct {
+    /// Re-export Idx for convenient access as SmallStringInterner.Idx
+    pub const Idx = FileLevelIdx;
+
+    /// The raw underlying bytes for all strings.
+    /// Since strings are small, they are simply null terminated.
+    /// This uses only 1 byte to encode the size and is cheap to scan.
+    bytes: SafeList(u8) = .{},
+    /// A hash table using linear probing to map hashes to string indices.
+    /// Each slot contains an Idx pointing to the start of a string in bytes.
+    /// A value of .unused (0) indicates an empty slot.
+    hash_table: SafeList(FileLevelIdx) = .{},
+    /// The current number of entries in the hash table.
+    entry_count: u32 = 0,
+    _padding: u32 = 0, // Padding for 8-byte alignment
 
 /// Initialize a `SmallStringInterner` with the specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!SmallStringInterner {
@@ -44,7 +52,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     var self = SmallStringInterner{
         .bytes = collections.SafeList(u8){},
-        .hash_table = collections.SafeList(Idx){},
+        .hash_table = collections.SafeList(FileLevelIdx){},
         .entry_count = 0,
     };
 
@@ -55,10 +63,10 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     _ = try self.bytes.append(gpa, 0);
 
     // Initialize hash table with all zeros (Idx.unused)
-    self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
+    self.hash_table = try collections.SafeList(FileLevelIdx).initCapacity(gpa, hash_table_capacity);
     try self.hash_table.items.ensureTotalCapacityPrecise(gpa, hash_table_capacity);
-    self.hash_table.items.items.len = hash_table_capacity;
-    @memset(self.hash_table.items.items, .unused);
+    self.hash_table.items.setLen(hash_table_capacity);
+    @memset(self.hash_table.items.toSlice(), .unused);
 
     return self;
 }
@@ -72,13 +80,13 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
 
 /// Find a string in the hash table using linear probing.
 /// Returns the Idx if found, or the slot index where it should be inserted if not found.
-pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) struct { idx: ?Idx, slot: u64 } {
+pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) struct { idx: ?FileLevelIdx, slot: u64 } {
     const hash = std.hash.Fnv1a_32.hash(string);
     const table_size = self.hash_table.len();
     var slot: usize = @intCast(hash % table_size);
 
     while (true) {
-        const idx_at_slot = self.hash_table.items.items[slot];
+        const idx_at_slot = self.hash_table.items.toSlice()[slot];
 
         if (idx_at_slot == .unused) {
             // Empty slot - string not found
@@ -92,9 +100,9 @@ pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) st
         // If the stored string would have had to go past the end of bytes,
         // they must not be equal. Also if there isn't a null terminator
         // right where we expect, they must not be equal.
-        if (stored_end < self.bytes.len() and self.bytes.items.items[stored_end] == 0) {
+        if (stored_end < self.bytes.len() and self.bytes.items.toSlice()[stored_end] == 0) {
             // With that out of the way, we can safely compare the string contents.
-            if (std.mem.eql(u8, string, self.bytes.items.items[stored_idx..stored_end])) {
+            if (std.mem.eql(u8, string, self.bytes.items.toSlice()[stored_idx..stored_end])) {
                 // Found the string!
                 return .{ .idx = idx_at_slot, .slot = slot };
             }
@@ -111,18 +119,18 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
     const new_size: usize = @intCast(old_table.len() * 2);
 
     // Create new hash table initialized to zeros
-    self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, new_size);
+    self.hash_table = try collections.SafeList(FileLevelIdx).initCapacity(gpa, new_size);
     try self.hash_table.items.ensureTotalCapacityPrecise(gpa, new_size);
-    self.hash_table.items.items.len = new_size;
-    @memset(self.hash_table.items.items, .unused);
+    self.hash_table.items.setLen(new_size);
+    @memset(self.hash_table.items.toSlice(), .unused);
 
     // Rehash all existing entries
-    for (old_table.items.items) |idx| {
+    for (old_table.items.toSlice()) |idx| {
         if (idx != .unused) {
             // Get the string for this index
             const string = self.getText(idx);
             const result = self.findStringOrSlot(string);
-            self.hash_table.items.items[@intCast(result.slot)] = idx;
+            self.hash_table.items.toSlice()[@intCast(result.slot)] = idx;
         }
     }
 
@@ -130,7 +138,7 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 }
 
 /// Add a string to this interner, returning a unique, serial index.
-pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!FileLevelIdx {
     // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
     if (self.entry_count * 5 >= self.hash_table.len() * 4) {
         try self.resizeHashTable(gpa);
@@ -144,13 +152,13 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
         return existing_idx;
     } else {
         // String doesn't exist, add it to bytes
-        const new_offset: Idx = @enumFromInt(self.bytes.len());
+        const new_offset: FileLevelIdx = @enumFromInt(self.bytes.len());
 
         _ = try self.bytes.appendSlice(gpa, string);
         _ = try self.bytes.append(gpa, 0);
 
         // Add to hash table
-        self.hash_table.items.items[@intCast(result.slot)] = new_offset;
+        self.hash_table.items.toSlice()[@intCast(result.slot)] = new_offset;
         self.entry_count += 1;
 
         return new_offset;
@@ -164,8 +172,8 @@ pub fn contains(self: *const SmallStringInterner, string: []const u8) bool {
 }
 
 /// Get a reference to the text for an interned string.
-pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
-    const bytes_slice = self.bytes.items.items;
+pub fn getText(self: *const SmallStringInterner, idx: FileLevelIdx) []u8 {
+    const bytes_slice = self.bytes.items.toSlice();
     const start = @intFromEnum(idx);
 
     return std.mem.sliceTo(bytes_slice[start..], 0);
@@ -207,7 +215,7 @@ pub fn relocate(self: *SmallStringInterner, offset: isize) void {
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
 pub const Serialized = extern struct {
     bytes: collections.SafeList(u8).Serialized,
-    hash_table: collections.SafeList(Idx).Serialized,
+    hash_table: collections.SafeList(FileLevelIdx).Serialized,
     entry_count: u32,
 
     /// Serialize a SmallStringInterner into this Serialized struct, appending data to the writer
@@ -227,11 +235,9 @@ pub const Serialized = extern struct {
 
     /// Deserialize this Serialized struct into a SmallStringInterner
     pub noinline fn deserialize(self: *Serialized, offset: i64) *SmallStringInterner {
-        // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
-        // output struct. This is because SmallStringInterner is a regular struct (not extern), so Zig may
-        // reorder its fields differently than Serialized (which is extern). If we read from self
-        // while writing to interner (which aliases self), we may read corrupted data in Release mode
-        // when field orderings differ.
+        // NOTE: SmallStringInterner is now an extern struct, but we still deserialize to locals
+        // because Serialized uses SafeList.Serialized types while the runtime type uses SafeList.
+        // Once SafeList.Serialized = SafeList (as an alias), this pattern can be simplified.
 
         // Step 1: Deserialize all fields into local variables first
         const deserialized_bytes = self.bytes.deserialize(offset).*;
@@ -250,6 +256,8 @@ pub const Serialized = extern struct {
         return interner;
     }
 };
+
+}; // End of SmallStringInterner extern struct
 
 test "SmallStringInterner empty CompactWriter roundtrip" {
     const gpa = std.testing.allocator;

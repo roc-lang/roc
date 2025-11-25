@@ -8,7 +8,7 @@ pub const StringLiteral = @import("StringLiteral.zig");
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
-pub const SmallStringInterner = @import("SmallStringInterner.zig");
+pub const SmallStringInterner = @import("SmallStringInterner.zig").SmallStringInterner;
 
 pub const safe_memory = @import("safe_memory.zig");
 
@@ -18,7 +18,7 @@ pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
-pub const CommonEnv = @import("CommonEnv.zig");
+pub const CommonEnv = @import("CommonEnv.zig").CommonEnv;
 
 test {
     _ = @import("Ident.zig");
@@ -147,7 +147,7 @@ pub const Allocators = struct {
 };
 
 test "base tests" {
-    std.testing.refAllDecls(@import("CommonEnv.zig"));
+    std.testing.refAllDecls(@import("CommonEnv.zig").CommonEnv);
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));

@@ -49,7 +49,7 @@ pub fn copyVar(
     }
 
     // Create a placeholder variable first to break cycles
-    const placeholder_var = try dest_store.fresh();
+    const placeholder_var = try dest_store.fresh(allocator);
 
     // Record the mapping immediately to handle recursive types
     try var_mapping.put(resolved.var_, placeholder_var);
@@ -171,19 +171,19 @@ fn copyAlias(
     const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     var dest_args = std.ArrayList(Var).empty;
-    defer dest_args.deinit(dest_store.gpa);
+    defer dest_args.deinit(allocator);
 
     const origin_backing = source_store.getAliasBackingVar(source_alias);
     const dest_backing = try copyVar(source_store, dest_store, origin_backing, var_mapping, source_idents, dest_idents, allocator);
-    try dest_args.append(dest_store.gpa, dest_backing);
+    try dest_args.append(allocator, dest_backing);
 
     const origin_args = source_store.sliceAliasArgs(source_alias);
     for (origin_args) |arg_var| {
         const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_args.append(dest_store.gpa, dest_arg);
+        try dest_args.append(allocator, dest_arg);
     }
 
-    const dest_vars_span = try dest_store.appendVars(dest_args.items);
+    const dest_vars_span = try dest_store.appendVars(allocator, dest_args.items);
 
     return Alias{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
@@ -226,14 +226,14 @@ fn copyTuple(
     const elems_slice = source_store.sliceVars(tuple.elems);
 
     var dest_elems = std.ArrayList(Var).empty;
-    defer dest_elems.deinit(dest_store.gpa);
+    defer dest_elems.deinit(allocator);
 
     for (elems_slice) |elem_var| {
         const dest_elem = try copyVar(source_store, dest_store, elem_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_elems.append(dest_store.gpa, dest_elem);
+        try dest_elems.append(allocator, dest_elem);
     }
 
-    const dest_range = try dest_store.appendVars(dest_elems.items);
+    const dest_range = try dest_store.appendVars(allocator, dest_elems.items);
     return types_mod.Tuple{ .elems = dest_range };
 }
 fn copyFunc(
@@ -249,14 +249,14 @@ fn copyFunc(
     const end_idx: usize = start_idx + func.args.count;
 
     // Validate the range before slicing
-    if (end_idx > source_store.vars.items.items.len) {
+    if (end_idx > source_store.vars.items.len) {
         // The function's arg range is invalid - this can happen if the function
         // type was created with a range from a different store or the store was modified
         // For now, handle gracefully by returning an empty args function
         // Return a function with no args for now to avoid the crash
         // TODO: Investigate why this happens and fix the root cause
         return Func{
-            .args = try dest_store.appendVars(&.{}),
+            .args = try dest_store.appendVars(allocator, &.{}),
             .ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator),
             .needs_instantiation = func.needs_instantiation,
         };
@@ -265,16 +265,16 @@ fn copyFunc(
     const args_slice = source_store.sliceVars(func.args);
 
     var dest_args = std.ArrayList(Var).empty;
-    defer dest_args.deinit(dest_store.gpa);
+    defer dest_args.deinit(allocator);
 
     for (args_slice) |arg_var| {
         const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_args.append(dest_store.gpa, dest_arg);
+        try dest_args.append(allocator, dest_arg);
     }
 
     const dest_ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator);
 
-    const dest_args_range = try dest_store.appendVars(dest_args.items);
+    const dest_args_range = try dest_store.appendVars(allocator, dest_args.items);
     return Func{
         .args = dest_args_range,
         .ret = dest_ret,
@@ -305,7 +305,7 @@ fn copyRecordFields(
         });
     }
 
-    return try dest_store.appendRecordFields(fresh_fields.items);
+    return try dest_store.appendRecordFields(allocator, fresh_fields.items);
 }
 
 fn copyRecord(
@@ -351,14 +351,14 @@ fn copyTagUnion(
         const args_slice = source_store.sliceVars(args_range);
 
         var dest_args = std.ArrayList(Var).empty;
-        defer dest_args.deinit(dest_store.gpa);
+        defer dest_args.deinit(allocator);
 
         for (args_slice) |arg_var| {
             const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-            try dest_args.append(dest_store.gpa, dest_arg);
+            try dest_args.append(allocator, dest_arg);
         }
 
-        const dest_args_range = try dest_store.appendVars(dest_args.items);
+        const dest_args_range = try dest_store.appendVars(allocator, dest_args.items);
 
         const name_str = source_idents.getText(name);
         const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
@@ -369,7 +369,7 @@ fn copyTagUnion(
         });
     }
 
-    const tags_range = try dest_store.appendTags(fresh_tags.items);
+    const tags_range = try dest_store.appendTags(allocator, fresh_tags.items);
     return TagUnion{
         .tags = tags_range,
         .ext = try copyVar(source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),
@@ -395,19 +395,19 @@ fn copyNominalType(
     const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
 
     var dest_args = std.ArrayList(Var).empty;
-    defer dest_args.deinit(dest_store.gpa);
+    defer dest_args.deinit(allocator);
 
     const origin_backing = source_store.getNominalBackingVar(source_nominal);
     const dest_backing = try copyVar(source_store, dest_store, origin_backing, var_mapping, source_idents, dest_idents, allocator);
-    try dest_args.append(dest_store.gpa, dest_backing);
+    try dest_args.append(allocator, dest_backing);
 
     const origin_args = source_store.sliceNominalArgs(source_nominal);
     for (origin_args) |arg_var| {
         const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_args.append(dest_store.gpa, dest_arg);
+        try dest_args.append(allocator, dest_arg);
     }
 
-    const dest_vars_span = try dest_store.appendVars(dest_args.items);
+    const dest_vars_span = try dest_store.appendVars(allocator, dest_args.items);
 
     return NominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
@@ -430,7 +430,7 @@ fn copyStaticDispatchConstraints(
         return StaticDispatchConstraint.SafeList.Range.empty();
     } else {
         // Setup tmp state
-        var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
+        var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(allocator, source_constraints_len);
         defer dest_constraints.deinit();
 
         // Iterate over the constraints
@@ -446,7 +446,7 @@ fn copyStaticDispatchConstraints(
             });
         }
 
-        const dest_constraints_range = try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
+        const dest_constraints_range = try dest_store.appendStaticDispatchConstraints(allocator, dest_constraints.items);
         return dest_constraints_range;
     }
 }

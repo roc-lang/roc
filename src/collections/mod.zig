@@ -11,6 +11,7 @@ const std = @import("std");
 /// in the interpreter for stack allocations.
 pub const max_roc_alignment: std.mem.Alignment = .@"16";
 
+pub const SafeSlice = @import("SafeSlice.zig").SafeSlice;
 pub const SafeList = @import("safe_list.zig").SafeList;
 pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
@@ -102,5 +103,6 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("SafeSlice.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
 }

@@ -116,7 +116,7 @@ external_decls: CIR.ExternalDecl.SafeList,
 imports: CIR.Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
-module_name: []const u8,
+module_name: collections.SafeSlice(u8),
 /// The module's name as an interned identifier (for fast comparisons)
 module_name_idx: Ident.Idx,
 /// Diagnostics collected during canonicalization (optional)
@@ -213,7 +213,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
-    self.module_name = module_name;
+    self.module_name = collections.SafeSlice(u8).fromSlice(module_name);
     self.module_name_idx = try self.insertIdent(Ident.for_text(module_name));
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
@@ -305,12 +305,12 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
-    self.types.deinit();
+    self.types.deinit(self.gpa);
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
-    self.store.deinit();
+    self.store.deinit(self.gpa);
 
     if (self.evaluation_order) |eval_order| {
         eval_order.deinit();
@@ -355,7 +355,7 @@ pub const castIdx = CIR.castIdx;
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
     // Get all diagnostics from the store, not just the ones in self.diagnostics span
-    const all_diagnostics = try self.store.diagnosticSpanFrom(0);
+    const all_diagnostics = try self.store.diagnosticSpanFrom(self.gpa, 0);
     const diagnostic_indices = self.store.sliceDiagnostics(all_diagnostics);
     const diagnostics = try self.gpa.alloc(CIR.Diagnostic, diagnostic_indices.len);
     for (diagnostic_indices, 0..) |diagnostic_idx, i| {
@@ -1691,7 +1691,7 @@ pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
 
 /// Extract a literal from source code between given byte offsets
 pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32) []const u8 {
-    return self.common.source[start_offset..end_offset];
+    return self.common.source.toSlice()[start_offset..end_offset];
 }
 
 /// Get the source line for a given region
@@ -1745,7 +1745,7 @@ pub const Serialized = extern struct {
         writer: *CompactWriter,
     ) !void {
         try self.common.serialize(&env.common, allocator, writer);
-        try self.types.serialize(&env.types, allocator, writer);
+        self.types = (try env.types.serialize(allocator, writer)).*;
 
         // Copy simple values directly
         self.module_kind = ModuleKind.Serialized.encode(env.module_kind);
@@ -1803,17 +1803,15 @@ pub const Serialized = extern struct {
         // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
         comptime std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
 
-        // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
-        // output struct. This is because ModuleEnv is a regular struct (not extern), so Zig may
-        // reorder its fields differently than Serialized (which is extern). If we read from self
-        // while writing to env (which aliases self), we may read corrupted data in Release mode
-        // when field orderings differ.
-        //
-        // Following the same pattern as NodeStore.deserialize to avoid aliasing issues.
+        // NOTE: ModuleEnv is still a regular struct (not extern) because it contains:
+        // - std.mem.Allocator (gpa) - not extern-compatible due to function pointers
+        // - TypeStore, NodeStore - also not extern structs
+        // - ?*DependencyGraph.EvaluationOrder - optional pointer not extern-compatible
+        // We still deserialize to locals to avoid aliasing issues between Serialized and Self.
 
         // Step 1: Deserialize all complex fields into local variables first
         const deserialized_common = self.common.deserialize(offset, source).*;
-        const deserialized_types = self.types.deserialize(offset, gpa).*;
+        const deserialized_types = self.types.deserialize(offset).*;
         const deserialized_module_kind = self.module_kind.decode();
         const deserialized_all_defs = self.all_defs;
         const deserialized_all_statements = self.all_statements;
@@ -1822,7 +1820,7 @@ pub const Serialized = extern struct {
         const deserialized_external_decls = self.external_decls.deserialize(offset).*;
         const deserialized_imports = (try self.imports.deserialize(offset, gpa)).*;
         const deserialized_diagnostics = self.diagnostics;
-        const deserialized_store = self.store.deserialize(offset, gpa).*;
+        const deserialized_store = self.store.deserialize(offset).*;
         const deserialized_deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*;
 
         // Step 2: Overwrite ourself with the deserialized version
@@ -1839,7 +1837,7 @@ pub const Serialized = extern struct {
             .builtin_statements = deserialized_builtin_statements,
             .external_decls = deserialized_external_decls,
             .imports = deserialized_imports,
-            .module_name = module_name,
+            .module_name = collections.SafeSlice(u8).fromSlice(module_name),
             .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = deserialized_diagnostics,
             .store = deserialized_store,
@@ -1920,7 +1918,7 @@ pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
-        const cir_nodes = self.store.nodes.items.len;
+        const cir_nodes = self.store.nodes.len();
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
@@ -1950,7 +1948,7 @@ inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: any
 /// Add a new expression to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
-    const expr_idx = try self.store.addDef(expr, region);
+    const expr_idx = try self.store.addDef(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1958,7 +1956,7 @@ pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Erro
 /// Add a new type header to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
-    const expr_idx = try self.store.addTypeHeader(expr, region);
+    const expr_idx = try self.store.addTypeHeader(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1966,7 +1964,7 @@ pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.
 /// Add a new statement to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
-    const expr_idx = try self.store.addStatement(expr, region);
+    const expr_idx = try self.store.addStatement(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1974,7 +1972,7 @@ pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Al
 /// Add a new pattern to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    const expr_idx = try self.store.addPattern(expr, region);
+    const expr_idx = try self.store.addPattern(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1982,7 +1980,7 @@ pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Alloca
 /// Add a new expression to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
-    const expr_idx = try self.store.addExpr(expr, region);
+    const expr_idx = try self.store.addExpr(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1990,7 +1988,7 @@ pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Er
 /// Add a new capture to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
-    const capture_idx = try self.store.addCapture(capture, region);
+    const capture_idx = try self.store.addCapture(self.gpa, capture, region);
     self.debugAssertArraysInSync();
     return capture_idx;
 }
@@ -1998,7 +1996,7 @@ pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.me
 /// Add a new record field to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
-    const expr_idx = try self.store.addRecordField(expr, region);
+    const expr_idx = try self.store.addRecordField(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2006,7 +2004,7 @@ pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.me
 /// Add a new record destructuring to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const expr_idx = try self.store.addRecordDestruct(expr, region);
+    const expr_idx = try self.store.addRecordDestruct(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2014,7 +2012,7 @@ pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: 
 /// Adds a new if branch to the store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const expr_idx = try self.store.addIfBranch(expr, region);
+    const expr_idx = try self.store.addIfBranch(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2022,7 +2020,7 @@ pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem
 /// Add a new match branch to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
-    const expr_idx = try self.store.addMatchBranch(expr, region);
+    const expr_idx = try self.store.addMatchBranch(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2030,7 +2028,7 @@ pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) 
 /// Add a new where clause to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
-    const expr_idx = try self.store.addWhereClause(expr, region);
+    const expr_idx = try self.store.addWhereClause(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2038,7 +2036,7 @@ pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.me
 /// Add a new type annotation to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
-    const expr_idx = try self.store.addTypeAnno(expr, region);
+    const expr_idx = try self.store.addTypeAnno(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2046,7 +2044,7 @@ pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allo
 /// Add a new annotation to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
-    const expr_idx = try self.store.addAnnotation(expr, region);
+    const expr_idx = try self.store.addAnnotation(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2054,7 +2052,7 @@ pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.
 /// Add a new record field to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    const expr_idx = try self.store.addAnnoRecordField(expr, region);
+    const expr_idx = try self.store.addAnnoRecordField(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2062,7 +2060,7 @@ pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: R
 /// Add a new exposed item to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
-    const expr_idx = try self.store.addExposedItem(expr, region);
+    const expr_idx = try self.store.addExposedItem(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2070,7 +2068,7 @@ pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.me
 /// Add a diagnostic.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!CIR.Diagnostic.Idx {
-    const expr_idx = try self.store.addDiagnostic(reason);
+    const expr_idx = try self.store.addDiagnostic(self.gpa, reason);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -2078,7 +2076,7 @@ pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Erro
 /// Add a new malformed node to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
-    const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
+    const malformed_idx = try self.store.addMalformed(self.gpa, diagnostic_idx, region);
     self.debugAssertArraysInSync();
     return malformed_idx;
 }
@@ -2086,7 +2084,7 @@ pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Reg
 /// Add a new match branch pattern to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    const expr_idx = try self.store.addMatchBranchPattern(expr, region);
+    const expr_idx = try self.store.addMatchBranchPattern(self.gpa, expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
 }

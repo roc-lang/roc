@@ -272,7 +272,7 @@ pub const Store = struct {
             AlignmentSortCtx.lessThan,
         );
 
-        const fields_start = self.record_fields.items.len;
+        const fields_start = self.record_fields.len();
         for (temp_fields.items) |sorted_field| {
             _ = try self.record_fields.append(self.env.gpa, sorted_field);
         }
@@ -341,7 +341,7 @@ pub const Store = struct {
         );
 
         // Append fields
-        const fields_start = self.tuple_fields.items.len;
+        const fields_start = self.tuple_fields.len();
         for (temp_fields.items) |sorted_field| {
             _ = try self.tuple_fields.append(self.env.gpa, sorted_field);
         }
@@ -467,7 +467,7 @@ pub const Store = struct {
     /// Get or create an empty record layout (for closures with no captures)
     fn getEmptyRecordLayout(self: *Self) !Idx {
         // Check if we already have an empty record layout
-        for (self.record_data.items.items, 0..) |record_data, i| {
+        for (self.record_data.items.toSlice(), 0..) |record_data, i| {
             if (record_data.size == 0 and record_data.fields.count == 0) {
                 const record_idx = RecordIdx{ .int_idx = @intCast(i) };
                 const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
@@ -682,7 +682,7 @@ pub const Store = struct {
         const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_record_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
-        const fields_start = self.record_fields.items.len;
+        const fields_start = self.record_fields.len();
 
         // Copy only this record's resolved fields to the record_fields store
         const field_names = self.work.resolved_record_fields.items(.field_name);
@@ -783,7 +783,7 @@ pub const Store = struct {
         const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_tuple_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_tuple.resolved_fields_start;
-        const fields_start = self.tuple_fields.items.len;
+        const fields_start = self.tuple_fields.len();
 
         // Copy only this tuple's resolved fields to the tuple_fields store
         const field_indices = self.work.resolved_tuple_fields.items(.field_index);

@@ -15,22 +15,24 @@ const RegionInfo = @import("RegionInfo.zig");
 const Region = @import("Region.zig");
 const SExprTree = @import("SExprTree.zig");
 const SafeList = collections.SafeList;
+const SafeSlice = collections.SafeSlice;
 const ExposedItems = collections.ExposedItems;
 const CompactWriter = collections.CompactWriter;
 
-const CommonEnv = @This();
-
-idents: Ident.Store,
-// ident_ids_for_slicing: SafeList(Ident.Idx),
-strings: StringLiteral.Store,
-/// The items (a combination of types and values) that this module exposes
-exposed_items: ExposedItems,
-/// Line starts for error reporting. We retain only start and offset positions in the IR
-/// and then use these line starts to calculate the line number and column number as required.
-/// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
-line_starts: SafeList(u32),
-/// The source code of this module.
-source: []const u8,
+/// CommonEnv provides shared environment state that is common across all modules.
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const CommonEnv = extern struct {
+    idents: Ident.Store,
+    // ident_ids_for_slicing: SafeList(Ident.Idx),
+    strings: StringLiteral.Store,
+    /// The items (a combination of types and values) that this module exposes
+    exposed_items: ExposedItems,
+    /// Line starts for error reporting. We retain only start and offset positions in the IR
+    /// and then use these line starts to calculate the line number and column number as required.
+    /// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
+    line_starts: SafeList(u32),
+    /// The source code of this module.
+    source: SafeSlice(u8),
 
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!CommonEnv {
     return CommonEnv{
@@ -38,7 +40,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .exposed_items = ExposedItems.init(),
         .line_starts = try SafeList(u32).initCapacity(gpa, 256),
-        .source = source,
+        .source = SafeSlice(u8).fromSlice(source),
     };
 }
 
@@ -60,40 +62,18 @@ pub fn relocate(self: *CommonEnv, offset: isize) void {
     // Note: source is not relocated - it should be set manually
 }
 
-/// Serialize this CommonEnv to the given CompactWriter.
-/// IMPORTANT: The returned pointer points to memory inside the writer!
-/// Attempting to dereference this pointer or calling any methods on it
-/// is illegal behavior!
-pub fn serialize(
-    self: *const CommonEnv,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const CommonEnv {
-    // First, write the CommonEnv struct itself
-    const offset_self = try writer.appendAlloc(allocator, CommonEnv);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .idents = (try self.idents.serialize(allocator, writer)).*,
-        .strings = (try self.strings.serialize(allocator, writer)).*,
-        .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
-        .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
-        .source = "", // Will be set when deserializing
-    };
-
-    return @constCast(offset_self);
-}
-
 /// Serialized representation of CommonEnv
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
+/// Note: This must be a separate type because sub-components (Ident.Store, etc.) have
+/// separate Serialized types with different field types.
 pub const Serialized = extern struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
-    source: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
+    source: SafeSlice(u8), // Will be set during deserialization
 
-    /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
+    /// Serialize a CommonEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
         self: *Serialized,
         env: *const CommonEnv,
@@ -103,42 +83,29 @@ pub const Serialized = extern struct {
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
-        try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
+        try self.exposed_items.serializeTo(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
 
-        // Set source to all zeros; the space needs to be here,
-        // but the value will be set separately during deserialization.
-        self.source = .{ 0, 0 };
+        // Set source to empty; the value will be set separately during deserialization.
+        self.source = SafeSlice(u8).empty();
     }
 
-    /// Deserialize a CommonEnv from the buffer, updating the CommonEnv in place
+    /// Deserialize a CommonEnv from the buffer
     pub fn deserialize(
         self: *Serialized,
         offset: i64,
-        source: []const u8,
+        source_text: []const u8,
     ) *CommonEnv {
-        // CRITICAL: We must deserialize ALL fields into local variables BEFORE writing to the
-        // output struct. This is because CommonEnv is a regular struct (not extern), so Zig may
-        // reorder its fields differently than Serialized (which is extern). If we read from self
-        // while writing to env (which aliases self), we may read corrupted data in Release mode
-        // when field orderings differ.
+        // Deserialize all fields - since CommonEnv is extern and Serialized fields
+        // line up properly, we can deserialize in place
+        _ = self.idents.deserialize(offset);
+        _ = self.strings.deserialize(offset);
+        self.exposed_items.deserializeInPlace(offset);
+        _ = self.line_starts.deserialize(offset);
 
-        // Step 1: Deserialize all fields into local variables first
-        const deserialized_idents = self.idents.deserialize(offset).*;
-        const deserialized_strings = self.strings.deserialize(offset).*;
-        const deserialized_exposed_items = self.exposed_items.deserialize(offset).*;
-        const deserialized_line_starts = self.line_starts.deserialize(offset).*;
-
-        // Step 2: Overwrite ourself with the deserialized version
+        // Reinterpret as CommonEnv and set source
         const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
-
-        env.* = CommonEnv{
-            .idents = deserialized_idents,
-            .strings = deserialized_strings,
-            .exposed_items = deserialized_exposed_items,
-            .line_starts = deserialized_line_starts,
-            .source = source,
-        };
+        env.source = SafeSlice(u8).fromSlice(source_text);
 
         return env;
     }
@@ -197,8 +164,8 @@ pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ide
 /// Get region info for a given region
 pub fn getRegionInfo(self: *const CommonEnv, region: Region) !RegionInfo {
     return RegionInfo.position(
-        self.source,
-        self.line_starts.items.items,
+        self.source.toSlice(),
+        self.line_starts.items.toSlice(),
         region.start.offset,
         region.end.offset,
     );
@@ -217,11 +184,11 @@ pub fn calcRegionInfo(self: *const CommonEnv, region: Region) RegionInfo {
 
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const source = self.source;
+    const source = self.source.toSlice();
 
     const info = RegionInfo.position(
         source,
-        self.line_starts.items.items,
+        self.line_starts.items.toSlice(),
         region.start.offset,
         region.end.offset,
     ) catch {
@@ -234,7 +201,7 @@ pub fn calcRegionInfo(self: *const CommonEnv, region: Region) RegionInfo {
 
 /// Returns the entire source code content.
 pub fn getSourceAll(self: *const CommonEnv) []const u8 {
-    return self.source;
+    return self.source.toSlice();
 }
 
 /// Calculate and store line starts from the source text
@@ -264,25 +231,28 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
 
 /// Returns all line start positions for source code position mapping.
 pub fn getLineStartsAll(self: *const CommonEnv) []const u32 {
-    return self.line_starts.items.items;
+    return self.line_starts.items.toSlice();
 }
 
 /// Get the source text for a given region
 pub fn getSource(self: *const CommonEnv, region: Region) []const u8 {
-    return self.source[region.start.offset..region.end.offset];
+    return self.source.toSlice()[region.start.offset..region.end.offset];
 }
 
 /// Get the source line for a given region
 pub fn getSourceLine(self: *const CommonEnv, region: Region) ![]const u8 {
     const region_info = try self.getRegionInfo(region);
-    const line_start = self.line_starts.items.items[region_info.start_line_idx];
-    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)
-        self.line_starts.items.items[region_info.start_line_idx + 1]
+    const source = self.source.toSlice();
+    const line_start = self.line_starts.items.toSlice()[region_info.start_line_idx];
+    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.toSlice().len)
+        self.line_starts.items.toSlice()[region_info.start_line_idx + 1]
     else
-        self.source.len;
+        source.len;
 
-    return self.source[line_start..line_end];
+    return source[line_start..line_end];
 }
+
+}; // End of CommonEnv extern struct
 
 test "CommonEnv.Serialized roundtrip" {
     const testing = std.testing;
@@ -338,11 +308,11 @@ test "CommonEnv.Serialized roundtrip" {
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 0), env.line_starts.items.toSlice()[0]);
+    try testing.expectEqual(@as(u32, 10), env.line_starts.items.toSlice()[1]);
+    try testing.expectEqual(@as(u32, 20), env.line_starts.items.toSlice()[2]);
 
-    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings(source, env.source.toSlice());
 }
 
 test "CommonEnv.Serialized roundtrip with empty data" {
@@ -386,7 +356,7 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     try testing.expectEqual(@as(u32, 0), env.idents.interner.entry_count);
     try testing.expectEqual(@as(usize, 0), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 0), env.line_starts.len());
-    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings(source, env.source.toSlice());
 }
 
 test "CommonEnv.Serialized roundtrip with large data" {
@@ -469,7 +439,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
     try testing.expectEqual(@as(u32, 50), env.idents.interner.entry_count);
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 101), env.line_starts.len()); // 100 lines + 1 for first line at offset 0
-    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings(source, env.source.toSlice());
 
     // Verify some specific identifiers
     try testing.expectEqualStrings("ident_0", env.getIdent(ident_indices.items[0]));
@@ -482,11 +452,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     try testing.expectEqualStrings("string_literal_24", env.getString(string_indices.items[24]));
 
     // Verify line starts
-    try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
+    try testing.expectEqual(@as(u32, 0), env.line_starts.items.toSlice()[0]);
     // Calculate the actual expected value for the second line start
     const first_line = "Line 0: This is a test line with some content\n";
     const expected_second_line_start = first_line.len;
-    try testing.expectEqual(@as(u32, expected_second_line_start), env.line_starts.items.items[1]);
+    try testing.expectEqual(@as(u32, expected_second_line_start), env.line_starts.items.toSlice()[1]);
 }
 
 test "CommonEnv.Serialized roundtrip with special characters" {
@@ -553,5 +523,5 @@ test "CommonEnv.Serialized roundtrip with special characters" {
 
     try testing.expectEqual(@as(usize, 2), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 5), env.line_starts.len()); // 4 lines + 1 for first line at offset 0
-    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings(source, env.source.toSlice());
 }

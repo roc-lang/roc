@@ -155,20 +155,20 @@ const TestEnv = struct {
     // helpers - alias //
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args);
+        return try self.module_env.types.mkAlias(self.module_env.gpa, try self.mkTypeIdent(name), backing_var, args);
     }
 
     // helpers - structure - tuple //
 
     fn mkTuple(self: *Self, slice: []const Var) std.mem.Allocator.Error!Content {
-        const elems_range = try self.module_env.types.appendVars(slice);
+        const elems_range = try self.module_env.types.appendVars(self.module_env.gpa, slice);
         return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
     }
 
     // helpers - nominal type //
 
     fn mkNominalType(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkNominal(
+        return try self.module_env.types.mkNominal(self.module_env.gpa, 
             try self.mkTypeIdent(name),
             backing_var,
             args,
@@ -187,7 +187,7 @@ const TestEnv = struct {
     // helpers - structure - func //
 
     fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkFuncPure(args, ret);
+        return try self.module_env.types.mkFuncPure(self.module_env.gpa, args, ret);
     }
 
     fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
@@ -195,12 +195,12 @@ const TestEnv = struct {
     }
 
     fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkFuncUnbound(args, ret);
+        return try self.module_env.types.mkFuncUnbound(self.module_env.gpa, args, ret);
     }
 
     fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
         // For flex functions, we use unbound since we don't know the effectfulness yet
-        return try self.module_env.types.mkFuncUnbound(args, ret);
+        return try self.module_env.types.mkFuncUnbound(self.module_env.gpa, args, ret);
     }
 
     // helpers - structure - records //
@@ -217,18 +217,18 @@ const TestEnv = struct {
     const RecordInfo = struct { record: Record, content: Content };
 
     fn mkRecord(self: *Self, fields: []const RecordField, ext_var: Var) std.mem.Allocator.Error!RecordInfo {
-        const fields_range = try self.module_env.types.appendRecordFields(fields);
+        const fields_range = try self.module_env.types.appendRecordFields(self.module_env.gpa, fields);
         const record = Record{ .fields = fields_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .record = record } }, .record = record };
     }
 
     fn mkRecordOpen(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+        const ext_var = try self.module_env.types.freshFromContent(self.module_env.gpa, .{ .flex = Flex.init() });
         return self.mkRecord(fields, ext_var);
     }
 
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .structure = .empty_record });
+        const ext_var = try self.module_env.types.freshFromContent(self.module_env.gpa, .{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
     }
 
@@ -237,27 +237,27 @@ const TestEnv = struct {
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
 
     fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.module_env.types.appendVars(args);
+        return try self.module_env.types.appendVars(self.module_env.gpa, args);
     }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
         const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
-        return Tag{ .name = ident_idx, .args = try self.module_env.types.appendVars(args) };
+        return Tag{ .name = ident_idx, .args = try self.module_env.types.appendVars(self.module_env.gpa, args) };
     }
 
     fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!TagUnionInfo {
-        const tags_range = try self.module_env.types.appendTags(tags);
+        const tags_range = try self.module_env.types.appendTags(self.module_env.gpa, tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .tag_union = tag_union } }, .tag_union = tag_union };
     }
 
     fn mkTagUnionOpen(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+        const ext_var = try self.module_env.types.freshFromContent(self.module_env.gpa, .{ .flex = Flex.init() });
         return self.mkTagUnion(tags, ext_var);
     }
 
     fn mkTagUnionClosed(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+        const ext_var = try self.module_env.types.freshFromContent(self.module_env.gpa, .{ .structure = .empty_tag_union });
         return self.mkTagUnion(tags, ext_var);
     }
 };
@@ -270,7 +270,7 @@ test "unify - identical" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = try env.module_env.types.fresh();
+    const a = try env.module_env.types.fresh(gpa);
     const desc = try env.getDescForRootVar(a);
 
     const result = try env.unify(a, a);
@@ -285,8 +285,8 @@ test "unify - both flex vars" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = try env.module_env.types.fresh();
-    const b = try env.module_env.types.fresh();
+    const a = try env.module_env.types.fresh(gpa);
+    const b = try env.module_env.types.fresh(gpa);
 
     const result = try env.unify(a, b);
 
@@ -302,8 +302,8 @@ test "rigid_var - unifies with flex_var" {
     defer env.deinit();
 
     const rigid = try env.mkRigidVar("a");
-    const a = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-    const b = try env.module_env.types.freshFromContent(rigid);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = Flex.init() });
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, rigid);
 
     const result = try env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
@@ -317,8 +317,8 @@ test "rigid_var - unifies with flex_var (other way)" {
     defer env.deinit();
 
     const rigid = try env.mkRigidVar("a");
-    const a = try env.module_env.types.freshFromContent(rigid);
-    const b = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, rigid);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = Flex.init() });
 
     const result = try env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
@@ -331,8 +331,8 @@ test "rigid_var - cannot unify with alias (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const alias = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+    const alias = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
+    const rigid = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkRigidVar("a"));
 
     const result = try env.unify(alias, rigid);
     try std.testing.expectEqual(false, result.isOk());
@@ -343,8 +343,8 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid1 = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
-    const rigid2 = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid1 = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkRigidVar("a"));
+    const rigid2 = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkRigidVar("a"));
 
     const result = try env.unify(rigid1, rigid2);
     try std.testing.expectEqual(false, result.isOk());
@@ -356,17 +356,17 @@ test "unify - aliases with different names but same backing" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create alias `a` with its backing var and arg
-    const a_backing_var = try env.module_env.types.freshFromContent(try env.mkTuple(&[_]Var{str}));
+    const a_backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkTuple(&[_]Var{str}));
     const a_alias = try env.mkAlias("AliasA", a_backing_var, &[_]Var{str});
-    const a = try env.module_env.types.freshFromContent(a_alias);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, a_alias);
 
     // Create alias `b` with its backing var and arg
-    const b_backing_var = try env.module_env.types.freshFromContent(try env.mkTuple(&[_]Var{str}));
+    const b_backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkTuple(&[_]Var{str}));
     const b_alias = try env.mkAlias("AliasB", b_backing_var, &[_]Var{str});
-    const b = try env.module_env.types.freshFromContent(b_alias);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, b_alias);
 
     const result = try env.unify(a, b);
 
@@ -380,11 +380,11 @@ test "unify - alias with concrete" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const a_backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
     const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{});
 
-    const a = try env.module_env.types.freshFromContent(a_alias);
-    const b = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, a_alias);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const result = try env.unify(a, b);
 
@@ -410,11 +410,11 @@ test "unify - alias with concrete other way" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const b_backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
     const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{});
 
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const b = try env.module_env.types.freshFromContent(b_alias);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, b_alias);
 
     const result = try env.unify(a, b);
 
@@ -445,8 +445,8 @@ test "unify - a is builtin and b is flex_var" {
 
     const str = Content{ .structure = .empty_record };
 
-    const a = try env.module_env.types.freshFromContent(str);
-    const b = try env.module_env.types.fresh();
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, str);
+    const b = try env.module_env.types.fresh(gpa);
 
     const result = try env.unify(a, b);
 
@@ -463,8 +463,8 @@ test "unify - a is flex_var and b is builtin" {
 
     const str = Content{ .structure = .empty_record };
 
-    const a = try env.module_env.types.fresh();
-    const b = try env.module_env.types.freshFromContent(str);
+    const a = try env.module_env.types.fresh(gpa);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, str);
 
     const result = try env.unify(a, b);
 
@@ -483,8 +483,8 @@ test "unify - a & b are both str" {
 
     const str = Content{ .structure = .empty_record };
 
-    const a = try env.module_env.types.freshFromContent(str);
-    const b = try env.module_env.types.freshFromContent(str);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, str);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, str);
 
     const result = try env.unify(a, b);
 
@@ -500,12 +500,12 @@ test "unify - a & b box with same arg unify" {
     defer env.deinit();
 
     const str = Content{ .structure = .empty_record };
-    const str_var = try env.module_env.types.freshFromContent(str);
+    const str_var = try env.module_env.types.freshFromContent(env.module_env.gpa, str);
 
     const box_str = try env.mkBox(str_var);
 
-    const a = try env.module_env.types.freshFromContent(box_str);
-    const b = try env.module_env.types.freshFromContent(box_str);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, box_str);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, box_str);
 
     const result = try env.unify(a, b);
 
@@ -521,12 +521,12 @@ test "unify - a & b list with same arg unify" {
     defer env.deinit();
 
     const str = Content{ .structure = .empty_record };
-    const str_var = try env.module_env.types.freshFromContent(str);
+    const str_var = try env.module_env.types.freshFromContent(env.module_env.gpa, str);
 
     const list_str = try env.mkList(str_var);
 
-    const a = try env.module_env.types.freshFromContent(list_str);
-    const b = try env.module_env.types.freshFromContent(list_str);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, list_str);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, list_str);
 
     const result = try env.unify(a, b);
 
@@ -547,15 +547,15 @@ test "unify - first is flex, second is func" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const tag_payload = try env.module_env.types.fresh();
+    const tag_payload = try env.module_env.types.fresh(gpa);
     const tag = try env.mkTag("Some", &[_]Var{tag_payload});
-    const backing_var = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{tag})).content);
-    const nominal_type = try env.module_env.types.freshFromContent(try env.mkNominalType("List", backing_var, &[_]Var{}));
-    const arg = try env.module_env.types.fresh();
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkTagUnionOpen(&[_]Tag{tag})).content);
+    const nominal_type = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkNominalType("List", backing_var, &[_]Var{}));
+    const arg = try env.module_env.types.fresh(gpa);
     const func = try env.mkFuncUnbound(&[_]Var{arg}, nominal_type);
 
-    const a = try env.module_env.types.fresh();
-    const b = try env.module_env.types.freshFromContent(func);
+    const a = try env.module_env.types.fresh(gpa);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, func);
 
     const result = try env.unify(a, b);
 
@@ -571,19 +571,19 @@ test "unify - anonymous tag union unifies with nominal tag union (nominal on lef
     defer env.deinit();
 
     // Create nominal type: Foo := [A(Str), B]
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
     const tag_a = try env.mkTag("A", &[_]Var{str_var});
     const tag_b = try env.mkTag("B", &[_]Var{});
     const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b });
-    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Foo", backing_var, &[_]Var{}),
     );
 
     // Create anonymous tag union: [A(Str)]
     const anon_tag_a = try env.mkTag("A", &[_]Var{str_var});
     const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
-    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+    const anon_var = try env.module_env.types.freshFromContent(env.module_env.gpa, anon_tu.content);
 
     // Unify: Foo ~ [A(Str)]
     const result = try env.unify(nominal_var, anon_var);
@@ -605,15 +605,15 @@ test "unify - anonymous tag union unifies with nominal (nominal on right)" {
     const tag_b = try env.mkTag("B", &[_]Var{});
     const tag_c = try env.mkTag("C", &[_]Var{});
     const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b, tag_c });
-    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Foo", backing_var, &[_]Var{}),
     );
 
     // Create anonymous tag union: [B]
     const anon_tag_b = try env.mkTag("B", &[_]Var{});
     const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_b});
-    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+    const anon_var = try env.module_env.types.freshFromContent(env.module_env.gpa, anon_tu.content);
 
     // Unify: [B] ~ Foo  (swapped order)
     const result = try env.unify(anon_var, nominal_var);
@@ -634,15 +634,15 @@ test "unify - anonymous tag union with wrong tag fails" {
     const tag_a = try env.mkTag("A", &[_]Var{});
     const tag_b = try env.mkTag("B", &[_]Var{});
     const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b });
-    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Foo", backing_var, &[_]Var{}),
     );
 
     // Create anonymous tag union: [D]  (D doesn't exist in Foo)
     const anon_tag_d = try env.mkTag("D", &[_]Var{});
     const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_d});
-    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+    const anon_var = try env.module_env.types.freshFromContent(env.module_env.gpa, anon_tu.content);
 
     // Unify: Foo ~ [D]  - should fail
     const result = try env.unify(nominal_var, anon_var);
@@ -661,8 +661,8 @@ test "unify - anonymous tag union with multiple tags unifies" {
     const tag_b = try env.mkTag("B", &[_]Var{});
     const tag_c = try env.mkTag("C", &[_]Var{});
     const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b, tag_c });
-    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Foo", backing_var, &[_]Var{}),
     );
 
@@ -670,7 +670,7 @@ test "unify - anonymous tag union with multiple tags unifies" {
     const anon_tag_a = try env.mkTag("A", &[_]Var{});
     const anon_tag_b = try env.mkTag("B", &[_]Var{});
     const anon_tu = try env.mkTagUnionOpen(&[_]Tag{ anon_tag_a, anon_tag_b });
-    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+    const anon_var = try env.module_env.types.freshFromContent(env.module_env.gpa, anon_tu.content);
 
     // Unify: Foo ~ [A, B]
     const result = try env.unify(nominal_var, anon_var);
@@ -690,13 +690,13 @@ test "unify - empty nominal type with empty tag union (nominal on left)" {
     defer env.deinit();
 
     // Create nominal type: Empty := []
-    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Empty", backing_var, &[_]Var{}),
     );
 
     // Create empty tag union: []
-    const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const empty_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
 
     // Unify: Empty ~ []
     const result = try env.unify(nominal_var, empty_var);
@@ -714,11 +714,11 @@ test "unify - empty tag union with empty nominal type (nominal on right)" {
     defer env.deinit();
 
     // Create empty tag union: []
-    const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const empty_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
 
     // Create nominal type: Empty := []
-    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Empty", backing_var, &[_]Var{}),
     );
 
@@ -738,14 +738,14 @@ test "unify - two empty nominal types" {
     defer env.deinit();
 
     // Create nominal type: Empty1 := []
-    const backing_var1 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
-    const nominal_var1 = try env.module_env.types.freshFromContent(
+    const backing_var1 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
+    const nominal_var1 = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Empty1", backing_var1, &[_]Var{}),
     );
 
     // Create nominal type: Empty2 := []
-    const backing_var2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
-    const nominal_var2 = try env.module_env.types.freshFromContent(
+    const backing_var2 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
+    const nominal_var2 = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Empty2", backing_var2, &[_]Var{}),
     );
 
@@ -762,15 +762,15 @@ test "unify - empty nominal type with non-empty tag union fails" {
     defer env.deinit();
 
     // Create nominal type: Empty := []
-    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
-    const nominal_var = try env.module_env.types.freshFromContent(
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_tag_union });
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, 
         try env.mkNominalType("Empty", backing_var, &[_]Var{}),
     );
 
     // Create non-empty tag union: [A]
     const anon_tag_a = try env.mkTag("A", &[_]Var{});
     const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
-    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+    const anon_var = try env.module_env.types.freshFromContent(env.module_env.gpa, anon_tu.content);
 
     // Unify: Empty ~ [A] - should fail
     const result = try env.unify(nominal_var, anon_var);
@@ -893,14 +893,14 @@ test "unify - identical closed records" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const fields = [_]RecordField{try env.mkRecordField("a", str)};
     const record_data = try env.mkRecordClosed(&fields);
     const record_data_fields = env.module_env.types.record_fields.sliceRange(record_data.record.fields);
 
-    const a = try env.module_env.types.freshFromContent(record_data.content);
-    const b = try env.module_env.types.freshFromContent(record_data.content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, record_data.content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, record_data.content);
 
     const result = try env.unify(a, b);
 
@@ -918,16 +918,16 @@ test "unify - closed record mismatch on diff fields (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const field1 = try env.mkRecordField("field1", str);
     const field2 = try env.mkRecordField("field2", str);
 
     const a_record_data = try env.mkRecordClosed(&[_]RecordField{ field1, field2 });
-    const a = try env.module_env.types.freshFromContent(a_record_data.content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, a_record_data.content);
 
     const b_record_data = try env.mkRecordClosed(&[_]RecordField{field1});
-    const b = try env.module_env.types.freshFromContent(b_record_data.content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, b_record_data.content);
 
     const result = try env.unify(a, b);
 
@@ -945,14 +945,14 @@ test "unify - identical open records" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const field_shared = try env.mkRecordField("x", str);
 
     const a_rec_data = try env.mkRecordOpen(&[_]RecordField{field_shared});
-    const a = try env.module_env.types.freshFromContent(a_rec_data.content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, a_rec_data.content);
     const b_rec_data = try env.mkRecordOpen(&[_]RecordField{field_shared});
-    const b = try env.module_env.types.freshFromContent(b_rec_data.content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, b_rec_data.content);
 
     const result = try env.unify(a, b);
 
@@ -982,13 +982,13 @@ test "unify - open record extends closed (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const field_x = try env.mkRecordField("field_x", str);
     const field_y = try env.mkRecordField("field_y", str);
 
-    const open = try env.module_env.types.freshFromContent((try env.mkRecordOpen(&[_]RecordField{ field_x, field_y })).content);
-    const closed = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&[_]RecordField{field_x})).content);
+    const open = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkRecordOpen(&[_]RecordField{ field_x, field_y })).content);
+    const closed = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkRecordClosed(&[_]RecordField{field_x})).content);
 
     const result = try env.unify(open, closed);
 
@@ -1002,13 +1002,13 @@ test "unify - closed record extends open" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const field_x = try env.mkRecordField("field_x", str);
     const field_y = try env.mkRecordField("field_y", str);
 
-    const open = try env.module_env.types.freshFromContent((try env.mkRecordOpen(&[_]RecordField{field_x})).content);
-    const closed = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&[_]RecordField{ field_x, field_y })).content);
+    const open = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkRecordOpen(&[_]RecordField{field_x})).content);
+    const closed = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkRecordClosed(&[_]RecordField{ field_x, field_y })).content);
 
     const result = try env.unify(open, closed);
 
@@ -1130,14 +1130,14 @@ test "unify - identical closed tag_unions" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const tag = try env.mkTag("A", &[_]Var{str});
     const tags = [_]Tag{tag};
     const tag_union_data = try env.mkTagUnionClosed(&tags);
 
-    const a = try env.module_env.types.freshFromContent(tag_union_data.content);
-    const b = try env.module_env.types.freshFromContent(tag_union_data.content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, tag_union_data.content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, tag_union_data.content);
 
     const result = try env.unify(a, b);
 
@@ -1166,15 +1166,15 @@ test "unify - identical open tag unions" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const tag_shared = try env.mkTag("Shared", &[_]Var{ str, str });
 
     const tag_union_a = try env.mkTagUnionOpen(&[_]Tag{tag_shared});
-    const a = try env.module_env.types.freshFromContent(tag_union_a.content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, tag_union_a.content);
 
     const tag_union_b = try env.mkTagUnionOpen(&[_]Tag{tag_shared});
-    const b = try env.module_env.types.freshFromContent(tag_union_b.content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, tag_union_b.content);
 
     const result = try env.unify(a, b);
 
@@ -1208,13 +1208,13 @@ test "unify - open tag extends closed (fail)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const tag_shared = try env.mkTag("Shared", &[_]Var{str});
     const tag_a_only = try env.mkTag("A", &[_]Var{str});
 
-    const a = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{ tag_shared, tag_a_only })).content);
-    const b = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{tag_shared})).content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkTagUnionOpen(&[_]Tag{ tag_shared, tag_a_only })).content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkTagUnionClosed(&[_]Tag{tag_shared})).content);
 
     const result = try env.unify(a, b);
 
@@ -1228,13 +1228,13 @@ test "unify - closed tag union extends open" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const tag_shared = try env.mkTag("Shared", &[_]Var{str});
     const tag_b_only = try env.mkTag("B", &[_]Var{str});
 
-    const a = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{tag_shared})).content);
-    const b = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ tag_shared, tag_b_only })).content);
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkTagUnionOpen(&[_]Tag{tag_shared})).content);
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, (try env.mkTagUnionClosed(&[_]Tag{ tag_shared, tag_b_only })).content);
 
     const result = try env.unify(a, b);
 
@@ -1269,7 +1269,7 @@ test "unify - closed tag union extends open" {
     // check that fresh vars are correct
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
-    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.toSliceConst()[0]);
 }
 
 // unification - recursion //
@@ -1279,15 +1279,15 @@ test "unify - fails on infinite type" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
-    const a = try env.module_env.types.fresh();
-    const a_elems_range = try env.module_env.types.appendVars(&[_]Var{ a, str_var });
+    const a = try env.module_env.types.fresh(gpa);
+    const a_elems_range = try env.module_env.types.appendVars(env.module_env.gpa, &[_]Var{ a, str_var });
     const a_tuple = types_mod.Tuple{ .elems = a_elems_range };
     try env.module_env.types.setRootVarContent(a, Content{ .structure = .{ .tuple = a_tuple } });
 
-    const b = try env.module_env.types.fresh();
-    const b_elems_range = try env.module_env.types.appendVars(&[_]Var{ b, str_var });
+    const b = try env.module_env.types.fresh(gpa);
+    const b_elems_range = try env.module_env.types.appendVars(env.module_env.gpa, &[_]Var{ b, str_var });
     const b_tuple = types_mod.Tuple{ .elems = b_elems_range };
     try env.module_env.types.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
@@ -1309,12 +1309,12 @@ test "unify - fails on anonymous recursion" {
 
     // Create a tag union that recursively contains itself (anonymous recursion)
     // This is like: a = [A a] unifying with b = [A b]
-    const tag_var_a = try env.module_env.types.fresh();
+    const tag_var_a = try env.module_env.types.fresh(gpa);
     const tag_a = try env.mkTag("A", &[_]Var{tag_var_a});
     const tag_union_a = try env.mkTagUnionClosed(&[_]Tag{tag_a});
     try env.module_env.types.setRootVarContent(tag_var_a, tag_union_a.content);
 
-    const tag_var_b = try env.module_env.types.fresh();
+    const tag_var_b = try env.module_env.types.fresh(gpa);
     const tag_b = try env.mkTag("A", &[_]Var{tag_var_b});
     const tag_union_b = try env.mkTagUnionClosed(&[_]Tag{tag_b});
     try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
@@ -1338,20 +1338,20 @@ test "unify - succeeds on nominal, tag union recursion" {
     var types_store = &env.module_env.types;
 
     // Create vars in the required order for adjacency to work out
-    const a = try types_store.fresh();
-    const b = try types_store.fresh();
-    const elem = try types_store.fresh();
-    const ext = try types_store.fresh();
+    const a = try types_store.fresh(gpa);
+    const b = try types_store.fresh(gpa);
+    const elem = try types_store.fresh(gpa);
+    const ext = try types_store.fresh(gpa);
 
     // Create the tag union content that references type_a_nominal
     const a_cons_tag = try env.mkTag("Cons", &[_]Var{ elem, a });
     const a_nil_tag = try env.mkTag("Nil", &[_]Var{});
-    const a_backing = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ a_cons_tag, a_nil_tag }, ext));
+    const a_backing = try types_store.freshFromContent(gpa, try types_store.mkTagUnion(gpa, &.{ a_cons_tag, a_nil_tag }, ext));
     try types_store.setVarContent(a, try env.mkNominalType("TypeA", a_backing, &.{}));
 
     const b_cons_tag = try env.mkTag("Cons", &[_]Var{ elem, b });
     const b_nil_tag = try env.mkTag("Nil", &[_]Var{});
-    const b_backing = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ b_cons_tag, b_nil_tag }, ext));
+    const b_backing = try types_store.freshFromContent(gpa, try types_store.mkTagUnion(gpa, &.{ b_cons_tag, b_nil_tag }, ext));
     try types_store.setVarContent(b, try env.mkNominalType("TypeA", b_backing, &.{}));
 
     const result_nominal_type = try env.unify(a, b);
@@ -1369,18 +1369,18 @@ test "unify - flex with no constraints unifies with flex with constraints" {
     defer env.deinit();
 
     // Create constraint: a.sort : List(a) -> List(a)
-    const list_a = try env.module_env.types.fresh();
-    const sort_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{list_a}, list_a));
+    const list_a = try env.module_env.types.fresh(gpa);
+    const sort_fn = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkFuncPure(&[_]Var{list_a}, list_a));
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("sort")),
         .fn_var = sort_fn,
         .origin = .where_clause,
     };
 
-    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
+    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{sort_constraint});
 
-    const a = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-    const b = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = Flex.init() });
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = constraints_range,
     } });
@@ -1398,24 +1398,24 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create constraint: a.to_str : Str -> Str
-    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_fn = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkFuncPure(&[_]Var{str}, str));
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
         .origin = .where_clause,
     };
 
-    const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
-    const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
+    const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{sort_constraint});
+    const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{sort_constraint});
 
-    const a = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = a_constraints,
     } });
-    const b = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = b_constraints,
     } });
@@ -1429,23 +1429,23 @@ test "unify - empty constraints unify with any" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
-    const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const foo_fn = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn,
         .origin = .where_clause,
     };
-    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
     const empty_range = types_mod.StaticDispatchConstraint.SafeList.Range.empty();
 
-    const a = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const a = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = empty_range,
     } });
-    const b = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const b = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = constraints,
     } });
@@ -1461,22 +1461,22 @@ test "unify - flex with constraints vs structure captures deferred check" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create constraint: a.to_str : Str -> Str
-    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_fn = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkFuncPure(&[_]Var{str}, str));
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
         .origin = .where_clause,
     };
-    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
-    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const flex_var = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = constraints,
     } });
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
     try std.testing.expectEqual(.ok, result);
@@ -1496,19 +1496,19 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create constraint: a.to_str : Str -> Str
-    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_fn = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkFuncPure(&[_]Var{str}, str));
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
         .origin = .where_clause,
     };
-    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
+    const flex_var = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = constraints,
     } });
@@ -1531,8 +1531,8 @@ test "unify - flex with no constraints vs structure does not capture" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const flex_var = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = Flex.init() });
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
     try std.testing.expectEqual(.ok, result);
@@ -1546,25 +1546,25 @@ test "unify - flex vs nominal type captures constraint" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create constraint
-    const ord_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const ord_fn = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkFuncPure(&[_]Var{str}, str));
     const ord_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("ord")),
         .fn_var = ord_fn,
         .origin = .where_clause,
     };
-    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ord_constraint});
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{ord_constraint});
 
-    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+    const flex_var = try env.module_env.types.freshFromContent(env.module_env.gpa, .{ .flex = .{
         .name = null,
         .constraints = constraints,
     } });
 
     // Create nominal type (e.g., Path)
-    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const nominal_var = try env.module_env.types.freshFromContent(try env.mkNominalType("Path", backing_var, &[_]Var{}));
+    const backing_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
+    const nominal_var = try env.module_env.types.freshFromContent(env.module_env.gpa, try env.mkNominalType("Path", backing_var, &[_]Var{}));
 
     const result = try env.unify(flex_var, nominal_var);
     try std.testing.expectEqual(.ok, result);
@@ -1588,10 +1588,10 @@ test "recursion_var - can be created and points to structure" {
     defer env.deinit();
 
     // Create a structure variable (e.g., a Str type)
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create a RecursionVar pointing to the structure
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1613,10 +1613,10 @@ test "recursion_var - unifies with its structure" {
     defer env.deinit();
 
     // Create a structure variable
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create a RecursionVar pointing to the structure
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1636,9 +1636,9 @@ test "recursion_var - does not cause infinite loop during resolution" {
     defer env.deinit();
 
     // Create a circular structure: rec_var -> structure_var -> rec_var
-    const structure_var = try env.module_env.types.fresh();
+    const structure_var = try env.module_env.types.fresh(gpa);
 
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1667,12 +1667,12 @@ test "recursion_var - unifies with alias" {
     defer env.deinit();
 
     // Create an alias MyStr = Str
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
     const alias_content = try env.mkAlias("MyStr", str_var, &[_]Var{});
-    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+    const alias_var = try env.module_env.types.freshFromContent(env.module_env.gpa, alias_content);
 
     // Create a RecursionVar pointing to str
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = str_var,
             .name = null,
@@ -1692,11 +1692,11 @@ test "recursion_var - cannot unify with rigid" {
 
     // Create a rigid var
     const rigid_content = try env.mkRigidVar("a");
-    const rigid_var = try env.module_env.types.freshFromContent(rigid_content);
+    const rigid_var = try env.module_env.types.freshFromContent(env.module_env.gpa, rigid_content);
 
     // Create a RecursionVar
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1715,17 +1715,17 @@ test "recursion_var - two recursion vars with same structure unify" {
     defer env.deinit();
 
     // Create a shared structure
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create two RecursionVars both pointing to the same structure
-    const rec_var_1 = try env.module_env.types.freshFromContent(Content{
+    const rec_var_1 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
         },
     });
 
-    const rec_var_2 = try env.module_env.types.freshFromContent(Content{
+    const rec_var_2 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1744,12 +1744,12 @@ test "recursion_var - equirecursive unification with nested structure" {
     defer env.deinit();
 
     // Create a list structure: List(a) where a is flexible
-    const elem_var = try env.module_env.types.fresh();
+    const elem_var = try env.module_env.types.fresh(gpa);
     const list_content = try env.mkList(elem_var);
-    const list_var = try env.module_env.types.freshFromContent(list_content);
+    const list_var = try env.module_env.types.freshFromContent(env.module_env.gpa, list_content);
 
     // Create a RecursionVar that points to the list
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = list_var,
             .name = null,
@@ -1757,9 +1757,9 @@ test "recursion_var - equirecursive unification with nested structure" {
     });
 
     // Create another list with the same structure
-    const elem_var_2 = try env.module_env.types.fresh();
+    const elem_var_2 = try env.module_env.types.fresh(gpa);
     const list_content_2 = try env.mkList(elem_var_2);
-    const list_var_2 = try env.module_env.types.freshFromContent(list_content_2);
+    const list_var_2 = try env.module_env.types.freshFromContent(env.module_env.gpa, list_content_2);
 
     // RecursionVar should unify with the list
     const result = try env.unify(rec_var, list_var_2);
@@ -1778,10 +1778,10 @@ test "recursion_var - unifies with flex preserving constraints" {
     defer env.deinit();
 
     // Create a flex var with static dispatch constraints
-    const fn_var = try env.module_env.types.freshFromContent(Content{
+    const fn_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .structure = .{ .fn_pure = .{
             .args = VarSafeList.Range.empty(),
-            .ret = try env.module_env.types.fresh(),
+            .ret = try env.module_env.types.fresh(gpa),
             .needs_instantiation = false,
         } },
     });
@@ -1792,14 +1792,14 @@ test "recursion_var - unifies with flex preserving constraints" {
         .origin = .method_call,
     };
 
-    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{constraint});
-    const flex_with_constraints = try env.module_env.types.freshFromContent(Content{
+    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(env.module_env.gpa, &[_]types_mod.StaticDispatchConstraint{constraint});
+    const flex_with_constraints = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .flex = Flex.init().withConstraints(constraints_range),
     });
 
     // Create a RecursionVar
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1823,10 +1823,10 @@ test "type_writer - recursion_var displays structure" {
     defer env.deinit();
 
     // Create a structure variable (empty record)
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const structure_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
     // Create a RecursionVar pointing to it
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = structure_var,
             .name = null,
@@ -1851,14 +1851,14 @@ test "type_writer - recursion_var with cycle displays correctly" {
     defer env.deinit();
 
     // Create a self-referential structure: rec_var -> list -> rec_var
-    const rec_var_placeholder = try env.module_env.types.fresh();
+    const rec_var_placeholder = try env.module_env.types.fresh(gpa);
 
     // Create a list that points to the placeholder
     const list_content = try env.mkList(rec_var_placeholder);
-    const list_var = try env.module_env.types.freshFromContent(list_content);
+    const list_var = try env.module_env.types.freshFromContent(env.module_env.gpa, list_content);
 
     // Create a RecursionVar that points to the list
-    const rec_var = try env.module_env.types.freshFromContent(Content{
+    const rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = list_var,
             .name = null,
@@ -1886,9 +1886,9 @@ test "type_writer - nested recursion_var displays correctly" {
     defer env.deinit();
 
     // Create nested structure: RecursionVar -> List -> RecursionVar -> empty_record
-    const empty_record_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const empty_record_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
-    const inner_rec_var = try env.module_env.types.freshFromContent(Content{
+    const inner_rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = empty_record_var,
             .name = null,
@@ -1896,9 +1896,9 @@ test "type_writer - nested recursion_var displays correctly" {
     });
 
     const list_content = try env.mkList(inner_rec_var);
-    const list_var = try env.module_env.types.freshFromContent(list_content);
+    const list_var = try env.module_env.types.freshFromContent(env.module_env.gpa, list_content);
 
-    const outer_rec_var = try env.module_env.types.freshFromContent(Content{
+    const outer_rec_var = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = list_var,
             .name = null,
@@ -1931,12 +1931,12 @@ test "recursion_var - integration: deep recursion with RecursionVar prevents inf
     // Create a deep chain of RecursionVars pointing to each other
     // var1 -> rec_var1 -> var2 -> rec_var2 -> var3 -> rec_var3 -> var1 (cycle!)
 
-    const var1 = try env.module_env.types.fresh();
-    const var2 = try env.module_env.types.fresh();
-    const var3 = try env.module_env.types.fresh();
+    const var1 = try env.module_env.types.fresh(gpa);
+    const var2 = try env.module_env.types.fresh(gpa);
+    const var3 = try env.module_env.types.fresh(gpa);
 
     // Create rec_var3 pointing to var1 (will create the cycle)
-    const rec_var3 = try env.module_env.types.freshFromContent(Content{
+    const rec_var3 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = var1,
             .name = null,
@@ -1944,7 +1944,7 @@ test "recursion_var - integration: deep recursion with RecursionVar prevents inf
     });
 
     // Create rec_var2 pointing to var3
-    const rec_var2 = try env.module_env.types.freshFromContent(Content{
+    const rec_var2 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = var3,
             .name = null,
@@ -1952,7 +1952,7 @@ test "recursion_var - integration: deep recursion with RecursionVar prevents inf
     });
 
     // Create rec_var1 pointing to var2
-    const rec_var1 = try env.module_env.types.freshFromContent(Content{
+    const rec_var1 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = var2,
             .name = null,
@@ -2003,10 +2003,10 @@ test "recursion_var - integration: multiple recursive constraints unify correctl
     // They should unify if their base structures match
 
     // Create chain A
-    const a1 = try env.module_env.types.fresh();
-    const a2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const a1 = try env.module_env.types.fresh(gpa);
+    const a2 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
-    const rec_var_a = try env.module_env.types.freshFromContent(Content{
+    const rec_var_a = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = a2,
             .name = null,
@@ -2016,10 +2016,10 @@ test "recursion_var - integration: multiple recursive constraints unify correctl
     _ = try env.unify(a1, rec_var_a);
 
     // Create chain B with same base structure
-    const b1 = try env.module_env.types.fresh();
-    const b2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const b1 = try env.module_env.types.fresh(gpa);
+    const b2 = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{ .structure = .empty_record });
 
-    const rec_var_b = try env.module_env.types.freshFromContent(Content{
+    const rec_var_b = try env.module_env.types.freshFromContent(env.module_env.gpa, Content{
         .recursion_var = .{
             .structure = b2,
             .name = null,

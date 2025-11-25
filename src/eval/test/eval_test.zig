@@ -696,8 +696,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var original_env = try ModuleEnv.init(gpa, source);
     defer original_env.deinit();
 
-    original_env.common.source = source;
-    original_env.module_name = "TestModule";
+    original_env.common.source = collections.SafeSlice(u8).fromSlice(source);
+    original_env.module_name = collections.SafeSlice(u8).fromSlice("TestModule");
     try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
@@ -811,16 +811,16 @@ test "ModuleEnv serialization and interpreter evaluation" {
         defer deserialized_env.imports.map.deinit(gpa);
 
         // Verify basic deserialization worked
-        try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
-        try testing.expectEqualStrings(source, deserialized_env.common.source);
+        try testing.expectEqualStrings("TestModule", deserialized_env.module_name.toSlice());
+        try testing.expectEqualStrings(source, deserialized_env.common.source.toSlice());
 
         // Test 3: Verify the deserialized ModuleEnv has the correct structure
         try testing.expect(deserialized_env.types.len() > 0);
-        try testing.expect(deserialized_env.store.nodes.items.len > 0);
+        try testing.expect(deserialized_env.store.nodes.len() > 0);
 
         // Verify that the deserialized data matches the original data
         try testing.expectEqual(original_env.types.len(), deserialized_env.types.len());
-        try testing.expectEqual(original_env.store.nodes.items.len, deserialized_env.store.nodes.items.len);
+        try testing.expectEqual(original_env.store.nodes.len(), deserialized_env.store.nodes.len());
         try testing.expectEqual(original_env.common.idents.interner.bytes.len(), deserialized_env.common.idents.interner.bytes.len());
 
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
