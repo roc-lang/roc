@@ -4197,6 +4197,15 @@ fn checkBinopExpr(
                 // Get the pre-cached "plus" identifier from the ModuleEnv
                 const method_name = self.cir.plus_ident;
 
+                // Unify lhs and rhs to ensure both operands have the same type
+                const unify_result = try self.unify(lhs_var, rhs_var, env);
+
+                // If unification failed, short-circuit and set the expression to error
+                if (!unify_result.isOk()) {
+                    try self.unifyWith(expr_var, .err, env);
+                    return does_fx;
+                }
+
                 // Create the function type: lhs_type, rhs_type -> ret_type
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
@@ -4255,7 +4264,13 @@ fn checkBinopExpr(
                 }
 
                 // Unify left and right together
-                _ = try self.unify(lhs_var, rhs_var, env);
+                const unify_result = try self.unify(lhs_var, rhs_var, env);
+
+                // If unification failed, short-circuit
+                if (!unify_result.isOk()) {
+                    try self.unifyWith(expr_var, .err, env);
+                    return does_fx;
+                }
 
                 // Set root expr. If unifications succeeded this will the the
                 // num, otherwise the propgate error
@@ -4307,9 +4322,17 @@ fn checkBinopExpr(
             }
         },
         .eq => {
-            // `a == b` desugars to `a.is_eq(b)`
+            // `a == b` desugars to `a.is_eq(b)` with additional constraint that a and b have the same type
             // Constraint: a.is_eq : a, b -> ret_type (ret_type is NOT hardcoded to Bool)
-            // Note: a and b are NOT unified - the is_eq method signature determines if they must be the same
+
+            // Unify lhs and rhs to ensure both operands have the same type
+            const unify_result = try self.unify(lhs_var, rhs_var, env);
+
+            // If unification failed, short-circuit and set the expression to error
+            if (!unify_result.isOk()) {
+                try self.unifyWith(expr_var, .err, env);
+                return does_fx;
+            }
 
             // Create the function type: lhs_type, rhs_type -> ret_type (fresh flex var)
             const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
@@ -4344,10 +4367,18 @@ fn checkBinopExpr(
             _ = try self.unify(expr_var, is_eq_ret_var, env);
         },
         .ne => {
-            // `a != b` desugars to `a.is_eq(b).not()`
+            // `a != b` desugars to `a.is_eq(b).not()` with additional constraint that a and b have the same type
             // Constraint 1: a.is_eq : a, b -> is_eq_ret
             // Constraint 2: is_eq_ret.not : is_eq_ret -> final_ret
-            // Note: a and b are NOT unified - the is_eq method signature determines if they must be the same
+
+            // Unify lhs and rhs to ensure both operands have the same type
+            const unify_result = try self.unify(lhs_var, rhs_var, env);
+
+            // If unification failed, short-circuit and set the expression to error
+            if (!unify_result.isOk()) {
+                try self.unifyWith(expr_var, .err, env);
+                return does_fx;
+            }
 
             // Create fresh var for the final return type (result of not)
             const not_ret_var = try self.fresh(env, expr_region);

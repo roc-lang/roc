@@ -116,10 +116,13 @@ test "check type - i64 annotation with fractional literal passes type checking" 
 }
 
 test "check type - string plus number should fail" {
+    // Str + number: when we unify Str with numeric flex, the flex's from_numeral constraint
+    // gets applied to Str. Since Str doesn't have from_numeral, we get MISSING METHOD.
+    // The plus dispatch on Str also fails with MISSING METHOD.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(source, .fail_first, "MISSING METHOD");
 }
 
 test "check type - string plus string should fail (no plus method)" {
@@ -285,34 +288,40 @@ test "check type - direct lambda equality - no is_eq" {
 
 // anonymous type inequality (desugars to is_eq().not()) //
 
-test "check type - (a == b) desugars to exactly a.is_eq(b)" {
-    // `a == b` desugars to `a.is_eq(b)`, so their inferred types are identical
+test "check type - (a == b) desugars to a.is_eq(b) with unified args" {
+    // `a == b` desugars to `a.is_eq(b)` with additional constraint that a and b have the same type
     const src_binop =
         \\|a, b| a == b
     ;
+
+    // The binop version unifies a and b, so they have the same type variable
+    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> d]";
+    try checkTypesExpr(src_binop, .pass, expected_binop);
+
+    // The direct method call version does NOT unify a and b
     const src_direct =
         \\|a, b| a.is_eq(b)
     ;
-
-    const expected: []const u8 = "c, d -> e where [c.is_eq : c, d -> e]";
-
-    try checkTypesExpr(src_direct, .pass, expected);
-    try checkTypesExpr(src_binop, .pass, expected);
+    const expected_direct: []const u8 = "c, d -> e where [c.is_eq : c, d -> e]";
+    try checkTypesExpr(src_direct, .pass, expected_direct);
 }
 
-test "check type - (a != b) desugars to exactly a.is_eq(b).not()" {
-    // `a != b` desugars to `a.is_eq(b).not()`, so their inferred types are identical
+test "check type - (a != b) desugars to a.is_eq(b).not() with unified args" {
+    // `a != b` desugars to `a.is_eq(b).not()` with additional constraint that a and b have the same type
     const src_binop =
         \\|a, b| a != b
     ;
+
+    // The binop version unifies a and b, so they have the same type variable
+    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> e, e.not : e -> d]";
+    try checkTypesExpr(src_binop, .pass, expected_binop);
+
+    // The direct method call version does NOT unify a and b
     const src_direct =
         \\|a, b| a.is_eq(b).not()
     ;
-
-    const expected: []const u8 = "c, d -> e where [c.is_eq : c, d -> f, f.not : f -> e]";
-
-    try checkTypesExpr(src_direct, .pass, expected);
-    try checkTypesExpr(src_binop, .pass, expected);
+    const expected_direct: []const u8 = "c, d -> e where [c.is_eq : c, d -> f, f.not : f -> e]";
+    try checkTypesExpr(src_direct, .pass, expected_direct);
 }
 
 test "check type - record inequality - same records" {
@@ -2224,6 +2233,7 @@ test "check type - equirecursive static dispatch with type annotation" {
 const ModuleExpectation = union(enum) {
     pass: DefExpectation,
     fail,
+    fail_first, // Allows multiple errors, checks first error title
 };
 
 const DefExpectation = union(enum) {
@@ -2257,6 +2267,9 @@ fn checkTypesModule(
         },
         .fail => {
             return test_env.assertOneTypeError(expected);
+        },
+        .fail_first => {
+            return test_env.assertFirstTypeError(expected);
         },
     }
 
