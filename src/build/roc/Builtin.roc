@@ -2,13 +2,11 @@ Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
 		is_empty : Str -> Bool
 		concat : Str, Str -> Str
+		contains : Str, Str -> Bool
 		trim : Str -> Str
 		caseless_ascii_equals : Str, Str -> Bool
 		with_ascii_lowercased : Str -> Str
 		with_ascii_uppercased : Str -> Str
-
-		contains : Str, Str -> Bool
-		contains = |_str, _other| True
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

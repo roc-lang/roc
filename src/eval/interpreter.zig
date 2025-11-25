@@ -2801,6 +2801,23 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_contains => {
+                // Str.contains : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const haystack_arg = args[0];
+                const needle_arg = args[1];
+
+                std.debug.assert(haystack_arg.ptr != null);
+                std.debug.assert(needle_arg.ptr != null);
+
+                const haystack: *const RocStr = @ptrCast(@alignCast(haystack_arg.ptr.?));
+                const needle: *const RocStr = @ptrCast(@alignCast(needle_arg.ptr.?));
+
+                const result = builtins.str.strContains(haystack.*, needle.*);
+
+                return try self.makeBoolValue(result);
+            },
             .str_trim => {
                 // Str.trim : Str -> Str
                 std.debug.assert(args.len == 1);
