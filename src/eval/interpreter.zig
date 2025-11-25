@@ -2951,6 +2951,21 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_starts_with => {
+                // Str.starts_with : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.startsWith(string.*, prefix.*));
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

@@ -856,3 +856,50 @@ test "e_low_level_lambda - F64.to_str with negative" {
     defer test_allocator.free(value);
     try testing.expect(std.mem.startsWith(u8, value, "\"-123.456"));
 }
+
+// Str.starts_with tests
+
+test "e_low_level_lambda - Str.starts_with returns True for matching prefix" {
+    const src =
+        \\x = Str.starts_with("hello world", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.starts_with returns False for non-matching prefix" {
+    const src =
+        \\x = Str.starts_with("hello world", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.starts_with with empty prefix" {
+    const src =
+        \\x = Str.starts_with("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.starts_with with empty string and empty prefix" {
+    const src =
+        \\x = Str.starts_with("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.starts_with with prefix longer than string" {
+    const src =
+        \\x = Str.starts_with("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
