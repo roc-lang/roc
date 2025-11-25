@@ -482,14 +482,22 @@ pub const Interpreter = struct {
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
-            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            // Only copy result if it has non-zero size (skip for unit type {})
+            const result_size = self.runtime_layout_store.layoutSize(result_value.layout);
+            if (result_size > 0) {
+                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            }
             return;
         }
 
         const result = try self.evalMinimal(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
-        try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+        // Only copy result if it has non-zero size (skip for unit type {})
+        const result_size = self.runtime_layout_store.layoutSize(result.layout);
+        if (result_size > 0) {
+            try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+        }
     }
 
     fn evalExprMinimal(

@@ -264,3 +264,43 @@ test "fx platform expect with numeric literal" {
     try testing.expectEqualStrings("", run_result.stdout);
     try testing.expectEqualStrings("", run_result.stderr);
 }
+
+test "fx platform match returning string" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run the app that has a match expression returning a string
+    // This tests that match expressions with string returns work correctly
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/match_str_return.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // The app should run successfully and exit with code 0
+    // It produces no output since it just returns a string that is discarded
+    try testing.expectEqualStrings("", run_result.stdout);
+    try testing.expectEqualStrings("", run_result.stderr);
+}
