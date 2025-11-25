@@ -420,6 +420,16 @@ pub const Interpreter = struct {
             }
 
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+
+            // Switch to the closure's source module for correct expression evaluation.
+            // This is critical because pattern indices and expression indices in the closure
+            // are relative to the source module where the closure was defined, not the
+            // current module. Without this switch, bindings created in the closure body
+            // would have the wrong source_env and lookups would fail.
+            const saved_env = self.env;
+            self.env = @constCast(header.source_env);
+            defer self.env = saved_env;
+
             const params = self.env.store.slicePatterns(header.params);
 
             try self.active_closures.append(func_val);
@@ -2821,6 +2831,23 @@ pub const Interpreter = struct {
 
                 out.is_initialized = true;
                 return out;
+            },
+            .str_contains => {
+                // Str.contains : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const haystack_arg = args[0];
+                const needle_arg = args[1];
+
+                std.debug.assert(haystack_arg.ptr != null);
+                std.debug.assert(needle_arg.ptr != null);
+
+                const haystack: *const RocStr = @ptrCast(@alignCast(haystack_arg.ptr.?));
+                const needle: *const RocStr = @ptrCast(@alignCast(needle_arg.ptr.?));
+
+                const result = builtins.str.strContains(haystack.*, needle.*);
+
+                return try self.makeBoolValue(result);
             },
             .str_trim => {
                 // Str.trim : Str -> Str
