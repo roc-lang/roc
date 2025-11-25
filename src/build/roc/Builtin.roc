@@ -3,6 +3,7 @@ Builtin :: [].{
 		is_empty : Str -> Bool
 		concat : Str, Str -> Str
 		trim : Str -> Str
+		caseless_ascii_equals : Str, Str -> Bool
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True

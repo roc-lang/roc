@@ -2814,6 +2814,24 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_caseless_ascii_equals => {
+                // Str.caseless_ascii_equals : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const str_a_arg = args[0];
+                const str_b_arg = args[1];
+
+                std.debug.assert(str_a_arg.ptr != null);
+                std.debug.assert(str_b_arg.ptr != null);
+
+                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
+                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+
+                // Call strConcat to concatenate the strings
+                const result = builtins.str.strCaselessAsciiEquals(str_a.*, str_b.*);
+
+                return try self.makeBoolValue(result);
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
