@@ -402,6 +402,7 @@ pub const Expr = union(enum) {
         // String operations
         str_is_empty,
         str_concat,
+        str_contains,
         str_trim,
         str_caseless_ascii_equals,
         str_with_ascii_lowercased,
