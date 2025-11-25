@@ -624,6 +624,90 @@ fn introduceTypeNameOnly(
     try self.exposed_type_texts.put(self.env.gpa, type_text, region);
 }
 
+/// Recursively introduce nested item aliases into the current scope.
+/// Given a type prefix (e.g., "Inner" or "Inner.Deep"), this adds aliases for all items
+/// defined in that nested type and all of its nested types.
+///
+/// For example, if we're in Outer's scope and Inner has:
+/// - Inner.val = 1
+/// - Inner.Deep := [].{ deepVal = 2 }
+///
+/// This will add:
+/// - "Inner.val" -> pattern for Inner.val
+/// - "Inner.Deep.deepVal" -> pattern for Inner.Deep.deepVal
+fn introduceNestedItemAliases(
+    self: *Self,
+    qualified_parent_idx: Ident.Idx, // Fully qualified parent, e.g., "Module.Outer.Inner"
+    prefix: []const u8, // User-facing prefix for this scope, e.g., "Inner"
+    assoc_statements: anytype,
+) std.mem.Allocator.Error!void {
+    for (self.parse_ir.store.statementSlice(assoc_statements)) |assoc_stmt_idx| {
+        const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
+        switch (assoc_stmt) {
+            .decl => |decl| {
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        // Build fully qualified name (e.g., "Module.Outer.Inner.val")
+                        const qualified_text = self.env.getIdent(qualified_parent_idx);
+                        const decl_text = self.env.getIdent(decl_ident);
+                        const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, decl_text);
+
+                        // Look up the fully qualified pattern
+                        switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
+                            .found => |pattern_idx| {
+                                const scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                // Build prefixed name for this scope (e.g., "Inner.val")
+                                // Need to copy prefix to buffer to avoid invalidation
+                                var prefix_buf: [256]u8 = undefined;
+                                if (prefix.len > prefix_buf.len) continue;
+                                @memcpy(prefix_buf[0..prefix.len], prefix);
+                                const safe_prefix = prefix_buf[0..prefix.len];
+
+                                const decl_text_fresh = self.env.getIdent(decl_ident);
+                                const prefixed_ident_idx = try self.env.insertQualifiedIdent(safe_prefix, decl_text_fresh);
+                                try scope.idents.put(self.env.gpa, prefixed_ident_idx, pattern_idx);
+                            },
+                            .not_found => {},
+                        }
+                    }
+                }
+            },
+            .type_decl => |nested_type_decl| {
+                // Recursively process nested types
+                if (nested_type_decl.associated) |nested_assoc| {
+                    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                    const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+
+                    // Build fully qualified name for the nested type
+                    const qualified_text = self.env.getIdent(qualified_parent_idx);
+                    const nested_type_text = self.env.getIdent(nested_type_ident);
+                    const nested_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_type_text);
+
+                    // Build new prefix (e.g., "Inner.Deep")
+                    // Need to copy to buffer to avoid invalidation
+                    var new_prefix_buf: [256]u8 = undefined;
+                    if (prefix.len > new_prefix_buf.len) continue;
+                    @memcpy(new_prefix_buf[0..prefix.len], prefix);
+
+                    // Re-fetch nested_type_text after insertQualifiedIdent may have reallocated
+                    const nested_type_text_fresh = self.env.getIdent(nested_type_ident);
+                    if (prefix.len + 1 + nested_type_text_fresh.len > new_prefix_buf.len) continue;
+                    new_prefix_buf[prefix.len] = '.';
+                    @memcpy(new_prefix_buf[prefix.len + 1 ..][0..nested_type_text_fresh.len], nested_type_text_fresh);
+                    const new_prefix = new_prefix_buf[0 .. prefix.len + 1 + nested_type_text_fresh.len];
+
+                    // Recursively introduce items from this nested type
+                    try self.introduceNestedItemAliases(nested_qualified_idx, new_prefix, nested_assoc.statements);
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 /// Process an associated block: introduce all items, set up scope with aliases, and canonicalize
 /// When skip_first_pass is true, placeholders were already created by a recursive call to
 /// processAssociatedItemsFirstPass, so we skip directly to scope entry and body processing.
@@ -759,42 +843,11 @@ fn processAssociatedBlock(
                     try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, qualified_type_decl_idx);
                 }
 
-                // Introduce associated items of nested types into this scope
+                // Introduce associated items of nested types into this scope (recursively)
                 // Now that nested blocks have been processed, these patterns exist and can be aliased.
-                // This allows qualified access like "Inner.inner_val" from the parent scope.
+                // This allows qualified access like "Inner.val" and "Inner.Deep.deepVal" from the parent scope.
                 if (nested_type_decl.associated) |nested_assoc| {
-                    for (self.parse_ir.store.statementSlice(nested_assoc.statements)) |nested_assoc_stmt_idx| {
-                        const nested_assoc_stmt = self.parse_ir.store.getStatement(nested_assoc_stmt_idx);
-                        if (nested_assoc_stmt == .decl) {
-                            const nested_decl = nested_assoc_stmt.decl;
-                            const nested_pattern = self.parse_ir.store.getPattern(nested_decl.pattern);
-                            if (nested_pattern == .ident) {
-                                const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
-                                if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
-                                    // Build fully qualified name (e.g., "Builtin.Num.Numeral.is_negative")
-                                    const qualified_text = self.env.getIdent(qualified_ident_idx);
-                                    const nested_decl_text = self.env.getIdent(nested_decl_ident);
-                                    const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
-
-                                    // Look up the fully qualified pattern (from parent scope via nesting)
-                                    switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
-                                        .found => |pattern_idx| {
-                                            const scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                                            // Add type-qualified name (e.g., "Inner.inner_val") so parent can
-                                            // access nested items via qualified syntax, but NOT unqualified.
-                                            // Unqualified access (e.g., just "inner_val") would violate scoping
-                                            // rules - nested items should only be accessible within their own
-                                            // scope or via qualified access from parent scopes.
-                                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(nested_type_text, nested_decl_text);
-                                            try scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                                        },
-                                        .not_found => {},
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    try self.introduceNestedItemAliases(qualified_ident_idx, nested_type_text, nested_assoc.statements);
                 }
             },
             .decl => {
@@ -1201,19 +1254,21 @@ fn processAssociatedItemsSecondPass(
     }
 }
 
-/// Register progressively qualified names at each scope level.
+/// Register the user-facing fully qualified name in the module scope.
 /// Given a fully qualified name like "module.Foo.Bar.baz", this registers:
 /// - "Foo.Bar.baz" in module scope (user-facing fully qualified)
-/// - "Bar.baz" in Foo's scope (partially qualified)
-/// - "baz" in Bar's scope (unqualified)
 ///
-/// This ensures single-string lookups work correctly at any scope level.
-fn registerProgressivelyQualifiedNames(
+/// Note: Partially qualified names (e.g., "Bar.baz" for Foo's scope, "baz" for Bar's scope)
+/// are NOT registered here. They are registered in processAssociatedBlock when the
+/// actual scopes are entered, via the alias registration logic there.
+fn registerUserFacingName(
     self: *Self,
     fully_qualified_idx: Ident.Idx,
     item_name_idx: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
 ) std.mem.Allocator.Error!void {
+    _ = item_name_idx;
+
     // Get the fully qualified text and strip the module prefix
     const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
     const module_prefix = self.env.module_name;
@@ -1236,82 +1291,10 @@ fn registerProgressivelyQualifiedNames(
     @memcpy(buf[0..user_facing_text.len], user_facing_text);
     const user_text = buf[0..user_facing_text.len];
 
-    // Parse the user-facing text into components: ["Foo", "Bar", "baz"]
-    var components: [32][]const u8 = undefined;
-    var num_components: usize = 0;
-    var start: usize = 0;
-    for (user_text, 0..) |c, i| {
-        if (c == '.') {
-            if (num_components < components.len) {
-                components[num_components] = user_text[start..i];
-                num_components += 1;
-            }
-            start = i + 1;
-        }
-    }
-    // Add the last component (the item name)
-    if (num_components < components.len and start < user_text.len) {
-        components[num_components] = user_text[start..];
-        num_components += 1;
-    }
-
-    if (num_components == 0) return;
-
-    // Now register at each scope level.
-    // Walk through scopes from module (index 0) to current, matching with type components.
-    // For each scope with associated_type_name, we register the suffix starting from that type.
-
-    // First, register the full user-facing name in module scope (index 0)
-    const full_user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_text));
-    try self.scopes.items[0].idents.put(self.env.gpa, full_user_facing_idx, pattern_idx);
-
-    // Now walk through scopes looking for associated type scopes
-    // Each associated type scope should get the suffix starting after that type
-    var scope_idx: usize = 1;
-    while (scope_idx < self.scopes.items.len) : (scope_idx += 1) {
-        const scope = &self.scopes.items[scope_idx];
-        if (scope.associated_type_name) |type_name_ident| {
-            const type_name = self.env.getIdent(type_name_ident);
-            // Find this type name in our components
-            for (components[0..num_components], 0..) |comp, comp_idx| {
-                if (std.mem.eql(u8, comp, type_name)) {
-                    // This scope corresponds to component comp_idx
-                    // Register the suffix starting from comp_idx + 1
-                    if (comp_idx + 1 < num_components) {
-                        // Build the suffix string
-                        var suffix_buf: [512]u8 = undefined;
-                        var suffix_len: usize = 0;
-                        var first = true;
-                        for (components[comp_idx + 1 .. num_components]) |suffix_comp| {
-                            if (!first) {
-                                suffix_buf[suffix_len] = '.';
-                                suffix_len += 1;
-                            }
-                            if (suffix_len + suffix_comp.len > suffix_buf.len) break;
-                            @memcpy(suffix_buf[suffix_len..][0..suffix_comp.len], suffix_comp);
-                            suffix_len += suffix_comp.len;
-                            first = false;
-                        }
-                        if (suffix_len > 0) {
-                            const suffix_idx = try self.env.insertIdent(base.Ident.for_text(suffix_buf[0..suffix_len]));
-                            try scope.idents.put(self.env.gpa, suffix_idx, pattern_idx);
-                        }
-                    } else if (comp_idx + 1 == num_components) {
-                        // Last component is the item name itself - register unqualified
-                        try scope.idents.put(self.env.gpa, item_name_idx, pattern_idx);
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    // Also ensure the unqualified name is in the innermost associated type scope
-    // (the scope where this item is being defined)
-    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    if (current_scope.associated_type_name != null) {
-        try current_scope.idents.put(self.env.gpa, item_name_idx, pattern_idx);
-    }
+    // Register ONLY the fully qualified user-facing name in the module scope.
+    // For "Foo.Bar.baz", we register just "Foo.Bar.baz" - not the shorter suffixes.
+    const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_text));
+    try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, pattern_idx);
 }
 
 /// Register an identifier hierarchically into all active scopes using scope hierarchy information.
@@ -1613,7 +1596,7 @@ fn processAssociatedItemsFirstPass(
                         // - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
                         // - Foo's scope gets "Bar.baz" (partially qualified)
                         // - Bar's scope gets "baz" (unqualified)
-                        try self.registerProgressivelyQualifiedNames(qualified_idx, decl_ident, placeholder_pattern_idx);
+                        try self.registerUserFacingName(qualified_idx, decl_ident, placeholder_pattern_idx);
                     }
                 }
             },
@@ -1641,7 +1624,7 @@ fn processAssociatedItemsFirstPass(
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
 
                     // Register progressively qualified names at each scope level per the plan
-                    try self.registerProgressivelyQualifiedNames(qualified_idx, anno_ident, placeholder_pattern_idx);
+                    try self.registerUserFacingName(qualified_idx, anno_ident, placeholder_pattern_idx);
                 }
             },
             else => {
