@@ -86,6 +86,9 @@ Builtin :: [].{
 		    Ok(_) => fallback
 		}
 
+		is_eq : Try(ok, err), Try(ok, err) -> Bool
+		is_ne : Try(ok, err), Try(ok, err) -> Bool
+
 		#eq : Try(ok, err), Try(ok, err) -> Bool
 		#	where [
 		#		ok.equals : ok, ok -> Bool,

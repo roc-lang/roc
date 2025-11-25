@@ -220,6 +220,8 @@ pub const Interpreter = struct {
     def_stack: std.array_list.Managed(DefInProgress),
     /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
+    /// Receiver type for method calls (set before calling low-level methods like Try.is_eq)
+    method_receiver_type: ?types.Var,
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
 
@@ -371,6 +373,7 @@ pub const Interpreter = struct {
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
+            .method_receiver_type = null,
             .last_error_message = null,
         };
 
@@ -3072,6 +3075,38 @@ pub const Interpreter = struct {
                 return try self.makeBoolValue(lhs != rhs);
             },
 
+            // Try operations
+            .try_is_eq => {
+                // Try.is_eq : Try(ok, err), Try(ok, err) -> Bool
+                // Uses structural equality on the backing tag union
+                std.debug.assert(args.len == 2);
+                const receiver_var = self.method_receiver_type orelse {
+                    return error.TypeMismatch;
+                };
+                const result = self.valuesStructurallyEqual(args[0], receiver_var, args[1], receiver_var) catch |err| {
+                    if (err == error.NotImplemented) {
+                        return try self.makeBoolValue(false);
+                    }
+                    return err;
+                };
+                return try self.makeBoolValue(result);
+            },
+            .try_is_ne => {
+                // Try.is_ne : Try(ok, err), Try(ok, err) -> Bool
+                // Uses structural equality on the backing tag union and negates
+                std.debug.assert(args.len == 2);
+                const receiver_var = self.method_receiver_type orelse {
+                    return error.TypeMismatch;
+                };
+                const result = self.valuesStructurallyEqual(args[0], receiver_var, args[1], receiver_var) catch |err| {
+                    if (err == error.NotImplemented) {
+                        return try self.makeBoolValue(true); // If can't compare, assume not equal
+                    }
+                    return err;
+                };
+                return try self.makeBoolValue(!result);
+            },
+
             // Numeric type checking operations
             .num_is_zero => {
                 // num.is_zero : num -> Bool
@@ -5667,6 +5702,11 @@ pub const Interpreter = struct {
         const method_name_str = current_ident_store.getText(method_name);
         // Construct: "OriginModule.TypeName.methodName"
         // Note: TypeName may already contain dots for nested types
+        // If type_name already starts with origin_module, don't duplicate
+        if (std.mem.startsWith(u8, type_name, origin_module_text) and type_name.len > origin_module_text.len and type_name[origin_module_text.len] == '.') {
+            // type_name already includes the module prefix, just append method
+            return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
+        }
         return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
@@ -5736,26 +5776,28 @@ pub const Interpreter = struct {
 
         // Get the nominal type information from lhs, or handle anonymous structural types
         const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
-            .structure => |s| switch (s) {
-                .nominal_type => |nom| .{
-                    .origin = nom.origin_module,
-                    .ident = nom.ident.ident_idx,
-                },
-                .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
-                    // Anonymous structural types have implicit is_eq
-                    if (method_ident == self.env.is_eq_ident) {
-                        const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
-                            // If structural equality is not implemented for this type, return false
-                            if (err == error.NotImplemented) {
-                                return try self.makeBoolValue(false);
-                            }
-                            return err;
-                        };
-                        return try self.makeBoolValue(result);
-                    }
-                    break :blk null;
-                },
-                else => null,
+            .structure => |s| blk2: {
+                break :blk2 switch (s) {
+                    .nominal_type => |nom| .{
+                        .origin = nom.origin_module,
+                        .ident = nom.ident.ident_idx,
+                    },
+                    .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                        // Anonymous structural types have implicit is_eq
+                        if (method_ident == self.env.is_eq_ident) {
+                            const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
+                                // If structural equality is not implemented for this type, return false
+                                if (err == error.NotImplemented) {
+                                    return try self.makeBoolValue(false);
+                                }
+                                return err;
+                            };
+                            return try self.makeBoolValue(result);
+                        }
+                        break :blk null;
+                    },
+                    else => null,
+                };
             },
             else => null,
         };
@@ -5765,12 +5807,12 @@ pub const Interpreter = struct {
         }
 
         // Resolve the method function
-        const method_func = self.resolveMethodFunction(
+        const method_func = try self.resolveMethodFunction(
             nominal_info.?.origin,
             nominal_info.?.ident,
             method_ident,
             roc_ops,
-        ) catch |err| return err;
+        );
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
         // Prepare arguments: lhs (receiver) + rhs
@@ -5805,6 +5847,12 @@ pub const Interpreter = struct {
         const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
+
+            // Set receiver type for methods that need it (like Try.is_eq)
+            const saved_receiver_type = self.method_receiver_type;
+            self.method_receiver_type = lhs_rt_var;
+            defer self.method_receiver_type = saved_receiver_type;
+
             // Dispatch to actual low-level builtin implementation
             // Binary ops don't need return type info (not num_from_int_digits etc)
             return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);

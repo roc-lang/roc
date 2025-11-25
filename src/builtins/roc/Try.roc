@@ -168,6 +168,8 @@ is_eq : Try(ok, err), Try(ok, err) -> Bool where [ok.Eq, err.Eq]
 is_eq = |r1, r2| match (r1, r2) {
     (Try.Ok(ok1), Try.Ok(ok2)) => ok1 == ok2
     (Try.Err(err1), Try.Err(err2)) => err1 == err2
+    (Try.Ok(_), Try.Err(_)) => Bool.false
+    (Try.Err(_), Try.Ok(_)) => Bool.false
 }
 
 expect Try.Ok(1) == Try.Ok(1)

@@ -436,6 +436,10 @@ pub const Expr = union(enum) {
         bool_is_eq,
         bool_is_ne,
 
+        // Try operations
+        try_is_eq,
+        try_is_ne,
+
         // Numeric type checking operations
         num_is_zero, // All numeric types
         num_is_negative, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
