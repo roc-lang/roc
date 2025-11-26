@@ -231,6 +231,7 @@ UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
+TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -971,6 +972,67 @@ It has the type:
 
 But the type annotation says it should have the type:
     _Try(d)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:100:9:148:2:**
+```roc
+main! = |_| { # Yeah Ie
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comd
+		tag
+
+	# Jusnt!
+
+	...
+	match_time(
+		..., #
+	)
+	some_func(
+		dbg # bug
+			42, # Aft expr
+	)
+	crash "Unreachtement
+	tag_with = Ok(number)
+	ited = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # Afin list
+e[, # afarg
+		),	456, # ee
+	]
+	for n in list {
+	line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	m_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # Thisnt
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+} # Commenl decl
+```
+
+It has the type:
+    _List(Error) => Error_
+
+But the type annotation says it should have the type:
+    _List(Error) -> Error_
 
 # TOKENS
 ~~~zig
@@ -2255,7 +2317,7 @@ expect {
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
-		(patt (type "List(Error) -> Error"))
+		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2292,7 +2354,7 @@ expect {
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
-		(expr (type "List(Error) -> Error"))
+		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~
