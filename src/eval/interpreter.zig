@@ -226,8 +226,6 @@ pub const Interpreter = struct {
     def_stack: std.array_list.Managed(DefInProgress),
     /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
-    /// Receiver type for method calls (set before calling low-level methods like Try.is_eq)
-    method_receiver_type: ?types.Var,
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
 
@@ -340,7 +338,6 @@ pub const Interpreter = struct {
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
-            .method_receiver_type = null,
             .last_error_message = null,
         };
 
@@ -6055,11 +6052,6 @@ pub const Interpreter = struct {
         const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
-
-            // Set receiver type for methods that need it (like Try.is_eq)
-            const saved_receiver_type = self.method_receiver_type;
-            self.method_receiver_type = lhs_rt_var;
-            defer self.method_receiver_type = saved_receiver_type;
 
             // Dispatch to actual low-level builtin implementation
             // Binary ops don't need return type info (not num_from_int_digits etc)
