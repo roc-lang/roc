@@ -106,8 +106,8 @@ const CheckTypeCheckerPatternsStep = struct {
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
-        // Recursively scan src/check/ and src/layout/ for .zig files
-        const dirs_to_scan = [_][]const u8{ "src/check", "src/layout" };
+        // Recursively scan src/check/, src/layout/, and src/eval/ for .zig files
+        const dirs_to_scan = [_][]const u8{ "src/check", "src/layout", "src/eval" };
         for (dirs_to_scan) |dir_path| {
             var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
                 return step.fail("Failed to open {s} directory: {}", .{ dir_path, err });
@@ -120,21 +120,21 @@ const CheckTypeCheckerPatternsStep = struct {
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 80 ++ "\n", .{});
-            std.debug.print("FORBIDDEN PATTERN DETECTED IN TYPE CHECKER CODE\n", .{});
+            std.debug.print("FORBIDDEN PATTERN DETECTED\n", .{});
             std.debug.print("=" ** 80 ++ "\n\n", .{});
 
             std.debug.print(
-                \\The type checker code in src/check/ and src/layout/ must NOT use std.mem.* functions.
+                \\Code in src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
                 \\
                 \\WHY THIS RULE EXISTS:
-                \\  During type checking, we NEVER do string or byte comparisons because:
+                \\  We NEVER do string or byte comparisons because:
                 \\
                 \\  1. PERFORMANCE: String comparisons take O(n) time where n is the string
-                \\     length. Type checking can involve many comparisons, so this adds up.
+                \\     length. These code paths can involve many comparisons, so this adds up.
                 \\
-                \\  2. BRITTLENESS: String comparisons make the type checker sensitive to
-                \\     changes it shouldn't care about (e.g., how identifiers are rendered,
-                \\     whitespace, formatting). This leads to subtle bugs.
+                \\  2. BRITTLENESS: String comparisons make the code sensitive to changes it
+                \\     shouldn't care about (e.g., how identifiers are rendered, whitespace,
+                \\     formatting). This leads to subtle bugs.
                 \\
                 \\WHAT TO DO INSTEAD:
                 \\  Always compare indices rather than strings:
@@ -164,7 +164,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} forbidden patterns (std.mem.* or findByString) in src/check/ or src/layout/. " ++
+                "Found {d} forbidden patterns (raw string comparison or manipulation) in src/check/, src/layout/, or src/eval/. " ++
                     "See above for details on why this is forbidden and what to do instead.",
                 .{violations.items.len},
             );

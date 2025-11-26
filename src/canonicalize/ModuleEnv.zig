@@ -175,6 +175,26 @@ is_eq_ident: Ident.Idx,
 /// Interned identifier for "is_ne" - used for != operator desugaring
 is_ne_ident: Ident.Idx,
 
+// Fully-qualified type identifiers for type checking and layout generation
+// These match the nominal types created during type checking
+builtin_try_ident: Ident.Idx,
+builtin_numeral_ident: Ident.Idx,
+list_type_ident: Ident.Idx,
+box_type_ident: Ident.Idx,
+u8_type_ident: Ident.Idx,
+i8_type_ident: Ident.Idx,
+u16_type_ident: Ident.Idx,
+i16_type_ident: Ident.Idx,
+u32_type_ident: Ident.Idx,
+i32_type_ident: Ident.Idx,
+u64_type_ident: Ident.Idx,
+i64_type_ident: Ident.Idx,
+u128_type_ident: Ident.Idx,
+i128_type_ident: Ident.Idx,
+f32_type_ident: Ident.Idx,
+f64_type_ident: Ident.Idx,
+dec_type_ident: Ident.Idx,
+
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
 deferred_numeric_literals: DeferredNumericLiteral.SafeList,
@@ -271,20 +291,24 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const is_eq_ident = try common.insertIdent(gpa, Ident.for_text("is_eq"));
     const is_ne_ident = try common.insertIdent(gpa, Ident.for_text("is_ne"));
 
-    // Pre-intern numeric type identifiers for layout store (these get looked up during runtime layout generation)
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.U8"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.I8"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.U16"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.I16"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.U32"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.I32"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.U64"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.I64"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.U128"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.I128"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.F32"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.F64"));
-    _ = try common.insertIdent(gpa, Ident.for_text("Num.Dec"));
+    // Pre-intern fully-qualified type identifiers for type checking and layout generation
+    const builtin_try_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Try"));
+    const builtin_numeral_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral"));
+    const list_type_ident = try common.insertIdent(gpa, Ident.for_text("List"));
+    const box_type_ident = try common.insertIdent(gpa, Ident.for_text("Box"));
+    const u8_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8"));
+    const i8_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8"));
+    const u16_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16"));
+    const i16_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16"));
+    const u32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32"));
+    const i32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32"));
+    const u64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64"));
+    const i64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64"));
+    const u128_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U128"));
+    const i128_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I128"));
+    const f32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32"));
+    const f64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64"));
+    const dec_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec"));
 
     return Self{
         .gpa = gpa,
@@ -322,6 +346,23 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .is_gte_ident = is_gte_ident,
         .is_eq_ident = is_eq_ident,
         .is_ne_ident = is_ne_ident,
+        .builtin_try_ident = builtin_try_ident_val,
+        .builtin_numeral_ident = builtin_numeral_ident_val,
+        .list_type_ident = list_type_ident,
+        .box_type_ident = box_type_ident,
+        .u8_type_ident = u8_type_ident,
+        .i8_type_ident = i8_type_ident,
+        .u16_type_ident = u16_type_ident,
+        .i16_type_ident = i16_type_ident,
+        .u32_type_ident = u32_type_ident,
+        .i32_type_ident = i32_type_ident,
+        .u64_type_ident = u64_type_ident,
+        .i64_type_ident = i64_type_ident,
+        .u128_type_ident = u128_type_ident,
+        .i128_type_ident = i128_type_ident,
+        .f32_type_ident = f32_type_ident,
+        .f64_type_ident = f64_type_ident,
+        .dec_type_ident = dec_type_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1762,6 +1803,24 @@ pub const Serialized = extern struct {
     is_gte_ident_reserved: u32, // Reserved space for is_gte_ident field (interned during deserialization)
     is_eq_ident_reserved: u32, // Reserved space for is_eq_ident field (interned during deserialization)
     is_ne_ident_reserved: u32, // Reserved space for is_ne_ident field (interned during deserialization)
+    // Fully-qualified type identifiers for type checking and layout generation (interned during deserialization)
+    builtin_try_ident_reserved: u32,
+    builtin_numeral_ident_reserved: u32,
+    list_type_ident_reserved: u32,
+    box_type_ident_reserved: u32,
+    u8_type_ident_reserved: u32,
+    i8_type_ident_reserved: u32,
+    u16_type_ident_reserved: u32,
+    i16_type_ident_reserved: u32,
+    u32_type_ident_reserved: u32,
+    i32_type_ident_reserved: u32,
+    u64_type_ident_reserved: u32,
+    i64_type_ident_reserved: u32,
+    u128_type_ident_reserved: u32,
+    i128_type_ident_reserved: u32,
+    f32_type_ident_reserved: u32,
+    f64_type_ident_reserved: u32,
+    dec_type_ident_reserved: u32,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1876,6 +1935,24 @@ pub const Serialized = extern struct {
             .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
             .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
             .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+            // Fully-qualified type identifiers for type checking and layout generation
+            .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
+            .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+            .list_type_ident = common.findIdent("List") orelse unreachable,
+            .box_type_ident = common.findIdent("Box") orelse unreachable,
+            .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
+            .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
+            .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
+            .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
+            .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
+            .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
+            .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
+            .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
+            .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
+            .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
+            .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
+            .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
+            .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 

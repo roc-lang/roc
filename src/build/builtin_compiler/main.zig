@@ -43,52 +43,8 @@ fn flushStderr() void {
     }
 }
 
-/// Indices of builtin type declarations within the Builtin module.
-/// These are determined at build time via string lookup and serialized to builtin_indices.bin.
-const BuiltinIndices = struct {
-    /// Statement index of nested Bool type declaration within Builtin module
-    bool_type: CIR.Statement.Idx,
-    /// Statement index of nested Try type declaration within Builtin module
-    try_type: CIR.Statement.Idx,
-    /// Statement index of nested Dict type declaration within Builtin module
-    dict_type: CIR.Statement.Idx,
-    /// Statement index of nested Set type declaration within Builtin module
-    set_type: CIR.Statement.Idx,
-    /// Statement index of nested Str type declaration within Builtin module
-    str_type: CIR.Statement.Idx,
-    /// Statement index of nested List type declaration within Builtin module
-    list_type: CIR.Statement.Idx,
-    /// Statement index of nested Box type declaration within Builtin module
-    box_type: CIR.Statement.Idx,
-    /// Statement index of nested U8 type declaration within Builtin module
-    u8_type: CIR.Statement.Idx,
-    /// Statement index of nested I8 type declaration within Builtin module
-    i8_type: CIR.Statement.Idx,
-    /// Statement index of nested U16 type declaration within Builtin module
-    u16_type: CIR.Statement.Idx,
-    /// Statement index of nested I16 type declaration within Builtin module
-    i16_type: CIR.Statement.Idx,
-    /// Statement index of nested U32 type declaration within Builtin module
-    u32_type: CIR.Statement.Idx,
-    /// Statement index of nested I32 type declaration within Builtin module
-    i32_type: CIR.Statement.Idx,
-    /// Statement index of nested U64 type declaration within Builtin module
-    u64_type: CIR.Statement.Idx,
-    /// Statement index of nested I64 type declaration within Builtin module
-    i64_type: CIR.Statement.Idx,
-    /// Statement index of nested U128 type declaration within Builtin module
-    u128_type: CIR.Statement.Idx,
-    /// Statement index of nested I128 type declaration within Builtin module
-    i128_type: CIR.Statement.Idx,
-    /// Statement index of nested Dec type declaration within Builtin module
-    dec_type: CIR.Statement.Idx,
-    /// Statement index of nested F32 type declaration within Builtin module
-    f32_type: CIR.Statement.Idx,
-    /// Statement index of nested F64 type declaration within Builtin module
-    f64_type: CIR.Statement.Idx,
-    /// Statement index of nested Numeral type declaration within Builtin module
-    numeral_type: CIR.Statement.Idx,
-};
+// Use the canonical BuiltinIndices from CIR
+const BuiltinIndices = CIR.BuiltinIndices;
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
 /// This transforms standalone annotations into low-level builtin lambda operations
@@ -578,31 +534,33 @@ pub fn main() !void {
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
     const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
-    // Expose the nested types so they can be found by getExposedNodeIndexById
-    // For builtin types, the statement index IS the node index
+    // Look up idents for each type
+    // Top-level types use simple names: "Bool", "Try", "List", etc.
+    // Numeric types nested under Num use fully-qualified names: "Builtin.Num.U8", etc.
+    // This allows method lookup to work correctly (getMethodIdent builds the full path)
     const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
     const try_ident = builtin_env.common.findIdent("Try") orelse unreachable;
     const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
     const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
     const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
     const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
+    const box_ident = builtin_env.common.findIdent("Box") orelse unreachable;
+    const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
+    const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
+    const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
+    const i16_ident = builtin_env.common.findIdent("Builtin.Num.I16") orelse unreachable;
+    const u32_ident = builtin_env.common.findIdent("Builtin.Num.U32") orelse unreachable;
+    const i32_ident = builtin_env.common.findIdent("Builtin.Num.I32") orelse unreachable;
+    const u64_ident = builtin_env.common.findIdent("Builtin.Num.U64") orelse unreachable;
+    const i64_ident = builtin_env.common.findIdent("Builtin.Num.I64") orelse unreachable;
+    const u128_ident = builtin_env.common.findIdent("Builtin.Num.U128") orelse unreachable;
+    const i128_ident = builtin_env.common.findIdent("Builtin.Num.I128") orelse unreachable;
+    const dec_ident = builtin_env.common.findIdent("Builtin.Num.Dec") orelse unreachable;
+    const f32_ident = builtin_env.common.findIdent("Builtin.Num.F32") orelse unreachable;
+    const f64_ident = builtin_env.common.findIdent("Builtin.Num.F64") orelse unreachable;
+    const numeral_ident = builtin_env.common.findIdent("Builtin.Num.Numeral") orelse unreachable;
 
-    // Expose numeric types with their simple names (not Num.U8, just U8)
-    const u8_ident = builtin_env.common.findIdent("U8") orelse unreachable;
-    const i8_ident = builtin_env.common.findIdent("I8") orelse unreachable;
-    const u16_ident = builtin_env.common.findIdent("U16") orelse unreachable;
-    const i16_ident = builtin_env.common.findIdent("I16") orelse unreachable;
-    const u32_ident = builtin_env.common.findIdent("U32") orelse unreachable;
-    const i32_ident = builtin_env.common.findIdent("I32") orelse unreachable;
-    const u64_ident = builtin_env.common.findIdent("U64") orelse unreachable;
-    const i64_ident = builtin_env.common.findIdent("I64") orelse unreachable;
-    const u128_ident = builtin_env.common.findIdent("U128") orelse unreachable;
-    const i128_ident = builtin_env.common.findIdent("I128") orelse unreachable;
-    const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
-    const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
-    const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
-    const numeral_ident = builtin_env.common.findIdent("Numeral") orelse unreachable;
-
+    // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
@@ -633,6 +591,7 @@ pub fn main() !void {
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
+        // Statement indices
         .bool_type = bool_type_idx,
         .try_type = try_type_idx,
         .dict_type = dict_type_idx,
@@ -654,6 +613,28 @@ pub fn main() !void {
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
+        // Ident indices
+        .bool_ident = bool_ident,
+        .try_ident = try_ident,
+        .dict_ident = dict_ident,
+        .set_ident = set_ident,
+        .str_ident = str_ident,
+        .list_ident = list_ident,
+        .box_ident = box_ident,
+        .u8_ident = u8_ident,
+        .i8_ident = i8_ident,
+        .u16_ident = u16_ident,
+        .i16_ident = i16_ident,
+        .u32_ident = u32_ident,
+        .i32_ident = i32_ident,
+        .u64_ident = u64_ident,
+        .i64_ident = i64_ident,
+        .u128_ident = u128_ident,
+        .i128_ident = i128_ident,
+        .dec_ident = dec_ident,
+        .f32_ident = f32_ident,
+        .f64_ident = f64_ident,
+        .numeral_ident = numeral_ident,
     };
 
     // Validate that BuiltinIndices contains all type declarations under Builtin
@@ -668,13 +649,16 @@ pub fn main() !void {
 /// with the exception of "Num" which is a container type, not an auto-imported type.
 fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinIndices) !void {
     // Collect all statement indices from BuiltinIndices using reflection
+    // Only check Statement.Idx fields (skip Ident.Idx fields)
     var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(std.heap.page_allocator);
     defer indexed_stmts.deinit();
 
     const fields = @typeInfo(BuiltinIndices).@"struct".fields;
     inline for (fields) |field| {
-        const stmt_idx = @field(indices, field.name);
-        try indexed_stmts.put(stmt_idx, {});
+        if (field.type == CIR.Statement.Idx) {
+            const stmt_idx = @field(indices, field.name);
+            try indexed_stmts.put(stmt_idx, {});
+        }
     }
 
     // Check all nominal type declarations in the Builtin module
@@ -1013,6 +997,13 @@ fn serializeModuleEnv(
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
+}
+
+/// Get the ident index from a type declaration statement
+fn getTypeIdent(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) base.Ident.Idx {
+    const stmt = env.store.getStatement(stmt_idx);
+    const header = env.store.getTypeHeader(stmt.s_nominal_decl.header);
+    return header.name;
 }
 
 /// Find a type declaration by name in a compiled module

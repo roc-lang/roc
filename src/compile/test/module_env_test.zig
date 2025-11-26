@@ -122,6 +122,24 @@ test "ModuleEnv.Serialized roundtrip" {
         .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
         .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
         .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        // Fully-qualified type identifiers for type checking and layout generation
+        .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
+        .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+        .list_type_ident = common.findIdent("List") orelse unreachable,
+        .box_type_ident = common.findIdent("Box") orelse unreachable,
+        .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
+        .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
+        .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
+        .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
+        .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
+        .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
+        .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
+        .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
+        .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
+        .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
+        .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
+        .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
+        .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
     };
 
@@ -131,8 +149,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
     // ModuleEnv.init() also interns 19 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
-    // Plus 13 numeric type identifiers: Num.U8, Num.I8, Num.U16, Num.I16, Num.U32, Num.I32, Num.U64, Num.I64, Num.U128, Num.I128, Num.F32, Num.F64, Num.Dec
-    try testing.expectEqual(@as(u32, 35), original.common.idents.interner.entry_count);
+    // Plus 17 type identifiers: Builtin.Try, Builtin.Num.Numeral, List, Box, Builtin.Num.{U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec}
+    try testing.expectEqual(@as(u32, 39), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -141,8 +159,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 35 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 13 numeric type identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 35), env.common.idents.interner.entry_count);
+    // Should have same 39 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 17 type identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 39), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

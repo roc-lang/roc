@@ -28,50 +28,54 @@ pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 /// Indices of builtin type declarations within the Builtin module.
 /// Loaded once at startup from builtin_indices.bin (generated at build time).
-/// The indices refer to statement positions within the Builtin.bin module.
+/// Contains both statement indices (positions within Builtin.bin) and ident indices
+/// (interned identifiers for comparison without string lookups).
 pub const BuiltinIndices = struct {
-    /// Statement index of nested Bool type declaration within Builtin module
+    // Statement indices - positions within the Builtin module
     bool_type: Statement.Idx,
-    /// Statement index of nested Try type declaration within Builtin module
     try_type: Statement.Idx,
-    /// Statement index of nested Dict type declaration within Builtin module
     dict_type: Statement.Idx,
-    /// Statement index of nested Set type declaration within Builtin module
     set_type: Statement.Idx,
-    /// Statement index of nested Str type declaration within Builtin module
     str_type: Statement.Idx,
-    /// Statement index of nested List type declaration within Builtin module
     list_type: Statement.Idx,
-    /// Statement index of nested Box type declaration within Builtin module
     box_type: Statement.Idx,
-    /// Statement index of nested U8 type declaration within Builtin module
     u8_type: Statement.Idx,
-    /// Statement index of nested I8 type declaration within Builtin module
     i8_type: Statement.Idx,
-    /// Statement index of nested U16 type declaration within Builtin module
     u16_type: Statement.Idx,
-    /// Statement index of nested I16 type declaration within Builtin module
     i16_type: Statement.Idx,
-    /// Statement index of nested U32 type declaration within Builtin module
     u32_type: Statement.Idx,
-    /// Statement index of nested I32 type declaration within Builtin module
     i32_type: Statement.Idx,
-    /// Statement index of nested U64 type declaration within Builtin module
     u64_type: Statement.Idx,
-    /// Statement index of nested I64 type declaration within Builtin module
     i64_type: Statement.Idx,
-    /// Statement index of nested U128 type declaration within Builtin module
     u128_type: Statement.Idx,
-    /// Statement index of nested I128 type declaration within Builtin module
     i128_type: Statement.Idx,
-    /// Statement index of nested Dec type declaration within Builtin module
     dec_type: Statement.Idx,
-    /// Statement index of nested F32 type declaration within Builtin module
     f32_type: Statement.Idx,
-    /// Statement index of nested F64 type declaration within Builtin module
     f64_type: Statement.Idx,
-    /// Statement index of nested Numeral type declaration within Builtin module
     numeral_type: Statement.Idx,
+
+    // Ident indices - simple unqualified names (e.g., "Bool", "U8")
+    bool_ident: Ident.Idx,
+    try_ident: Ident.Idx,
+    dict_ident: Ident.Idx,
+    set_ident: Ident.Idx,
+    str_ident: Ident.Idx,
+    list_ident: Ident.Idx,
+    box_ident: Ident.Idx,
+    u8_ident: Ident.Idx,
+    i8_ident: Ident.Idx,
+    u16_ident: Ident.Idx,
+    i16_ident: Ident.Idx,
+    u32_ident: Ident.Idx,
+    i32_ident: Ident.Idx,
+    u64_ident: Ident.Idx,
+    i64_ident: Ident.Idx,
+    u128_ident: Ident.Idx,
+    i128_ident: Ident.Idx,
+    dec_ident: Ident.Idx,
+    f32_ident: Ident.Idx,
+    f64_ident: Ident.Idx,
+    numeral_ident: Ident.Idx,
 };
 
 // Type definitions for module compilation

@@ -752,14 +752,30 @@ pub const ComptimeEvaluator = struct {
                 type_name_bytes;
 
             // Build qualified name: Builtin.Num.TypeName.from_numeral
-            // Note: type_name_bytes may be "Num.I64" or just "I64" depending on context
-            // We need to use the full type_name_bytes to preserve module nesting
+            // type_name_bytes may be:
+            // - "I64" (simple unqualified name)
+            // - "Num.I64" (partial qualification within module)
+            // - "Builtin.Num.I64" (fully qualified name including module)
+            // If already fully-qualified (starts with module name), don't prefix again
             var qualified_name_buf: [256]u8 = undefined;
-            const qualified_name = try std.fmt.bufPrint(
-                &qualified_name_buf,
-                "{s}.{s}.{s}",
-                .{ origin_env.module_name, type_name_bytes, method_name_bytes },
-            );
+            const qualified_name = if (std.mem.startsWith(u8, type_name_bytes, origin_env.module_name) and
+                type_name_bytes.len > origin_env.module_name.len and
+                type_name_bytes[origin_env.module_name.len] == '.')
+            blk: {
+                // Already fully qualified, just append method name
+                break :blk try std.fmt.bufPrint(
+                    &qualified_name_buf,
+                    "{s}.{s}",
+                    .{ type_name_bytes, method_name_bytes },
+                );
+            } else blk: {
+                // Need to add module prefix
+                break :blk try std.fmt.bufPrint(
+                    &qualified_name_buf,
+                    "{s}.{s}.{s}",
+                    .{ origin_env.module_name, type_name_bytes, method_name_bytes },
+                );
+            };
 
             // Look up the identifier in the origin module
             const ident_in_origin = origin_env.getIdentStoreConst().findByString(qualified_name) orelse {

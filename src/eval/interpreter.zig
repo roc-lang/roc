@@ -2498,10 +2498,16 @@ pub const Interpreter = struct {
                     if (err == error.MethodLookupFailed) {
                         // Get type and method names for a helpful crash message
                         const origin_env = self.getModuleEnvForOrigin(nominal_info.origin);
-                        const type_name = if (origin_env) |env|
+                        const full_type_name = if (origin_env) |env|
                             env.common.getIdentStore().getText(nominal_info.ident)
                         else
                             "Unknown";
+                        // Strip module prefixes for user-friendly display
+                        // "Builtin.Num.Dec" -> "Dec", "Builtin.Bool" -> "Bool", "MyModule.Foo" -> "Foo"
+                        const type_name = if (std.mem.lastIndexOf(u8, full_type_name, ".")) |dot_idx|
+                            full_type_name[dot_idx + 1 ..]
+                        else
+                            full_type_name;
                         const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, field_name }) catch {
                             self.triggerCrash("Method not found", false, roc_ops);
                             return error.Crash;
@@ -6418,8 +6424,9 @@ pub const Interpreter = struct {
     fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
         const origin_module_id = self.env.builtin_module_ident;
 
-        // Number types are nested in Num module, so the qualified name is "Num.Dec", "Num.I64", etc.
-        const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Num.{s}", .{type_name});
+        // Use fully-qualified type name "Builtin.Num.U8" etc.
+        // This allows method lookup to work correctly
+        const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Builtin.Num.{s}", .{type_name});
         defer self.allocator.free(qualified_type_name);
         const type_name_ident = try @constCast(self.env.getIdentStore()).insert(self.allocator, base_pkg.Ident.for_text(qualified_type_name));
         const type_ident = types.TypeIdent{

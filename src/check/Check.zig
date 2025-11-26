@@ -675,8 +675,9 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Number types are nested in Num module, so the qualified name is "Num.U8", "Num.I32", etc.
-    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Num.{s}", .{type_name});
+    // Use fully-qualified type name "Builtin.Num.U8" etc.
+    // This allows method lookup to work correctly (getMethodIdent builds "Builtin.Num.U8.method_name")
+    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
     defer self.gpa.free(qualified_type_name);
     const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
     const type_ident = types_mod.TypeIdent{
@@ -822,14 +823,10 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the fully qualified name "Builtin.Try" to match how Try is defined in the Builtin module
+    // Use the precomputed "Builtin.Try" ident from ModuleEnv
     // This ensures our Try type unifies correctly with the Try type from actual method signatures
-    const try_ident_idx = self.cir.common.findIdent("Builtin.Try") orelse blk: {
-        // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Try"));
-    };
     const try_ident = types_mod.TypeIdent{
-        .ident_idx = try_ident_idx,
+        .ident_idx = self.cir.builtin_try_ident,
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -856,13 +853,9 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the fully qualified name "Builtin.Num.Numeral" to match how Numeral is defined
-    const numeral_ident_idx = self.cir.common.findIdent("Builtin.Num.Numeral") orelse blk: {
-        // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Num.Numeral"));
-    };
+    // Use the precomputed "Builtin.Num.Numeral" ident from ModuleEnv
     const numeral_ident = types_mod.TypeIdent{
-        .ident_idx = numeral_ident_idx,
+        .ident_idx = self.cir.builtin_numeral_ident,
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -5162,6 +5155,8 @@ pub fn createImportMapping(
 
     const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
     inline for (fields) |field| {
+        // Only process Statement.Idx fields (skip Ident.Idx fields)
+        if (field.type != CIR.Statement.Idx) continue;
         const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
 
         const stmt = builtin_env.store.getStatement(stmt_idx);
