@@ -74,6 +74,159 @@ const TestsSummaryStep = struct {
     }
 };
 
+/// Build step that checks for forbidden patterns in the type checker code.
+///
+/// During type checking, we NEVER do string or byte comparisons because:
+/// 1. They take linear time, which can cause performance issues
+/// 2. They are brittle to changes that type-checking should not be sensitive to
+///
+/// Instead, we always compare indices - either into node stores or to interned string indices.
+/// This step enforces that rule by failing the build if `std.mem.` is found in src/check/.
+const CheckTypeCheckerPatternsStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckTypeCheckerPatternsStep {
+        const self = b.allocator.create(CheckTypeCheckerPatternsStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-type-checker-patterns",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Recursively scan src/check/ for .zig files
+        var dir = std.fs.cwd().openDir("src/check", .{ .iterate = true }) catch |err| {
+            return step.fail("Failed to open src/check directory: {}", .{err});
+        };
+        defer dir.close();
+
+        try scanDirectory(allocator, dir, "src/check", &violations);
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("FORBIDDEN PATTERN DETECTED IN TYPE CHECKER CODE\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\The type checker code in src/check/ must NOT use std.mem.* functions.
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  During type checking, we NEVER do string or byte comparisons because:
+                \\
+                \\  1. PERFORMANCE: String comparisons take O(n) time where n is the string
+                \\     length. Type checking can involve many comparisons, so this adds up.
+                \\
+                \\  2. BRITTLENESS: String comparisons make the type checker sensitive to
+                \\     changes it shouldn't care about (e.g., how identifiers are rendered,
+                \\     whitespace, formatting). This leads to subtle bugs.
+                \\
+                \\WHAT TO DO INSTEAD:
+                \\  Always compare indices rather than strings:
+                \\
+                \\  - For identifiers: Compare Ident.Idx values (interned string indices)
+                \\  - For types: Compare type variable indices or node store indices
+                \\  - For expressions: Compare Expr.Idx values from the node store
+                \\
+                \\  Example - WRONG:
+                \\    if (std.mem.eql(u8, ident_name, "is_eq")) {{ ... }}
+                \\
+                \\  Example - RIGHT:
+                \\    if (ident_idx == module_env.is_eq_ident) {{ ... }}
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} uses of std.mem.* in src/check/. " ++
+                    "See above for details on why this is forbidden and what to do instead.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+    };
+
+    fn scanDirectory(
+        allocator: std.mem.Allocator,
+        dir: std.fs.Dir,
+        path_prefix: []const u8,
+        violations: *std.ArrayList(Violation),
+    ) !void {
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+
+            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            const file = dir.openFile(entry.path, .{}) catch continue;
+            defer file.close();
+
+            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            defer allocator.free(content);
+
+            var line_number: usize = 1;
+            var line_start: usize = 0;
+
+            for (content, 0..) |char, i| {
+                if (char == '\n') {
+                    const line = content[line_start..i];
+
+                    // Check for std.mem. usage (but allow std.mem.Allocator which is a type)
+                    if (std.mem.indexOf(u8, line, "std.mem.")) |idx| {
+                        // Check if it's just "std.mem.Allocator" which is allowed
+                        const after_match = line[idx + 8 ..];
+                        if (!std.mem.startsWith(u8, after_match, "Allocator")) {
+                            const trimmed = std.mem.trim(u8, line, " \t");
+                            // Skip comments
+                            if (!std.mem.startsWith(u8, trimmed, "//")) {
+                                try violations.append(allocator, .{
+                                    .file_path = full_path,
+                                    .line_number = line_number,
+                                    .line_content = try allocator.dupe(u8, trimmed),
+                                });
+                            }
+                        }
+                    }
+
+                    line_number += 1;
+                    line_start = i + 1;
+                }
+            }
+        }
+    }
+};
+
 const MiniCiStep = struct {
     step: Step,
 
@@ -791,6 +944,10 @@ pub fn build(b: *std.Build) void {
         }
         tests_summary.addRun(&run_watch_test.step);
     }
+
+    // Add check for forbidden patterns in type checker code
+    const check_patterns = CheckTypeCheckerPatternsStep.create(b);
+    test_step.dependOn(&check_patterns.step);
 
     test_step.dependOn(&tests_summary.step);
 
