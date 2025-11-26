@@ -259,6 +259,15 @@ const CheckTypeCheckerPatternsStep = struct {
                         });
                     }
 
+                    // Check for findIdent usage - should use pre-stored Ident.Idx instead
+                    if (std.mem.indexOf(u8, line, "findIdent") != null) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+
                     line_number += 1;
                     line_start = i + 1;
                 }
