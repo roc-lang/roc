@@ -11,9 +11,6 @@ Builtin :: [].{
 		with_ascii_uppercased : Str -> Str
 
 		is_eq : Str, Str -> Bool
-
-		contains : Str, Str -> Bool
-		contains = |_str, _other| True
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

@@ -1348,11 +1348,19 @@ pub const Interpreter = struct {
             .e_zero_argument_tag => |zero| {
                 // Construct a tag union value with no payload
                 // Determine discriminant index by consulting the runtime tag union type
-                const rt_var = expected_rt_var orelse blk: {
+                var rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
-                const resolved = self.runtime_types.resolveVar(rt_var);
+                var resolved = self.runtime_types.resolveVar(rt_var);
+                // If the type is still flex and this is a True/False tag, use Bool
+                if (resolved.desc.content == .flex) {
+                    const name_text = self.env.getIdent(zero.name);
+                    if (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False")) {
+                        rt_var = try self.getCanonicalBoolRuntimeVar();
+                        resolved = self.runtime_types.resolveVar(rt_var);
+                    }
+                }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
                     @panic("e_zero_argument_tag: expected tag_union structure type");
                 }
@@ -1386,6 +1394,7 @@ pub const Interpreter = struct {
                         out.is_initialized = false;
                         try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
+                        out.rt_var = rt_var; // Set rt_var for proper rendering
                         return out;
                     }
                     @panic("e_zero_argument_tag: scalar layout is not int");
@@ -1401,6 +1410,7 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
                     } else @panic("e_zero_argument_tag: record tag field is not scalar int");
+                    dest.rt_var = rt_var; // Set rt_var for proper rendering
                     return dest;
                 } else if (layout_val.tag == .tuple) {
                     // Tuple (payload, tag) - tag unions are now represented as tuples
@@ -1414,18 +1424,27 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
                     } else @panic("e_zero_argument_tag: tuple tag field is not scalar int");
+                    dest.rt_var = rt_var; // Set rt_var for proper rendering
                     return dest;
                 }
                 @panic("e_zero_argument_tag: unexpected layout type");
             },
             .e_tag => |tag| {
                 // Construct a tag union value with payloads
-                const rt_var = expected_rt_var orelse blk: {
+                var rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
                 // Unwrap nominal types and aliases to get the base tag union
-                const resolved = self.resolveBaseVar(rt_var);
+                var resolved = self.resolveBaseVar(rt_var);
+                // If the type is still flex and this is a True/False tag, use Bool
+                if (resolved.desc.content == .flex) {
+                    const name_text = self.env.getIdent(tag.name);
+                    if (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False")) {
+                        rt_var = try self.getCanonicalBoolRuntimeVar();
+                        resolved = self.resolveBaseVar(rt_var);
+                    }
+                }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
                     @panic("e_tag: expected tag_union structure type");
                 }
@@ -1460,6 +1479,7 @@ pub const Interpreter = struct {
                         out.is_initialized = false;
                         try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
+                        out.rt_var = rt_var; // Set rt_var for proper rendering
                         return out;
                     }
                     @panic("e_tag: scalar layout is not int");
@@ -1492,6 +1512,7 @@ pub const Interpreter = struct {
                     }
 
                     if (args_exprs.len == 0) {
+                        dest.rt_var = rt_var;
                         return dest;
                     } else if (args_exprs.len == 1) {
                         const arg_rt_var = arg_rt_vars[0];
@@ -1500,6 +1521,7 @@ pub const Interpreter = struct {
                         if (payload_field.ptr) |payload_ptr| {
                             try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
+                        dest.rt_var = rt_var;
                         return dest;
                     } else {
                         const arg_count = args_exprs.len;
@@ -1534,6 +1556,7 @@ pub const Interpreter = struct {
                             }
                         }
 
+                        dest.rt_var = rt_var;
                         return dest;
                     }
                 } else if (layout_val.tag == .tuple) {
@@ -1567,6 +1590,7 @@ pub const Interpreter = struct {
                     }
 
                     if (args_exprs.len == 0) {
+                        dest.rt_var = rt_var;
                         return dest;
                     } else if (args_exprs.len == 1) {
                         const arg_rt_var = arg_rt_vars[0];
@@ -1605,6 +1629,7 @@ pub const Interpreter = struct {
                                 try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             }
 
+                            proper_dest.rt_var = rt_var;
                             return proper_dest;
                         }
 
@@ -1612,6 +1637,7 @@ pub const Interpreter = struct {
                         if (payload_field.ptr) |payload_ptr| {
                             try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
+                        dest.rt_var = rt_var;
                         return dest;
                     } else {
                         const arg_count = args_exprs.len;
@@ -1676,9 +1702,11 @@ pub const Interpreter = struct {
                                 @memcpy(dst_bytes, src_bytes);
                             }
 
+                            proper_dest.rt_var = rt_var;
                             return proper_dest;
                         }
 
+                        dest.rt_var = rt_var;
                         return dest;
                     }
                 }
@@ -2212,7 +2240,7 @@ pub const Interpreter = struct {
                             }
                         }
                     }
-                    return try self.evalExprMinimal(header.body_idx, roc_ops, null);
+                    return try self.evalExprMinimal(header.body_idx, roc_ops, call_ret_rt_var);
                 }
 
                 // Fallback: direct lambda expression (legacy minimal path)
@@ -2234,7 +2262,7 @@ pub const Interpreter = struct {
                             }
                         }
                     }
-                    return try self.evalExprMinimal(lambda.body, roc_ops, null);
+                    return try self.evalExprMinimal(lambda.body, roc_ops, call_ret_rt_var);
                 }
 
                 @panic("e_call: func is neither closure nor lambda");
