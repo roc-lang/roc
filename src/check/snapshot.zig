@@ -667,7 +667,10 @@ pub const Store = struct {
                 if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
-                    _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
+                    // If this flex var has constraints, use .General context so it gets a general name
+                    // that will match when the constraint is written in the where clause
+                    const var_context = if (flex.constraints.len() > 0) .General else context;
+                    _ = try self.writeFlexVarName(flex.var_, content_idx, var_context, root_idx);
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
@@ -1119,10 +1122,22 @@ pub const Store = struct {
             // Check if this variable appears multiple times
             const occurrences = try self.countOccurrences(flex_var, root_idx);
 
-            if (occurrences == 1) {
+            // Treat vars that will appear in the where clause as multi-occurrence
+            // to ensure they get general names without context-specific prefixes
+            const treat_as_multi = occurrences > 1 or context == .General;
+
+            if (!treat_as_multi) {
                 // If it appears once, then generate the contextual name
+                const buf_start = self.buf.items.len;
                 _ = try self.buf.writer().write("_");
                 try self.generateContextualName(context);
+                const buf_end = self.buf.items.len;
+
+                // Store the name in the map so it can be reused if this var is written again
+                const flex_start = self.flex_var_names.items.len;
+                try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
+                const flex_end = self.flex_var_names.items.len;
+                try self.flex_var_names_map.put(flex_var, .{ .start = flex_start, .end = flex_end });
             } else {
                 // If it appears more than once, then we have to track the name we
                 // assign it so it appears consistently across the type str
@@ -1512,7 +1527,10 @@ pub const SnapshotWriter = struct {
                 if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
-                    _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
+                    // If this flex var has constraints, use .General context so it gets a general name
+                    // that will match when the constraint is written in the where clause
+                    const var_context = if (flex.constraints.len() > 0) .General else context;
+                    _ = try self.writeFlexVarName(flex.var_, content_idx, var_context, root_idx);
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
@@ -1964,10 +1982,22 @@ pub const SnapshotWriter = struct {
             // Check if this variable appears multiple times
             const occurrences = try self.countOccurrences(flex_var, root_idx);
 
-            if (occurrences == 1) {
+            // Treat vars that will appear in the where clause as multi-occurrence
+            // to ensure they get general names without context-specific prefixes
+            const treat_as_multi = occurrences > 1 or context == .General;
+
+            if (!treat_as_multi) {
                 // If it appears once, then generate the contextual name
+                const buf_start = self.buf.items.len;
                 _ = try self.buf.writer().write("_");
                 try self.generateContextualName(context);
+                const buf_end = self.buf.items.len;
+
+                // Store the name in the map so it can be reused if this var is written again
+                const flex_start = self.flex_var_names.items.len;
+                try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
+                const flex_end = self.flex_var_names.items.len;
+                try self.flex_var_names_map.put(flex_var, .{ .start = flex_start, .end = flex_end });
             } else {
                 // If it appears more than once, then we have to track the name we
                 // assign it so it appears consistently across the type str

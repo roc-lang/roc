@@ -1006,7 +1006,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+    _d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1033,7 +1033,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    __d_
+    _d_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
