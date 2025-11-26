@@ -421,7 +421,6 @@ pub const Store = struct {
 
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
-            // Compare field names by Ident.Idx (O(1) index comparison)
             if (field.name == field_name_idx) {
                 return current_offset;
             }

@@ -4677,20 +4677,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // nested types like: MyModule.A.B.C.my_func
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
 
-                // Check if type_name_bytes already starts with "module_name."
-                const module_prefix = original_env.module_name;
-                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
-                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
-                    type_name_bytes[module_prefix.len] == '.';
-
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else if (already_qualified) {
-                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
+                if (nominal_type.ident.ident_idx == original_module_ident) {
                     try self.static_dispatch_method_name_buf.print(
                         self.gpa,
                         "{s}.{s}",

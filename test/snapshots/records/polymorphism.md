@@ -17,7 +17,7 @@ type=expr
 MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
 **MISSING METHOD**
-This `to_str` method is being called on the type _{ first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d } where [Num.Numeral.from_numeral : Num.Numeral -> Try(_e, [InvalidNumeral(Str)]), Num.Numeral.from_numeral : Num.Numeral -> Try(_f, [InvalidNumeral(Str)])]_, which has no method with that name:
+This `to_str` method is being called on the type _{ first: a, first: Str, first: [True]b, pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True]b, second: [False]d }, second: Str, second: c, second: [False]d } where [Numeral.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)]), Numeral.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]_, which has no method with that name:
 **polymorphism.md:6:29:6:35:**
 ```roc
     { pair1, pair2, pair3 }.to_str()

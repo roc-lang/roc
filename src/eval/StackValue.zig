@@ -15,6 +15,7 @@ const layout_mod = @import("layout");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+const Ident = base.Ident;
 const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
 const StringLiteral = base.StringLiteral;
@@ -26,7 +27,6 @@ const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout_mod.Closure;
 const Expr = CIR.Expr;
-const Ident = base.Ident;
 
 const StackValue = @This();
 
@@ -711,11 +711,10 @@ pub const RecordAccessor = struct {
     }
 
     /// Get a StackValue for the field with the given name
-    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8) !?StackValue {
-        // Find the field index by name
+    pub fn getFieldByName(self: RecordAccessor, field_name_idx: Ident.Idx) !?StackValue {
         const field_offset = self.layout_cache.getRecordFieldOffsetByName(
             self.record_layout.data.record.idx,
-            field_name,
+            field_name_idx,
         ) orelse return null;
 
         // Find the field layout by name

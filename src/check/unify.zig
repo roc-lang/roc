@@ -1294,9 +1294,11 @@ const Unifier = struct {
         self: *Self,
         module_name: []const u8,
         type_name: []const u8,
+        type_name_idx: Ident.Idx,
+        module_name_idx: Ident.Idx,
         method_name: []const u8,
     ) std.mem.Allocator.Error![]u8 {
-        if (std.mem.eql(u8, type_name, module_name)) {
+        if (type_name_idx == module_name_idx) {
             return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ type_name, method_name });
         } else {
             return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name });
@@ -1307,11 +1309,12 @@ const Unifier = struct {
         self: *Self,
         origin_env: *const ModuleEnv,
         type_name: []const u8,
+        type_name_idx: Ident.Idx,
         method_name: []const u8,
     ) error{AllocatorError}!?Ident.Idx {
         const ident_store = origin_env.getIdentStoreConst();
 
-        const primary = self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name) catch return error.AllocatorError;
+        const primary = self.buildQualifiedMethodName(origin_env.module_name, type_name, type_name_idx, origin_env.module_name_idx, method_name) catch return error.AllocatorError;
         defer self.scratch.gpa.free(primary);
         if (ident_store.findByString(primary)) |ident| return ident;
 

@@ -319,6 +319,16 @@ pub const ReportBuilder = struct {
         self.bytes_buf.deinit();
     }
 
+    /// Check if any static dispatch constraint involves the is_eq method
+    fn hasEqualityConstraint(self: *Self) bool {
+        for (self.snapshot_writer.static_dispatch_constraints.items) |constraint| {
+            if (constraint.fn_name == self.can_ir.is_eq_ident) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Build a report for a problem
     pub fn build(
         self: *Self,
@@ -454,17 +464,10 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is a method type mismatch (both types are functions with where clauses
-        // that reference method constraints like `.is_eq :` rather than just `from_numeral`)
+        // Check if this is a method type mismatch (both types are functions with equality constraints)
         const is_method_type_mismatch = self.areBothFunctionSnapshots(expected_content, actual_content) and
-            (std.mem.indexOf(u8, owned_actual, "where [") != null or
-                std.mem.indexOf(u8, owned_expected, "where [") != null) and
-            // Exclude cases where the only constraint is from_numeral (numeric literals)
-            // These are regular function calls, not method calls
-            (std.mem.indexOf(u8, owned_actual, ".is_eq :") != null or
-                std.mem.indexOf(u8, owned_actual, ".is_ne :") != null or
-                std.mem.indexOf(u8, owned_expected, ".is_eq :") != null or
-                std.mem.indexOf(u8, owned_expected, ".is_ne :") != null);
+            self.snapshot_writer.static_dispatch_constraints.items.len > 0 and
+            self.hasEqualityConstraint();
 
         if (is_method_type_mismatch) {
             try report.document.addReflowingText("This method has an unexpected type:");
@@ -497,29 +500,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
-
-        // Add a hint if this looks like a numeric literal size issue
-        const actual_str = owned_actual;
-        const expected_str = owned_expected;
-
-        // Check if we're dealing with numeric types
-        const is_numeric_issue = (std.mem.indexOf(u8, actual_str, "Num(") != null and
-            std.mem.indexOf(u8, expected_str, "Num(") != null);
-
-        // Check if target is a concrete integer type
-        const has_unsigned = std.mem.indexOf(u8, expected_str, "Unsigned") != null;
-        const has_signed = std.mem.indexOf(u8, expected_str, "Signed") != null;
-
-        if (is_numeric_issue and (has_unsigned or has_signed)) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint:", .emphasized);
-            if (has_unsigned) {
-                try report.document.addReflowingText(" This might be because the numeric literal is either negative or too large to fit in the unsigned type.");
-            } else {
-                try report.document.addReflowingText(" This might be because the numeric literal is too large to fit in the target type.");
-            }
-        }
 
         return report;
     }
@@ -1387,7 +1367,6 @@ pub const ReportBuilder = struct {
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
-                // Compare tag names by Ident.Idx (O(1) index comparison)
                 if (actual_tag.name == cur_expected_tag.name) {
                     self.snapshot_writer.resetContext();
                     try self.snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);

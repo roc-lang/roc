@@ -31,6 +31,23 @@ pub fn createImportMapping(
     try addMapping(&mapping, gpa, idents, "Builtin.Try", "Try");
     try addMapping(&mapping, gpa, idents, "Builtin.Dict", "Dict");
     try addMapping(&mapping, gpa, idents, "Builtin.Set", "Set");
+    try addMapping(&mapping, gpa, idents, "Builtin.List", "List");
+
+    // Numeric types from Builtin.Num module
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.Numeral", "Numeral");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.U8", "U8");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.I8", "I8");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.U16", "U16");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.I16", "I16");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.U32", "U32");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.I32", "I32");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.U64", "U64");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.I64", "I64");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.U128", "U128");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.I128", "I128");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.F32", "F32");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.F64", "F64");
+    try addMapping(&mapping, gpa, idents, "Builtin.Num.Dec", "Dec");
 
     return mapping;
 }

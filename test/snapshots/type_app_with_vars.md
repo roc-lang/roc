@@ -24,7 +24,7 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _List(_c) -> _ret where [Num.Numeral.from_numeral : Num.Numeral -> Try(_d, [InvalidNumeral(Str)])]_
+    _List(_c) -> _ret where [Numeral.from_numeral : Numeral -> Try(_d, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _List(a), (a -> b) -> List(b)_
