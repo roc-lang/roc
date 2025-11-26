@@ -134,6 +134,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.with_prefix")) |str_with_prefix_ident| {
         try low_level_map.put(str_with_prefix_ident, .str_with_prefix);
     }
+    if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
+        try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

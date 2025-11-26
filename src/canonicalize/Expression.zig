@@ -413,6 +413,7 @@ pub const Expr = union(enum) {
         str_ends_with,
         str_repeat,
         str_with_prefix,
+        str_drop_prefix,
 
         // Numeric to_str operations
         u8_to_str,

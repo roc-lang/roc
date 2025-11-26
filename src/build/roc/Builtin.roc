@@ -13,6 +13,7 @@ Builtin :: [].{
 		ends_with : Str, Str -> Bool
 		repeat : Str, U64 -> Str
 		with_prefix : Str, Str -> Str
+		drop_prefix : Str, Str -> Str
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
