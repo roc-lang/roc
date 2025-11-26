@@ -433,31 +433,37 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
 
         // Check if both types are functions to provide more specific error messages
-        if (types.from_annotation) {
-            // Check the snapshot content to determine if we have function types
-            const expected_content = self.snapshots.getContent(types.expected_snapshot);
-            const actual_content = self.snapshots.getContent(types.actual_snapshot);
+        const expected_content = self.snapshots.getContent(types.expected_snapshot);
+        const actual_content = self.snapshots.getContent(types.actual_snapshot);
 
-            if (self.areBothFunctionSnapshots(expected_content, actual_content)) {
-                // When we have constraint_origin_var, it indicates this error originated from
-                // a specific constraint like a dot access (e.g., str.to_utf8()).
-                // In this case, show a specialized argument type mismatch error.
-                if (types.constraint_origin_var) |origin_var| {
-                    report.deinit();
-                    return self.buildIncompatibleFnCallArg(types, .{
-                        .fn_name = null,
-                        .arg_var = origin_var,
-                        .incompatible_arg_index = 0, // First argument
-                        .num_args = 1, // Single argument lambda
-                    });
-                }
+        if (types.from_annotation and self.areBothFunctionSnapshots(expected_content, actual_content)) {
+            // When we have constraint_origin_var, it indicates this error originated from
+            // a specific constraint like a dot access (e.g., str.to_utf8()).
+            // In this case, show a specialized argument type mismatch error.
+            if (types.constraint_origin_var) |origin_var| {
+                report.deinit();
+                return self.buildIncompatibleFnCallArg(types, .{
+                    .fn_name = null,
+                    .arg_var = origin_var,
+                    .incompatible_arg_index = 0, // First argument
+                    .num_args = 1, // Single argument lambda
+                });
             }
         }
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("This expression is used in an unexpected way:");
+        // Check if this is a method type mismatch (both types are functions with where clauses)
+        const is_method_type_mismatch = self.areBothFunctionSnapshots(expected_content, actual_content) and
+            (std.mem.indexOf(u8, owned_actual, "where [") != null or
+            std.mem.indexOf(u8, owned_expected, "where [") != null);
+
+        if (is_method_type_mismatch) {
+            try report.document.addReflowingText("This method has an unexpected type:");
+        } else {
+            try report.document.addReflowingText("This expression is used in an unexpected way:");
+        }
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(

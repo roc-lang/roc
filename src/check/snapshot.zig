@@ -28,7 +28,8 @@ pub const SnapshotContent = union(enum) {
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
     recursion_var: SnapshotRecursionVar,
-    recursive,
+    /// A recursive type reference. Stores the name of the type variable if available.
+    recursive: ?Ident.Idx,
     err,
 };
 
@@ -228,8 +229,14 @@ pub const Store = struct {
         }
 
         // If we've seen this variable, then return it as a recursive type
+        // Try to extract the name from the content for better error messages
         if (has_seen_var) {
-            return try self.contents.append(self.gpa, .recursive);
+            const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
+                .flex => |flex| flex.name,
+                .rigid => |rigid| rigid.name,
+                else => null,
+            };
+            return try self.contents.append(self.gpa, .{ .recursive = recursive_name });
         }
 
         // If not, add it to the seen list
@@ -717,8 +724,14 @@ pub const Store = struct {
                 const structure_content = self.snapshots.getContent(rec_var.structure);
                 try self.writeContent(structure_content, context, rec_var.structure, root_idx);
             },
-            .recursive => {
-                _ = try self.buf.writer().write("RecursiveType");
+            .recursive => |maybe_name| {
+                if (maybe_name) |name_idx| {
+                    _ = try self.buf.writer().write(self.idents.getText(name_idx));
+                } else {
+                    // Fallback if no name was captured - generate a contextual name
+                    _ = try self.buf.writer().write("_");
+                    try self.generateContextualName(context);
+                }
             },
             .err => {
                 _ = try self.buf.writer().write("Error");
@@ -1587,8 +1600,14 @@ pub const SnapshotWriter = struct {
                 const structure_content = self.snapshots.getContent(rec_var.structure);
                 try self.writeContent(structure_content, context, rec_var.structure, root_idx);
             },
-            .recursive => {
-                _ = try self.buf.writer().write("RecursiveType");
+            .recursive => |maybe_name| {
+                if (maybe_name) |name_idx| {
+                    _ = try self.buf.writer().write(self.idents.getText(name_idx));
+                } else {
+                    // Fallback if no name was captured - generate a contextual name
+                    _ = try self.buf.writer().write("_");
+                    try self.generateContextualName(context);
+                }
             },
             .err => {
                 _ = try self.buf.writer().write("Error");
