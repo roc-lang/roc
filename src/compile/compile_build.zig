@@ -16,12 +16,16 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
+const check = @import("check");
 
 const Report = reporting.Report;
+const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
 const Mode = @import("compile_package.zig").Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
+const Can = can.Can;
+const Check = check.Check;
 const PackageEnv = @import("compile_package.zig").PackageEnv;
 const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
 const ImportResolver = @import("compile_package.zig").ImportResolver;
@@ -544,8 +548,123 @@ pub const BuildEnv = struct {
         // Note: In single-threaded mode, buildRoot() runs synchronously and blocks
         // until all modules are complete, so no additional waiting is needed.
 
+        // Check platform requirements for app modules
+        try self.checkPlatformRequirements();
+
         // Deterministic emission: globally order reports by (min dependency depth from app, then module name)
         try self.emitDeterministic();
+    }
+
+    /// Check that app exports match platform requirements.
+    /// This is called after all modules are compiled and type-checked.
+    fn checkPlatformRequirements(self: *BuildEnv) !void {
+        // Find the app and platform packages
+        var app_pkg: ?[]const u8 = null;
+        var platform_pkg: ?[]const u8 = null;
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            if (pkg.kind == .app) {
+                app_pkg = entry.key_ptr.*;
+            } else if (pkg.kind == .platform) {
+                platform_pkg = entry.key_ptr.*;
+            }
+        }
+
+        // If we don't have both an app and a platform, nothing to check
+        const app_name = app_pkg orelse return;
+        const platform_name = platform_pkg orelse return;
+
+        // Get the schedulers for both packages
+        const app_sched = self.schedulers.get(app_name) orelse return;
+        const platform_sched = self.schedulers.get(platform_name) orelse return;
+
+        // Get the root module envs for both packages
+        const app_root_env = app_sched.getRootEnv() orelse return;
+        const platform_root_env = platform_sched.getRootEnv() orelse return;
+
+        // If the platform has no requires_types, nothing to check
+        if (platform_root_env.requires_types.items.items.len == 0) {
+            return;
+        }
+
+        // Get builtin indices and module
+        const builtin_indices = self.builtin_modules.builtin_indices;
+        const builtin_module_env = self.builtin_modules.builtin_module.env;
+
+        // Build module_envs_map for type resolution
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
+        defer module_envs_map.deinit();
+
+        // Add builtin types (Bool, Try, Str)
+        if (app_root_env.common.findIdent("Bool")) |bi| {
+            try module_envs_map.put(bi, .{
+                .env = builtin_module_env,
+                .statement_idx = builtin_indices.bool_type,
+            });
+        }
+        if (app_root_env.common.findIdent("Try")) |ti| {
+            try module_envs_map.put(ti, .{
+                .env = builtin_module_env,
+                .statement_idx = builtin_indices.try_type,
+            });
+        }
+        if (app_root_env.common.findIdent("Str")) |si| {
+            try module_envs_map.put(si, .{
+                .env = builtin_module_env,
+                .statement_idx = builtin_indices.str_type,
+            });
+        }
+
+        // Build common idents for the type checker
+        const common_idents = Check.CommonIdents{
+            .module_name = app_root_env.module_name_idx,
+            .list = app_root_env.common.findIdent("List") orelse return,
+            .box = app_root_env.common.findIdent("Box") orelse return,
+            .@"try" = app_root_env.common.findIdent("Try") orelse return,
+            .bool_stmt = builtin_indices.bool_type,
+            .try_stmt = builtin_indices.try_type,
+            .str_stmt = builtin_indices.str_type,
+            .builtin_module = builtin_module_env,
+        };
+
+        // Create type checker for the app module
+        var checker = try Check.init(
+            self.gpa,
+            &app_root_env.types,
+            app_root_env,
+            &.{}, // No imported modules needed for checking exports
+            &module_envs_map,
+            &app_root_env.store.regions,
+            common_idents,
+        );
+        defer checker.deinit();
+
+        // Check platform requirements against app exports
+        try checker.checkPlatformRequirements(platform_root_env);
+
+        // If there are type problems, convert them to reports and emit via sink
+        if (checker.problems.problems.items.len > 0) {
+            const app_root_module = app_sched.getRootModule() orelse return;
+
+            var rb = ReportBuilder.init(
+                self.gpa,
+                app_root_env,
+                app_root_env,
+                &checker.snapshots,
+                app_root_module.path,
+                &.{},
+                &checker.import_mapping,
+            );
+            defer rb.deinit();
+
+            for (checker.problems.problems.items) |prob| {
+                const rep = rb.build(prob) catch continue;
+                // Emit via sink with the module name (not path) to match other reports
+                self.sink.emitReport(app_name, app_root_module.name, rep);
+            }
+        }
     }
 
     // ------------------------

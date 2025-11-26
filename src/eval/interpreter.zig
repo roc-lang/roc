@@ -234,6 +234,26 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
+        var imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator);
+        errdefer imported_modules.deinit();
+
+        if (other_envs.len > 0) {
+            // Populate imported_modules with platform modules and builtin module
+            // This allows dynamic lookup by name, which is needed for cross-module calls
+            // when imports are processed in different orders across modules
+            for (other_envs) |module_env| {
+                const module_name = module_env.module_name;
+                // Add full name "Stdout.roc"
+                try imported_modules.put(module_name, module_env);
+
+                // Add name without extension if present "Stdout"
+                if (std.mem.endsWith(u8, module_name, ".roc")) {
+                    const short_name = module_name[0 .. module_name.len - 4];
+                    try imported_modules.put(short_name, module_env);
+                }
+            }
+        }
+
         // Safely access import count
         const import_count = if (env.imports.imports.items.items.len > 0)
             env.imports.imports.items.items.len
@@ -320,7 +340,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, imported_modules, next_id, builtin_types, builtin_module_env);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -334,6 +354,7 @@ pub const Interpreter = struct {
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
+        imported_modules: std.StringHashMap(*const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const can.ModuleEnv,
@@ -368,7 +389,7 @@ pub const Interpreter = struct {
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
-            .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
+            .imported_modules = imported_modules,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
             .last_error_message = null,
@@ -416,7 +437,8 @@ pub const Interpreter = struct {
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
-                return error.NotImplemented;
+                self.triggerCrash("DEBUG: evaluateExpression func_val not closure", false, roc_ops);
+                return error.Crash;
             }
 
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
@@ -492,14 +514,45 @@ pub const Interpreter = struct {
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
-            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            // Only copy result if the result type is compatible with ret_ptr
+            if (try self.shouldCopyResult(result_value, ret_ptr)) {
+                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            }
             return;
         }
 
         const result = try self.evalMinimal(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
-        try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+        // Only copy result if the result type is compatible with ret_ptr
+        if (try self.shouldCopyResult(result, ret_ptr)) {
+            try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+        }
+    }
+
+    /// Check if the result should be copied to ret_ptr based on the result's layout.
+    /// Returns false for zero-sized types (nothing to copy).
+    /// Validates that ret_ptr is properly aligned for the result type.
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) !bool {
+        const result_size = self.runtime_layout_store.layoutSize(result.layout);
+        if (result_size == 0) {
+            // Zero-sized types don't need copying
+            return false;
+        }
+
+        // Validate alignment: ret_ptr must be properly aligned for the result type.
+        // A mismatch here indicates a type error between what the platform expects
+        // and what the Roc code returns. This should have been caught at compile
+        // time, but if the type checking didn't enforce the constraint, we catch
+        // it here at runtime.
+        const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+        const ret_addr = @intFromPtr(ret_ptr);
+        if (ret_addr % required_alignment.toByteUnits() != 0) {
+            // Type mismatch detected at runtime
+            return error.TypeMismatch;
+        }
+
+        return true;
     }
 
     fn evalExprMinimal(
@@ -660,7 +713,10 @@ pub const Interpreter = struct {
                         },
                         .s_reassign => |r| {
                             const patt = self.env.store.getPattern(r.pattern_idx);
-                            if (patt != .assign) return error.NotImplemented;
+                            if (patt != .assign) {
+                                self.triggerCrash("DEBUG: s_reassign pattern not assign", false, roc_ops);
+                                return error.Crash;
+                            }
                             const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
                             // Search through all bindings, not just current block scope
                             // This allows reassigning variables from outer scopes (e.g., in for loops)
@@ -797,7 +853,10 @@ pub const Interpreter = struct {
 
                             // While loop completes and returns {} (implicitly)
                         },
-                        else => return error.NotImplemented,
+                        else => {
+                            self.triggerCrash("DEBUG: stmt not implemented", false, roc_ops);
+                            return error.Crash;
+                        },
                     }
                 }
 
@@ -1351,7 +1410,10 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
                 const resolved = self.runtime_types.resolveVar(rt_var);
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("DEBUG: e_zero_argument_tag not tag union", false, roc_ops);
+                    return error.Crash;
+                }
                 const tu = resolved.desc.content.structure.tag_union;
                 const tags = self.runtime_types.getTagsSlice(tu.tags);
                 // Find index by name
@@ -1384,19 +1446,26 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
-                    return error.NotImplemented;
+                    self.triggerCrash("DEBUG: e_zero_argument_tag scalar not int", false, roc_ops);
+                    return error.Crash;
                 } else if (layout_val.tag == .record) {
                     // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                        self.triggerCrash("DEBUG: e_zero_argument_tag tag field not found", false, roc_ops);
+                        return error.Crash;
+                    };
                     const tag_field = try acc.getFieldByIndex(tag_idx);
                     // write tag as int
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: e_zero_argument_tag tag field not int", false, roc_ops);
+                        return error.Crash;
+                    }
                     return dest;
                 } else if (layout_val.tag == .tuple) {
                     // Tuple (payload, tag) - tag unions are now represented as tuples
@@ -1409,10 +1478,14 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: e_zero_argument_tag tuple tag not int", false, roc_ops);
+                        return error.Crash;
+                    }
                     return dest;
                 }
-                return error.NotImplemented;
+                self.triggerCrash("DEBUG: e_zero_argument_tag layout not implemented", false, roc_ops);
+                return error.Crash;
             },
             .e_tag => |tag| {
                 // Construct a tag union value with payloads
@@ -1422,7 +1495,10 @@ pub const Interpreter = struct {
                 };
                 // Unwrap nominal types and aliases to get the base tag union
                 const resolved = self.resolveBaseVar(rt_var);
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("DEBUG: e_tag not tag union", false, roc_ops);
+                    return error.Crash;
+                }
                 const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
@@ -1456,20 +1532,30 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
-                    return error.NotImplemented;
+                    self.triggerCrash("DEBUG: e_tag scalar not int", false, roc_ops);
+                    return error.Crash;
                 } else if (layout_val.tag == .record) {
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                        self.triggerCrash("DEBUG: e_tag tag field not found", false, roc_ops);
+                        return error.Crash;
+                    };
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                        self.triggerCrash("DEBUG: e_tag payload field not found", false, roc_ops);
+                        return error.Crash;
+                    };
                     // write tag discriminant
                     const tag_field = try acc.getFieldByIndex(tag_field_idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: e_tag tag field not int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -1544,7 +1630,10 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: e_tag (nullable) tag field not int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -1676,7 +1765,8 @@ pub const Interpreter = struct {
                         return dest;
                     }
                 }
-                return error.NotImplemented;
+                self.triggerCrash("DEBUG: e_tag layout not implemented", false, roc_ops);
+                return error.Crash;
             },
             .e_match => |m| {
                 // Evaluate scrutinee once and protect from stack corruption
@@ -1777,7 +1867,32 @@ pub const Interpreter = struct {
                 };
                 const closure_layout = try self.getRuntimeLayout(rt_var);
                 // Expect a closure layout from type-to-layout translation
-                if (closure_layout.tag != .closure) return error.NotImplemented;
+                if (closure_layout.tag != .closure) {
+                    // Debug: print what type we got instead
+                    const resolved = self.runtime_types.resolveVar(rt_var);
+                    const ct_var_debug = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_resolved = self.env.types.resolveVar(ct_var_debug);
+                    // Build a message with the expression index
+                    var msg_buf: [256]u8 = undefined;
+                    const expr_idx_int = @intFromEnum(expr_idx);
+                    const types_len = self.env.types.len();
+                    const msg = switch (ct_resolved.desc.content) {
+                        .flex => std.fmt.bufPrint(&msg_buf, "e_lambda: type is FLEX, expr_idx={}, types.len={}", .{ expr_idx_int, types_len }) catch "e_lambda: FLEX",
+                        .rigid => std.fmt.bufPrint(&msg_buf, "e_lambda: type is RIGID, expr_idx={}, types.len={}", .{ expr_idx_int, types_len }) catch "e_lambda: RIGID",
+                        .structure => |s| switch (s) {
+                            .fn_pure => "e_lambda: type is fn_pure (should work!)",
+                            .fn_effectful => "e_lambda: type is fn_effectful (should work!)",
+                            .fn_unbound => "e_lambda: type is fn_unbound",
+                            else => std.fmt.bufPrint(&msg_buf, "e_lambda: type is structure, expr_idx={}, types.len={}", .{ expr_idx_int, types_len }) catch "e_lambda: structure",
+                        },
+                        .alias => "e_lambda: type is alias",
+                        .recursion_var => "e_lambda: type is recursion_var",
+                        .err => std.fmt.bufPrint(&msg_buf, "e_lambda: type is ERROR, expr_idx={}, types.len={}", .{ expr_idx_int, types_len }) catch "e_lambda: ERROR",
+                    };
+                    _ = resolved;
+                    self.triggerCrash(msg, false, roc_ops);
+                    return error.Crash;
+                }
                 const value = try self.pushRaw(closure_layout, 0);
                 self.registerDefValue(expr_idx, value);
                 // Initialize the closure header
@@ -1860,7 +1975,10 @@ pub const Interpreter = struct {
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
                 const lam_expr = self.env.store.getExpr(cls.lambda_idx);
-                if (lam_expr != .e_lambda) return error.NotImplemented;
+                if (lam_expr != .e_lambda) {
+                    self.triggerCrash("DEBUG: e_closure expr not lambda", false, roc_ops);
+                    return error.Crash;
+                }
                 const lam = lam_expr.e_lambda;
 
                 // Collect capture layouts and names from current bindings
@@ -1975,8 +2093,12 @@ pub const Interpreter = struct {
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                     for (caps) |cap_idx2| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
-                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse return error.NotImplemented;
-                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse return error.NotImplemented;
+                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
+                            return error.NotImplemented;
+                        };
+                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse {
+                            return error.NotImplemented;
+                        };
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
                     }
                 }
@@ -2231,7 +2353,8 @@ pub const Interpreter = struct {
                     return try self.evalExprMinimal(lambda.body, roc_ops, null);
                 }
 
-                return error.NotImplemented;
+                self.triggerCrash("DEBUG: e_call NotImplemented", false, roc_ops);
+                return error.Crash;
             },
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
@@ -2553,12 +2676,55 @@ pub const Interpreter = struct {
                     }
                 }
 
-                return error.NotImplemented;
+                self.triggerCrash("DEBUG: e_lookup_local not found", false, roc_ops);
+                return error.Crash;
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
-                const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    return error.NotImplemented;
+                const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
+                    // Fallback: dynamic lookup by name
+                    // This is needed when the current module (self.env) has imports in a different order
+                    // than the root module, so the Import.Idx doesn't match what was populated in init().
+                    // We need to get the module name from the import list using the Import.Idx.
+                    if (self.env.imports.map.count() > @intFromEnum(lookup.module_idx)) {
+                        // Retrieve the interned string index for this import
+                        const import_list = self.env.imports.imports.items.items;
+                        if (@intFromEnum(lookup.module_idx) < import_list.len) {
+                            const str_idx = import_list[@intFromEnum(lookup.module_idx)];
+                            const import_name = self.env.common.getString(str_idx);
+
+                            // Try to find it in imported_modules
+                            // First try exact match
+                            if (self.imported_modules.get(import_name)) |env| {
+                                break :blk env;
+                            }
+
+                            // Try stripping .roc if present
+                            if (std.mem.endsWith(u8, import_name, ".roc")) {
+                                const short = import_name[0 .. import_name.len - 4];
+                                if (self.imported_modules.get(short)) |env| {
+                                    break :blk env;
+                                }
+                            }
+
+                            // Try extracting module name from "pf.Module"
+                            if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx| {
+                                const short = import_name[dot_idx + 1 ..];
+                                if (self.imported_modules.get(short)) |env| {
+                                    break :blk env;
+                                }
+                            }
+
+                            self.triggerCrash("DEBUG: Failed to resolve import in imported_modules", false, roc_ops);
+                            return error.Crash;
+                        } else {
+                            self.triggerCrash("DEBUG: lookup.module_idx >= import_list.len", false, roc_ops);
+                            return error.Crash;
+                        }
+                    } else {
+                        self.triggerCrash("DEBUG: lookup.module_idx >= map.count", false, roc_ops);
+                        return error.Crash;
+                    }
                 };
 
                 // The target_node_idx is a Def.Idx in the other module
@@ -2588,7 +2754,10 @@ pub const Interpreter = struct {
             },
             // no if handling in minimal evaluator
             // no second e_binop case; handled above
-            else => return error.NotImplemented,
+            else => {
+                self.triggerCrash("DEBUG: evalExprMinimal catch-all NotImplemented", false, roc_ops);
+                return error.Crash;
+            },
         }
     }
 
@@ -3506,8 +3675,12 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                        return error.NotImplemented;
+                    };
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                        return error.NotImplemented;
+                    };
 
                     // Write tag discriminant
                     const tag_field = try acc.getFieldByIndex(tag_field_idx);
@@ -3516,7 +3689,10 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: callLowLevelBuiltin tag not int (1)", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     // Clear payload area
                     const payload_field = try acc.getFieldByIndex(payload_field_idx);
@@ -3832,8 +4008,12 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse return error.NotImplemented;
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse return error.NotImplemented;
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse {
+                        return error.NotImplemented;
+                    };
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse {
+                        return error.NotImplemented;
+                    };
 
                     // Write tag discriminant
                     const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
@@ -3842,7 +4022,10 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: callLowLevelBuiltin tag not int (2)", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     // Clear payload area
                     const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
@@ -4077,7 +4260,10 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else return error.NotImplemented;
+                    } else {
+                        self.triggerCrash("DEBUG: callLowLevelBuiltin tag not int (3)", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     // Clear payload area (element 0)
                     const payload_field = try result_acc.getElement(0);
@@ -4457,7 +4643,9 @@ pub const Interpreter = struct {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
                 break :blk RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
             },
-            else => return error.NotImplemented,
+            else => {
+                return error.NotImplemented;
+            },
         };
 
         var out = try self.pushRaw(result_layout, 0);
@@ -4497,7 +4685,9 @@ pub const Interpreter = struct {
                 if (rhs_float == 0) return error.DivisionByZero;
                 break :blk @rem(lhs_float, rhs_float);
             },
-            else => return error.NotImplemented,
+            else => {
+                return error.NotImplemented;
+            },
         };
 
         var out = try self.pushRaw(result_layout, 0);
@@ -4711,14 +4901,18 @@ pub const Interpreter = struct {
                     const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
                     return std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
                 },
-                else => return error.NotImplemented,
+                else => {
+                    return error.NotImplemented;
+                },
             }
         }
 
         // Ensure runtime vars resolve to the same descriptor before structural comparison.
         const lhs_resolved = self.resolveBaseVar(lhs_var);
         const lhs_content = lhs_resolved.desc.content;
-        if (lhs_content != .structure) return error.NotImplemented;
+        if (lhs_content != .structure) {
+            return error.NotImplemented;
+        }
 
         return switch (lhs_content.structure) {
             .tuple => |tuple| {
@@ -4737,7 +4931,9 @@ pub const Interpreter = struct {
                 // For nominal types, dispatch to their is_eq method
                 return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var);
             },
-            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => error.NotImplemented,
+            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => {
+                return error.NotImplemented;
+            },
         };
     }
 
@@ -4944,13 +5140,16 @@ pub const Interpreter = struct {
         // For other cases, fall back to attempting scalar comparison
         // This handles cases like Bool which wraps a tag union but is represented as a scalar
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const order = self.compareNumericScalars(lhs, rhs) catch return error.NotImplemented;
+            const order = self.compareNumericScalars(lhs, rhs) catch {
+                return error.NotImplemented;
+            };
             return order == .eq;
         }
 
         // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
         // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
         _ = lhs_var;
+
         return error.NotImplemented;
     }
 
@@ -5793,7 +5992,8 @@ pub const Interpreter = struct {
                         const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
                             // If structural equality is not implemented for this type, return false
                             if (err == error.NotImplemented) {
-                                return try self.makeBoolValue(false);
+                                self.triggerCrash("DEBUG: dispatchBinaryOpMethod NotImplemented", false, roc_ops);
+                                return error.Crash;
                             }
                             return err;
                         };

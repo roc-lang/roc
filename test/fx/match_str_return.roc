@@ -1,12 +1,13 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
-import pf.Stdin
-import pf.Stderr
+import pf.Stdout
 
 str : Str -> Str
 str = |s| s
 
 main! = || {
-    line = Stdin.line!()
-    Stderr.line!(str(line))
+    x = match 0 {
+        _ => str("0")
+    }
+    Stdout.line!(x)
 }
