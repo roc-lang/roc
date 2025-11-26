@@ -2487,6 +2487,57 @@ pub fn insertQualifiedIdent(
     }
 }
 
+/// Looks up a method identifier on a type by building the qualified method name.
+/// This handles cross-module method lookup by building names like "Builtin.Num.U64.from_numeral".
+///
+/// Parameters:
+/// - type_name: The type's identifier text (e.g., "Num.U64" or "Bool")
+/// - method_name: The unqualified method name (e.g., "from_numeral")
+///
+/// Returns the method's ident index if found, or null if the method doesn't exist.
+/// This is a read-only operation that doesn't modify the ident store.
+pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []const u8) ?Ident.Idx {
+    // Build the qualified method name: "{type_name}.{method_name}"
+    // The type_name may already include the module prefix (e.g., "Num.U64")
+    // or just be the type name (e.g., "Bool" for Builtin.Bool)
+    const total_len = self.module_name.len + 1 + type_name.len + 1 + method_name.len;
+
+    if (total_len <= 256) {
+        // Use stack buffer for small identifiers
+        var buf: [256]u8 = undefined;
+
+        // Check if type_name already starts with module_name
+        if (type_name.len > self.module_name.len and
+            std.mem.startsWith(u8, type_name, self.module_name) and
+            type_name[self.module_name.len] == '.')
+        {
+            // Type name is already qualified (e.g., "Builtin.Bool")
+            const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
+            return self.getIdentStoreConst().findByString(qualified);
+        } else if (std.mem.eql(u8, type_name, self.module_name)) {
+            // Type name IS the module name (e.g., looking up method on "Builtin" itself)
+            const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
+            return self.getIdentStoreConst().findByString(qualified);
+        } else {
+            // Need to add module prefix
+            const qualified = std.fmt.bufPrint(&buf, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
+            return self.getIdentStoreConst().findByString(qualified);
+        }
+    } else {
+        // Use heap allocation for large identifiers (rare case)
+        const qualified = if (type_name.len > self.module_name.len and
+            std.mem.startsWith(u8, type_name, self.module_name) and
+            type_name[self.module_name.len] == '.')
+            std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null
+        else if (std.mem.eql(u8, type_name, self.module_name))
+            std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null
+        else
+            std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
+        defer self.gpa.free(qualified);
+        return self.getIdentStoreConst().findByString(qualified);
+    }
+}
+
 /// Returns the line start positions for source code position mapping.
 /// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {

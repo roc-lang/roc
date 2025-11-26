@@ -117,8 +117,6 @@ constraint_origins: std.AutoHashMap(Var, Var),
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
 str_var: Var,
-/// Used when looking up static dispatch functions
-static_dispatch_method_name_buf: std.ArrayList(u8),
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Map representation all top level patterns, and if we've processed them yet
@@ -209,7 +207,6 @@ pub fn init(
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
-        .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
     };
@@ -236,7 +233,6 @@ pub fn deinit(self: *Self) void {
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
-    self.static_dispatch_method_name_buf.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
 }
@@ -4499,6 +4495,7 @@ fn handleRecursiveConstraint(
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
+
 /// Check a from_numeral constraint - actual validation happens during comptime evaluation
 fn checkNumeralConstraint(
     self: *Self,
@@ -4661,6 +4658,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             // Get some data about the nominal type
             const region = self.getRegionAt(deferred_constraint.var_);
+            const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -4671,17 +4669,24 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Look up the method in the original env using the constraint's fn_name.
-                // For same-module lookups, use the ident directly.
-                // For cross-module lookups, the fn_name should already be set to the
-                // correct ident index in the original module during canonicalization.
-                const method_ident = constraint.fn_name;
+                // Look up the method in the original env.
+                // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
+                // Use the module's getMethodIdent to build and look up the qualified name.
+                const method_name_bytes = self.cir.getIdent(constraint.fn_name);
+                const method_ident = original_env.getMethodIdent(type_name_bytes, method_name_bytes) orelse {
+                    // Method name doesn't exist in target module
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
+                    continue;
+                };
 
                 // Get the def index in the original env
                 const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
-                    // This can happen if the original module has an ident that
-                    // matches the method/type, but it doesn't actually have
-                    // that method.
+                    // The ident exists but isn't exposed as a def
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -4739,10 +4744,13 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const resolved_real = self.types.resolveVar(real_method_var);
                 const mb_real_func = resolved_real.desc.content.unwrapFunc();
                 if (mb_real_func == null) {
-                    // This shouldn't happen - the method should be a function
-                    std.debug.assert(false);
-                    try self.unifyWith(deferred_constraint.var_, .err, env);
-                    try self.unifyWith(resolved_func.ret, .err, env);
+                    // The looked-up definition is not a function - report as missing method
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
                     continue;
                 }
                 const real_func = mb_real_func.?;
@@ -4752,10 +4760,13 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const real_args = self.types.sliceVars(real_func.args);
 
                 if (constraint_args.len != real_args.len) {
-                    // Arity mismatch - shouldn't happen if method was found correctly
-                    std.debug.assert(false);
-                    try self.unifyWith(deferred_constraint.var_, .err, env);
-                    try self.unifyWith(resolved_func.ret, .err, env);
+                    // Arity mismatch - the method exists but has wrong number of arguments
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
                     continue;
                 }
 

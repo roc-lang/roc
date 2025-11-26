@@ -1247,18 +1247,29 @@ const Unifier = struct {
         nominal_type: NominalType,
         method_ident: Ident.Idx,
     ) Error!?Var {
-        const origin_env = if (nominal_type.origin_module == self.module_env.module_name_idx)
+        const is_this_module = nominal_type.origin_module == self.module_env.module_name_idx;
+        const origin_env = if (is_this_module)
             self.module_env
         else
             self.module_lookup.get(nominal_type.origin_module) orelse return null;
 
-        // Look up method directly by ident - the method_ident should already be properly qualified
+        // For cross-module lookups, use getMethodIdent to build the qualified method name
+        const lookup_ident = if (is_this_module)
+            method_ident
+        else blk: {
+            // Get the type name and method name for the qualified lookup
+            const type_name = self.module_env.getIdent(nominal_type.ident.ident_idx);
+            const method_name = self.module_env.getIdent(method_ident);
+            break :blk origin_env.getMethodIdent(type_name, method_name) orelse return null;
+        };
+
+        // Look up method by the ident
         const method_def_idx: CIR.Def.Idx = blk: {
-            if (origin_env.getExposedNodeIndexById(method_ident)) |node_idx| {
+            if (origin_env.getExposedNodeIndexById(lookup_ident)) |node_idx| {
                 break :blk @enumFromInt(@as(u32, node_idx));
             }
 
-            if (Self.findDefIdxByIdent(origin_env, method_ident)) |def_idx| {
+            if (Self.findDefIdxByIdent(origin_env, lookup_ident)) |def_idx| {
                 break :blk def_idx;
             }
 
