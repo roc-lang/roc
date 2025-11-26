@@ -1062,6 +1062,84 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
     // before type inference
+
+    // Process requires_types annotations for platforms
+    // This ensures the type store has the actual types for platform requirements
+    try self.processRequiresTypes(&env);
+}
+
+/// Process the requires_types annotations for platform modules.
+/// This generates the actual types from the type annotations stored in requires_types.
+fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const requires_types_slice = self.cir.requires_types.items.items;
+    for (requires_types_slice) |required_type| {
+        // Generate the type from the annotation
+        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
+    }
+}
+
+/// Check that the app's exported values match the platform's required types.
+/// This should be called after checkFile() to verify that app exports conform
+/// to the platform's requirements.
+pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Create a solver env for type operations
+    var env = try self.env_pool.acquire(.generalized);
+    defer self.env_pool.release(env);
+
+    // Iterate over the platform's required types
+    const requires_types_slice = platform_env.requires_types.items.items;
+    for (requires_types_slice) |required_type| {
+        // Get the identifier name for this required type
+        const required_ident = required_type.ident;
+        const required_ident_text = platform_env.getIdent(required_ident);
+
+        // Find the matching export in the app
+        const app_exports_slice = self.cir.store.sliceDefs(self.cir.exports);
+        var found_export: ?CIR.Def.Idx = null;
+
+        for (app_exports_slice) |def_idx| {
+            const def = self.cir.store.getDef(def_idx);
+            const pattern = self.cir.store.getPattern(def.pattern);
+
+            if (pattern == .assign) {
+                const export_ident_text = self.cir.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, export_ident_text, required_ident_text)) {
+                    found_export = def_idx;
+                    break;
+                }
+            }
+        }
+
+        if (found_export) |export_def_idx| {
+            // Get the app export's type variable
+            const export_def = self.cir.store.getDef(export_def_idx);
+            const export_var = ModuleEnv.varFrom(export_def.pattern);
+
+            // Copy the required type from the platform's type store into the app's type store
+            // First, convert the type annotation to a type variable in the platform's context
+            const required_type_var = ModuleEnv.varFrom(required_type.type_anno);
+
+            // Copy the type from the platform's type store
+            const copied_required_var = try self.copyVar(required_type_var, platform_env, required_type.region);
+
+            // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
+            const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
+
+            // Create a copy of the export's type for unification.
+            // This prevents unification failure from corrupting the app's actual types
+            // (which would cause the interpreter to fail when trying to get layouts).
+            const export_copy = try self.copyVar(export_var, self.cir, required_type.region);
+            const instantiated_export_copy = try self.instantiateVar(export_copy, &env, .{ .explicit = required_type.region });
+
+            // Unify the platform's required type with the COPY of the app's export type.
+            // The platform type is the "expected" type, app export copy is "actual".
+            _ = try self.unifyFromAnno(instantiated_required_var, instantiated_export_copy, &env);
+        }
+        // Note: If the export is not found, the canonicalizer should have already reported an error
+    }
 }
 
 // repl //
@@ -3154,8 +3232,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // without doing any additional work
                         try self.unifyWith(expr_var, .err, env);
                     } else {
-                        // From the base function type, extract the actual function  info
-                        const mb_func: ?types_mod.Func = inner_blk: {
+                        // From the base function type, extract the actual function info
+                        // and also track whether the function is effectful
+                        const FuncInfo = struct { func: types_mod.Func, is_effectful: bool };
+                        const mb_func_info: ?FuncInfo = inner_blk: {
                             // Here, we unwrap the function, following aliases, to get
                             // the actual function we want to check against
                             var var_ = func_var;
@@ -3163,9 +3243,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 switch (self.types.resolveVar(var_).desc.content) {
                                     .structure => |flat_type| {
                                         switch (flat_type) {
-                                            .fn_pure => |func| break :inner_blk func,
-                                            .fn_unbound => |func| break :inner_blk func,
-                                            .fn_effectful => |func| break :inner_blk func,
+                                            .fn_pure => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
+                                            .fn_unbound => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
+                                            .fn_effectful => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = true },
                                             else => break :inner_blk null,
                                         }
                                     },
@@ -3176,6 +3256,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 }
                             }
                         };
+                        const mb_func = if (mb_func_info) |info| info.func else null;
+
+                        // If the function being called is effectful, mark this expression as effectful
+                        if (mb_func_info) |info| {
+                            if (info.is_effectful) {
+                                does_fx = true;
+                            }
+                        }
 
                         // Get the name of the function (for error messages)
                         const func_name: ?Ident.Idx = inner_blk: {
