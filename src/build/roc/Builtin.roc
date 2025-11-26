@@ -18,6 +18,7 @@ Builtin :: [].{
 		count_utf8_bytes : Str -> U64
 		with_capacity : U64 -> Str
 		reserve : Str, U64 -> Str
+		release_excess_capacity : Str -> Str
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

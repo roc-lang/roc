@@ -149,6 +149,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.reserve")) |str_reserve_ident| {
         try low_level_map.put(str_reserve_ident, .str_reserve);
     }
+    if (env.common.findIdent("Builtin.Str.release_excess_capacity")) |str_release_excess_capacity_ident| {
+        try low_level_map.put(str_release_excess_capacity_ident, .str_release_excess_capacity);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

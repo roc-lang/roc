@@ -418,6 +418,7 @@ pub const Expr = union(enum) {
         str_count_utf8_bytes,
         str_with_capacity,
         str_reserve,
+        str_release_excess_capacity,
 
         // Numeric to_str operations
         u8_to_str,

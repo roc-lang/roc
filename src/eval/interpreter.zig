@@ -3153,6 +3153,26 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_release_excess_capacity => {
+                // Str.release_excess_capacity : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const string_arg = args[0];
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const result_str = builtins.str.strReleaseExcessCapacity(roc_ops, string.*);
+
+                const result_layout = string_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
