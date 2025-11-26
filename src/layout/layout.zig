@@ -106,6 +106,10 @@ pub const Idx = enum(@Type(.{
     // Regular indices start from here.
     // num_scalars in store.zig must refer to how many variants we had up to this point.
     _,
+
+    /// Sentinel value representing "not present" / "no layout".
+    /// Used by ArrayListMap as the empty slot marker.
+    pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
 };
 
 /// Represents a closure with its captured environment

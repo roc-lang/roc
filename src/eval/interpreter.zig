@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 const trace_eval = build_options.trace_eval;
 const base_pkg = @import("base");
 const types = @import("types");
+const import_mapping_mod = types.import_mapping;
 const layout = @import("layout");
 const can = @import("can");
 const TypeScope = types.TypeScope;
@@ -159,8 +160,11 @@ pub const Interpreter = struct {
         }
         pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
             if (a.module_id != b.module_id or a.func_id != b.func_id or a.args_len != b.args_len) return false;
-            if (a.args_len == 0) return true;
-            return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
+            // Compare type variable indices element-wise
+            for (0..a.args_len) |i| {
+                if (a.args_ptr[i] != b.args_ptr[i]) return false;
+            }
+            return true;
         }
     };
     const Binding = struct {
@@ -196,6 +200,9 @@ pub const Interpreter = struct {
     // Runtime unification context
     env: *can.ModuleEnv,
     builtin_module_env: ?*const can.ModuleEnv,
+    /// Array of all module environments, indexed by resolved module index
+    /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
+    all_module_envs: []const *const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
@@ -203,6 +210,7 @@ pub const Interpreter = struct {
     next_module_id: u32,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
+    import_mapping: *const import_mapping_mod.ImportMapping,
     unify_scratch: unify.Scratch,
 
     // Minimal eval support
@@ -215,15 +223,15 @@ pub const Interpreter = struct {
     scratch_tags: std.array_list.Managed(types.Tag),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
-    /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
-    imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
     /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
+    /// Receiver type for method calls (set before calling low-level methods like Try.is_eq)
+    method_receiver_type: ?types.Var,
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -233,26 +241,6 @@ pub const Interpreter = struct {
         errdefer import_envs.deinit(allocator);
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
-
-        var imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator);
-        errdefer imported_modules.deinit();
-
-        if (other_envs.len > 0) {
-            // Populate imported_modules with platform modules and builtin module
-            // This allows dynamic lookup by name, which is needed for cross-module calls
-            // when imports are processed in different orders across modules
-            for (other_envs) |module_env| {
-                const module_name = module_env.module_name;
-                // Add full name "Stdout.roc"
-                try imported_modules.put(module_name, module_env);
-
-                // Add name without extension if present "Stdout"
-                if (std.mem.endsWith(u8, module_name, ".roc")) {
-                    const short_name = module_name[0 .. module_name.len - 4];
-                    try imported_modules.put(short_name, module_env);
-                }
-            }
-        }
 
         // Safely access import count
         const import_count = if (env.imports.imports.items().len > 0)
@@ -266,70 +254,28 @@ pub const Interpreter = struct {
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
 
-            // Process ALL imports, matching each to the appropriate module from other_envs
+            // Process ALL imports using pre-resolved module indices
             for (0..import_count) |i| {
-                const str_idx = env.imports.imports.items()[i];
-                const import_name = env.common.getString(str_idx);
+                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
 
-                // Find matching module in other_envs
-                // Since modules loaded from shared memory may have empty names, we match based on:
-                // 1. "Builtin" imports match the module with module_name="Builtin"
-                // 2. Imports containing "Stdout" match other_env[1] (first platform module)
-                // 3. Imports containing "Stderr" match other_env[2] (second platform module)
-                var matched_module: ?*const can.ModuleEnv = null;
+                // Use pre-resolved module index - imports must be resolved during compilation
+                const resolved_idx = env.imports.getResolvedModule(import_idx) orelse {
+                    continue; // Skip unresolved imports
+                };
 
-                if (std.mem.indexOf(u8, import_name, "Builtin") != null) {
-                    // Match Builtin
-                    for (other_envs) |module_env| {
-                        if (std.mem.indexOf(u8, module_env.module_name, "Builtin") != null) {
-                            matched_module = module_env;
-                            break;
-                        }
-                    }
-                } else {
-                    // Dynamically match any platform module
-                    // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
-                    const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
-                        import_name[0 .. import_name.len - 4]
-                    else
-                        import_name;
-
-                    // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
-                    const module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
-                        without_ext[dot_idx + 1 ..]
-                    else
-                        without_ext;
-
-                    // Find matching platform module by searching through all other_envs
-                    for (other_envs) |platform_env| {
-                        const platform_module_name = platform_env.module_name;
-
-                        // Strip .roc extension if present for exact matching
-                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
-                            platform_module_name[0 .. platform_module_name.len - 4]
-                        else
-                            platform_module_name;
-
-                        // Match "Stdout" to "Stdout.roc" via exact match, not substring
-                        if (std.mem.eql(u8, name_without_ext, module_name)) {
-                            matched_module = platform_env;
-                            break;
-                        }
-                    }
+                if (resolved_idx >= other_envs.len) {
+                    continue; // Invalid index, skip
                 }
 
-                const module_env = matched_module orelse {
-                    continue; // Skip if no match found
-                };
+                const module_env = other_envs[resolved_idx];
 
                 // Store in import_envs (always, for every import)
                 // This is the critical mapping that e_lookup_external needs!
-                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
                 // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
-                const ident_idx = env.common.findIdent(import_name);
-                if (ident_idx) |idx| {
+                // Use pre-stored ident index instead of string lookup
+                if (env.imports.getIdentIdx(import_idx)) |idx| {
                     // Only add to module_envs/module_ids if not already present (to avoid duplicates)
                     if (!module_envs.contains(idx)) {
                         module_envs.putAssumeCapacity(idx, module_env);
@@ -340,7 +286,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, imported_modules, next_id, builtin_types, builtin_module_env);
+        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -351,13 +297,14 @@ pub const Interpreter = struct {
     pub fn initWithModuleEnvs(
         allocator: std.mem.Allocator,
         env: *can.ModuleEnv,
+        all_module_envs: []const *const can.ModuleEnv,
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
-        imported_modules: std.StringHashMap(*const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const can.ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -375,6 +322,7 @@ pub const Interpreter = struct {
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .builtin_module_env = builtin_module_env,
+            .all_module_envs = all_module_envs,
             .module_envs = module_envs,
             .module_ids = module_ids,
             .import_envs = import_envs,
@@ -382,6 +330,7 @@ pub const Interpreter = struct {
             .next_module_id = next_module_id,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
+            .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
             .stack_memory = try stack.Stack.initCapacity(allocator, 8 * 1024 * 1024), // 8MB stack
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
@@ -389,17 +338,14 @@ pub const Interpreter = struct {
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
-            .imported_modules = imported_modules,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
+            .method_receiver_type = null,
             .last_error_message = null,
         };
 
-        // Get the "Builtin.Str" identifier from the runtime module's identifier store
-        // (identifiers are per-module, so we need to insert "Builtin.Str" into the runtime module's table)
-        const builtin_str_ident = env.common.findIdent("Builtin.Str");
-
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, builtin_str_ident);
+        // Use the pre-interned "Builtin.Str" identifier from the module env
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.builtin_str_ident);
 
         return result;
     }
@@ -515,7 +461,7 @@ pub const Interpreter = struct {
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             // Only copy result if the result type is compatible with ret_ptr
-            if (try self.shouldCopyResult(result_value, ret_ptr)) {
+            if (try self.shouldCopyResult(result_value, ret_ptr, roc_ops)) {
                 try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
             }
             return;
@@ -525,7 +471,7 @@ pub const Interpreter = struct {
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
         // Only copy result if the result type is compatible with ret_ptr
-        if (try self.shouldCopyResult(result, ret_ptr)) {
+        if (try self.shouldCopyResult(result, ret_ptr, roc_ops)) {
             try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
         }
     }
@@ -533,7 +479,7 @@ pub const Interpreter = struct {
     /// Check if the result should be copied to ret_ptr based on the result's layout.
     /// Returns false for zero-sized types (nothing to copy).
     /// Validates that ret_ptr is properly aligned for the result type.
-    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) !bool {
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque, _: *RocOps) !bool {
         const result_size = self.runtime_layout_store.layoutSize(result.layout);
         if (result_size == 0) {
             // Zero-sized types don't need copying
@@ -548,7 +494,6 @@ pub const Interpreter = struct {
         const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
         const ret_addr = @intFromPtr(ret_ptr);
         if (ret_addr % required_alignment.toByteUnits() != 0) {
-            // Type mismatch detected at runtime
             return error.TypeMismatch;
         }
 
@@ -740,7 +685,7 @@ pub const Interpreter = struct {
                             const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
                             const is_true = boolValueEquals(true, cond_val);
                             if (!is_true) {
-                                try self.handleExpectFailure(expect_stmt.body, roc_ops);
+                                self.handleExpectFailure(expect_stmt.body, roc_ops);
                                 return error.Crash;
                             }
                         },
@@ -1322,8 +1267,7 @@ pub const Interpreter = struct {
                     var idx: usize = 0;
                     while (idx < base_accessor.getFieldCount()) : (idx += 1) {
                         const info = base_accessor.field_layouts.get(idx);
-                        const field_name = self.env.getIdent(info.name);
-                        const dest_field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                        const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
                         const base_field_value = try base_accessor.getFieldByIndex(idx);
                         try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
                     }
@@ -1331,12 +1275,11 @@ pub const Interpreter = struct {
 
                 for (fields, 0..) |field_idx_enum, explicit_index| {
                     const f = self.env.store.getRecordField(field_idx_enum);
-                    const name_text = self.env.getIdent(f.name);
-                    const dest_field_idx = accessor.findFieldIndex(self.env, name_text) orelse return error.TypeMismatch;
+                    const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
                     const val = field_values.items[explicit_index];
 
                     if (base_accessor_opt) |base_accessor| {
-                        if (base_accessor.findFieldIndex(self.env, name_text) != null) {
+                        if (base_accessor.findFieldIndex(f.name) != null) {
                             const existing = try accessor.getFieldByIndex(dest_field_idx);
                             existing.decref(&self.runtime_layout_store, roc_ops);
                         }
@@ -1416,26 +1359,13 @@ pub const Interpreter = struct {
                 }
                 const tu = resolved.desc.content.structure.tag_union;
                 const tags = self.runtime_types.getTagsSlice(tu.tags);
-                // Find index by name
-                var tag_index: usize = 0;
-                var found = false;
-                const name_text = self.env.getIdent(zero.name);
-                var i: usize = 0;
-                while (i < tags.len) : (i += 1) {
-                    // Use runtime_layout_store.env to look up tag names since that's where
-                    // the runtime type tag idents are stored (after translation)
-                    const tag_name_in_rt = self.runtime_layout_store.env.getIdent(tags.items(.name)[i]);
-                    if (std.mem.eql(u8, tag_name_in_rt, name_text)) {
-                        tag_index = i;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+                // Find tag index by translating the source ident to the runtime store and comparing indices
+                const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+                    const name_text = self.env.getIdent(zero.name);
                     const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
-                }
+                };
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 // If layout is scalar (int), write discriminant directly
                 if (layout_val.tag == .scalar) {
@@ -1452,7 +1382,7 @@ pub const Interpreter = struct {
                     // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                    const tag_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
                         self.triggerCrash("DEBUG: e_zero_argument_tag tag field not found", false, roc_ops);
                         return error.Crash;
                     };
@@ -1499,27 +1429,16 @@ pub const Interpreter = struct {
                     self.triggerCrash("DEBUG: e_tag not tag union", false, roc_ops);
                     return error.Crash;
                 }
-                const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
                 try self.appendUnionTags(rt_var, &tag_list);
-                var tag_index: usize = 0;
-                var found = false;
-                for (tag_list.items, 0..) |tag_info, i| {
-                    // Use runtime_layout_store.env to look up tag names since that's where
-                    // the runtime type tag idents are stored (after translation)
-                    const tag_name_in_rt = self.runtime_layout_store.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name_in_rt, name_text)) {
-                        tag_index = i;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+                // Find tag index by translating the source ident to the runtime store and comparing indices
+                const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
+                    const name_text = self.env.getIdent(tag.name);
                     const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
-                }
+                };
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
 
@@ -1538,11 +1457,11 @@ pub const Interpreter = struct {
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                    const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
                         self.triggerCrash("DEBUG: e_tag tag field not found", false, roc_ops);
                         return error.Crash;
                     };
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                    const payload_field_idx = acc.findFieldIndex(self.env.payload_ident) orelse {
                         self.triggerCrash("DEBUG: e_tag payload field not found", false, roc_ops);
                         return error.Crash;
                     };
@@ -1842,17 +1761,23 @@ pub const Interpreter = struct {
                     const layout_val = try self.getRuntimeLayout(rt_var);
                     return try self.pushRaw(layout_val, 0);
                 }
-                try self.handleExpectFailure(expect_expr.body, roc_ops);
+                self.handleExpectFailure(expect_expr.body, roc_ops);
                 return error.Crash;
             },
             .e_dbg => |dbg_expr| {
+                // Evaluate and print the inner expression
                 const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
                 const value = try self.evalExprMinimal(dbg_expr.expr, roc_ops, inner_rt_var);
+                defer value.decref(&self.runtime_layout_store, roc_ops);
                 const rendered = try self.renderValueRocWithType(value, inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
-                return value;
+                // dbg returns {} (empty record) - use same pattern as e_expect
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                return try self.pushRaw(layout_val, 0);
             },
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {
@@ -2015,8 +1940,7 @@ pub const Interpreter = struct {
                                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                                     var rec_acc = (rec_val.asRecord(&self_interp.runtime_layout_store)) catch continue;
-                                    const name_text = self_interp.env.getIdent(cap.name);
-                                    if (rec_acc.findFieldIndex(self_interp.env, name_text)) |fidx| {
+                                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
                                         if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
                                             return field_val;
                                         }
@@ -2091,12 +2015,15 @@ pub const Interpreter = struct {
                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                    for (caps) |cap_idx2| {
+                    for (caps, 0..) |cap_idx2, cap_i| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
                         const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
                             return error.NotImplemented;
                         };
-                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse {
+                        // Use field_names[cap_i] which was translated to runtime_layout_store.env
+                        // instead of cap2.name which is from self.env (different ident namespace)
+                        const translated_name = field_names[cap_i];
+                        const idx_opt = accessor.findFieldIndex(translated_name) orelse {
                             return error.NotImplemented;
                         };
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
@@ -2363,7 +2290,6 @@ pub const Interpreter = struct {
                 defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                 const method_args = dot_access.args;
-                const field_name = self.env.getIdent(dot_access.field_name);
 
                 // Field access vs method call
                 if (method_args == null) {
@@ -2373,7 +2299,7 @@ pub const Interpreter = struct {
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
                     if (rec_data.fields.count == 0) return error.TypeMismatch; // No fields to access
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                    const field_idx = accessor.findFieldIndex(dot_access.field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);
                     return try self.pushCopy(field_value, roc_ops);
                 }
@@ -2402,16 +2328,14 @@ pub const Interpreter = struct {
                 if (base_content == .structure) {
                     switch (base_content.structure) {
                         .nominal_type => |nominal| {
-                            const nominal_name = self.env.getIdent(nominal.ident.ident_idx);
-
-                            // Check if this is Box
-                            if (std.mem.eql(u8, nominal_name, "Box")) {
-                                if (std.mem.eql(u8, field_name, "box")) {
+                            // Check if this is Box using ident comparison
+                            if (nominal.ident.ident_idx == self.env.box_type_ident) {
+                                if (dot_access.field_name == self.env.box_method_ident) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
                                     const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
                                     const result_layout = try self.getRuntimeLayout(result_rt_var);
                                     return try self.makeBoxValueFromLayout(result_layout, arg_values[0], roc_ops);
-                                } else if (std.mem.eql(u8, field_name, "unbox")) {
+                                } else if (dot_access.field_name == self.env.unbox_method_ident) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
                                     const box_value = arg_values[0];
                                     const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
@@ -2457,9 +2381,7 @@ pub const Interpreter = struct {
                 }
 
                 // Try static dispatch for nominal types with method constraints
-                const method_ident = self.env.common.findIdent(field_name) orelse {
-                    return error.MethodNotFound;
-                };
+                const method_ident = dot_access.field_name;
 
                 // Find the nominal type's origin module from the receiver type
                 var receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
@@ -2494,12 +2416,14 @@ pub const Interpreter = struct {
                 ) catch |err| {
                     if (err == error.MethodLookupFailed) {
                         // Get type and method names for a helpful crash message
-                        const origin_env = self.getModuleEnvForOrigin(nominal_info.origin);
-                        const type_name = if (origin_env) |env|
-                            env.common.getIdentStore().getText(nominal_info.ident)
-                        else
-                            "Unknown";
-                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, field_name }) catch {
+                        // Use import mapping to get the user-facing display name
+                        const type_name = import_mapping_mod.getDisplayName(
+                            self.import_mapping,
+                            self.env.common.getIdentStore(),
+                            nominal_info.ident,
+                        );
+                        const method_name = self.env.getIdent(dot_access.field_name);
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
                             self.triggerCrash("Method not found", false, roc_ops);
                             return error.Crash;
                         };
@@ -2627,7 +2551,7 @@ pub const Interpreter = struct {
                 if (self.active_closures.items.len > 0) {
                     const pat = self.env.store.getPattern(lookup.pattern_idx);
                     if (pat == .assign) {
-                        const var_name = self.env.getIdent(pat.assign.ident);
+                        const var_ident = pat.assign.ident;
                         // Search from innermost to outermost closure
                         var closure_idx: usize = self.active_closures.items.len;
                         while (closure_idx > 0) {
@@ -2649,7 +2573,7 @@ pub const Interpreter = struct {
                                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                                    if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
+                                    if (accessor.findFieldIndex(var_ident)) |fidx| {
                                         const field_val = try accessor.getFieldByIndex(fidx);
                                         return try self.pushCopy(field_val, roc_ops);
                                     }
@@ -2682,49 +2606,17 @@ pub const Interpreter = struct {
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
                 const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
-                    // Fallback: dynamic lookup by name
+                    // Fallback: Use pre-resolved module indices from the current module's imports
                     // This is needed when the current module (self.env) has imports in a different order
                     // than the root module, so the Import.Idx doesn't match what was populated in init().
-                    // We need to get the module name from the import list using the Import.Idx.
-                    if (self.env.imports.map.count() > @intFromEnum(lookup.module_idx)) {
-                        // Retrieve the interned string index for this import
-                        const import_list = self.env.imports.imports.items();
-                        if (@intFromEnum(lookup.module_idx) < import_list.len) {
-                            const str_idx = import_list[@intFromEnum(lookup.module_idx)];
-                            const import_name = self.env.common.getString(str_idx);
-
-                            // Try to find it in imported_modules
-                            // First try exact match
-                            if (self.imported_modules.get(import_name)) |env| {
-                                break :blk env;
-                            }
-
-                            // Try stripping .roc if present
-                            if (std.mem.endsWith(u8, import_name, ".roc")) {
-                                const short = import_name[0 .. import_name.len - 4];
-                                if (self.imported_modules.get(short)) |env| {
-                                    break :blk env;
-                                }
-                            }
-
-                            // Try extracting module name from "pf.Module"
-                            if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx| {
-                                const short = import_name[dot_idx + 1 ..];
-                                if (self.imported_modules.get(short)) |env| {
-                                    break :blk env;
-                                }
-                            }
-
-                            self.triggerCrash("DEBUG: Failed to resolve import in imported_modules", false, roc_ops);
-                            return error.Crash;
-                        } else {
-                            self.triggerCrash("DEBUG: lookup.module_idx >= import_list.len", false, roc_ops);
-                            return error.Crash;
+                    // Use the pre-resolved index from self.env.imports.resolved_modules
+                    if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
+                        if (resolved_idx < self.all_module_envs.len) {
+                            break :blk self.all_module_envs[resolved_idx];
                         }
-                    } else {
-                        self.triggerCrash("DEBUG: lookup.module_idx >= map.count", false, roc_ops);
-                        return error.Crash;
                     }
+                    self.triggerCrash("DEBUG: Failed to resolve import via pre-resolved index", false, roc_ops);
+                    return error.Crash;
                 };
 
                 // The target_node_idx is a Def.Idx in the other module
@@ -2751,6 +2643,13 @@ pub const Interpreter = struct {
                 _ = rt_err;
                 self.triggerCrash("runtime error", false, roc_ops);
                 return error.Crash;
+            },
+            .e_lookup_required => {
+                // Required lookups reference values from the app that provides values to the
+                // platform's `requires` clause. These are not available during compile-time
+                // evaluation - they will be linked at runtime. Return TypeMismatch to signal
+                // that this expression cannot be evaluated at compile time.
+                return error.TypeMismatch;
             },
             // no if handling in minimal evaluator
             // no second e_binop case; handled above
@@ -3426,7 +3325,6 @@ pub const Interpreter = struct {
                 const rhs = args[1].asBool();
                 return try self.makeBoolValue(lhs != rhs);
             },
-
             // Numeric type checking operations
             .num_is_zero => {
                 // num.is_zero : num -> Bool
@@ -3768,15 +3666,18 @@ pub const Interpreter = struct {
                 var err_index: ?usize = null;
                 var ok_payload_var: ?types.Var = null;
 
+                // Use precomputed idents from the module env for direct comparison instead of string matching
+                const ok_ident = self.env.ok_ident;
+                const err_ident = self.env.err_ident;
+
                 for (tag_list.items, 0..) |tag_info, i| {
-                    const tag_name = self.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                    if (tag_info.name == ok_ident) {
                         ok_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                         if (arg_vars.len >= 1) {
                             ok_payload_var = arg_vars[0];
                         }
-                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                    } else if (tag_info.name == err_ident) {
                         err_index = i;
                     }
                 }
@@ -3815,10 +3716,10 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                    const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
                         return error.NotImplemented;
                     };
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                    const payload_field_idx = acc.findFieldIndex(self.env.payload_ident) orelse {
                         return error.NotImplemented;
                     };
 
@@ -3908,7 +3809,7 @@ pub const Interpreter = struct {
                 // Get is_negative field
                 // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
                 const layout_env = self.runtime_layout_store.env;
-                const is_neg_idx = acc.findFieldIndex(layout_env, "is_negative") orelse {
+                const is_neg_idx = acc.findFieldIndex(layout_env.is_negative_ident) orelse {
                     self.triggerCrash("num_from_numeral: missing is_negative field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3919,7 +3820,7 @@ pub const Interpreter = struct {
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
-                const before_idx = acc.findFieldIndex(layout_env, "digits_before_pt") orelse {
+                const before_idx = acc.findFieldIndex(layout_env.digits_before_pt_ident) orelse {
                     self.triggerCrash("num_from_numeral: missing digits_before_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3929,7 +3830,7 @@ pub const Interpreter = struct {
                 };
 
                 // Get digits_after_pt field (List(U8))
-                const after_idx = acc.findFieldIndex(layout_env, "digits_after_pt") orelse {
+                const after_idx = acc.findFieldIndex(layout_env.digits_after_pt_ident) orelse {
                     self.triggerCrash("num_from_numeral: missing digits_after_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3984,16 +3885,18 @@ pub const Interpreter = struct {
                 var ok_payload_var: ?types.Var = null;
                 var err_payload_var: ?types.Var = null;
 
+                // Use precomputed idents from the module env for direct comparison instead of string matching
+                const ok_ident = self.env.ok_ident;
+                const err_ident = self.env.err_ident;
+
                 for (tag_list.items, 0..) |tag_info, i| {
-                    // Use runtime_layout_store.env for tag names since appendUnionTags uses runtime types
-                    const tag_name = self.runtime_layout_store.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                    if (tag_info.name == ok_ident) {
                         ok_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                         if (arg_vars.len >= 1) {
                             ok_payload_var = arg_vars[0];
                         }
-                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                    } else if (tag_info.name == err_ident) {
                         err_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                         if (arg_vars.len >= 1) {
@@ -4148,10 +4051,10 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse {
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env.tag_ident) orelse {
                         return error.NotImplemented;
                     };
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse {
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env.payload_ident) orelse {
                         return error.NotImplemented;
                     };
 
@@ -4272,39 +4175,7 @@ pub const Interpreter = struct {
                         // For Err case, construct InvalidNumeral(Str) with descriptive message
                         // Format the number that was rejected
                         var num_str_buf: [128]u8 = undefined;
-                        const num_str = blk: {
-                            var writer = std.io.fixedBufferStream(&num_str_buf);
-                            if (is_negative) writer.writer().writeAll("-") catch {};
-                            // Format integer part
-                            writer.writer().print("{d}", .{value}) catch {};
-                            // Format fractional part if present
-                            if (digits_after.len > 0) {
-                                var has_nonzero = false;
-                                for (digits_after) |d| {
-                                    if (d != 0) {
-                                        has_nonzero = true;
-                                        break;
-                                    }
-                                }
-                                if (has_nonzero) {
-                                    writer.writer().writeAll(".") catch {};
-                                    // Convert base-256 fractional digits to decimal
-                                    var frac: f64 = 0;
-                                    var mult: f64 = 1.0 / 256.0;
-                                    for (digits_after) |digit| {
-                                        frac += @as(f64, @floatFromInt(digit)) * mult;
-                                        mult /= 256.0;
-                                    }
-                                    // Print fractional part (removing leading "0.")
-                                    var frac_buf: [32]u8 = undefined;
-                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
-                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                                        writer.writer().writeAll(frac_str[2..]) catch {};
-                                    }
-                                }
-                            }
-                            break :blk num_str_buf[0..writer.pos];
-                        };
+                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
 
                         // Create descriptive error message
                         const error_msg = switch (rejection_reason) {
@@ -4352,7 +4223,7 @@ pub const Interpreter = struct {
 
                                     // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
                                     // Use layout store's env for field lookup to match comptime_evaluator
-                                    if (err_acc.findFieldIndex(layout_env, "tag")) |inner_tag_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.tag_ident)) |inner_tag_idx| {
                                         const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx);
                                         if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
                                             var tmp = inner_tag_field;
@@ -4362,7 +4233,7 @@ pub const Interpreter = struct {
                                     }
 
                                     // Set the payload to the Str
-                                    if (err_acc.findFieldIndex(layout_env, "payload")) |inner_payload_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.payload_ident)) |inner_payload_idx| {
                                         const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx);
                                         if (inner_payload_field.ptr) |str_ptr| {
                                             const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
@@ -4497,35 +4368,7 @@ pub const Interpreter = struct {
                     } else if (!in_range and err_payload_var != null) {
                         // For Err case, construct InvalidNumeral(Str) with descriptive message
                         var num_str_buf: [128]u8 = undefined;
-                        const num_str = blk: {
-                            var writer = std.io.fixedBufferStream(&num_str_buf);
-                            if (is_negative) writer.writer().writeAll("-") catch {};
-                            writer.writer().print("{d}", .{value}) catch {};
-                            if (digits_after.len > 0) {
-                                var has_nonzero = false;
-                                for (digits_after) |d| {
-                                    if (d != 0) {
-                                        has_nonzero = true;
-                                        break;
-                                    }
-                                }
-                                if (has_nonzero) {
-                                    writer.writer().writeAll(".") catch {};
-                                    var frac: f64 = 0;
-                                    var mult: f64 = 1.0 / 256.0;
-                                    for (digits_after) |digit| {
-                                        frac += @as(f64, @floatFromInt(digit)) * mult;
-                                        mult /= 256.0;
-                                    }
-                                    var frac_buf: [32]u8 = undefined;
-                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
-                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                                        writer.writer().writeAll(frac_str[2..]) catch {};
-                                    }
-                                }
-                            }
-                            break :blk num_str_buf[0..writer.pos];
-                        };
+                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
 
                         const error_msg = switch (rejection_reason) {
                             .negative_unsigned => std.fmt.allocPrint(
@@ -4651,19 +4494,19 @@ pub const Interpreter = struct {
         roc_ops.crash(message);
     }
 
-    fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !void {
+    fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) void {
         const region = self.env.store.getExprRegion(snippet_expr_idx);
-        const slice = self.env.getSource(region);
-        const trimmed = std.mem.trim(u8, slice, " \t\n\r");
-        const message = try std.fmt.allocPrint(self.allocator, "Expect failed: {s}", .{trimmed});
-        defer self.allocator.free(message);
+        const source_bytes = self.env.getSource(region);
 
+        // Pass raw source bytes to the host - let the host handle trimming and formatting
         const expect_args = RocExpectFailed{
-            .utf8_bytes = @constCast(message.ptr),
-            .len = message.len,
+            .utf8_bytes = @constCast(source_bytes.ptr),
+            .len = source_bytes.len,
         };
         roc_ops.roc_expect_failed(&expect_args, roc_ops.env);
-        roc_ops.crash(message);
+
+        // Also pass raw source bytes to crash - host handles formatting
+        roc_ops.crash(source_bytes);
     }
 
     fn getRuntimeU8(value: StackValue) u8 {
@@ -4724,7 +4567,7 @@ pub const Interpreter = struct {
         const resolved = self.runtime_types.resolveVar(type_var);
         const map_idx = @intFromEnum(resolved.var_);
         if (map_idx < self.runtime_layout_store.layouts_by_var.entries.len) {
-            self.runtime_layout_store.layouts_by_var.entries[map_idx] = std.mem.zeroes(layout.Idx);
+            self.runtime_layout_store.layouts_by_var.entries[map_idx] = layout.Idx.none;
         }
     }
 
@@ -5039,7 +4882,7 @@ pub const Interpreter = struct {
                     if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
                     const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
                     const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
-                    return std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                    return lhs_str.eql(rhs_str.*);
                 },
                 else => {
                     return error.NotImplemented;
@@ -5404,6 +5247,56 @@ pub const Interpreter = struct {
         std.mem.sort(types.Tag, list.items, self.runtime_layout_store.env.common.getIdentStore(), comptime types.Tag.sortByNameAsc);
     }
 
+    /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
+    /// This avoids string comparison by translating the source ident to the runtime layout store's
+    /// ident store and comparing ident indices directly.
+    ///
+    /// Parameters:
+    /// - source_env: The module environment containing the source tag name ident
+    /// - source_tag_ident: The tag name ident from the source module
+    /// - runtime_tags: MultiArrayList slice of tags from the runtime tag union type
+    ///
+    /// Returns the tag index if found, or null if not found.
+    pub fn findTagIndexByIdent(
+        self: *Interpreter,
+        source_env: *const can.ModuleEnv,
+        source_tag_ident: base_pkg.Ident.Idx,
+        runtime_tags: anytype,
+    ) !?usize {
+        // Translate the source tag name to the runtime layout store's ident store
+        const source_name_str = source_env.getIdent(source_tag_ident);
+        const rt_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+
+        // Compare ident indices directly (O(1) per comparison instead of string comparison)
+        for (runtime_tags.items(.name), 0..) |tag_name_ident, i| {
+            if (tag_name_ident == rt_tag_ident) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    /// Find the index of a tag in a list of runtime tags by translating the source tag name ident.
+    /// This is the list-based variant of findTagIndexByIdent, used when tags come from appendUnionTags.
+    pub fn findTagIndexByIdentInList(
+        self: *Interpreter,
+        source_env: *const can.ModuleEnv,
+        source_tag_ident: base_pkg.Ident.Idx,
+        tag_list: []const types.Tag,
+    ) !?usize {
+        // Translate the source tag name to the runtime layout store's ident store
+        const source_name_str = source_env.getIdent(source_tag_ident);
+        const rt_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+
+        // Compare ident indices directly (O(1) per comparison instead of string comparison)
+        for (tag_list, 0..) |tag_info, i| {
+            if (tag_info.name == rt_tag_ident) {
+                return i;
+            }
+        }
+        return null;
+    }
+
     const TagValue = struct {
         index: usize,
         payload: ?StackValue,
@@ -5419,7 +5312,7 @@ pub const Interpreter = struct {
             },
             .record => {
                 var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse return error.TypeMismatch;
                 const tag_field = try acc.getFieldByIndex(tag_field_idx);
                 var tag_index: usize = undefined;
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
@@ -5428,7 +5321,7 @@ pub const Interpreter = struct {
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
-                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                if (acc.findFieldIndex(self.env.payload_ident)) |payload_idx| {
                     payload_value = try acc.getFieldByIndex(payload_idx);
                     if (payload_value) |field_value| {
                         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -5729,7 +5622,7 @@ pub const Interpreter = struct {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
                 const lit = self.env.getString(sl.literal);
                 const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
-                return std.mem.eql(u8, rs.asSlice(), lit);
+                return rs.eqlSlice(lit);
             },
             .nominal => |n| {
                 const underlying = self.resolveBaseVar(value_rt_var);
@@ -5862,9 +5755,8 @@ pub const Interpreter = struct {
                 const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.env.getIdent(destruct.label);
 
-                    const field_index = accessor.findFieldIndex(self.env, field_name) orelse return false;
+                    const field_index = accessor.findFieldIndex(destruct.label) orelse return false;
                     const field_value = try accessor.getFieldByIndex(field_index);
                     const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
                     const field_var = try self.translateTypeVar(self.env, field_ct_var);
@@ -5988,13 +5880,13 @@ pub const Interpreter = struct {
         self.allocator.destroy(self.runtime_types);
         self.snapshots.deinit();
         self.problems.deinit(self.allocator);
+        // Note: import_mapping is borrowed, not owned - don't deinit it
         self.unify_scratch.deinit();
         self.stack_memory.deinit();
         self.bindings.deinit();
         self.active_closures.deinit();
         self.def_stack.deinit();
         self.scratch_tags.deinit();
-        self.imported_modules.deinit();
     }
 
     /// Get the module environment for a given origin module identifier.
@@ -6023,36 +5915,6 @@ pub const Interpreter = struct {
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
         return self.module_ids.get(origin_module) orelse self.current_module_id;
-    }
-
-    /// Build a fully-qualified method identifier.
-    /// Note: nominal_ident comes from the runtime type store (translated idents),
-    /// while method_name comes from the current environment.
-    ///
-    /// Supports arbitrary nesting depth because type_name can itself be qualified.
-    /// Examples:
-    ///   - "Builtin.List.len" (2 levels: module + type + method)
-    ///   - "Builtin.Num.Dec.plus" (3 levels: module + nested type + method)
-    ///   - "MyModule.Foo.Bar.Baz.method" (5 levels: module + deeply nested type + method)
-    fn getMethodQualifiedIdent(
-        self: *const Interpreter,
-        origin_module: base_pkg.Ident.Idx,
-        nominal_ident: base_pkg.Ident.Idx,
-        method_name: base_pkg.Ident.Idx,
-        buf: []u8,
-    ) ![]const u8 {
-        // Build fully-qualified method name: "OriginModule.TypeName.methodName"
-        // where TypeName can itself be qualified (e.g., "Foo.Bar" for nested types)
-        // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
-        const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
-        const origin_module_text = runtime_ident_store.getText(origin_module);
-        const type_name = runtime_ident_store.getText(nominal_ident);
-        // method_name is from the current environment
-        const current_ident_store = self.env.common.getIdentStore();
-        const method_name_str = current_ident_store.getText(method_name);
-        // Construct: "OriginModule.TypeName.methodName"
-        // Note: TypeName may already contain dots for nested types
-        return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
@@ -6121,27 +5983,29 @@ pub const Interpreter = struct {
 
         // Get the nominal type information from lhs, or handle anonymous structural types
         const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
-            .structure => |s| switch (s) {
-                .nominal_type => |nom| .{
-                    .origin = nom.origin_module,
-                    .ident = nom.ident.ident_idx,
-                },
-                .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
-                    // Anonymous structural types have implicit is_eq
-                    if (method_ident == self.env.is_eq_ident) {
-                        const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
-                            // If structural equality is not implemented for this type, return false
-                            if (err == error.NotImplemented) {
-                                self.triggerCrash("DEBUG: dispatchBinaryOpMethod NotImplemented", false, roc_ops);
-                                return error.Crash;
-                            }
-                            return err;
-                        };
-                        return try self.makeBoolValue(result);
-                    }
-                    break :blk null;
-                },
-                else => null,
+            .structure => |s| blk2: {
+                break :blk2 switch (s) {
+                    .nominal_type => |nom| .{
+                        .origin = nom.origin_module,
+                        .ident = nom.ident.ident_idx,
+                    },
+                    .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                        // Anonymous structural types have implicit is_eq
+                        if (method_ident == self.env.is_eq_ident) {
+                            const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
+                                // If structural equality is not implemented for this type, return false
+                                if (err == error.NotImplemented) {
+                                    self.triggerCrash("DEBUG: dispatchBinaryOpMethod NotImplemented", false, roc_ops);
+                                    return error.Crash;
+                                }
+                                return err;
+                            };
+                            return try self.makeBoolValue(result);
+                        }
+                        break :blk null;
+                    },
+                    else => null,
+                };
             },
             else => null,
         };
@@ -6151,12 +6015,12 @@ pub const Interpreter = struct {
         }
 
         // Resolve the method function
-        const method_func = self.resolveMethodFunction(
+        const method_func = try self.resolveMethodFunction(
             nominal_info.?.origin,
             nominal_info.?.ident,
             method_ident,
             roc_ops,
-        ) catch |err| return err;
+        );
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
         // Prepare arguments: lhs (receiver) + rhs
@@ -6191,6 +6055,12 @@ pub const Interpreter = struct {
         const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
+
+            // Set receiver type for methods that need it (like Try.is_eq)
+            const saved_receiver_type = self.method_receiver_type;
+            self.method_receiver_type = lhs_rt_var;
+            defer self.method_receiver_type = saved_receiver_type;
+
             // Dispatch to actual low-level builtin implementation
             // Binary ops don't need return type info (not num_from_int_digits etc)
             return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
@@ -6342,13 +6212,14 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Build the fully-qualified method name: "OriginModule.TypeName.method"
-        // e.g., "Builtin.List.len" or "Builtin.Num.Dec.plus"
-        var qualified_name_buf: [256]u8 = undefined;
-        const qualified_name = try self.getMethodQualifiedIdent(origin_module, nominal_ident, method_name, &qualified_name_buf);
-
-        // Single lookup with the fully-qualified method name - no fallbacks, no retries
-        const method_ident = origin_env.common.findIdent(qualified_name) orelse {
+        // Use semantic method lookup via ident indices
+        // The getMethodIdentByIdents function handles qualified name construction internally
+        // Pass self.env as the source since that's where the idents are from
+        const method_ident = origin_env.getMethodIdentByIdents(
+            self.env,
+            nominal_ident,
+            method_name,
+        ) orelse {
             return error.MethodLookupFailed;
         };
 
@@ -6403,8 +6274,9 @@ pub const Interpreter = struct {
     fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
         const origin_module_id = self.env.builtin_module_ident;
 
-        // Number types are nested in Num module, so the qualified name is "Num.Dec", "Num.I64", etc.
-        const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Num.{s}", .{type_name});
+        // Use fully-qualified type name "Builtin.Num.U8" etc.
+        // This allows method lookup to work correctly
+        const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Builtin.Num.{s}", .{type_name});
         defer self.allocator.free(qualified_type_name);
         const type_name_ident = try @constCast(self.env.getIdentStore()).insert(self.allocator, base_pkg.Ident.for_text(qualified_type_name));
         const type_ident = types.TypeIdent{
@@ -7103,10 +6975,13 @@ fn add(a: i32, b: i32) i32 {
     return a + b;
 }
 
-// GREEN step: basic test to confirm the module’s tests run
+// GREEN step: basic test to confirm the module's tests run
 test "interpreter: wiring works" {
     try std.testing.expectEqual(@as(i32, 3), add(1, 2));
 }
+
+// Empty import mapping for tests that don't need type name resolution
+var empty_import_mapping = import_mapping_mod.ImportMapping.init(std.testing.allocator);
 
 // RED: expect Var->Layout slot to work (will fail until implemented)
 
@@ -7129,7 +7004,7 @@ test "interpreter: translateTypeVar for str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Get the actual Str type from the Builtin module using the str_stmt index
@@ -7166,7 +7041,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -7218,7 +7093,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -7275,7 +7150,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -7303,7 +7178,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -7341,7 +7216,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Create nominal Str type (no constraints)
@@ -7389,7 +7264,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -7439,7 +7314,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -7495,7 +7370,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Register module B

@@ -19,45 +19,57 @@ MISSING METHOD - literal_patterns.md:5:5:5:7
 MISSING METHOD - literal_patterns.md:5:11:5:12
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **literal_patterns.md:2:15:2:16:**
 ```roc
     Answer => 1
 ```
               ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **literal_patterns.md:4:17:4:18:**
 ```roc
     Greeting => 3
 ```
                 ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _[Answer, Zero, Greeting]_others_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **literal_patterns.md:5:5:5:7:**
 ```roc
     10 => 4
 ```
     ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _[Answer, Zero, Greeting]_others_
 
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **literal_patterns.md:5:11:5:12:**
 ```roc
     10 => 4
 ```
           ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

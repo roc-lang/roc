@@ -16,13 +16,16 @@ type=expr
 MISSING METHOD - test_instantiated_arg_mismatch.md:5:10:5:12
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **test_instantiated_arg_mismatch.md:5:10:5:12:**
 ```roc
     pair(42, "hello")
 ```
          ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

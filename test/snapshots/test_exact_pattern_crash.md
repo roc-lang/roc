@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __arg, _arg2, (e -> e), (h -> h) -> _ret where [i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k]_
+    _e, h, (i -> i), (j -> j) -> _ret where [e.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(_l, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(_m, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(_n, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_o, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_p, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_

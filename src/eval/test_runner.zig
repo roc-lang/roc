@@ -6,6 +6,8 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
+const types = @import("types");
+const import_mapping_mod = types.import_mapping;
 const reporting = @import("reporting");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const eval_mod = @import("mod.zig");
@@ -75,9 +77,17 @@ fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    const test_env: *TestRunner = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(test_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        @panic("failed to allocate expect failure message for test runner");
+    };
+    test_env.crash.recordCrash(formatted) catch {
+        test_env.allocator.free(formatted);
+        @panic("failed to record expect failure for test runner");
+    };
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
@@ -143,11 +153,12 @@ pub const TestRunner = struct {
         builtin_types_param: BuiltinTypes,
         other_modules: []const *const can.ModuleEnv,
         builtin_module_env: ?*const can.ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.array_list.Managed(TestResult).init(allocator),

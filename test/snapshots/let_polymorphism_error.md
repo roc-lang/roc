@@ -11,13 +11,16 @@ type=expr
 MISSING METHOD - let_polymorphism_error.md:1:6:1:9
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **let_polymorphism_error.md:1:6:1:9:**
 ```roc
 [42, 4.2, "hello"]
 ```
      ^^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

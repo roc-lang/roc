@@ -1835,7 +1835,7 @@ test "type_writer - recursion_var displays structure" {
 
     // Write the recursion var to a string
     const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
     const result = try writer.writeGet(rec_var);
@@ -1870,7 +1870,7 @@ test "type_writer - recursion_var with cycle displays correctly" {
 
     // Write the recursion var
     const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
     const result = try writer.writeGet(rec_var);
@@ -1907,7 +1907,7 @@ test "type_writer - nested recursion_var displays correctly" {
 
     // Write the outer recursion var
     const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
     const result = try writer.writeGet(outer_rec_var);
@@ -1982,7 +1982,7 @@ test "recursion_var - integration: deep recursion with RecursionVar prevents inf
 
     // The type should display with cycle detection
     const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore());
+    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
     const display = try writer.writeGet(var1);

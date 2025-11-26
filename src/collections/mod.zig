@@ -43,19 +43,17 @@ pub const NonEmptyRange = struct {
 };
 
 /// A key-value map that uses direct array indexing instead of hashing.
-/// Keys must be enums that are convertible to indices, and key value 0 is reserved
-/// as a sentinel value which indicates an empty slot.
+/// Keys must be enums that are convertible to indices. The value type V must
+/// have a `none` constant that serves as the sentinel value for empty slots.
 pub fn ArrayListMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
-        // We store V directly, using 0 as a sentinel value meaning "empty"
         entries: []V,
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
-            // Allocate zeroed memory
             const entries = try allocator.alloc(V, capacity);
-            @memset(entries, std.mem.zeroes(V));
+            @memset(entries, V.none);
 
             return .{ .entries = entries };
         }
@@ -69,8 +67,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             if (idx >= self.entries.len) return null;
 
             const value = self.entries[idx];
-            // Check if this is an empty slot (zero value)
-            if (std.meta.eql(value, std.mem.zeroes(V))) {
+            if (value == V.none) {
                 return null;
             }
             return value;
@@ -83,8 +80,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             if (idx >= self.entries.len) {
                 const new_size = idx + 1;
                 const new_entries = try allocator.realloc(self.entries, new_size);
-                // Zero out the new memory
-                @memset(new_entries[self.entries.len..], std.mem.zeroes(V));
+                @memset(new_entries[self.entries.len..], V.none);
                 self.entries = new_entries;
             }
 

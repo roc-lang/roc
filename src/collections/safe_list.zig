@@ -111,7 +111,19 @@ pub fn SafeList(comptime T: type) type {
 
         /// An index for an item in the list. Idx 0 is reserved as a sentinel
         /// meaning "missing" and will never be returned by append operations.
-        pub const Idx = enum(u32) { _ };
+        pub const Idx = enum(u32) {
+            _,
+
+            /// Get the raw u32 value for storage
+            pub fn toU32(self: Idx) u32 {
+                return @intFromEnum(self);
+            }
+
+            /// Create from a raw u32 value
+            pub fn fromU32(value: u32) Idx {
+                return @enumFromInt(value);
+            }
+        };
 
         /// An index that may be empty (Idx 0 represents "missing").
         /// Use get() to convert to an optional Idx.

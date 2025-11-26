@@ -105,7 +105,39 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
         .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
         .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        // Fully-qualified type identifiers for type checking and layout generation
+        .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
+        .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+        .builtin_str_ident = common.findIdent("Builtin.Str") orelse unreachable,
+        .list_type_ident = common.findIdent("List") orelse unreachable,
+        .box_type_ident = common.findIdent("Box") orelse unreachable,
+        .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
+        .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
+        .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
+        .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
+        .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
+        .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
+        .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
+        .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
+        .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
+        .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
+        .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
+        .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
+        .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+        .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
+        .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
+        .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
+        .tag_ident = common.findIdent("tag") orelse unreachable,
+        .payload_ident = common.findIdent("payload") orelse unreachable,
+        .is_negative_ident = common.findIdent("is_negative") orelse unreachable,
+        .digits_before_pt_ident = common.findIdent("digits_before_pt") orelse unreachable,
+        .digits_after_pt_ident = common.findIdent("digits_after_pt") orelse unreachable,
+        .box_method_ident = common.findIdent("box") orelse unreachable,
+        .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
+        .ok_ident = common.findIdent("Ok") orelse unreachable,
+        .err_ident = common.findIdent("Err") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
     };
 
     return LoadedModule{
@@ -234,6 +266,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = other_test_env.builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Build imported_envs array
@@ -353,6 +386,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Build imported_envs array

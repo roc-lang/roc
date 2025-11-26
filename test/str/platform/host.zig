@@ -67,8 +67,9 @@ fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
 /// Roc expect failed function
 fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = env;
-    const message = roc_expect.utf8_bytes[0..roc_expect.len];
-    std.debug.print("ROC EXPECT FAILED: {s}\n", .{message});
+    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function

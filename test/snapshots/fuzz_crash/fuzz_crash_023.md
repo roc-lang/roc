@@ -281,6 +281,7 @@ UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
 UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
 UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
+TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -921,7 +922,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num.U64_
+    _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -1006,7 +1007,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+    _d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1033,7 +1034,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    __d_
+    _d_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1045,6 +1046,71 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     _[Blue]_others_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_023.md:144:9:196:2:**
+```roc
+main! = |_| { # Yeah I can leave a comment here
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comment after return keyword
+		tag # Comment after return statement
+
+	# Just a random comment!
+
+	...
+	match_time(
+		..., # Single args with comment
+	)
+	some_func(
+		dbg # After debug
+			42, # After debug expr
+	)
+	crash # Comment after crash keyword
+		"Unreachable!" # Comment after crash statement
+	tag_with_payload = Ok(number)
+	interpolated = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+		789, # Comment three
+	]
+	for n in list {
+		Stdout.line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	multiline_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # This one has a comment
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+	Stdout.line!(interpolated)?
+	Stdout.line!(
+		"How about ${ # Comment after string interpolation open
+			Num.toStr(number) # Comment after string interpolation expr
+		} as a string?",
+	)
+} # Comment after top-level decl
+```
+
+It has the type:
+    _List(Error) => Error_
+
+But the type annotation says it should have the type:
+    _List(Error) -> Error_
 
 # TOKENS
 ~~~zig
@@ -2578,7 +2644,7 @@ expect {
 		(patt (type "Error -> U64"))
 		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
-		(patt (type "List(Error) -> Error"))
+		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2625,7 +2691,7 @@ expect {
 		(expr (type "Error -> U64"))
 		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))
-		(expr (type "List(Error) -> Error"))
+		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~
