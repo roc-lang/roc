@@ -27,7 +27,7 @@ This argument has the type:
     _{ age: a, namee: Str } where [a.from_numeral : Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But `getName` needs the first argument to be:
-    _{ age: Num.U64, name: Str }_
+    _{ age: U64, name: Str }_
 
 # TOKENS
 ~~~zig

@@ -865,7 +865,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num.U64_
+    _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 

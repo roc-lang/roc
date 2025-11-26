@@ -210,7 +210,7 @@ It's referenced here:
 
 
 **MISSING METHOD**
-This **to_frac** method is being called on the type **Num.U8**, which has no method with that name:
+This **to_frac** method is being called on the type **U8**, which has no method with that name:
 **Color.md:22:17:22:24:**
 ```roc
     rounded = a.to_frac() / 255.0
