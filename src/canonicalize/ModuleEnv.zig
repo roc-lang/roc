@@ -95,7 +95,7 @@ pub const ModuleKind = union(enum) {
 /// Well-known identifiers that are interned once and reused throughout compilation.
 /// These are needed for type checking, operator desugaring, and layout generation.
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
-pub const WellKnownIdents = extern struct {
+pub const CommonIdents = extern struct {
     // Method names for operator desugaring
     from_int_digits: Ident.Idx,
     from_dec_digits: Ident.Idx,
@@ -156,7 +156,7 @@ pub const WellKnownIdents = extern struct {
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
-    pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!WellKnownIdents {
+    pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
         return .{
             .from_int_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
             .from_dec_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
@@ -214,7 +214,7 @@ pub const WellKnownIdents = extern struct {
     /// Find all well-known identifiers in a CommonEnv that has already interned them.
     /// Use this when loading a pre-compiled module where identifiers are already present.
     /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
-    pub fn find(common: *const CommonEnv) WellKnownIdents {
+    pub fn find(common: *const CommonEnv) CommonIdents {
         return .{
             .from_int_digits = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
             .from_dec_digits = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
@@ -313,7 +313,7 @@ evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
 /// Well-known identifiers for type checking, operator desugaring, and layout generation.
 /// Interned once during init to avoid repeated string comparisons.
-idents: WellKnownIdents,
+idents: CommonIdents,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -395,7 +395,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     var common = try CommonEnv.init(gpa, source);
-    const idents = try WellKnownIdents.insert(gpa, &common);
+    const idents = try CommonIdents.insert(gpa, &common);
 
     return Self{
         .gpa = gpa,
@@ -1839,7 +1839,7 @@ pub const Serialized = extern struct {
     module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
-    idents: WellKnownIdents,
+    idents: CommonIdents,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
 
