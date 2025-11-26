@@ -252,6 +252,18 @@ pub const PackageEnv = struct {
         self.emitted.deinit(self.gpa);
     }
 
+    /// Get the root module's env (first module added)
+    pub fn getRootEnv(self: *PackageEnv) ?*ModuleEnv {
+        if (self.modules.items.len == 0) return null;
+        return if (self.modules.items[0].env) |*env| env else null;
+    }
+
+    /// Get the root module state (first module added)
+    pub fn getRootModule(self: *PackageEnv) ?*ModuleState {
+        if (self.modules.items.len == 0) return null;
+        return &self.modules.items[0];
+    }
+
     fn internModuleName(self: *PackageEnv, name: []const u8) !ModuleId {
         const gop = try self.module_names.getOrPut(self.gpa, name);
         if (!gop.found_existing) {

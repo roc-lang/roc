@@ -1734,6 +1734,10 @@ pub fn canonicalizeFile(
         .platform => |h| {
             self.env.module_kind = .platform;
             try self.createExposedScope(h.exposes);
+            // Extract required type signatures for type checking
+            // This stores the types in env.requires_types without creating local definitions
+            // Pass requires_rigids so R1, R2, etc. are in scope when processing signatures
+            try self.processRequiresSignatures(h.requires_rigids, h.requires_signatures);
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -2621,6 +2625,82 @@ fn createExposedScope(
                 _ = malformed;
             },
         }
+    }
+}
+
+/// Process the requires_signatures from a platform header.
+///
+/// This extracts the required type signatures (like `main! : () => {}`) from the platform
+/// header and stores them in `env.requires_types`. These are used during app type checking
+/// to ensure the app's provided values match the platform's expected types.
+///
+/// The requires_rigids parameter contains the type variables declared in `requires { R1, R2 }`.
+/// These are introduced into scope before processing the signatures so that references to
+/// R1, R2, etc. in the signatures are properly resolved as type variables.
+///
+/// Note: This does NOT create local definitions for the required identifiers. The platform
+/// body can reference these identifiers as forward references that will be resolved to
+/// the app's exports at runtime.
+fn processRequiresSignatures(self: *Self, requires_rigids_idx: AST.Collection.Idx, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    // First, process the requires_rigids to add them to the type variable scope
+    // This allows R1, R2, etc. to be recognized when processing the signatures
+    const rigids_collection = self.parse_ir.store.getCollection(requires_rigids_idx);
+    for (self.parse_ir.store.exposedItemSlice(.{ .span = rigids_collection.span })) |exposed_idx| {
+        const exposed_item = self.parse_ir.store.getExposedItem(exposed_idx);
+        switch (exposed_item) {
+            .upper_ident => |upper| {
+                // Get the identifier for this rigid type variable (e.g., "R1")
+                const rigid_name = self.parse_ir.tokens.resolveIdentifier(upper.ident) orelse continue;
+                const rigid_region = self.parse_ir.tokenizedRegionToRegion(upper.region);
+
+                // Create a type annotation for this rigid variable
+                const rigid_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                    .name = rigid_name,
+                } }, rigid_region);
+
+                // Introduce it into the type variable scope
+                _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
+            },
+            else => {
+                // Skip lower_ident, upper_ident_star, malformed - these aren't valid for requires rigids
+            },
+        }
+    }
+
+    // Now process the requires_signatures with the rigids in scope
+    const requires_signatures = self.parse_ir.store.getTypeAnno(requires_signatures_idx);
+
+    // The requires_signatures should be a record type like { main! : () => {} }
+    switch (requires_signatures) {
+        .record => |record| {
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => {
+                        // Skip malformed fields
+                        continue;
+                    },
+                };
+
+                // Get the field name (e.g., "main!")
+                const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse continue;
+                const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
+
+                // Canonicalize the type annotation for this required identifier
+                var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnnoHelp(field.ty, &type_anno_ctx);
+
+                // Store the required type in the module env
+                _ = try self.env.requires_types.append(self.env.gpa, .{
+                    .ident = field_name,
+                    .type_anno = type_anno_idx,
+                    .region = field_region,
+                });
+            }
+        },
+        else => {
+            // requires_signatures should always be a record type from parsing
+            // If it's not, just skip processing (parser would have reported an error)
+        },
     }
 }
 
@@ -7249,6 +7329,17 @@ fn canonicalizeTypeAnnoBasicType(
                         }
                     }
                 }
+            }
+
+            // Check if this is a type variable in scope (e.g., R1, R2 from requires { R1, R2 })
+            switch (self.scopeLookupTypeVar(type_name_ident)) {
+                .found => |found_anno_idx| {
+                    // Found a type variable with this name - create a reference to it
+                    return try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
+                        .ref = found_anno_idx,
+                    } }, region);
+                },
+                .not_found => {},
             }
 
             // Not found anywhere - undeclared type

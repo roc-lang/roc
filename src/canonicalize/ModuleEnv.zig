@@ -108,6 +108,10 @@ all_defs: CIR.Def.Span,
 all_statements: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
+/// Required type signatures for platform modules (from `requires {} { main! : () => {} }`)
+/// Maps identifier names to their expected type annotations.
+/// Empty for non-platform modules.
+requires_types: RequiredType.SafeList,
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
@@ -185,6 +189,19 @@ pub const DeferredNumericLiteral = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// Required type for platform modules - maps an identifier to its expected type annotation.
+/// Used to enforce that apps provide values matching the platform's required types.
+pub const RequiredType = struct {
+    /// The identifier name (e.g., "main!")
+    ident: Ident.Idx,
+    /// The canonicalized type annotation for this required value
+    type_anno: CIR.TypeAnno.Idx,
+    /// Region of the requirement for error reporting
+    region: Region,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -192,6 +209,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.common.relocate(offset);
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
+    self.requires_types.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
@@ -276,6 +294,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
+        .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
@@ -312,6 +331,7 @@ pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
+    self.requires_types.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
@@ -1713,6 +1733,7 @@ pub const Serialized = extern struct {
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
+    requires_types: RequiredType.SafeList.Serialized,
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
@@ -1760,6 +1781,7 @@ pub const Serialized = extern struct {
         self.exports = env.exports;
         self.builtin_statements = env.builtin_statements;
 
+        try self.requires_types.serialize(&env.requires_types, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -1830,6 +1852,7 @@ pub const Serialized = extern struct {
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
+            .requires_types = self.requires_types.deserialize(offset).*,
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = (try self.imports.deserialize(offset, gpa)).*,

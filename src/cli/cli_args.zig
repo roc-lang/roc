@@ -136,6 +136,7 @@ pub const ExperimentalLspArgs = struct {
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
+    if (mem.eql(u8, args[0], "run")) return try parseRun(alloc, args[1..]);
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);

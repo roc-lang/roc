@@ -233,6 +233,26 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
+        var imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator);
+        errdefer imported_modules.deinit();
+
+        if (other_envs.len > 0) {
+            // Populate imported_modules with platform modules and builtin module
+            // This allows dynamic lookup by name, which is needed for cross-module calls
+            // when imports are processed in different orders across modules
+            for (other_envs) |module_env| {
+                const module_name = module_env.module_name;
+                // Add full name "Stdout.roc"
+                try imported_modules.put(module_name, module_env);
+
+                // Add name without extension if present "Stdout"
+                if (std.mem.endsWith(u8, module_name, ".roc")) {
+                    const short_name = module_name[0 .. module_name.len - 4];
+                    try imported_modules.put(short_name, module_env);
+                }
+            }
+        }
+
         // Safely access import count
         const import_count = if (env.imports.imports.items.items.len > 0)
             env.imports.imports.items.items.len
@@ -319,7 +339,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, imported_modules, next_id, builtin_types, builtin_module_env);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -333,6 +353,7 @@ pub const Interpreter = struct {
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
+        imported_modules: std.StringHashMap(*const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const can.ModuleEnv,
@@ -367,7 +388,7 @@ pub const Interpreter = struct {
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
-            .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
+            .imported_modules = imported_modules,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
             .last_error_message = null,
@@ -415,7 +436,8 @@ pub const Interpreter = struct {
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
-                @panic("evalEntry: expected closure layout, got something else");
+                self.triggerCrash("evalEntry: expected closure layout, got something else", false, roc_ops);
+                return error.Crash;
             }
 
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
@@ -491,14 +513,45 @@ pub const Interpreter = struct {
             const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
-            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            // Only copy result if the result type is compatible with ret_ptr
+            if (try self.shouldCopyResult(result_value, ret_ptr)) {
+                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            }
             return;
         }
 
         const result = try self.evalMinimal(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
-        try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+        // Only copy result if the result type is compatible with ret_ptr
+        if (try self.shouldCopyResult(result, ret_ptr)) {
+            try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+        }
+    }
+
+    /// Check if the result should be copied to ret_ptr based on the result's layout.
+    /// Returns false for zero-sized types (nothing to copy).
+    /// Validates that ret_ptr is properly aligned for the result type.
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) !bool {
+        const result_size = self.runtime_layout_store.layoutSize(result.layout);
+        if (result_size == 0) {
+            // Zero-sized types don't need copying
+            return false;
+        }
+
+        // Validate alignment: ret_ptr must be properly aligned for the result type.
+        // A mismatch here indicates a type error between what the platform expects
+        // and what the Roc code returns. This should have been caught at compile
+        // time, but if the type checking didn't enforce the constraint, we catch
+        // it here at runtime.
+        const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+        const ret_addr = @intFromPtr(ret_ptr);
+        if (ret_addr % required_alignment.toByteUnits() != 0) {
+            // Type mismatch detected at runtime
+            return error.TypeMismatch;
+        }
+
+        return true;
     }
 
     fn evalExprMinimal(
@@ -659,7 +712,10 @@ pub const Interpreter = struct {
                         },
                         .s_reassign => |r| {
                             const patt = self.env.store.getPattern(r.pattern_idx);
-                            if (patt != .assign) @panic("s_reassign: pattern is not an assign pattern");
+                            if (patt != .assign) {
+                                self.triggerCrash("s_reassign: pattern is not an assign pattern", false, roc_ops);
+                                return error.Crash;
+                            }
                             const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
                             // Search through all bindings, not just current block scope
                             // This allows reassigning variables from outer scopes (e.g., in for loops)
@@ -796,7 +852,10 @@ pub const Interpreter = struct {
 
                             // While loop completes and returns {} (implicitly)
                         },
-                        else => @panic("e_block: unhandled statement type"),
+                        else => {
+                            self.triggerCrash("e_block: unhandled statement type", false, roc_ops);
+                            return error.Crash;
+                        },
                     }
                 }
 
@@ -1362,7 +1421,8 @@ pub const Interpreter = struct {
                     }
                 }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    @panic("e_zero_argument_tag: expected tag_union structure type");
+                    self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
+                    return error.Crash;
                 }
                 const tu = resolved.desc.content.structure.tag_union;
                 const tags = self.runtime_types.getTagsSlice(tu.tags);
@@ -1397,19 +1457,26 @@ pub const Interpreter = struct {
                         out.rt_var = rt_var; // Set rt_var for proper rendering
                         return out;
                     }
-                    @panic("e_zero_argument_tag: scalar layout is not int");
+                    self.triggerCrash("e_zero_argument_tag: scalar layout is not int", false, roc_ops);
+                    return error.Crash;
                 } else if (layout_val.tag == .record) {
                     // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse @panic("e_zero_argument_tag: record has no 'tag' field");
+                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                        self.triggerCrash("e_zero_argument_tag: record has no 'tag' field", false, roc_ops);
+                        return error.Crash;
+                    };
                     const tag_field = try acc.getFieldByIndex(tag_idx);
                     // write tag as int
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else @panic("e_zero_argument_tag: record tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("e_zero_argument_tag: record tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
                     dest.rt_var = rt_var; // Set rt_var for proper rendering
                     return dest;
                 } else if (layout_val.tag == .tuple) {
@@ -1423,11 +1490,15 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else @panic("e_zero_argument_tag: tuple tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("e_zero_argument_tag: tuple tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
                     dest.rt_var = rt_var; // Set rt_var for proper rendering
                     return dest;
                 }
-                @panic("e_zero_argument_tag: unexpected layout type");
+                self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
+                return error.Crash;
             },
             .e_tag => |tag| {
                 // Construct a tag union value with payloads
@@ -1446,7 +1517,8 @@ pub const Interpreter = struct {
                     }
                 }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    @panic("e_tag: expected tag_union structure type");
+                    self.triggerCrash("e_tag: expected tag_union structure type", false, roc_ops);
+                    return error.Crash;
                 }
                 const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -1482,20 +1554,30 @@ pub const Interpreter = struct {
                         out.rt_var = rt_var; // Set rt_var for proper rendering
                         return out;
                     }
-                    @panic("e_tag: scalar layout is not int");
+                    self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
+                    return error.Crash;
                 } else if (layout_val.tag == .record) {
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse @panic("e_tag: record has no 'tag' field");
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse @panic("e_tag: record has no 'payload' field");
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                        self.triggerCrash("e_tag: record has no 'tag' field", false, roc_ops);
+                        return error.Crash;
+                    };
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                        self.triggerCrash("e_tag: record has no 'payload' field", false, roc_ops);
+                        return error.Crash;
+                    };
                     // write tag discriminant
                     const tag_field = try acc.getFieldByIndex(tag_field_idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else @panic("e_tag: record tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("e_tag: record tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -1573,7 +1655,10 @@ pub const Interpreter = struct {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
-                    } else @panic("e_tag: tuple tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("e_tag: tuple tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -1710,7 +1795,8 @@ pub const Interpreter = struct {
                         return dest;
                     }
                 }
-                @panic("e_tag: unexpected layout type");
+                self.triggerCrash("e_tag: unexpected layout type", false, roc_ops);
+                return error.Crash;
             },
             .e_match => |m| {
                 // Evaluate scrutinee once and protect from stack corruption
@@ -1811,7 +1897,10 @@ pub const Interpreter = struct {
                 };
                 const closure_layout = try self.getRuntimeLayout(rt_var);
                 // Expect a closure layout from type-to-layout translation
-                if (closure_layout.tag != .closure) @panic("e_lambda: expected closure layout");
+                if (closure_layout.tag != .closure) {
+                    self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
+                    return error.Crash;
+                }
                 const value = try self.pushRaw(closure_layout, 0);
                 self.registerDefValue(expr_idx, value);
                 // Initialize the closure header
@@ -1894,7 +1983,10 @@ pub const Interpreter = struct {
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
                 const lam_expr = self.env.store.getExpr(cls.lambda_idx);
-                if (lam_expr != .e_lambda) @panic("e_closure: lambda_idx does not point to e_lambda");
+                if (lam_expr != .e_lambda) {
+                    self.triggerCrash("e_closure: lambda_idx does not point to e_lambda", false, roc_ops);
+                    return error.Crash;
+                }
                 const lam = lam_expr.e_lambda;
 
                 // Collect capture layouts and names from current bindings
@@ -2009,8 +2101,14 @@ pub const Interpreter = struct {
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                     for (caps) |cap_idx2| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
-                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse @panic("e_closure: failed to resolve capture value");
-                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse @panic("e_closure: capture field not found in record");
+                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
+                            self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse {
+                            self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
+                            return error.Crash;
+                        };
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
                     }
                 }
@@ -2265,7 +2363,8 @@ pub const Interpreter = struct {
                     return try self.evalExprMinimal(lambda.body, roc_ops, call_ret_rt_var);
                 }
 
-                @panic("e_call: func is neither closure nor lambda");
+                self.triggerCrash("e_call: func is neither closure nor lambda", false, roc_ops);
+                return error.Crash;
             },
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
@@ -2587,12 +2686,55 @@ pub const Interpreter = struct {
                     }
                 }
 
-                @panic("e_lookup_local: definition not found in current scope");
+                self.triggerCrash("e_lookup_local: definition not found in current scope", false, roc_ops);
+                return error.Crash;
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
-                const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    @panic("e_lookup_external: module not found in import_envs");
+                const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
+                    // Fallback: dynamic lookup by name
+                    // This is needed when the current module (self.env) has imports in a different order
+                    // than the root module, so the Import.Idx doesn't match what was populated in init().
+                    // We need to get the module name from the import list using the Import.Idx.
+                    if (self.env.imports.map.count() > @intFromEnum(lookup.module_idx)) {
+                        // Retrieve the interned string index for this import
+                        const import_list = self.env.imports.imports.items.items;
+                        if (@intFromEnum(lookup.module_idx) < import_list.len) {
+                            const str_idx = import_list[@intFromEnum(lookup.module_idx)];
+                            const import_name = self.env.common.getString(str_idx);
+
+                            // Try to find it in imported_modules
+                            // First try exact match
+                            if (self.imported_modules.get(import_name)) |env| {
+                                break :blk env;
+                            }
+
+                            // Try stripping .roc if present
+                            if (std.mem.endsWith(u8, import_name, ".roc")) {
+                                const short = import_name[0 .. import_name.len - 4];
+                                if (self.imported_modules.get(short)) |env| {
+                                    break :blk env;
+                                }
+                            }
+
+                            // Try extracting module name from "pf.Module"
+                            if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx| {
+                                const short = import_name[dot_idx + 1 ..];
+                                if (self.imported_modules.get(short)) |env| {
+                                    break :blk env;
+                                }
+                            }
+
+                            self.triggerCrash("e_lookup_external: failed to resolve import in imported_modules", false, roc_ops);
+                            return error.Crash;
+                        } else {
+                            self.triggerCrash("e_lookup_external: module_idx >= import_list.len", false, roc_ops);
+                            return error.Crash;
+                        }
+                    } else {
+                        self.triggerCrash("e_lookup_external: module not found in import_envs", false, roc_ops);
+                        return error.Crash;
+                    }
                 };
 
                 // The target_node_idx is a Def.Idx in the other module
@@ -2622,7 +2764,10 @@ pub const Interpreter = struct {
             },
             // no if handling in minimal evaluator
             // no second e_binop case; handled above
-            else => @panic("evalExprMinimal: unhandled expression type"),
+            else => {
+                self.triggerCrash("evalExprMinimal: unhandled expression type", false, roc_ops);
+                return error.Crash;
+            },
         }
     }
 
@@ -2989,6 +3134,146 @@ pub const Interpreter = struct {
 
                 // Allocate space for the result string
                 const result_layout = str_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_starts_with => {
+                // Str.starts_with : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.startsWith(string.*, prefix.*));
+            },
+            .str_ends_with => {
+                // Str.ends_with : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const suffix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(suffix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.endsWith(string.*, suffix.*));
+            },
+            .str_repeat => {
+                // Str.repeat : Str, U64 -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const count_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const count_value = try self.extractNumericValue(count_arg);
+                const count: u64 = @intCast(count_value.int);
+
+                // Call repeatC to repeat the string
+                const result_str = builtins.str.repeatC(string.*, count, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_with_prefix => {
+                // Str.with_prefix : Str, Str -> Str (prefix ++ string)
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                // with_prefix is just concat with args swapped: prefix ++ string
+                const result_str = builtins.str.strConcat(prefix.*, string.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_drop_prefix => {
+                // Str.drop_prefix : Str, Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                const result_str = builtins.str.strDropPrefix(string.*, prefix.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_drop_suffix => {
+                // Str.drop_suffix : Str, Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const suffix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(suffix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+
+                const result_str = builtins.str.strDropSuffix(string.*, suffix.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
 
@@ -3533,8 +3818,14 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse @panic("num_from_int_digits: record has no 'tag' field");
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse @panic("num_from_int_digits: record has no 'payload' field");
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                        self.triggerCrash("num_from_int_digits: record has no 'tag' field", false, roc_ops);
+                        return error.Crash;
+                    };
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                        self.triggerCrash("num_from_int_digits: record has no 'payload' field", false, roc_ops);
+                        return error.Crash;
+                    };
 
                     // Write tag discriminant
                     const tag_field = try acc.getFieldByIndex(tag_field_idx);
@@ -3543,7 +3834,10 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else @panic("num_from_int_digits: tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("num_from_int_digits: tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     // Clear payload area
                     const payload_field = try acc.getFieldByIndex(payload_field_idx);
@@ -3859,8 +4153,14 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse @panic("num_from_numeral: record has no 'tag' field");
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse @panic("num_from_numeral: record has no 'payload' field");
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse {
+                        self.triggerCrash("num_from_numeral: record has no 'tag' field", false, roc_ops);
+                        return error.Crash;
+                    };
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse {
+                        self.triggerCrash("num_from_numeral: record has no 'payload' field", false, roc_ops);
+                        return error.Crash;
+                    };
 
                     // Write tag discriminant
                     const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
@@ -3869,7 +4169,10 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else @panic("num_from_numeral: tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("num_from_numeral: tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     // Clear payload area
                     const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
@@ -4104,7 +4407,10 @@ pub const Interpreter = struct {
                         tmp.is_initialized = false;
                         const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                         try tmp.setInt(@intCast(tag_idx));
-                    } else @panic("num_from_numeral: tuple tag field is not scalar int");
+                    } else {
+                        self.triggerCrash("num_from_numeral: tuple tag field is not scalar int", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     // Clear payload area (element 0)
                     const payload_field = try result_acc.getElement(0);

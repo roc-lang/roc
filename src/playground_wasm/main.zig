@@ -972,6 +972,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
+                .requires_types = serialized_ptr.requires_types.deserialize(@as(i64, @intCast(base_ptr))).*,
                 .builtin_statements = serialized_ptr.builtin_statements,
                 .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
                 .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
