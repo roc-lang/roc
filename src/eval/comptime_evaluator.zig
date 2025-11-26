@@ -842,7 +842,7 @@ pub const ComptimeEvaluator = struct {
 
             // Validation passed - rewrite the expression for builtin types
             if (is_builtin) {
-                try self.rewriteNumericLiteralExpr(literal.expr_idx, short_type_name, num_lit_info);
+                try self.rewriteNumericLiteralExpr(literal.expr_idx, nominal_type.ident.ident_idx, num_lit_info);
             }
             // For user-defined types, keep the original expression
         }
@@ -853,12 +853,20 @@ pub const ComptimeEvaluator = struct {
     fn rewriteNumericLiteralExpr(
         self: *ComptimeEvaluator,
         expr_idx: CIR.Expr.Idx,
-        type_name: []const u8,
+        type_ident: base.Ident.Idx,
         num_lit_info: types_mod.NumeralInfo,
     ) !void {
+        const builtin_indices = self.interpreter.builtins.indices;
+
+        // Use direct ident comparison to determine NumKind
+        const num_kind = builtin_indices.numKindFromIdent(type_ident) orelse {
+            // Unknown type - nothing to rewrite
+            return;
+        };
+
         const current_expr = self.env.store.getExpr(expr_idx);
 
-        // Extract the f64 value from the current expression
+        // Extract the f64 value from the current expression (needed for float types)
         const f64_value: f64 = switch (current_expr) {
             .e_dec => |dec| blk: {
                 // Dec is stored as i128 scaled by 10^18
@@ -882,52 +890,49 @@ pub const ComptimeEvaluator = struct {
             },
         };
 
-        // Determine the target expression type based on type_name
-        if (std.mem.eql(u8, type_name, "F32")) {
-            // Rewrite to e_frac_f32
-            const f32_value: f32 = @floatCast(f64_value);
-            const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-            self.env.store.nodes.set(node_idx, .{
-                .tag = .expr_frac_f32,
-                .data_1 = @bitCast(f32_value),
-                .data_2 = 1, // has_suffix = true to mark as explicitly typed
-                .data_3 = 0,
-            });
-        } else if (std.mem.eql(u8, type_name, "F64")) {
-            // Rewrite to e_frac_f64
-            const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-            const f64_bits: u64 = @bitCast(f64_value);
-            const low: u32 = @truncate(f64_bits);
-            const high: u32 = @truncate(f64_bits >> 32);
-            self.env.store.nodes.set(node_idx, .{
-                .tag = .expr_frac_f64,
-                .data_1 = low,
-                .data_2 = high,
-                .data_3 = 1, // has_suffix = true to mark as explicitly typed
-            });
-        } else if (!num_lit_info.is_fractional) {
-            // Integer type - rewrite to e_num
-            const num_kind: CIR.NumKind = blk: {
-                if (std.mem.eql(u8, type_name, "I8")) break :blk .i8;
-                if (std.mem.eql(u8, type_name, "U8")) break :blk .u8;
-                if (std.mem.eql(u8, type_name, "I16")) break :blk .i16;
-                if (std.mem.eql(u8, type_name, "U16")) break :blk .u16;
-                if (std.mem.eql(u8, type_name, "I32")) break :blk .i32;
-                if (std.mem.eql(u8, type_name, "U32")) break :blk .u32;
-                if (std.mem.eql(u8, type_name, "I64")) break :blk .i64;
-                if (std.mem.eql(u8, type_name, "U64")) break :blk .u64;
-                if (std.mem.eql(u8, type_name, "I128")) break :blk .i128;
-                if (std.mem.eql(u8, type_name, "U128")) break :blk .u128;
-                break :blk .int_unbound; // Fallback
-            };
-
-            const int_value = CIR.IntValue{
-                .bytes = num_lit_info.bytes,
-                .kind = if (num_lit_info.is_u128) .u128 else .i128,
-            };
-            try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+        // Determine the target expression type based on num_kind
+        switch (num_kind) {
+            .f32 => {
+                // Rewrite to e_frac_f32
+                const f32_value: f32 = @floatCast(f64_value);
+                const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                self.env.store.nodes.set(node_idx, .{
+                    .tag = .expr_frac_f32,
+                    .data_1 = @bitCast(f32_value),
+                    .data_2 = 1, // has_suffix = true to mark as explicitly typed
+                    .data_3 = 0,
+                });
+            },
+            .f64 => {
+                // Rewrite to e_frac_f64
+                const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const f64_bits: u64 = @bitCast(f64_value);
+                const low: u32 = @truncate(f64_bits);
+                const high: u32 = @truncate(f64_bits >> 32);
+                self.env.store.nodes.set(node_idx, .{
+                    .tag = .expr_frac_f64,
+                    .data_1 = low,
+                    .data_2 = high,
+                    .data_3 = 1, // has_suffix = true to mark as explicitly typed
+                });
+            },
+            .dec => {
+                // For Dec type, keep the original e_dec/e_dec_small expression
+            },
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
+                // Integer type - rewrite to e_num
+                if (!num_lit_info.is_fractional) {
+                    const int_value = CIR.IntValue{
+                        .bytes = num_lit_info.bytes,
+                        .kind = if (num_lit_info.is_u128) .u128 else .i128,
+                    };
+                    try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+                }
+            },
+            .num_unbound, .int_unbound => {
+                // Nothing to rewrite for unbound types
+            },
         }
-        // For Dec type, keep the original e_dec/e_dec_small expression
     }
 
     /// Invoke a user-defined from_numeral function and check the result.

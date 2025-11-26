@@ -76,6 +76,25 @@ pub const BuiltinIndices = struct {
     f32_ident: Ident.Idx,
     f64_ident: Ident.Idx,
     numeral_ident: Ident.Idx,
+
+    /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
+    /// This allows direct ident comparison instead of string comparison for type identification.
+    pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
+        if (ident == self.u8_ident) return .u8;
+        if (ident == self.i8_ident) return .i8;
+        if (ident == self.u16_ident) return .u16;
+        if (ident == self.i16_ident) return .i16;
+        if (ident == self.u32_ident) return .u32;
+        if (ident == self.i32_ident) return .i32;
+        if (ident == self.u64_ident) return .u64;
+        if (ident == self.i64_ident) return .i64;
+        if (ident == self.u128_ident) return .u128;
+        if (ident == self.i128_ident) return .i128;
+        if (ident == self.f32_ident) return .f32;
+        if (ident == self.f64_ident) return .f64;
+        if (ident == self.dec_ident) return .dec;
+        return null;
+    }
 };
 
 // Type definitions for module compilation
