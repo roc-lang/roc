@@ -4506,7 +4506,6 @@ fn checkNumeralConstraint(
     constraint: types_mod.StaticDispatchConstraint,
     num_lit_info: types_mod.NumeralInfo,
     nominal_type: types_mod.NominalType,
-    type_name_bytes: []const u8,
     env: *Env,
 ) !void {
     // Mark parameters as intentionally unused - validation happens in comptime evaluation
@@ -4515,7 +4514,6 @@ fn checkNumeralConstraint(
     _ = constraint;
     _ = num_lit_info;
     _ = nominal_type;
-    _ = type_name_bytes;
     _ = env;
 
     // All numeric literal validation now happens during comptime evaluation
@@ -4663,7 +4661,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             // Get some data about the nominal type
             const region = self.getRegionAt(deferred_constraint.var_);
-            const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -4674,22 +4671,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // The constraint's fn_name is already the fully qualified method name
-                // (e.g., "Basic.to_str" or "Try.is_eq"), created by the canonicalizer.
-                // We need to look up this string in the original env's ident store.
-                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
-                const ident_in_original_env = original_env.getIdentStoreConst().findByString(constraint_fn_name_bytes) orelse {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                    );
-                    continue;
-                };
+                // Look up the method in the original env using the constraint's fn_name.
+                // For same-module lookups, use the ident directly.
+                // For cross-module lookups, the fn_name should already be set to the
+                // correct ident index in the original module during canonicalization.
+                const method_ident = constraint.fn_name;
 
                 // Get the def index in the original env
-                const node_idx_in_original_env = original_env.getExposedNodeIndexById(ident_in_original_env) orelse {
+                const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
                     // This can happen if the original module has an ident that
                     // matches the method/type, but it doesn't actually have
                     // that method.
@@ -4792,7 +4781,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         constraint,
                         constraint.num_literal.?,
                         nominal_type,
-                        type_name_bytes,
                         env,
                     );
                 }

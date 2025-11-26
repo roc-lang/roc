@@ -1252,17 +1252,13 @@ const Unifier = struct {
         else
             self.module_lookup.get(nominal_type.origin_module) orelse return null;
 
-        const method_name = self.module_env.common.getIdent(method_ident);
-        const type_name = self.module_env.common.getIdent(nominal_type.ident.ident_idx);
-
-        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, nominal_type.ident.ident_idx, method_name) orelse return null;
-
+        // Look up method directly by ident - the method_ident should already be properly qualified
         const method_def_idx: CIR.Def.Idx = blk: {
-            if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {
+            if (origin_env.getExposedNodeIndexById(method_ident)) |node_idx| {
                 break :blk @enumFromInt(@as(u32, node_idx));
             }
 
-            if (Self.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
+            if (Self.findDefIdxByIdent(origin_env, method_ident)) |def_idx| {
                 break :blk def_idx;
             }
 
@@ -1288,45 +1284,6 @@ const Unifier = struct {
 
         try self.trackNewVars(start_slots);
         return copied_var;
-    }
-
-    fn buildQualifiedMethodName(
-        self: *Self,
-        module_name: []const u8,
-        type_name: []const u8,
-        type_name_idx: Ident.Idx,
-        module_name_idx: Ident.Idx,
-        method_name: []const u8,
-    ) std.mem.Allocator.Error![]u8 {
-        if (type_name_idx == module_name_idx) {
-            return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ type_name, method_name });
-        } else {
-            return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name });
-        }
-    }
-
-    fn findMethodIdent(
-        self: *Self,
-        origin_env: *const ModuleEnv,
-        type_name: []const u8,
-        type_name_idx: Ident.Idx,
-        method_name: []const u8,
-    ) error{AllocatorError}!?Ident.Idx {
-        const ident_store = origin_env.getIdentStoreConst();
-
-        const primary = self.buildQualifiedMethodName(origin_env.module_name, type_name, type_name_idx, origin_env.module_name_idx, method_name) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(primary);
-        if (ident_store.findByString(primary)) |ident| return ident;
-
-        const module_type = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name }) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(module_type);
-        if (ident_store.findByString(module_type)) |ident| return ident;
-
-        const module_method = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ origin_env.module_name, method_name }) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(module_method);
-        if (ident_store.findByString(module_method)) |ident| return ident;
-
-        return ident_store.findByString(method_name);
     }
 
     fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
