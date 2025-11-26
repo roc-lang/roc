@@ -10000,12 +10000,13 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
     const receiver_idx = try self.canonicalizeFieldAccessReceiver(field_access) orelse return null;
 
     // Parse the right side - this could be just a field name or a method call
-    const field_name, const args = try self.parseFieldAccessRight(field_access);
+    const field_name, const field_name_region, const args = try self.parseFieldAccessRight(field_access);
 
     const dot_access_expr = CIR.Expr{
         .e_dot_access = .{
             .receiver = receiver_idx,
             .field_name = field_name,
+            .field_name_region = field_name_region,
             .args = args,
         },
     };
@@ -10038,16 +10039,24 @@ fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) std.mem
 /// Parse the right side of field access, handling both plain fields and method calls.
 ///
 /// Examples:
-/// - `user.name` - returns `("name", null)` for plain field access
-/// - `list.map(fn)` - returns `("map", args)` where args contains the canonicalized function
-/// - `obj.method(a, b)` - returns `("method", args)` where args contains canonicalized a and b
-fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!struct { Ident.Idx, ?Expr.Span } {
+/// - `user.name` - returns `("name", region, null)` for plain field access
+/// - `list.map(fn)` - returns `("map", region, args)` where args contains the canonicalized function
+/// - `obj.method(a, b)` - returns `("method", region, args)` where args contains canonicalized a and b
+fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!struct { Ident.Idx, Region, ?Expr.Span } {
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
 
     return switch (right_expr) {
         .apply => |apply| try self.parseMethodCall(apply),
-        .ident => |ident| .{ try self.resolveIdentOrFallback(ident.token), null },
-        else => .{ try self.createUnknownIdent(), null },
+        .ident => |ident| .{
+            try self.resolveIdentOrFallback(ident.token),
+            self.parse_ir.tokenizedRegionToRegion(ident.region),
+            null,
+        },
+        else => .{
+            try self.createUnknownIdent(),
+            self.parse_ir.tokenizedRegionToRegion(field_access.region), // fallback to whole region
+            null,
+        },
     };
 }
 
@@ -10057,11 +10066,25 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator
 /// - `.map(transform)` - extracts "map" as method name and canonicalizes `transform` argument
 /// - `.filter(predicate)` - extracts "filter" and canonicalizes `predicate`
 /// - `.fold(0, combine)` - extracts "fold" and canonicalizes both `0` and `combine` arguments
-fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) std.mem.Allocator.Error!struct { Ident.Idx, ?Expr.Span } {
+fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) std.mem.Allocator.Error!struct { Ident.Idx, Region, ?Expr.Span } {
     const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
-    const field_name = switch (method_expr) {
-        .ident => |ident| try self.resolveIdentOrFallback(ident.token),
-        else => try self.createUnknownIdent(),
+    const field_name, const field_name_region = switch (method_expr) {
+        .ident => |ident| blk: {
+            const raw_region = self.parse_ir.tokenizedRegionToRegion(ident.region);
+            // Skip the leading dot if present (parser includes it in ident region for field access)
+            const adjusted_region = if (raw_region.end.offset > raw_region.start.offset)
+                Region{ .start = .{ .offset = raw_region.start.offset + 1 }, .end = raw_region.end }
+            else
+                raw_region;
+            break :blk .{
+                try self.resolveIdentOrFallback(ident.token),
+                adjusted_region,
+            };
+        },
+        else => .{
+            try self.createUnknownIdent(),
+            self.parse_ir.tokenizedRegionToRegion(apply.region), // fallback
+        },
     };
 
     // Canonicalize the arguments using scratch system
@@ -10071,12 +10094,12 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
             try self.env.store.addScratchExpr(canonicalized.get_idx());
         } else {
             self.env.store.clearScratchExprsFrom(scratch_top);
-            return .{ field_name, null };
+            return .{ field_name, field_name_region, null };
         }
     }
     const args = try self.env.store.exprSpanFrom(scratch_top);
 
-    return .{ field_name, args };
+    return .{ field_name, field_name_region, args };
 }
 
 /// Resolve an identifier token or return a fallback "unknown" identifier.

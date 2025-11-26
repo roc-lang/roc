@@ -3388,11 +3388,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const dispatch_ret_var = try self.fresh(env, expr_region);
 
                     // Now, create the function being dispatched
+                    // Use field_name_region so error messages point at the method name, not the whole expression
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = dispatch_arg_vars_range,
                         .ret = dispatch_ret_var,
                         .needs_instantiation = false,
-                    } } }, env, expr_region);
+                    } } }, env, dot_access.field_name_region);
 
                     // Then, create the static dispatch constraint
                     const constraint = StaticDispatchConstraint{
@@ -3403,10 +3404,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
                     // Create our constrained flex, and unify it with the receiver
+                    // Use field_name_region so error messages point at the method name, not the whole expression
                     const constrained_var = try self.freshFromContent(
                         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
                         env,
-                        expr_region,
+                        dot_access.field_name_region,
                     );
 
                     _ = try self.unify(constrained_var, receiver_var, env);

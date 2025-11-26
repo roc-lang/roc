@@ -89,7 +89,7 @@ Builtin :: [].{
 		is_eq : Try(ok, err), Try(ok, err) -> Bool
 			where [
 				ok.is_eq : ok, ok -> Bool,
-				err.is_eq : ok, ok -> Bool,
+				err.is_eq : err, err -> Bool,
 			]
 		is_eq = |a, b| match a {
 			Ok(a_val) => {

@@ -336,6 +336,7 @@ test "NodeStore round trip - Expressions" {
         .e_dot_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .field_name = rand_ident_idx(),
+            .field_name_region = rand_region(),
             .args = null,
         },
     });
