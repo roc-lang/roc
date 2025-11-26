@@ -340,6 +340,46 @@ test "fx platform match with wildcard" {
     }
 }
 
+test "fx platform dbg missing return value" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that uses dbg as the last expression in main!.
+    // dbg is treated as a statement (side-effect only) when it's the final
+    // expression in a block, so the block returns {} as expected by main!.
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "--no-cache",
+            "test/fx/dbg_missing_return.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify that the dbg output was printed
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "this should work now") != null);
+}
+
 test "fx platform check unused state var reports correct errors" {
     const allocator = testing.allocator;
 

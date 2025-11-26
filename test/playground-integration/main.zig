@@ -433,7 +433,8 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
     // Create and instantiate the module instance using the gpa allocator for the VM
     var module_instance = try bytebox.createModuleInstance(.Stack, module_def, gpa);
     errdefer module_instance.destroy();
-    try module_instance.instantiate(.{});
+    // Use a larger stack size (256 KB instead of default 128 KB) to accommodate complex interpreter code
+    try module_instance.instantiate(.{ .stack_size = 1024 * 256 });
 
     logDebug("[INFO] WASM module instantiated successfully.\n", .{});
 

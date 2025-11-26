@@ -135,7 +135,6 @@ pub const Token = struct {
         KwAs,
         KwCrash,
         KwDbg,
-        KwDebug,
         KwElse,
         KwExpect,
         KwExposes,
@@ -275,7 +274,6 @@ pub const Token = struct {
                 .KwAs,
                 .KwCrash,
                 .KwDbg,
-                .KwDebug,
                 .KwElse,
                 .KwExpect,
                 .KwExposes,
@@ -369,7 +367,6 @@ pub const Token = struct {
         .{ "as", .KwAs },
         .{ "crash", .KwCrash },
         .{ "dbg", .KwDbg },
-        .{ "debug", .KwDebug },
         .{ "else", .KwElse },
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },
@@ -2209,9 +2206,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwDbg => {
                 try buf2.appendSlice("dbg");
-            },
-            .KwDebug => {
-                try buf2.appendSlice("debug");
             },
             .KwElse => {
                 try buf2.appendSlice("else");
