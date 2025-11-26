@@ -3120,6 +3120,146 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_starts_with => {
+                // Str.starts_with : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.startsWith(string.*, prefix.*));
+            },
+            .str_ends_with => {
+                // Str.ends_with : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const suffix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(suffix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.endsWith(string.*, suffix.*));
+            },
+            .str_repeat => {
+                // Str.repeat : Str, U64 -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const count_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const count_value = try self.extractNumericValue(count_arg);
+                const count: u64 = @intCast(count_value.int);
+
+                // Call repeatC to repeat the string
+                const result_str = builtins.str.repeatC(string.*, count, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_with_prefix => {
+                // Str.with_prefix : Str, Str -> Str (prefix ++ string)
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                // with_prefix is just concat with args swapped: prefix ++ string
+                const result_str = builtins.str.strConcat(prefix.*, string.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_drop_prefix => {
+                // Str.drop_prefix : Str, Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const prefix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(prefix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+
+                const result_str = builtins.str.strDropPrefix(string.*, prefix.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_drop_suffix => {
+                // Str.drop_suffix : Str, Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const suffix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(suffix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+
+                const result_str = builtins.str.strDropSuffix(string.*, suffix.*, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

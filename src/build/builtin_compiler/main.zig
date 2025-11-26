@@ -122,6 +122,24 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.with_ascii_uppercased")) |str_with_ascii_uppercased_ident| {
         try low_level_map.put(str_with_ascii_uppercased_ident, .str_with_ascii_uppercased);
     }
+    if (env.common.findIdent("Builtin.Str.starts_with")) |str_starts_with_ident| {
+        try low_level_map.put(str_starts_with_ident, .str_starts_with);
+    }
+    if (env.common.findIdent("Builtin.Str.ends_with")) |str_ends_with_ident| {
+        try low_level_map.put(str_ends_with_ident, .str_ends_with);
+    }
+    if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
+        try low_level_map.put(str_repeat_ident, .str_repeat);
+    }
+    if (env.common.findIdent("Builtin.Str.with_prefix")) |str_with_prefix_ident| {
+        try low_level_map.put(str_with_prefix_ident, .str_with_prefix);
+    }
+    if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
+        try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
+    }
+    if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
+        try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

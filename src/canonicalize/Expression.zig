@@ -409,6 +409,12 @@ pub const Expr = union(enum) {
         str_caseless_ascii_equals,
         str_with_ascii_lowercased,
         str_with_ascii_uppercased,
+        str_starts_with,
+        str_ends_with,
+        str_repeat,
+        str_with_prefix,
+        str_drop_prefix,
+        str_drop_suffix,
 
         // Numeric to_str operations
         u8_to_str,

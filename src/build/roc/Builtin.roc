@@ -9,6 +9,12 @@ Builtin :: [].{
 		caseless_ascii_equals : Str, Str -> Bool
 		with_ascii_lowercased : Str -> Str
 		with_ascii_uppercased : Str -> Str
+		starts_with : Str, Str -> Bool
+		ends_with : Str, Str -> Bool
+		repeat : Str, U64 -> Str
+		with_prefix : Str, Str -> Str
+		drop_prefix : Str, Str -> Str
+		drop_suffix : Str, Str -> Str
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
