@@ -1353,22 +1353,37 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     defer builtin_modules.deinit();
 
     // Try to find and compile platform modules
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    const platform_dir = try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, "platform" });
-    defer allocs.gpa.free(platform_dir);
+    // Extract the actual platform path from the app header to support paths like "../platform/main.roc"
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse return error.InvalidAppPath;
 
-    const platform_main_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, "main.roc" });
-    defer allocs.gpa.free(platform_main_path);
+    const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
+
+    // Resolve relative paths (starting with ./ or ../) relative to app directory
+    // Non-relative paths (like package URLs) are not local platform files
+    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
+        try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, platform_spec })
+    else
+        null;
+    defer if (platform_main_path) |p| allocs.gpa.free(p);
+
+    // Get the platform directory from the resolved path
+    const platform_dir: ?[]const u8 = if (platform_main_path) |p|
+        std.fs.path.dirname(p) orelse return error.InvalidPlatformPath
+    else
+        null;
 
     // Extract exposed modules from the platform header (if platform exists)
     var exposed_modules = std.ArrayList([]const u8).empty;
     defer exposed_modules.deinit(allocs.gpa);
 
-    var has_platform = true;
-    extractExposedModulesFromPlatform(allocs, platform_main_path, &exposed_modules) catch {
-        // No platform found - that's fine, just continue with no platform modules
-        has_platform = false;
-    };
+    var has_platform = false;
+    if (platform_main_path) |pmp| {
+        has_platform = true;
+        extractExposedModulesFromPlatform(allocs, pmp, &exposed_modules) catch {
+            // Platform file not found or couldn't be parsed - continue without platform modules
+            has_platform = false;
+        };
+    }
 
     // IMPORTANT: Create header FIRST before any module compilation.
     // The interpreter_shim expects the Header to be at FIRST_ALLOC_OFFSET (504).
@@ -1402,10 +1417,13 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     defer allocs.gpa.free(platform_env_ptrs);
 
     for (exposed_modules.items, 0..) |module_name, i| {
+        // platform_dir is guaranteed to be non-null if exposed_modules is non-empty
+        // because we only populate exposed_modules when platform_main_path is non-null
+        const plat_dir = platform_dir orelse unreachable;
         const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
         defer allocs.gpa.free(module_filename);
 
-        const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, module_filename });
+        const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ plat_dir, module_filename });
         defer allocs.gpa.free(module_path);
 
         const module_env_ptr = try compileModuleToSharedMemory(
@@ -1459,9 +1477,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     if (has_platform) {
         // Cast []*ModuleEnv to []const *ModuleEnv for the function parameter
         const const_platform_env_ptrs: []const *ModuleEnv = platform_env_ptrs;
+        // platform_main_path is guaranteed non-null when has_platform is true
         platform_main_env = compileModuleToSharedMemory(
             allocs,
-            platform_main_path,
+            platform_main_path.?,
             "main.roc",
             shm_allocator,
             &builtin_modules,
