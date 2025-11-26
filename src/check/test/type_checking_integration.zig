@@ -132,6 +132,64 @@ test "check type - string plus string should fail (no plus method)" {
     try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
+// binop operand type unification //
+
+test "check type - binop operands must have same type - I64 plus I32 should fail" {
+    const source =
+        \\x = 1i64 + 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands must have same type - I64 minus I32 should fail" {
+    const source =
+        \\x = 1i64 - 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands must have same type - I64 times I32 should fail" {
+    const source =
+        \\x = 1i64 * 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands must have same type - F64 divide F32 should fail" {
+    const source =
+        \\x = 1.0f64 / 2.0f32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands same type works - I64 plus I64" {
+    const source =
+        \\x = 1i64 + 2i64
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - binop operands same type works - unbound plus unbound" {
+    const source =
+        \\x = 1 + 2
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+}
+
+test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
+    const source =
+        \\x = 1i64 == 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - comparison operands must have same type - I64 lt I32 should fail" {
+    const source =
+        \\x = 1i64 < 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
 // primitives - lists //
 
 test "check type - list empty" {
