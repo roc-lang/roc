@@ -1352,7 +1352,9 @@ pub const Interpreter = struct {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
-                const resolved = self.runtime_types.resolveVar(rt_var);
+                // Use resolveBaseVar to unwrap nominal types (like Bool := [False, True])
+                // to get to the underlying tag union
+                const resolved = self.resolveBaseVar(rt_var);
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
                     self.triggerCrash("DEBUG: e_zero_argument_tag not tag union", false, roc_ops);
                     return error.Crash;
@@ -2018,13 +2020,17 @@ pub const Interpreter = struct {
                     for (caps, 0..) |cap_idx2, cap_i| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
                         const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
-                            return error.NotImplemented;
+                            // Capture couldn't be resolved - it may be a pattern binding
+                            // that will be available when the closure is actually called.
+                            // Skip it and let the normal binding mechanism handle it.
+                            continue;
                         };
                         // Use field_names[cap_i] which was translated to runtime_layout_store.env
                         // instead of cap2.name which is from self.env (different ident namespace)
                         const translated_name = field_names[cap_i];
                         const idx_opt = accessor.findFieldIndex(translated_name) orelse {
-                            return error.NotImplemented;
+                            // Field not found - skip this capture
+                            continue;
                         };
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
                     }
@@ -2315,9 +2321,11 @@ pub const Interpreter = struct {
                 defer if (arg_values.len > 0) self.allocator.free(arg_values);
 
                 if (method_args) |span| {
+                    // Use sliceExpr to properly get argument indices instead of computing them directly
+                    const arg_indices = self.env.store.sliceExpr(span);
                     var i: usize = 0;
                     while (i < arg_values.len) : (i += 1) {
-                        const arg_expr_idx: can.CIR.Expr.Idx = @enumFromInt(span.span.start + i);
+                        const arg_expr_idx = arg_indices[i];
                         const arg_ct_var = can.ModuleEnv.varFrom(arg_expr_idx);
                         const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
                         arg_values[i] = try self.evalExprMinimal(arg_expr_idx, roc_ops, arg_rt_var);
