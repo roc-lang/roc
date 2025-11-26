@@ -2603,9 +2603,9 @@ fn createExposedScope(
 /// These are introduced into scope before processing the signatures so that references to
 /// R1, R2, etc. in the signatures are properly resolved as type variables.
 ///
-/// Note: This does NOT create local definitions for the required identifiers. The platform
-/// body can reference these identifiers as forward references that will be resolved to
-/// the app's exports at runtime.
+/// Note: Required identifiers (like `main!`) are NOT introduced into scope here. Instead,
+/// when an identifier is looked up and not found, we check env.requires_types to see if it's
+/// a required identifier from the platform. This avoids conflicts with local definitions.
 fn processRequiresSignatures(self: *Self, requires_rigids_idx: AST.Collection.Idx, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
     // First, process the requires_rigids to add them to the type variable scope
     // This allows R1, R2, etc. to be recognized when processing the signatures

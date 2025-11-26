@@ -164,10 +164,13 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         }
     }
     // Verify we got the expected errors
-    try expectEqual(@as(u32, 1), module_not_found_count); // NonExistent module
+    // Note: MODULE NOT FOUND is no longer reported during canonicalization because
+    // local imports are resolved later by the build system's scheduler. Only
+    // VALUE NOT EXPOSED and TYPE NOT EXPOSED are checked at canonicalization time.
+    try expectEqual(@as(u32, 0), module_not_found_count); // No longer reported at canonicalization
     try expectEqual(@as(u32, 1), value_not_exposed_count); // doesNotExist
     try expectEqual(@as(u32, 1), type_not_exposed_count); // InvalidType
-    try expectEqual(true, found_non_existent);
+    try expectEqual(false, found_non_existent); // No longer reported at canonicalization
     try expectEqual(true, found_does_not_exist);
     try expectEqual(true, found_invalid_type);
     // Verify that valid imports didn't generate errors
@@ -208,7 +211,9 @@ test "import validation - no module_envs provided" {
     for (diagnostics) |diagnostic| {
         switch (diagnostic) {
             .module_not_found => {
-                // expected this error message, ignore
+                // MODULE NOT FOUND is no longer reported at canonicalization time
+                // (local imports are resolved later by the scheduler)
+                try testing.expect(false);
             },
             .module_header_deprecated => {
                 // expected deprecation warning, ignore

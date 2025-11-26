@@ -2199,3 +2199,32 @@ fn checkTypesExpr(
 
     return test_env.assertLastDefType(expected);
 }
+
+// effectful function type annotation parsing //
+
+test "check type - effectful zero-arg function annotation" {
+    // This test verifies that () => {} is parsed as a zero-arg effectful function,
+    // NOT as a function taking a unit tuple argument.
+    // The bug was that () => {} was being parsed as (()) => {} - a function taking
+    // one empty-tuple argument instead of zero arguments.
+    const source =
+        \\foo : (() => {})
+        \\foo = || {}
+    ;
+    // Expected: zero-arg effectful function returning empty record
+    // If the parser bug exists, this would fail with TYPE MISMATCH because:
+    // - annotation parses as: (()) => {} (one empty-tuple arg)
+    // - lambda infers as: ({}) -> {} (zero args, pure)
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {  }");
+}
+
+test "check type - pure zero-arg function annotation" {
+    // This test verifies that () -> {} is parsed as a zero-arg pure function,
+    // NOT as a function taking a unit tuple argument.
+    const source =
+        \\foo : (() -> {})
+        \\foo = || {}
+    ;
+    // Expected: zero-arg pure function returning empty record
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
+}
