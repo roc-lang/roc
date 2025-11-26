@@ -1037,11 +1037,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -1108,7 +1105,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_common_idents);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {

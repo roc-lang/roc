@@ -1643,11 +1643,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check with all imported modules
-    const app_common_idents: Check.CommonIdents = .{
+    const app_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
-        .list = try app_env.insertIdent(base.Ident.for_text("List")),
-        .box = try app_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try app_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1665,7 +1662,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Resolve imports - map each import to its index in app_imported_envs
     app_env.imports.resolveImports(&app_env, app_imported_envs.items);
 
-    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_common_idents);
+    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
     defer app_checker.deinit();
 
     try app_checker.checkFile();
@@ -1822,11 +1819,8 @@ fn compileModuleToSharedMemory(
     var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer check_module_envs_map.deinit();
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try env.insertIdent(base.Ident.for_text(module_name_arg)),
-        .list = try env.insertIdent(base.Ident.for_text("List")),
-        .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1839,7 +1833,7 @@ fn compileModuleToSharedMemory(
     // Resolve imports - map each import to its index in imported_envs
     env.imports.resolveImports(&env, &imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
+    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -2831,11 +2825,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs.deinit();
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try env.insertIdent(base.Ident.for_text("List")),
-        .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
@@ -2890,7 +2881,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     env.imports.resolveImports(&env, imported_envs);
 
     // Type check the module
-    var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_common_idents) catch |err| {
+    var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_builtin_ctx) catch |err| {
         try stderr.print("Failed to initialize type checker: {}\n", .{err});
         return err;
     };

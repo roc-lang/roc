@@ -70,8 +70,8 @@ imported_modules: []const *const ModuleEnv,
 /// Map of module name identifiers to their env. This includes all modules
 /// "below" this one in the dependency graph
 module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
-/// Common module-wide identified
-common_idents: CommonIdents,
+/// Builtin type context for the module being type-checked
+builtin_ctx: BuiltinContext,
 
 /// type snapshots used in error messages
 snapshots: SnapshotStore,
@@ -137,13 +137,11 @@ const ScratchStaticDispatchConstraint = struct {
     constraint: types_mod.StaticDispatchConstraint,
 };
 
-/// A struct of common idents and builtin statement indices
-pub const CommonIdents = struct {
+/// Context for type checking: module identity, builtin type references, and the Builtin module itself.
+/// This is passed to Check.init() to provide access to auto-imported types from Builtin.
+pub const BuiltinContext = struct {
+    /// The name of the module being type-checked
     module_name: base.Ident.Idx,
-    list: base.Ident.Idx,
-    box: base.Ident.Idx,
-    /// Identifier for the Try type
-    @"try": base.Ident.Idx,
     /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Try type in the current module (injected from Builtin.bin)
@@ -154,8 +152,6 @@ pub const CommonIdents = struct {
     builtin_module: ?*const ModuleEnv,
     /// Indices of auto-imported types in the Builtin module (null when compiling Builtin module itself)
     builtin_indices: ?can.CIR.BuiltinIndices,
-    /// Cached identifier for "from_numeral" (used for numeric literal constraints)
-    from_numeral: ?base.Ident.Idx = null,
 };
 
 /// Init type solver
@@ -167,15 +163,15 @@ pub fn init(
     imported_modules: []const *const ModuleEnv,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
     regions: *Region.List,
-    common_idents: CommonIdents,
+    builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
     var import_mapping = try createImportMapping(
         gpa,
         mutable_cir.getIdentStore(),
         cir,
-        common_idents.builtin_module,
-        common_idents.builtin_indices,
+        builtin_ctx.builtin_module,
+        builtin_ctx.builtin_indices,
         module_envs,
     );
     errdefer import_mapping.deinit();
@@ -187,7 +183,7 @@ pub fn init(
         .imported_modules = imported_modules,
         .module_envs = module_envs,
         .regions = regions,
-        .common_idents = common_idents,
+        .builtin_ctx = builtin_ctx,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
         .problems = try ProblemStore.initCapacity(gpa, 64),
         .import_mapping = import_mapping,
@@ -633,13 +629,13 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where List is defined.
-    const origin_module_id = if (self.common_idents.builtin_module) |_|
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
-        self.common_idents.module_name; // We're compiling Builtin module itself
+        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     const list_ident = types_mod.TypeIdent{
-        .ident_idx = self.common_idents.list,
+        .ident_idx = self.cir.idents.list,
     };
 
     // List's backing is [ProvidedByCompiler] with closed extension
@@ -672,10 +668,10 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 /// Number types are defined in Builtin.roc nested inside Num module: Num.U8 :: [].{...}
 /// They have no type parameters and their backing is the empty tag union []
 fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
-    const origin_module_id = if (self.common_idents.builtin_module) |_|
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
-        self.common_idents.module_name; // We're compiling Builtin module itself
+        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     // Use fully-qualified type name "Builtin.Num.U8" etc.
     // This allows method lookup to work correctly (getMethodIdent builds "Builtin.Num.U8.method_name")
@@ -717,18 +713,7 @@ fn mkFlexWithFromNumeralConstraint(
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) !Var {
-    // Get or create the from_numeral identifier
-    const from_numeral_ident = blk: {
-        if (self.common_idents.from_numeral) |ident| {
-            break :blk ident;
-        }
-        // First time - create and cache it
-        const ident = try @constCast(self.cir).insertIdent(
-            base.Ident.for_text("from_numeral"),
-        );
-        self.common_idents.from_numeral = ident;
-        break :blk ident;
-    };
+    const from_numeral_ident = self.cir.idents.from_numeral;
 
     // Create the flex var first - this represents the target type `a`
     const flex_var = try self.fresh(env, num_literal_info.region);
@@ -795,13 +780,13 @@ fn mkFlexWithFromNumeralConstraint(
 fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Box is defined.
-    const origin_module_id = if (self.common_idents.builtin_module) |_|
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
-        self.common_idents.module_name; // We're compiling Builtin module itself
+        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     const box_ident = types_mod.TypeIdent{
-        .ident_idx = self.common_idents.box,
+        .ident_idx = self.cir.idents.box,
     };
 
     // The backing var is the element type var
@@ -820,10 +805,10 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Try is defined.
-    const origin_module_id = if (self.common_idents.builtin_module) |_|
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
-        self.common_idents.module_name; // We're compiling Builtin module itself
+        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     // Use the precomputed "Builtin.Try" ident from ModuleEnv
     // This ensures our Try type unifies correctly with the Try type from actual method signatures
@@ -850,10 +835,10 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
 fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Numeral is defined.
-    const origin_module_id = if (self.common_idents.builtin_module) |_|
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
-        self.common_idents.module_name; // We're compiling Builtin module itself
+        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     // Use the precomputed "Builtin.Num.Numeral" ident from ModuleEnv
     const numeral_ident = types_mod.TypeIdent{
@@ -930,10 +915,10 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
 /// other modules directly. The Bool and Try types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    const bool_stmt_idx = self.common_idents.bool_stmt;
-    const str_stmt_idx = self.common_idents.str_stmt;
+    const bool_stmt_idx = self.builtin_ctx.bool_stmt;
+    const str_stmt_idx = self.builtin_ctx.str_stmt;
 
-    if (self.common_idents.builtin_module) |builtin_env| {
+    if (self.builtin_ctx.builtin_module) |builtin_env| {
         // Copy Bool type from Builtin module using the direct reference
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
@@ -1368,7 +1353,7 @@ fn generateNominalDecl(
             .{ .ident_idx = header.name },
             backing_var,
             header_vars,
-            self.common_idents.module_name,
+            self.builtin_ctx.module_name,
         ),
         env,
     );
@@ -1609,7 +1594,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 .{ .ident_idx = this_decl.name },
                                                 this_decl.backing_var,
                                                 &.{},
-                                                self.common_idents.module_name,
+                                                self.builtin_ctx.module_name,
                                             );
                                         },
                                     }
@@ -1703,7 +1688,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 .{ .ident_idx = this_decl.name },
                                                 this_decl.backing_var,
                                                 anno_arg_vars,
-                                                self.common_idents.module_name,
+                                                self.builtin_ctx.module_name,
                                             );
                                         },
                                     }
@@ -4724,7 +4709,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const original_module_ident = nominal_type.origin_module;
 
             // Check if the nominal type in question is defined in this module
-            const is_this_module = original_module_ident == self.common_idents.module_name;
+            const is_this_module = original_module_ident == self.builtin_ctx.module_name;
 
             // Get the list of exposed items to check
             const original_env: *const ModuleEnv = blk: {
@@ -4732,7 +4717,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     break :blk self.cir;
                 } else if (original_module_ident == self.cir.idents.builtin_module) {
                     // For builtin types, use the builtin module environment directly
-                    if (self.common_idents.builtin_module) |builtin_env| {
+                    if (self.builtin_ctx.builtin_module) |builtin_env| {
                         break :blk builtin_env;
                     } else {
                         // This happens when compiling the Builtin module itself

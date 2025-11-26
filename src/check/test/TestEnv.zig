@@ -208,11 +208,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const try_stmt_in_result_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -246,7 +243,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        module_common_idents,
+        module_builtin_ctx,
     );
     errdefer checker.deinit();
 
@@ -328,11 +325,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const try_stmt_in_result_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -356,7 +350,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        module_common_idents,
+        module_builtin_ctx,
     );
     errdefer checker.deinit();
 

@@ -315,11 +315,8 @@ test "Repl - minimal interpreter integration" {
     const try_stmt_in_builtin_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
-        .list = try cir.insertIdent(base.Ident.for_text("List")),
-        .box = try cir.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try cir.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -342,7 +339,7 @@ test "Repl - minimal interpreter integration" {
     // Resolve imports - map each import to its index in imported_envs
     cir.imports.resolveImports(cir, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());

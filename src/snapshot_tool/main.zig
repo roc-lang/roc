@@ -1131,11 +1131,8 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
-        .list = try can_ir.insertIdent(base.Ident.for_text("List")),
-        .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try can_ir.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,
@@ -1275,7 +1272,7 @@ fn processSnapshotContent(
             builtin_modules.items,
             &module_envs,
             &can_ir.store.regions,
-            common_idents,
+            builtin_ctx,
         );
         _ = try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
@@ -1323,7 +1320,7 @@ fn processSnapshotContent(
                 builtin_modules.items,
                 &module_envs,
                 &can_ir.store.regions,
-                common_idents,
+                builtin_ctx,
             );
             try checker.checkFile();
             module_envs_for_snippet = module_envs; // Keep alive

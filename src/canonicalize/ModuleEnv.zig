@@ -152,6 +152,7 @@ pub const WellKnownIdents = extern struct {
     unbox_method: Ident.Idx,
     ok: Ident.Idx,
     err: Ident.Idx,
+    from_numeral: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -206,6 +207,7 @@ pub const WellKnownIdents = extern struct {
             .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
+            .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
         };
     }
 
@@ -263,6 +265,7 @@ pub const WellKnownIdents = extern struct {
             .unbox_method = common.findIdent("unbox") orelse unreachable,
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
+            .from_numeral = common.findIdent("from_numeral") orelse unreachable,
         };
     }
 };
