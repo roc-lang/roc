@@ -173,8 +173,10 @@ pub fn init(
     var import_mapping = try createImportMapping(
         gpa,
         mutable_cir.getIdentStore(),
+        cir,
         common_idents.builtin_module,
         common_idents.builtin_indices,
+        module_envs,
     );
     errdefer import_mapping.deinit();
 
@@ -5141,48 +5143,82 @@ const EnvPool = struct {
     }
 };
 
-/// Create the import mapping for auto-imported builtin types.
-/// Uses reflection over BuiltinIndices to automatically include all auto-imported types.
+/// Create the import mapping for type display names in error messages.
+///
+/// This builds a mapping from fully-qualified type identifiers to their shortest display names
+/// based on what's in scope. The mapping is built from:
+/// 1. Auto-imported builtin types (e.g., Bool, Str, Dec, U64, etc.)
+/// 2. User import statements with their aliases
+///
+/// When multiple imports could refer to the same type, the shortest name wins.
+/// This ensures error messages show types the way users would write them in their code.
 pub fn createImportMapping(
     gpa: std.mem.Allocator,
     idents: *Ident.Store,
+    cir: *const ModuleEnv,
     builtin_module: ?*const ModuleEnv,
     builtin_indices: ?CIR.BuiltinIndices,
+    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 ) std.mem.Allocator.Error!types_mod.import_mapping.ImportMapping {
     var mapping = types_mod.import_mapping.ImportMapping.init(gpa);
     errdefer mapping.deinit();
 
-    const builtin_env = builtin_module orelse return mapping;
-    const indices = builtin_indices orelse return mapping;
+    // Step 1: Add auto-imported builtin types
+    if (builtin_module) |builtin_env| {
+        if (builtin_indices) |indices| {
+            const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
+            inline for (fields) |field| {
+                // Only process Statement.Idx fields (skip Ident.Idx fields)
+                if (field.type != CIR.Statement.Idx) continue;
+                const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
 
-    const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
-    inline for (fields) |field| {
-        // Only process Statement.Idx fields (skip Ident.Idx fields)
-        if (field.type != CIR.Statement.Idx) continue;
-        const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
+                const stmt = builtin_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_nominal_decl => |decl| {
+                        const header = builtin_env.store.getTypeHeader(decl.header);
+                        const qualified_name = builtin_env.getIdentText(header.name);
 
-        const stmt = builtin_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = builtin_env.store.getTypeHeader(decl.header);
-                const qualified_name = builtin_env.getIdentText(header.name);
+                        // Extract display name (last component after dots)
+                        const display_name = blk: {
+                            var last_dot: usize = 0;
+                            for (qualified_name, 0..) |c, i| {
+                                if (c == '.') last_dot = i + 1;
+                            }
+                            break :blk qualified_name[last_dot..];
+                        };
 
-                // Extract display name (last component after dots)
-                const display_name = blk: {
-                    var last_dot: usize = 0;
-                    for (qualified_name, 0..) |c, i| {
-                        if (c == '.') last_dot = i + 1;
-                    }
-                    break :blk qualified_name[last_dot..];
-                };
-
-                const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
-                const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
-                try mapping.put(qualified_ident, display_ident);
-            },
-            else => @panic("BuiltinIndices contains non-nominal statement"),
+                        const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                        const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+                        try mapping.put(qualified_ident, display_ident);
+                    },
+                    else => @panic("BuiltinIndices contains non-nominal statement"),
+                }
+            }
         }
     }
+
+    // Step 2: Copy user import mappings from the ModuleEnv
+    // These were built during canonicalization when processing import statements
+    var iter = cir.import_mapping.iterator();
+    while (iter.next()) |entry| {
+        const qualified_ident = entry.key_ptr.*;
+        const local_ident = entry.value_ptr.*;
+
+        // Get the text for comparison
+        const local_name = cir.getIdentText(local_ident);
+
+        if (mapping.get(qualified_ident)) |existing_display| {
+            // Only replace if the new name is shorter
+            const existing_name = idents.getText(existing_display);
+            if (local_name.len < existing_name.len) {
+                try mapping.put(qualified_ident, local_ident);
+            }
+        } else {
+            try mapping.put(qualified_ident, local_ident);
+        }
+    }
+
+    _ = module_envs; // Not needed anymore - mapping is built during canonicalization
 
     return mapping;
 }

@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 const trace_eval = build_options.trace_eval;
 const base_pkg = @import("base");
 const types = @import("types");
+const import_mapping_mod = types.import_mapping;
 const layout = @import("layout");
 const can = @import("can");
 const TypeScope = types.TypeScope;
@@ -209,6 +210,7 @@ pub const Interpreter = struct {
     next_module_id: u32,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
+    import_mapping: *const import_mapping_mod.ImportMapping,
     unify_scratch: unify.Scratch,
 
     // Minimal eval support
@@ -229,7 +231,7 @@ pub const Interpreter = struct {
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -284,7 +286,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env);
+        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -302,6 +304,7 @@ pub const Interpreter = struct {
         next_module_id: u32,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const can.ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -327,6 +330,7 @@ pub const Interpreter = struct {
             .next_module_id = next_module_id,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
+            .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
             .stack_memory = try stack.Stack.initCapacity(allocator, 8 * 1024 * 1024), // 8MB stack
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
@@ -2404,17 +2408,12 @@ pub const Interpreter = struct {
                 ) catch |err| {
                     if (err == error.MethodLookupFailed) {
                         // Get type and method names for a helpful crash message
-                        const origin_env = self.getModuleEnvForOrigin(nominal_info.origin);
-                        const full_type_name = if (origin_env) |env|
-                            env.common.getIdentStore().getText(nominal_info.ident)
-                        else
-                            "Unknown";
-                        // Strip module prefixes for user-friendly display
-                        // "Builtin.Num.Dec" -> "Dec", "Builtin.Bool" -> "Bool", "MyModule.Foo" -> "Foo"
-                        const type_name = if (std.mem.lastIndexOf(u8, full_type_name, ".")) |dot_idx|
-                            full_type_name[dot_idx + 1 ..]
-                        else
-                            full_type_name;
+                        // Use import mapping to get the user-facing display name
+                        const type_name = import_mapping_mod.getDisplayName(
+                            self.import_mapping,
+                            self.env.common.getIdentStore(),
+                            nominal_info.ident,
+                        );
                         const method_name = self.env.getIdent(dot_access.field_name);
                         const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
                             self.triggerCrash("Method not found", false, roc_ops);
@@ -5866,6 +5865,7 @@ pub const Interpreter = struct {
         self.allocator.destroy(self.runtime_types);
         self.snapshots.deinit();
         self.problems.deinit(self.allocator);
+        // Note: import_mapping is borrowed, not owned - don't deinit it
         self.unify_scratch.deinit();
         self.stack_memory.deinit();
         self.bindings.deinit();
@@ -6960,10 +6960,13 @@ fn add(a: i32, b: i32) i32 {
     return a + b;
 }
 
-// GREEN step: basic test to confirm the module’s tests run
+// GREEN step: basic test to confirm the module's tests run
 test "interpreter: wiring works" {
     try std.testing.expectEqual(@as(i32, 3), add(1, 2));
 }
+
+// Empty import mapping for tests that don't need type name resolution
+var empty_import_mapping = import_mapping_mod.ImportMapping.init(std.testing.allocator);
 
 // RED: expect Var->Layout slot to work (will fail until implemented)
 
@@ -6986,7 +6989,7 @@ test "interpreter: translateTypeVar for str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Get the actual Str type from the Builtin module using the str_stmt index
@@ -7023,7 +7026,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -7075,7 +7078,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -7132,7 +7135,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -7160,7 +7163,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -7198,7 +7201,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Create nominal Str type (no constraints)
@@ -7246,7 +7249,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -7296,7 +7299,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -7352,7 +7355,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{});
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
     defer interp.deinit();
 
     // Register module B

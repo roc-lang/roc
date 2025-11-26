@@ -3256,11 +3256,15 @@ fn introduceItemsAliased(
                         break :blk module_env.getExposedNodeIndexById(main_type_ident);
                     };
 
+                    // Get the type name text from the target module's ident store
+                    const original_type_name = module_env.getIdent(main_type_ident);
+
                     try self.setExternalTypeBinding(
                         current_scope,
                         module_alias,
                         module_name,
                         main_type_ident,
+                        original_type_name,
                         target_node_idx,
                         module_import_idx,
                         import_region,
@@ -3421,11 +3425,15 @@ fn introduceItemsUnaliased(
                 try self.scopeIntroduceExposedItem(local_ident, item_info);
 
                 if (is_type_name) {
+                    // Get the original type name text from current module's ident store
+                    const original_type_name = self.env.getIdent(exposed_item.name);
+
                     try self.setExternalTypeBinding(
                         current_scope,
                         local_ident,
                         module_name,
                         exposed_item.name,
+                        original_type_name,
                         target_node_idx,
                         module_import_idx,
                         import_region,
@@ -3460,11 +3468,15 @@ fn introduceItemsUnaliased(
             try self.scopeIntroduceExposedItem(local_ident, item_info);
 
             if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
+                // Get the original type name text from current module's ident store
+                const original_type_name = self.env.getIdent(exposed_item.name);
+
                 try self.setExternalTypeBinding(
                     current_scope,
                     local_ident,
                     module_name,
                     exposed_item.name,
+                    original_type_name,
                     null,
                     module_import_idx,
                     import_region,
@@ -9638,12 +9650,14 @@ pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: S
 }
 
 /// Set an external type binding for an imported nominal type
+/// Also adds the qualified type name to the import mapping for error message display.
 fn setExternalTypeBinding(
     self: *Self,
     scope: *Scope,
     local_ident: Ident.Idx,
     module_ident: Ident.Idx,
     original_ident: Ident.Idx,
+    original_type_name: []const u8,
     target_node_idx: ?u16,
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
@@ -9680,6 +9694,20 @@ fn setExternalTypeBinding(
             .module_not_found = module_found_status == .module_not_found,
         },
     });
+
+    // Add to import mapping: qualified_name -> local_name
+    // This allows error messages to display the user's preferred name for the type
+    const module_name_text = self.env.getIdent(module_ident);
+
+    // Build the fully-qualified type name (e.g., "MyModule.Foo")
+    const qualified_name = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ module_name_text, original_type_name });
+    defer self.env.gpa.free(qualified_name);
+
+    // Intern the qualified name in the current module's ident store
+    const qualified_ident = try self.env.insertIdent(Ident.for_text(qualified_name));
+
+    // Add the mapping from qualified ident to local ident
+    try self.env.import_mapping.put(qualified_ident, local_ident);
 }
 
 /// Look up an exposed item in parent scopes (for shadowing detection)

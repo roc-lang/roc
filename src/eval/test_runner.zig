@@ -6,6 +6,8 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
+const types = @import("types");
+const import_mapping_mod = types.import_mapping;
 const reporting = @import("reporting");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const eval_mod = @import("mod.zig");
@@ -151,11 +153,12 @@ pub const TestRunner = struct {
         builtin_types_param: BuiltinTypes,
         other_modules: []const *const can.ModuleEnv,
         builtin_module_env: ?*const can.ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.array_list.Managed(TestResult).init(allocator),

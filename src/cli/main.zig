@@ -2890,7 +2890,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
 
     // Evaluate all top-level declarations at compile time
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env, &checker.import_mapping) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -2903,7 +2903,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
-    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env) catch |err| {
+    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env, &checker.import_mapping) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         return err;
     };

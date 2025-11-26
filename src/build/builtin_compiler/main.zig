@@ -616,7 +616,6 @@ pub fn main() !void {
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
-        // Ident indices
         .bool_ident = bool_ident,
         .try_ident = try_ident,
         .dict_ident = dict_ident,

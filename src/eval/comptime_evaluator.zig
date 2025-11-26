@@ -9,6 +9,7 @@ const builtins = @import("builtins");
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
+const import_mapping_mod = types_mod.import_mapping;
 const Interpreter = @import("interpreter.zig").Interpreter;
 const eval_mod = @import("mod.zig");
 
@@ -181,8 +182,9 @@ pub const ComptimeEvaluator = struct {
         problems: *ProblemStore,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping);
 
         return ComptimeEvaluator{
             .allocator = allocator,
@@ -752,12 +754,12 @@ pub const ComptimeEvaluator = struct {
                 literal.constraint.fn_name,
             ) orelse {
                 // Method not found - the type doesn't have a from_numeral method
-                // Get the type name for the error message
-                const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
-                const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
-                    type_name_bytes[dot_idx + 1 ..]
-                else
-                    type_name_bytes;
+                // Use import mapping to get the user-facing display name
+                const short_type_name = import_mapping_mod.getDisplayName(
+                    self.interpreter.import_mapping,
+                    self.env.common.getIdentStore(),
+                    nominal_type.ident.ident_idx,
+                );
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Type {s} does not have a from_numeral method",
@@ -777,12 +779,12 @@ pub const ComptimeEvaluator = struct {
             // Get the definition index
             const node_idx_in_origin = origin_env.getExposedNodeIndexById(ident_in_origin) orelse {
                 // Definition not exposed - this is also an error
-                // Get the type name for the error message
-                const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
-                const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
-                    type_name_bytes[dot_idx + 1 ..]
-                else
-                    type_name_bytes;
+                // Use import mapping to get the user-facing display name
+                const short_type_name = import_mapping_mod.getDisplayName(
+                    self.interpreter.import_mapping,
+                    self.env.common.getIdentStore(),
+                    nominal_type.ident.ident_idx,
+                );
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Type {s} does not have an accessible from_numeral method",

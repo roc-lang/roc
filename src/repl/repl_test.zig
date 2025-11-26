@@ -6,6 +6,7 @@ const eval = @import("eval");
 const base = @import("base");
 const check = @import("check");
 const parse = @import("parse");
+const types = @import("types");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const ModuleEnv = can_mod.ModuleEnv;
@@ -140,6 +141,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .ok_ident = common.findIdent("Ok") orelse unreachable,
         .err_ident = common.findIdent("Err") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
     };
 
     return LoadedModule{
@@ -396,7 +398,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &[_]*const ModuleEnv{});
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &[_]*const ModuleEnv{}, &checker.import_mapping);
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

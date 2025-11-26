@@ -1040,6 +1040,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .ok_ident = common.findIdent("Ok") orelse unreachable,
                 .err_ident = common.findIdent("Err") orelse unreachable,
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
@@ -1646,7 +1647,11 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     // Create interpreter infrastructure for test evaluation
     const empty_modules: []const *const ModuleEnv = &.{};
     const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env) catch {
+    const solver = data.solver orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for test evaluation.");
+        return;
+    };
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env, &solver.import_mapping) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

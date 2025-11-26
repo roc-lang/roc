@@ -154,6 +154,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .ok_ident = common.findIdent("Ok") orelse unreachable,
         .err_ident = common.findIdent("Err") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
     };
 
     // Verify the data was preserved

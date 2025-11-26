@@ -169,7 +169,6 @@ pub const Store = struct {
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
-            // Use pre-interned idents from ModuleEnv (avoids string lookup during type checking)
             .list_ident = env.list_type_ident,
             .box_ident = env.box_type_ident,
             .u8_ident = env.u8_type_ident,

@@ -216,6 +216,12 @@ err_ident: Ident.Idx,
 /// These will be validated during comptime evaluation
 deferred_numeric_literals: DeferredNumericLiteral.SafeList,
 
+/// Import mapping for type display names in error messages.
+/// Maps fully-qualified type identifiers to their shortest display names based on imports.
+/// Built during canonicalization when processing import statements.
+/// Example: "MyModule.Foo" -> "F" if user has `import MyModule exposing [Foo as F]`
+import_mapping: types_mod.import_mapping.ImportMapping,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
@@ -407,6 +413,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .ok_ident = ok_ident,
         .err_ident = err_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
+        .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
     };
 }
 
@@ -418,6 +425,7 @@ pub fn deinit(self: *Self) void {
     self.requires_types.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
+    self.import_mapping.deinit();
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1879,6 +1887,7 @@ pub const Serialized = extern struct {
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
+    import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1966,6 +1975,8 @@ pub const Serialized = extern struct {
         self.unbox_method_ident = env.unbox_method_ident;
         self.ok_ident = env.ok_ident;
         self.err_ident = env.err_ident;
+        // import_mapping is runtime-only and initialized fresh during deserialization
+        self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -2056,6 +2067,7 @@ pub const Serialized = extern struct {
             .ok_ident = self.ok_ident,
             .err_ident = self.err_ident,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         };
 
         return env;

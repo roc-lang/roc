@@ -137,6 +137,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .ok_ident = common.findIdent("Ok") orelse unreachable,
         .err_ident = common.findIdent("Err") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
     };
 
     return LoadedModule{
