@@ -242,17 +242,7 @@ const CheckTypeCheckerPatternsStep = struct {
                             std.mem.startsWith(u8, after_match, "order") or
                             std.mem.startsWith(u8, after_match, "copyForwards");
 
-                        // Also allow module name comparisons - these are legitimately string-based
-                        // (matching import names to loaded modules at runtime)
-                        const is_module_name_comparison =
-                            std.mem.indexOf(u8, line, "module_name") != null or
-                            std.mem.indexOf(u8, line, "import_name") != null or
-                            std.mem.indexOf(u8, line, "qualified_name") != null or
-                            std.mem.indexOf(u8, line, "type_name") != null or
-                            std.mem.indexOf(u8, line, "type_path") != null or
-                            std.mem.indexOf(u8, line, "origin_env") != null;
-
-                        if (!is_allowed and !is_module_name_comparison) {
+                        if (!is_allowed) {
                             try violations.append(allocator, .{
                                 .file_path = full_path,
                                 .line_number = line_number,
