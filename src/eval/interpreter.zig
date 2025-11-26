@@ -254,17 +254,16 @@ pub const Interpreter = struct {
             try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
 
             // Process ALL imports using pre-resolved module indices
+            // Note: Some imports may be unresolved (e.g., platform modules in test context).
+            // We skip unresolved imports here - errors will occur at point-of-use if the
+            // code actually tries to access an unresolved import.
             for (0..import_count) |i| {
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
 
-                // Use pre-resolved module index - imports must be resolved during compilation
-                const resolved_idx = env.imports.getResolvedModule(import_idx) orelse {
-                    continue; // Skip unresolved imports
-                };
+                // Use pre-resolved module index - skip if not resolved
+                const resolved_idx = env.imports.getResolvedModule(import_idx) orelse continue;
 
-                if (resolved_idx >= other_envs.len) {
-                    continue; // Invalid index, skip
-                }
+                if (resolved_idx >= other_envs.len) continue;
 
                 const module_env = other_envs[resolved_idx];
 
@@ -2626,42 +2625,8 @@ pub const Interpreter = struct {
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
-                const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
-                    // Fallback: Try pre-resolved module indices first
-                    if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
-                        if (resolved_idx < self.all_module_envs.len) {
-                            break :blk self.all_module_envs[resolved_idx];
-                        }
-                    }
-                    // Fallback: For REPL and other scenarios where resolved_modules isn't populated,
-                    // search all_module_envs by comparing module names directly.
-                    const import_list = self.env.imports.imports.items.items;
-                    if (@intFromEnum(lookup.module_idx) < import_list.len) {
-                        const str_idx = import_list[@intFromEnum(lookup.module_idx)];
-                        const import_name = self.env.common.getString(str_idx);
-
-                        // Search all_module_envs for a module with matching name
-                        for (self.all_module_envs) |env| {
-                            if (std.mem.eql(u8, env.module_name, import_name)) {
-                                break :blk env;
-                            }
-                            // Also try without .roc suffix
-                            if (std.mem.endsWith(u8, import_name, ".roc")) {
-                                const short = import_name[0 .. import_name.len - 4];
-                                if (std.mem.eql(u8, env.module_name, short)) {
-                                    break :blk env;
-                                }
-                            }
-                            // Also try just the last component (e.g., "Builtin" from "pf.Builtin")
-                            if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx| {
-                                const short = import_name[dot_idx + 1 ..];
-                                if (std.mem.eql(u8, env.module_name, short)) {
-                                    break :blk env;
-                                }
-                            }
-                        }
-                    }
-                    self.triggerCrash("e_lookup_external: failed to resolve import via pre-resolved index", false, roc_ops);
+                const other_env = self.import_envs.get(lookup.module_idx) orelse {
+                    self.triggerCrash("e_lookup_external: import_envs missing entry for module", false, roc_ops);
                     return error.Crash;
                 };
 
@@ -6004,6 +5969,26 @@ pub const Interpreter = struct {
         return try std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
+    /// Get text for an ident that may come from any of the interpreter's stores.
+    /// Checks runtime_layout_store, current env, and builtins interners.
+    fn getIdentTextFromAnyStore(self: *const Interpreter, idx: base_pkg.Ident.Idx) []const u8 {
+        const runtime_interner = &self.runtime_layout_store.env.common.idents.interner;
+        const current_interner = &self.env.common.idents.interner;
+        const builtin_interner = &self.builtins.bool_env.common.idents.interner;
+
+        const interner_idx = @as(base_pkg.SmallStringInterner.Idx, @enumFromInt(@as(u32, idx.idx)));
+        if (idx.idx < runtime_interner.bytes.len()) {
+            return runtime_interner.getText(interner_idx);
+        }
+        if (idx.idx < current_interner.bytes.len()) {
+            return current_interner.getText(interner_idx);
+        }
+        if (idx.idx < builtin_interner.bytes.len()) {
+            return builtin_interner.getText(interner_idx);
+        }
+        @panic("getIdentTextFromAnyStore: ident not found in any store");
+    }
+
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
     /// Returns the constraint if found, or MethodNotFound if the receiver doesn't expose the method.
     fn getStaticDispatchConstraint(
@@ -6282,7 +6267,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         origin_module: base_pkg.Ident.Idx,
         nominal_ident: base_pkg.Ident.Idx,
-        method_name: base_pkg.Ident.Idx,
+        method_name_ident: base_pkg.Ident.Idx,
         roc_ops: *RocOps,
     ) Error!StackValue {
         // Get the module environment for this type's origin
@@ -6290,38 +6275,14 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Build the qualified method name using getMethodQualifiedIdent to get the text
-        // This handles idents from different stores (runtime types, current env, builtins)
-        var method_name_buf: [256]u8 = undefined;
-        const qualified_name = self.getMethodQualifiedIdent(
-            origin_module,
-            nominal_ident,
-            method_name,
-            &method_name_buf,
-        ) catch {
-            return error.MethodLookupFailed;
-        };
-
-        // Parse out the type name and method name from the qualified name
-        // The format is "Module.Type.method" or "Module.Nested.Type.method"
-        // We need to find the last dot to separate method from type path
-        const last_dot = std.mem.lastIndexOf(u8, qualified_name, ".") orelse {
-            return error.MethodLookupFailed;
-        };
-        const type_path = qualified_name[0..last_dot];
-        const method_str = qualified_name[last_dot + 1 ..];
-
-        // Strip the module name prefix from type_path to get just the type name
-        // e.g., "Builtin.Num.Dec" -> "Num.Dec", "Builtin.Bool" -> "Bool"
-        const type_name = if (std.mem.startsWith(u8, type_path, origin_env.module_name) and
-            type_path.len > origin_env.module_name.len and
-            type_path[origin_env.module_name.len] == '.')
-            type_path[origin_env.module_name.len + 1 ..]
-        else
-            type_path;
+        // Get type and method name strings directly from the idents.
+        // The idents may come from different stores (runtime types, current env, builtins)
+        // so we check each interner.
+        const type_name = self.getIdentTextFromAnyStore(nominal_ident);
+        const method_name_str = self.getIdentTextFromAnyStore(method_name_ident);
 
         // Use getMethodIdent which handles the qualified name construction properly
-        const method_ident = origin_env.getMethodIdent(type_name, method_str) orelse {
+        const method_ident = origin_env.getMethodIdent(type_name, method_name_str) orelse {
             return error.MethodLookupFailed;
         };
 
