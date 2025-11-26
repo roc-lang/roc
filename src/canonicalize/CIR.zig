@@ -600,7 +600,79 @@ pub const NumeralDigits = struct {
         const after_start = self.digits_start + self.before_pt_len;
         return digit_bytes[after_start..][0..self.after_pt_len];
     }
+
+    /// Format the base-256 encoded numeral back to a human-readable decimal string.
+    /// Writes to the provided buffer and returns a slice of the written content.
+    /// Buffer should be at least 128 bytes to handle most numbers.
+    pub fn formatDecimal(self: NumeralDigits, digit_bytes: []const u8, buf: []u8) []const u8 {
+        return formatBase256ToDecimal(
+            self.is_negative,
+            self.getDigitsBeforePt(digit_bytes),
+            self.getDigitsAfterPt(digit_bytes),
+            buf,
+        );
+    }
 };
+
+/// Format base-256 encoded digits to a human-readable decimal string.
+/// This is useful for error messages where we need to show the user what number
+/// was invalid (e.g., "The number 999999999 is not a valid U8").
+///
+/// Parameters:
+/// - is_negative: whether the number had a minus sign
+/// - digits_before_pt: base-256 encoded integer part
+/// - digits_after_pt: base-256 encoded fractional part
+/// - buf: output buffer (should be at least 128 bytes)
+///
+/// Returns a slice of buf containing the formatted decimal string.
+pub fn formatBase256ToDecimal(
+    is_negative: bool,
+    digits_before_pt: []const u8,
+    digits_after_pt: []const u8,
+    buf: []u8,
+) []const u8 {
+    var writer = std.io.fixedBufferStream(buf);
+    const w = writer.writer();
+
+    // Write sign if negative
+    if (is_negative) w.writeAll("-") catch {};
+
+    // Convert base-256 integer part to decimal
+    var value: u128 = 0;
+    for (digits_before_pt) |digit| {
+        value = value * 256 + digit;
+    }
+    w.print("{d}", .{value}) catch {};
+
+    // Format fractional part if present and non-zero
+    if (digits_after_pt.len > 0) {
+        var has_nonzero = false;
+        for (digits_after_pt) |d| {
+            if (d != 0) {
+                has_nonzero = true;
+                break;
+            }
+        }
+        if (has_nonzero) {
+            w.writeAll(".") catch {};
+            // Convert base-256 fractional digits to decimal
+            var frac: f64 = 0;
+            var mult: f64 = 1.0 / 256.0;
+            for (digits_after_pt) |digit| {
+                frac += @as(f64, @floatFromInt(digit)) * mult;
+                mult /= 256.0;
+            }
+            // Print fractional part (removing leading "0.")
+            var frac_buf: [32]u8 = undefined;
+            const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+            if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
+                w.writeAll(frac_str[2..]) catch {};
+            }
+        }
+    }
+
+    return buf[0..writer.pos];
+}
 
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec

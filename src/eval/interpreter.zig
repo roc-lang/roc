@@ -4273,39 +4273,7 @@ pub const Interpreter = struct {
                         // For Err case, construct InvalidNumeral(Str) with descriptive message
                         // Format the number that was rejected
                         var num_str_buf: [128]u8 = undefined;
-                        const num_str = blk: {
-                            var writer = std.io.fixedBufferStream(&num_str_buf);
-                            if (is_negative) writer.writer().writeAll("-") catch {};
-                            // Format integer part
-                            writer.writer().print("{d}", .{value}) catch {};
-                            // Format fractional part if present
-                            if (digits_after.len > 0) {
-                                var has_nonzero = false;
-                                for (digits_after) |d| {
-                                    if (d != 0) {
-                                        has_nonzero = true;
-                                        break;
-                                    }
-                                }
-                                if (has_nonzero) {
-                                    writer.writer().writeAll(".") catch {};
-                                    // Convert base-256 fractional digits to decimal
-                                    var frac: f64 = 0;
-                                    var mult: f64 = 1.0 / 256.0;
-                                    for (digits_after) |digit| {
-                                        frac += @as(f64, @floatFromInt(digit)) * mult;
-                                        mult /= 256.0;
-                                    }
-                                    // Print fractional part (removing leading "0.")
-                                    var frac_buf: [32]u8 = undefined;
-                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
-                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                                        writer.writer().writeAll(frac_str[2..]) catch {};
-                                    }
-                                }
-                            }
-                            break :blk num_str_buf[0..writer.pos];
-                        };
+                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
 
                         // Create descriptive error message
                         const error_msg = switch (rejection_reason) {
@@ -4498,35 +4466,7 @@ pub const Interpreter = struct {
                     } else if (!in_range and err_payload_var != null) {
                         // For Err case, construct InvalidNumeral(Str) with descriptive message
                         var num_str_buf: [128]u8 = undefined;
-                        const num_str = blk: {
-                            var writer = std.io.fixedBufferStream(&num_str_buf);
-                            if (is_negative) writer.writer().writeAll("-") catch {};
-                            writer.writer().print("{d}", .{value}) catch {};
-                            if (digits_after.len > 0) {
-                                var has_nonzero = false;
-                                for (digits_after) |d| {
-                                    if (d != 0) {
-                                        has_nonzero = true;
-                                        break;
-                                    }
-                                }
-                                if (has_nonzero) {
-                                    writer.writer().writeAll(".") catch {};
-                                    var frac: f64 = 0;
-                                    var mult: f64 = 1.0 / 256.0;
-                                    for (digits_after) |digit| {
-                                        frac += @as(f64, @floatFromInt(digit)) * mult;
-                                        mult /= 256.0;
-                                    }
-                                    var frac_buf: [32]u8 = undefined;
-                                    const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
-                                    if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                                        writer.writer().writeAll(frac_str[2..]) catch {};
-                                    }
-                                }
-                            }
-                            break :blk num_str_buf[0..writer.pos];
-                        };
+                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
 
                         const error_msg = switch (rejection_reason) {
                             .negative_unsigned => std.fmt.allocPrint(
