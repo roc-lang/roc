@@ -199,18 +199,18 @@ boxed = Container(X)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Foo.Bar, Foo.Baz)"))
+		(patt (type "(Bar, Baz)"))
 		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Bar")
+		(nominal (type "Bar")
 			(ty-header (name "Foo.Bar")))
-		(nominal (type "Foo.Baz")
+		(nominal (type "Baz")
 			(ty-header (name "Foo.Baz")))
 		(alias (type "Container")
 			(ty-header (name "Container"))))
 	(expressions
-		(expr (type "(Foo.Bar, Foo.Baz)"))
+		(expr (type "(Bar, Baz)"))
 		(expr (type "Error"))))
 ~~~

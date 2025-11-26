@@ -142,11 +142,11 @@ Foo := [Whatever].{
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Bar")
+		(nominal (type "Bar")
 			(ty-header (name "Foo.Bar")))
-		(nominal (type "Foo.Bar.Baz")
+		(nominal (type "Bar.Baz")
 			(ty-header (name "Foo.Bar.Baz")))
-		(nominal (type "Foo.Bar.Baz.Qux")
+		(nominal (type "Bar.Baz.Qux")
 			(ty-header (name "Foo.Bar.Baz.Qux"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))

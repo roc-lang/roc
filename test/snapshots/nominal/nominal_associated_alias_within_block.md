@@ -114,16 +114,16 @@ external = Foo.defaultBaz
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "nominal_associated_alias_within_block.Foo.Baz"))
-		(patt (type "nominal_associated_alias_within_block.Foo.Baz")))
+		(patt (type "Baz"))
+		(patt (type "Baz")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_associated_alias_within_block.Foo.Bar")
+		(nominal (type "Bar")
 			(ty-header (name "nominal_associated_alias_within_block.Foo.Bar")))
-		(alias (type "nominal_associated_alias_within_block.Foo.Baz")
+		(alias (type "Baz")
 			(ty-header (name "nominal_associated_alias_within_block.Foo.Baz"))))
 	(expressions
-		(expr (type "nominal_associated_alias_within_block.Foo.Baz"))
-		(expr (type "nominal_associated_alias_within_block.Foo.Baz"))))
+		(expr (type "Baz"))
+		(expr (type "Baz"))))
 ~~~

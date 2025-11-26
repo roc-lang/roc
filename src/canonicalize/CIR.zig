@@ -138,7 +138,11 @@ pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { start: u32, len: u32 };
 
+    /// The fully qualified name for lookups (e.g., "Builtin.Bool" or "MyModule.Foo.Bar")
     name: base.Ident.Idx,
+    /// The name relative to the module, without the module prefix (e.g., "Bool" or "Foo.Bar").
+    /// This is what should be used for NominalType.ident to avoid redundancy with origin_module.
+    relative_name: base.Ident.Idx,
     args: TypeAnno.Span,
 
     pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) !void {

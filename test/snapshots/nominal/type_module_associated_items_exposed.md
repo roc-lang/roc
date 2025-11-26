@@ -86,7 +86,7 @@ Foo := [Blah].{
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Foo.Bar")
+		(nominal (type "Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
 		(expr (type "{}"))

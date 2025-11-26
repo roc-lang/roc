@@ -23,7 +23,28 @@ main = (helper1(val), helper2(val))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **to_str** method is being called on the type **BasicNoAnno**, which has no method with that name:
+**BasicNoAnno.md:7:15:7:25:**
+```roc
+helper1 = |x| x.to_str()
+```
+              ^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **to_str2** method is being called on the type **BasicNoAnno**, which has no method with that name:
+**BasicNoAnno.md:9:15:9:26:**
+```roc
+helper2 = |x| x.to_str2()
+```
+              ^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **to_str2** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -205,7 +226,7 @@ main = (helper1(val), helper2(val))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "BasicNoAnno"))
-		(patt (type "(Str, Str)")))
+		(patt (type "(Error, Error)")))
 	(type_decls
 		(nominal (type "BasicNoAnno")
 			(ty-header (name "BasicNoAnno"))))
@@ -215,5 +236,5 @@ main = (helper1(val), helper2(val))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "BasicNoAnno"))
-		(expr (type "(Str, Str)"))))
+		(expr (type "(Error, Error)"))))
 ~~~

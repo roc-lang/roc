@@ -5702,7 +5702,9 @@ pub const Interpreter = struct {
         buf: []u8,
     ) ![]const u8 {
         // Build fully-qualified method name: "OriginModule.TypeName.methodName"
-        // where TypeName can itself be qualified (e.g., "Foo.Bar" for nested types)
+        // where TypeName can itself be qualified for nested types (e.g., "Num.U8")
+        // but does NOT include the module prefix (that's in origin_module).
+        //
         // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
         const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
         const origin_module_text = runtime_ident_store.getText(origin_module);
@@ -5710,9 +5712,9 @@ pub const Interpreter = struct {
         // method_name is from the current environment
         const current_ident_store = self.env.common.getIdentStore();
         const method_name_str = current_ident_store.getText(method_name);
-        // Construct: "OriginModule.TypeName.methodName"
-        // Note: TypeName may already contain dots for nested types
-        return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
+
+        // Build: module_name.type_name.method_name (e.g., "Builtin.Bool.is_eq" or "Builtin.Num.U8.from_numeral")
+        return try std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.

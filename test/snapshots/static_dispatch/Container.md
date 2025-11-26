@@ -48,7 +48,17 @@ func = {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **map** method is being called on the type **Container(a) where [Container(a).from_numeral : Container(a)]**, which has no method with that name:
+**Container.md:33:13:34:20:**
+```roc
+  chained = num_container
+    .map(|x| x + 1)
+```
+
+
+**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -307,66 +317,60 @@ func = {
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "Container.get_or"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "default")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "val")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "default"))))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "default")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "val")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "default")))))))))))
 	(d-let
 		(p-assign (ident "Container.flat_map"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "f")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-lookup-local
-												(p-assign (ident "f")))
-											(e-lookup-local
-												(p-assign (ident "val"))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Empty"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "f")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "f")))
+										(e-lookup-local
+											(p-assign (ident "val"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Empty")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Container") (local)
@@ -436,7 +440,7 @@ func = {
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
 		(patt (type "[Value(c), Empty]_others, c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "_c")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -446,5 +450,5 @@ func = {
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
 		(expr (type "[Value(c), Empty]_others, c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "_c"))))
 ~~~

@@ -77,12 +77,12 @@ x = Foo.Bar.X
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "nominal_simple_nested_tag.Foo.Bar")))
+		(patt (type "Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_simple_nested_tag.Foo.Bar")
+		(nominal (type "Bar")
 			(ty-header (name "nominal_simple_nested_tag.Foo.Bar"))))
 	(expressions
-		(expr (type "nominal_simple_nested_tag.Foo.Bar"))))
+		(expr (type "Bar"))))
 ~~~

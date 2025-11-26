@@ -49,15 +49,15 @@ MISSING METHOD - Adv.md:23:13:23:33
 MISSING METHOD - Adv.md:28:13:28:32
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
-**Adv.md:17:28:17:31:**
+This **update_str** method is being called on the type **Adv**, which has no method with that name:
+**Adv.md:17:13:17:32:**
 ```roc
 	next_val = val.update_str(100)
 ```
-	                          ^^^
+	           ^^^^^^^^^^^^^^^^^^^
 
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **update_str** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **update_strr** method is being called on the type **Adv**, which has no method with that name:
@@ -80,6 +80,17 @@ This **update** method is being called on the type **Str**, which has no method 
 
 
 **Hint: **For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **update_str** method is being called on the type **Adv**, which has no method with that name:
+**Adv.md:35:13:35:36:**
+```roc
+	next_val = val.update_str("world").update_u64(20)
+```
+	           ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **update_str** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -500,7 +511,7 @@ main = {
 		(patt (type "Adv -> U64"))
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
-		(patt (type "Adv"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "(Str, U64)")))
@@ -512,7 +523,7 @@ main = {
 		(expr (type "Adv -> U64"))
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
-		(expr (type "Adv"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "(Str, U64)"))))

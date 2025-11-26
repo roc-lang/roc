@@ -384,10 +384,12 @@ const Self = @This();
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
 /// First pass helper: Process a type declaration and introduce it into scope
 /// If parent_name is provided, creates a qualified name (e.g., "Foo.Bar")
+/// relative_parent_name is the parent path without the module prefix (e.g., null for top-level, "Num" for U8 inside Num)
 fn processTypeDeclFirstPass(
     self: *Self,
     type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
     parent_name: ?Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
     defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
     // Canonicalize the type declaration header first
@@ -412,10 +414,21 @@ fn processTypeDeclFirstPass(
         break :blk try self.env.insertQualifiedIdent(parent_text, type_text);
     } else type_header.name;
 
+    // Compute relative_name: the type name without the module prefix
+    // For nested types like U8 in Num: relative_name = "Num.U8" (relative_parent + type's relative_name)
+    // For top-level types: relative_name = type_header.relative_name (original unqualified name)
+    const relative_name_idx: Ident.Idx = if (relative_parent_name) |rel_parent_idx| blk: {
+        // Nested case: build "Num.U8" from relative_parent="Num" and type="U8"
+        const rel_parent_text = self.env.getIdent(rel_parent_idx);
+        const type_relative = self.env.getIdent(type_header.relative_name);
+        break :blk try self.env.insertQualifiedIdent(rel_parent_text, type_relative);
+    } else type_header.relative_name;
+
     // Create a new header with the qualified name if needed
     const final_header_idx = if (parent_name != null and qualified_name_idx.idx != type_header.name.idx) blk: {
         const qualified_header = CIR.TypeHeader{
             .name = qualified_name_idx,
+            .relative_name = relative_name_idx,
             .args = type_header.args,
         };
         break :blk try self.env.addTypeHeader(qualified_header, region);
@@ -563,7 +576,7 @@ fn processTypeDeclFirstPass(
     // to handle sibling type forward references)
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
-            try self.processAssociatedBlock(qualified_name_idx, type_header.name, assoc, false);
+            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc, false);
         }
     }
 }
@@ -711,9 +724,11 @@ fn introduceNestedItemAliases(
 /// Process an associated block: introduce all items, set up scope with aliases, and canonicalize
 /// When skip_first_pass is true, placeholders were already created by a recursive call to
 /// processAssociatedItemsFirstPass, so we skip directly to scope entry and body processing.
+/// relative_name is the type's name without module prefix (null for module-level associated blocks)
 fn processAssociatedBlock(
     self: *Self,
     qualified_name_idx: Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
     assoc: anytype,
     skip_first_pass: bool,
@@ -721,7 +736,7 @@ fn processAssociatedBlock(
     // First, introduce placeholder patterns for all associated items
     // (Skip if this is a nested call where placeholders were already created)
     if (!skip_first_pass) {
-        try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
+        try self.processAssociatedItemsFirstPass(qualified_name_idx, relative_name_idx, assoc.statements);
     }
 
     // Now enter a new scope for the associated block where both qualified and unqualified names work
@@ -804,10 +819,17 @@ fn processAssociatedBlock(
                 const nested_type_text = self.env.getIdent(nested_type_ident);
                 const nested_qualified_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
 
+                // Build relative name for the nested type (without module prefix)
+                // If relative_name_idx is null, the nested type is at module level, so its relative name is just the type name
+                const nested_relative_idx = if (relative_name_idx) |rel_idx| blk: {
+                    const rel_parent_text = self.env.getIdent(rel_idx);
+                    break :blk try self.env.insertQualifiedIdent(rel_parent_text, nested_type_text);
+                } else nested_type_ident;
+
                 // Recursively process the nested type's associated block
                 // Skip first pass because placeholders were already created by
                 // processAssociatedItemsFirstPass Phase 2b
-                try self.processAssociatedBlock(nested_qualified_idx, nested_type_ident, nested_assoc, true);
+                try self.processAssociatedBlock(nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc, true);
             }
         }
     }
@@ -1443,9 +1465,11 @@ fn updatePlaceholderHierarchically(
 }
 
 /// First pass helper: Process associated items and introduce them into scope with qualified names
+/// relative_parent_name is the parent path without the module prefix (null for top-level in module)
 fn processAssociatedItemsFirstPass(
     self: *Self,
     parent_name: Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     // Multi-phase approach for sibling types:
@@ -1462,7 +1486,7 @@ fn processAssociatedItemsFirstPass(
             const type_decl = stmt.type_decl;
             // Only process nominal types in this phase; aliases will be processed later
             if (type_decl.kind == .nominal) {
-                try self.processTypeDeclFirstPass(type_decl, parent_name, true); // defer associated blocks
+                try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
     }
@@ -1515,7 +1539,7 @@ fn processAssociatedItemsFirstPass(
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
             if (type_decl.kind == .alias) {
-                try self.processTypeDeclFirstPass(type_decl, parent_name, true); // defer associated blocks
+                try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
     }
@@ -1650,8 +1674,18 @@ fn processAssociatedItemsFirstPass(
                 const type_text = self.env.getIdent(type_ident);
                 const qualified_idx = try self.env.insertQualifiedIdent(parent_text, type_text);
 
+                // Build relative name for nested type (without module prefix)
+                const nested_relative_name = if (relative_parent_name) |rel_parent| blk: {
+                    // Parent already has relative path, extend it
+                    const rel_parent_text = self.env.getIdent(rel_parent);
+                    break :blk try self.env.insertQualifiedIdent(rel_parent_text, type_text);
+                } else blk: {
+                    // Parent is module root, so this type name IS the relative path
+                    break :blk type_ident;
+                };
+
                 // Recursively create placeholders for this nested block's items
-                try self.processAssociatedItemsFirstPass(qualified_idx, assoc.statements);
+                try self.processAssociatedItemsFirstPass(qualified_idx, nested_relative_name, assoc.statements);
             }
         }
     }
@@ -1740,7 +1774,7 @@ pub fn canonicalizeFile(
         switch (stmt) {
             .type_decl => |type_decl| {
                 if (type_decl.associated) |_| {
-                    try self.processTypeDeclFirstPass(type_decl, null, true); // defer associated blocks
+                    try self.processTypeDeclFirstPass(type_decl, null, null, true); // defer associated blocks
                 }
             },
             .decl => |decl| {
@@ -1897,7 +1931,8 @@ pub fn canonicalizeFile(
                 else
                     try self.env.insertQualifiedIdent(module_name_text, type_name_text);
 
-                try self.processAssociatedBlock(qualified_type_ident, type_ident, assoc, false);
+                // For module-level associated blocks, relative_parent is null since items are at the module root
+                try self.processAssociatedBlock(qualified_type_ident, null, type_ident, assoc, false);
             }
         }
     }
@@ -1909,7 +1944,7 @@ pub fn canonicalizeFile(
         switch (stmt) {
             .type_decl => |type_decl| {
                 if (type_decl.associated == null) {
-                    try self.processTypeDeclFirstPass(type_decl, null, false); // no associated block to defer
+                    try self.processTypeDeclFirstPass(type_decl, null, null, false); // no associated block to defer
                 }
             },
             else => {
@@ -4988,6 +5023,17 @@ pub fn canonicalizeExpr(
                 // Get the pattern span
                 const branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
+                // Collect variables bound by the branch pattern(s)
+                var branch_bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+                defer branch_bound_vars.deinit(self.env.gpa);
+                for (self.env.store.sliceMatchBranchPatterns(branch_pat_span)) |branch_pat_idx| {
+                    const branch_pat = self.env.store.getMatchBranchPattern(branch_pat_idx);
+                    try self.collectBoundVars(branch_pat.pattern, &branch_bound_vars);
+                }
+
+                // Save position before canonicalizing body so we can filter pattern-bound vars
+                const body_free_vars_start = self.scratch_free_vars.top();
+
                 // Canonicalize the branch's body
                 const can_body = try self.canonicalizeExpr(ast_branch.body) orelse {
                     const body = self.parse_ir.store.getExpr(ast_branch.body);
@@ -4998,6 +5044,26 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
                 };
                 const value_idx = can_body.idx;
+
+                // Filter out pattern-bound variables from the body's free_vars
+                // Only truly free variables (not bound by this branch's pattern) should
+                // propagate up to the match expression's free_vars
+                if (can_body.free_vars) |body_free_vars| {
+                    // Copy the free vars we need to filter
+                    const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_free_vars);
+                    var filtered_free_vars = std.ArrayListUnmanaged(Pattern.Idx){};
+                    defer filtered_free_vars.deinit(self.env.gpa);
+                    for (body_free_vars_slice) |fv| {
+                        if (!branch_bound_vars.contains(fv)) {
+                            try filtered_free_vars.append(self.env.gpa, fv);
+                        }
+                    }
+                    // Clear back to before body canonicalization and re-add only filtered vars
+                    self.scratch_free_vars.clearFrom(body_free_vars_start);
+                    for (filtered_free_vars.items) |fv| {
+                        try self.scratch_free_vars.append(fv);
+                    }
+                }
 
                 const branch_idx = try self.env.addMatchBranch(
                     Expr.Match.Branch{
@@ -7622,11 +7688,10 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     const node_region = self.parse_ir.tokenizedRegionToRegion(node.region);
     if (node.tag == .malformed) {
-        // Create a malformed type header with an invalid identifier
-        return try self.env.addTypeHeader(.{
-            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
-            .args = .{ .span = .{ .start = 0, .len = 0 } },
-        }, node_region);
+        // Create a malformed type header node that will be caught by processTypeDeclFirstPass
+        return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .malformed_type_annotation = .{
+            .region = node_region,
+        } });
     }
 
     const ast_header = self.parse_ir.store.getTypeHeader(header_idx) catch unreachable; // Malformed handled above
@@ -7634,11 +7699,10 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
 
     // Get the type name identifier
     const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse {
-        // If we can't resolve the identifier, create a malformed header with invalid identifier
-        return try self.env.addTypeHeader(.{
-            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
-            .args = .{ .span = .{ .start = 0, .len = 0 } },
-        }, region);
+        // If we can't resolve the identifier, create a malformed header node
+        return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .malformed_type_annotation = .{
+            .region = region,
+        } });
     };
 
     // Check if this is a builtin type
@@ -7761,8 +7825,11 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
 
     const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
 
+    // For original headers from parsing, relative_name is the same as name
+    // (it will be differentiated when a qualified header is created in processTypeDeclFirstPass)
     return try self.env.addTypeHeader(.{
         .name = name_ident,
+        .relative_name = name_ident,
         .args = args,
     }, region);
 }

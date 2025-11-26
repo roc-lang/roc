@@ -156,41 +156,37 @@ expect user1 != user3
 (can-ir
 	(d-let
 		(p-assign (ident "custom_wrapper_equality.UserId.is_eq"))
-		(e-closure
-			(captures
-				(capture (ident "id_a"))
-				(capture (ident "id_b")))
-			(e-lambda
-				(args
-					(p-assign (ident "a"))
-					(p-assign (ident "b")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "a"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-match
-										(match
-											(cond
-												(e-lookup-local
-													(p-assign (ident "b"))))
-											(branches
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-applied-tag)))
-													(value
-														(e-binop (op "eq")
-															(e-lookup-local
-																(p-assign (ident "id_a")))
-															(e-lookup-local
-																(p-assign (ident "id_b"))))))))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "a"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-match
+									(match
+										(cond
+											(e-lookup-local
+												(p-assign (ident "b"))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-applied-tag)))
+												(value
+													(e-binop (op "eq")
+														(e-lookup-local
+															(p-assign (ident "id_a")))
+														(e-lookup-local
+															(p-assign (ident "id_b")))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "UserId") (local))

@@ -819,14 +819,10 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the fully qualified name "Builtin.Try" to match how Try is defined in the Builtin module
-    // This ensures our Try type unifies correctly with the Try type from actual method signatures
-    const try_ident_idx = self.cir.common.findIdent("Builtin.Try") orelse blk: {
-        // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Try"));
-    };
+    // Use the relative name "Try" (not "Builtin.Try") to match the relative_name in TypeHeader
+    // The origin_module field already captures that this type is from Builtin
     const try_ident = types_mod.TypeIdent{
-        .ident_idx = try_ident_idx,
+        .ident_idx = self.common_idents.@"try",
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -853,10 +849,11 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the fully qualified name "Builtin.Num.Numeral" to match how Numeral is defined
-    const numeral_ident_idx = self.cir.common.findIdent("Builtin.Num.Numeral") orelse blk: {
+    // Use the relative name "Num.Numeral" (not "Builtin.Num.Numeral") to match the relative_name in TypeHeader
+    // The origin_module field already captures that this type is from Builtin
+    const numeral_ident_idx = self.cir.common.findIdent("Num.Numeral") orelse blk: {
         // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Num.Numeral"));
+        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Num.Numeral"));
     };
     const numeral_ident = types_mod.TypeIdent{
         .ident_idx = numeral_ident_idx,
@@ -1237,7 +1234,7 @@ fn generateAliasDecl(
     const backing_var: Var = ModuleEnv.varFrom(alias.anno);
     try self.generateAnnoTypeInPlace(alias.anno, env, .{ .type_decl = .{
         .idx = decl_idx,
-        .name = header.name,
+        .name = header.relative_name,
         .type_ = .alias,
         .backing_var = backing_var,
         .num_args = @intCast(header_args.len),
@@ -1246,7 +1243,7 @@ fn generateAliasDecl(
     try self.unifyWith(
         decl_var,
         try self.types.mkAlias(
-            .{ .ident_idx = header.name },
+            .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
         ),
@@ -1275,7 +1272,7 @@ fn generateNominalDecl(
     const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
     try self.generateAnnoTypeInPlace(nominal.anno, env, .{ .type_decl = .{
         .idx = decl_idx,
-        .name = header.name,
+        .name = header.relative_name,
         .type_ = .nominal,
         .backing_var = backing_var,
         .num_args = @intCast(header_args.len),
@@ -1284,7 +1281,7 @@ fn generateNominalDecl(
     try self.unifyWith(
         decl_var,
         try self.types.mkNominal(
-            .{ .ident_idx = header.name },
+            .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
             self.common_idents.module_name,
@@ -4863,37 +4860,15 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
 
                 // Calculate the name of the static dispatch function
-                //
-                // TODO: This works for top-level types, but not for deeply
-                // nested types like: MyModule.A.B.C.my_func
+                // Format: "ModuleName.TypeName.method_name"
+                // e.g., "Builtin.Bool.is_eq" or "Builtin.Num.U8.from_numeral"
+                // type_name_bytes is the type's relative name (without module prefix)
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
-
-                // Check if type_name_bytes already starts with "module_name."
-                const module_prefix = original_env.module_name;
-                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
-                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
-                    type_name_bytes[module_prefix.len] == '.';
-
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else if (already_qualified) {
-                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}.{s}",
-                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
-                    );
-                }
+                try self.static_dispatch_method_name_buf.print(
+                    self.gpa,
+                    "{s}.{s}.{s}",
+                    .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
+                );
                 const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
 
                 // Get the ident of this method in the original env
