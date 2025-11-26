@@ -2966,6 +2966,21 @@ pub const Interpreter = struct {
 
                 return try self.makeBoolValue(builtins.str.startsWith(string.*, prefix.*));
             },
+            .str_ends_with => {
+                // Str.ends_with : Str, Str -> Bool
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const suffix_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(suffix_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+
+                return try self.makeBoolValue(builtins.str.endsWith(string.*, suffix.*));
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

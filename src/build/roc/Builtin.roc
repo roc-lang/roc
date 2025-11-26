@@ -10,6 +10,7 @@ Builtin :: [].{
 		with_ascii_lowercased : Str -> Str
 		with_ascii_uppercased : Str -> Str
 		starts_with : Str, Str -> Bool
+		ends_with : Str, Str -> Bool
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

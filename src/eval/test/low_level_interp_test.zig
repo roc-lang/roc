@@ -903,3 +903,50 @@ test "e_low_level_lambda - Str.starts_with with prefix longer than string" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("False", value);
 }
+
+// Str.ends_with tests
+
+test "e_low_level_lambda - Str.ends_with returns True for matching suffix" {
+    const src =
+        \\x = Str.ends_with("hello world", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.ends_with returns False for non-matching suffix" {
+    const src =
+        \\x = Str.ends_with("hello world", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.ends_with with empty suffix" {
+    const src =
+        \\x = Str.ends_with("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.ends_with with empty string and empty suffix" {
+    const src =
+        \\x = Str.ends_with("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.ends_with with suffix longer than string" {
+    const src =
+        \\x = Str.ends_with("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
