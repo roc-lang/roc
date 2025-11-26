@@ -1,5 +1,6 @@
 const std = @import("std");
 const protocol = @import("../protocol.zig");
+const capabilities = @import("../capabilities.zig");
 
 /// Returns the `initialize` method handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
@@ -20,10 +21,10 @@ pub fn handler(comptime ServerType: type) type {
             self.state = .waiting_for_initialized;
 
             const response = protocol.InitializeResult{
-                .capabilities = .{},
+                .capabilities = capabilities.buildCapabilities(),
                 .serverInfo = .{
                     .name = ServerType.server_name,
-                    .version = "0.1",
+                    .version = ServerType.version,
                 },
             };
 

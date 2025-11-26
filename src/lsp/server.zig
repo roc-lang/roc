@@ -36,6 +36,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         doc_store: DocumentStore,
 
         pub const server_name = "roc-lsp";
+        pub const version = "0.1";
 
         pub const State = enum {
             waiting_for_initialize,
