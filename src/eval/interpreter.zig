@@ -2639,6 +2639,13 @@ pub const Interpreter = struct {
                 self.triggerCrash("runtime error", false, roc_ops);
                 return error.Crash;
             },
+            .e_lookup_required => {
+                // Required lookups reference values from the app that provides values to the
+                // platform's `requires` clause. These are not available during compile-time
+                // evaluation - they will be linked at runtime. Return TypeMismatch to signal
+                // that this expression cannot be evaluated at compile time.
+                return error.TypeMismatch;
+            },
             // no if handling in minimal evaluator
             // no second e_binop case; handled above
             else => {

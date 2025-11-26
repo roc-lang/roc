@@ -3024,6 +3024,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, .err, env);
             }
         },
+        .e_lookup_required => |req| {
+            // Look up the type from the platform's requires clause
+            const requires_items = self.cir.requires_types.items.items;
+            const idx = req.requires_idx.toU32();
+            if (idx < requires_items.len) {
+                const required_type = requires_items[idx];
+                const type_var = ModuleEnv.varFrom(required_type.type_anno);
+                const instantiated_var = try self.instantiateVar(
+                    type_var,
+                    env,
+                    .{ .explicit = expr_region },
+                );
+                _ = try self.unify(expr_var, instantiated_var, env);
+            } else {
+                try self.unifyWith(expr_var, .err, env);
+            }
+        },
         // block //
         .e_block => |block| {
             const anno_free_vars_top = self.anno_free_vars.top();

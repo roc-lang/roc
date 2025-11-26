@@ -203,7 +203,15 @@ pub const Store = struct {
     /// This is used to determine if an unbound type variable represents
     /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
     fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
+        // Empty constraints can't contain from_numeral
         if (constraints.isEmpty()) {
+            return false;
+        }
+        // Check bounds before slicing - at runtime, constraints may not be available
+        const start: usize = @intFromEnum(constraints.start);
+        const end: usize = start + constraints.count;
+        if (end > self.types_store.static_dispatch_constraints.len()) {
+            // Constraints not available in this types store (e.g., runtime context)
             return false;
         }
         for (self.types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {

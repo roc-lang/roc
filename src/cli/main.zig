@@ -1386,20 +1386,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Compile platform main.roc to get requires_types (if platform exists)
-    // This must come AFTER header allocation to preserve memory layout.
-    var platform_main_env: ?*ModuleEnv = null;
-    if (has_platform) {
-        platform_main_env = compileModuleToSharedMemory(
-            allocs,
-            platform_main_path,
-            "main.roc",
-            shm_allocator,
-            &builtin_modules,
-            &.{},
-        ) catch null;
-    }
-
     // Module count = 1 (app) + number of platform modules
     const total_module_count: u32 = 1 + @as(u32, @intCast(exposed_modules.items.len));
     header_ptr.module_count = total_module_count;
@@ -1409,7 +1395,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_envs_offset = module_envs_offset_location;
 
-    // Compile platform modules (if any)
+    // Compile platform sibling modules FIRST (Stdout, Stderr, Stdin, etc.)
+    // This must happen before platform main.roc so that when main.roc is canonicalized,
+    // we can pass the sibling modules to module_envs and validate imports correctly.
     var platform_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, exposed_modules.items.len);
     defer allocs.gpa.free(platform_env_ptrs);
 
@@ -1463,6 +1451,22 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         // Store platform modules at indices 0..N-2, app will be at N-1
         module_env_offsets_ptr[i] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
         platform_env_ptrs[i] = module_env_ptr;
+    }
+
+    // NOW compile platform main.roc AFTER sibling modules so we can pass them to module_envs.
+    // This allows the canonicalizer to validate that imports of Stdout, Stderr, etc. are valid.
+    var platform_main_env: ?*ModuleEnv = null;
+    if (has_platform) {
+        // Cast []*ModuleEnv to []const *ModuleEnv for the function parameter
+        const const_platform_env_ptrs: []const *ModuleEnv = platform_env_ptrs;
+        platform_main_env = compileModuleToSharedMemory(
+            allocs,
+            platform_main_path,
+            "main.roc",
+            shm_allocator,
+            &builtin_modules,
+            const_platform_env_ptrs,
+        ) catch null;
     }
 
     // Collect and sort all hosted functions globally, then assign indices
@@ -1790,8 +1794,17 @@ fn compileModuleToSharedMemory(
     );
 
     for (additional_modules) |mod_env| {
+        // Add with full module name (e.g., "Stdout.roc")
         const name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
         try module_envs_map.put(name, .{ .env = mod_env });
+
+        // Also add without .roc suffix (e.g., "Stdout") for import validation
+        // The import statement `import Stdout` uses the name without .roc
+        if (std.mem.endsWith(u8, mod_env.module_name, ".roc")) {
+            const name_without_roc = mod_env.module_name[0 .. mod_env.module_name.len - 4];
+            const short_name = try env.insertIdent(base.Ident.for_text(name_without_roc));
+            try module_envs_map.put(short_name, .{ .env = mod_env });
+        }
     }
 
     // Canonicalize (without root_is_platform - we'll run HostedCompiler separately)
