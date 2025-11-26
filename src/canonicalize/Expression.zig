@@ -315,6 +315,7 @@ pub const Expr = union(enum) {
     e_dot_access: struct {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
+        field_name_region: base.Region, // Region of just the field/method name for error reporting
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
     },
     /// Runtime error expression that crashes when executed.

@@ -730,8 +730,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_dot_access => {
-            const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(node.data_3 - OPTIONAL_VALUE_OFFSET);
+            // Read extra data: field_name_region (2 u32s) + optional args (1 u32)
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+            const field_name_region = base.Region{
+                .start = .{ .offset = extra_data[0] },
+                .end = .{ .offset = extra_data[1] },
+            };
+            const args_packed = extra_data[2];
+            const args_span = if (args_packed != 0) blk: {
+                const packed_span = FunctionArgs.fromU32(args_packed - OPTIONAL_VALUE_OFFSET);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -739,6 +747,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_dot_access = .{
                 .receiver = @enumFromInt(node.data_1),
                 .field_name = @bitCast(node.data_2),
+                .field_name_region = field_name_region,
                 .args = args_span,
             } };
         },
@@ -1584,12 +1593,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_dot_access;
             node.data_1 = @intFromEnum(e.receiver);
             node.data_2 = @bitCast(e.field_name);
+            // Store extra data: field_name_region (2 u32s) + optional args (1 u32)
+            node.data_3 = @intCast(store.extra_data.len());
+            _ = try store.extra_data.append(store.gpa, e.field_name_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, e.field_name_region.end.offset);
             if (e.args) |args| {
                 std.debug.assert(FunctionArgs.canFit(args.span));
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                node.data_3 = packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
+                _ = try store.extra_data.append(store.gpa, packed_span.toU32() + OPTIONAL_VALUE_OFFSET);
             } else {
-                node.data_3 = 0;
+                _ = try store.extra_data.append(store.gpa, 0);
             }
         },
         .e_runtime_error => |e| {

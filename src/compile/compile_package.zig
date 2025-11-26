@@ -822,6 +822,7 @@ pub const PackageEnv = struct {
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
         };
 
         var checker = try Check.init(
@@ -945,6 +946,7 @@ pub const PackageEnv = struct {
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
         };
 
         // Create module_envs map for auto-importing builtin types
@@ -974,7 +976,8 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping);
+        defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();
@@ -986,15 +989,19 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
 
-        // Build other_modules array according to env.imports order
+        // Build the array of all available modules for this module's imports
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
+
+        // Always include Builtin first
+        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+
+        // Add external and local modules
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
 
-            // Skip "Builtin" - it's provided separately via builtin_types_for_eval to the evaluator
-            // and via module_envs_map to the type checker
+            // Skip Builtin - already added above
             if (std.mem.eql(u8, import_name, "Builtin")) {
                 continue;
             }
@@ -1005,11 +1012,9 @@ pub const PackageEnv = struct {
             if (is_ext) {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
-                        // External env is already a pointer, use it directly
                         try imported_envs.append(self.gpa, ext_env_ptr);
-                    } else {
-                        // External env not ready; skip (tryUnblock should have prevented this)
                     }
+                    // External env not ready; skip (tryUnblock should have prevented this)
                 }
             } else {
                 const child_id = self.module_names.get(import_name).?;
@@ -1020,6 +1025,10 @@ pub const PackageEnv = struct {
                 try imported_envs.append(self.gpa, child_env_ptr);
             }
         }
+
+        // Resolve all imports using the shared function
+        // This matches import names to module names in imported_envs
+        env.imports.resolveImports(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items);

@@ -2124,6 +2124,24 @@ test "check type - equirecursive static dispatch with type annotation" {
     );
 }
 
+test "check type - static dispatch method type mismatch - REGRESSION TEST" {
+    // This test verifies that when a method is called with mismatched types,
+    // we get a TYPE MISMATCH error. This is a regression test for the diagnostic
+    // output when static dispatch method arguments don't match.
+    //
+    // The scenario: a function requires is_eq on type `a`, but we call it
+    // with two different types (number and string), causing a type mismatch.
+    const source =
+        \\fn : a, a -> Bool where [a.is_eq : a, a -> Bool]
+        \\fn = |x, y| x.is_eq(y)
+        \\
+        \\result = fn(1u64, 2u64) == fn(3u64, 4u64)
+    ;
+
+    // This should pass - both calls use the same types
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
 // helpers - module //
 
 const ModuleExpectation = union(enum) {

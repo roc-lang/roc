@@ -1652,6 +1652,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
+        .builtin_indices = builtin_modules.builtin_indices,
     };
 
     var app_imported_envs = std.ArrayList(*const ModuleEnv).empty;
@@ -1661,6 +1662,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         try app_imported_envs.append(allocs.gpa, penv);
     }
 
+    // Resolve imports - map each import to its index in app_imported_envs
+    app_env.imports.resolveImports(&app_env, app_imported_envs.items);
+
     var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_common_idents);
     defer app_checker.deinit();
 
@@ -1668,7 +1672,18 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     // Check that app exports match platform requirements (if platform exists)
     if (platform_main_env) |penv| {
-        try app_checker.checkPlatformRequirements(penv);
+        // Build the platform-to-app ident translation map
+        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(allocs.gpa);
+        defer platform_to_app_idents.deinit();
+
+        for (penv.requires_types.items.items) |required_type| {
+            const platform_ident_text = penv.getIdent(required_type.ident);
+            if (app_env.common.findIdent(platform_ident_text)) |app_ident| {
+                try platform_to_app_idents.put(required_type.ident, app_ident);
+            }
+        }
+
+        try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
     }
 
     app_env_ptr.* = app_env;
@@ -1816,9 +1831,14 @@ fn compileModuleToSharedMemory(
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
+        .builtin_indices = builtin_modules.builtin_indices,
     };
 
     const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    env.imports.resolveImports(&env, &imported_envs);
+
     var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -2820,6 +2840,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Parse the source code as a full module
@@ -2865,6 +2886,9 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Build imported_envs array with builtin module
     const imported_envs: []const *const ModuleEnv = &.{builtin_module.env};
 
+    // Resolve imports - map each import to its index in imported_envs
+    env.imports.resolveImports(&env, imported_envs);
+
     // Type check the module
     var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}\n", .{err});
@@ -2879,7 +2903,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
 
     // Evaluate all top-level declarations at compile time
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env, &checker.import_mapping) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -2892,7 +2916,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
-    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env) catch |err| {
+    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env, &checker.import_mapping) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         return err;
     };

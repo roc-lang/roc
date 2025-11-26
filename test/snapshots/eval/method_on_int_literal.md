@@ -8,6 +8,6 @@ type=repl
 » 35.foo()
 ~~~
 # OUTPUT
-Crash: Num.Dec does not implement foo
+Crash: Dec does not implement foo
 # PROBLEMS
 NIL
