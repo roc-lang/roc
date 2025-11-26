@@ -1784,43 +1784,44 @@ pub const Serialized = extern struct {
     store: NodeStore.Serialized,
     module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
-    from_int_digits_ident_reserved: u32, // Reserved space for from_int_digits_ident field (interned during deserialization)
-    from_dec_digits_ident_reserved: u32, // Reserved space for from_dec_digits_ident field (interned during deserialization)
-    try_ident_reserved: u32, // Reserved space for try_ident field (interned during deserialization)
-    out_of_range_ident_reserved: u32, // Reserved space for out_of_range_ident field (interned during deserialization)
-    builtin_module_ident_reserved: u32, // Reserved space for builtin_module_ident field (interned during deserialization)
-    plus_ident_reserved: u32, // Reserved space for plus_ident field (interned during deserialization)
-    minus_ident_reserved: u32, // Reserved space for minus_ident field (interned during deserialization)
-    times_ident_reserved: u32, // Reserved space for times_ident field (interned during deserialization)
-    div_by_ident_reserved: u32, // Reserved space for div_by_ field (interned during deserialization)
-    div_trunc_by_ident_reserved: u32, // Reserved space for div_trunc_by_ident field (interned during deserialization)
-    rem_by_ident_reserved: u32, // Reserved space for rem_by_ident field (interned during deserialization)
-    negate_ident_reserved: u32, // Reserved space for negate_ident field (interned during deserialization)
-    not_ident_reserved: u32, // Reserved space for not_ident field (interned during deserialization)
-    is_lt_ident_reserved: u32, // Reserved space for is_lt_ident field (interned during deserialization)
-    is_lte_ident_reserved: u32, // Reserved space for is_lte_ident field (interned during deserialization)
-    is_gt_ident_reserved: u32, // Reserved space for is_gt_ident field (interned during deserialization)
-    is_gte_ident_reserved: u32, // Reserved space for is_gte_ident field (interned during deserialization)
-    is_eq_ident_reserved: u32, // Reserved space for is_eq_ident field (interned during deserialization)
-    is_ne_ident_reserved: u32, // Reserved space for is_ne_ident field (interned during deserialization)
-    // Fully-qualified type identifiers for type checking and layout generation (interned during deserialization)
-    builtin_try_ident_reserved: u32,
-    builtin_numeral_ident_reserved: u32,
-    list_type_ident_reserved: u32,
-    box_type_ident_reserved: u32,
-    u8_type_ident_reserved: u32,
-    i8_type_ident_reserved: u32,
-    u16_type_ident_reserved: u32,
-    i16_type_ident_reserved: u32,
-    u32_type_ident_reserved: u32,
-    i32_type_ident_reserved: u32,
-    u64_type_ident_reserved: u32,
-    i64_type_ident_reserved: u32,
-    u128_type_ident_reserved: u32,
-    i128_type_ident_reserved: u32,
-    f32_type_ident_reserved: u32,
-    f64_type_ident_reserved: u32,
-    dec_type_ident_reserved: u32,
+    // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
+    from_int_digits_ident: Ident.Idx,
+    from_dec_digits_ident: Ident.Idx,
+    try_ident: Ident.Idx,
+    out_of_range_ident: Ident.Idx,
+    builtin_module_ident: Ident.Idx,
+    plus_ident: Ident.Idx,
+    minus_ident: Ident.Idx,
+    times_ident: Ident.Idx,
+    div_by_ident: Ident.Idx,
+    div_trunc_by_ident: Ident.Idx,
+    rem_by_ident: Ident.Idx,
+    negate_ident: Ident.Idx,
+    not_ident: Ident.Idx,
+    is_lt_ident: Ident.Idx,
+    is_lte_ident: Ident.Idx,
+    is_gt_ident: Ident.Idx,
+    is_gte_ident: Ident.Idx,
+    is_eq_ident: Ident.Idx,
+    is_ne_ident: Ident.Idx,
+    // Fully-qualified type identifiers for type checking and layout generation
+    builtin_try_ident: Ident.Idx,
+    builtin_numeral_ident: Ident.Idx,
+    list_type_ident: Ident.Idx,
+    box_type_ident: Ident.Idx,
+    u8_type_ident: Ident.Idx,
+    i8_type_ident: Ident.Idx,
+    u16_type_ident: Ident.Idx,
+    i16_type_ident: Ident.Idx,
+    u32_type_ident: Ident.Idx,
+    i32_type_ident: Ident.Idx,
+    u64_type_ident: Ident.Idx,
+    i64_type_ident: Ident.Idx,
+    u128_type_ident: Ident.Idx,
+    i128_type_ident: Ident.Idx,
+    f32_type_ident: Ident.Idx,
+    f64_type_ident: Ident.Idx,
+    dec_type_ident: Ident.Idx,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1852,31 +1853,50 @@ pub const Serialized = extern struct {
         // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
         try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
 
-        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and identifier reserved fields to all zeros;
-        // the space needs to be here, but the values will be set separately during deserialization (these are runtime-only).
+        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved to zeros;
+        // these are runtime-only and will be set during deserialization.
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
-        self.from_int_digits_ident_reserved = 0;
-        self.from_dec_digits_ident_reserved = 0;
-        self.try_ident_reserved = 0;
-        self.out_of_range_ident_reserved = 0;
-        self.builtin_module_ident_reserved = 0;
-        self.plus_ident_reserved = 0;
-        self.minus_ident_reserved = 0;
-        self.times_ident_reserved = 0;
-        self.div_by_ident_reserved = 0;
-        self.div_trunc_by_ident_reserved = 0;
-        self.rem_by_ident_reserved = 0;
-        self.negate_ident_reserved = 0;
-        self.not_ident_reserved = 0;
-        self.is_lt_ident_reserved = 0;
-        self.is_lte_ident_reserved = 0;
-        self.is_gt_ident_reserved = 0;
-        self.is_gte_ident_reserved = 0;
-        self.is_eq_ident_reserved = 0;
-        self.is_ne_ident_reserved = 0;
+
+        // Serialize well-known identifier indices directly (no lookup needed during deserialization)
+        self.from_int_digits_ident = env.from_int_digits_ident;
+        self.from_dec_digits_ident = env.from_dec_digits_ident;
+        self.try_ident = env.try_ident;
+        self.out_of_range_ident = env.out_of_range_ident;
+        self.builtin_module_ident = env.builtin_module_ident;
+        self.plus_ident = env.plus_ident;
+        self.minus_ident = env.minus_ident;
+        self.times_ident = env.times_ident;
+        self.div_by_ident = env.div_by_ident;
+        self.div_trunc_by_ident = env.div_trunc_by_ident;
+        self.rem_by_ident = env.rem_by_ident;
+        self.negate_ident = env.negate_ident;
+        self.not_ident = env.not_ident;
+        self.is_lt_ident = env.is_lt_ident;
+        self.is_lte_ident = env.is_lte_ident;
+        self.is_gt_ident = env.is_gt_ident;
+        self.is_gte_ident = env.is_gte_ident;
+        self.is_eq_ident = env.is_eq_ident;
+        self.is_ne_ident = env.is_ne_ident;
+        self.builtin_try_ident = env.builtin_try_ident;
+        self.builtin_numeral_ident = env.builtin_numeral_ident;
+        self.list_type_ident = env.list_type_ident;
+        self.box_type_ident = env.box_type_ident;
+        self.u8_type_ident = env.u8_type_ident;
+        self.i8_type_ident = env.i8_type_ident;
+        self.u16_type_ident = env.u16_type_ident;
+        self.i16_type_ident = env.i16_type_ident;
+        self.u32_type_ident = env.u32_type_ident;
+        self.i32_type_ident = env.i32_type_ident;
+        self.u64_type_ident = env.u64_type_ident;
+        self.i64_type_ident = env.i64_type_ident;
+        self.u128_type_ident = env.u128_type_ident;
+        self.i128_type_ident = env.i128_type_ident;
+        self.f32_type_ident = env.f32_type_ident;
+        self.f64_type_ident = env.f64_type_ident;
+        self.dec_type_ident = env.dec_type_ident;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1915,44 +1935,44 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
-            // Well-known identifiers for type checking - look them up in the deserialized common env
-            .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-            .try_ident = common.findIdent("Try") orelse unreachable,
-            .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-            .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-            .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
-            .minus_ident = common.findIdent("minus") orelse unreachable,
-            .times_ident = common.findIdent("times") orelse unreachable,
-            .div_by_ident = common.findIdent("div_by") orelse unreachable,
-            .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
-            .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
-            .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
-            .not_ident = common.findIdent("not") orelse unreachable,
-            .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
-            .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
-            .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
-            .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
-            .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-            .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+            // Well-known identifiers - read directly from serialized data (no string lookup needed)
+            .from_int_digits_ident = self.from_int_digits_ident,
+            .from_dec_digits_ident = self.from_dec_digits_ident,
+            .try_ident = self.try_ident,
+            .out_of_range_ident = self.out_of_range_ident,
+            .builtin_module_ident = self.builtin_module_ident,
+            .plus_ident = self.plus_ident,
+            .minus_ident = self.minus_ident,
+            .times_ident = self.times_ident,
+            .div_by_ident = self.div_by_ident,
+            .div_trunc_by_ident = self.div_trunc_by_ident,
+            .rem_by_ident = self.rem_by_ident,
+            .negate_ident = self.negate_ident,
+            .not_ident = self.not_ident,
+            .is_lt_ident = self.is_lt_ident,
+            .is_lte_ident = self.is_lte_ident,
+            .is_gt_ident = self.is_gt_ident,
+            .is_gte_ident = self.is_gte_ident,
+            .is_eq_ident = self.is_eq_ident,
+            .is_ne_ident = self.is_ne_ident,
             // Fully-qualified type identifiers for type checking and layout generation
-            .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
-            .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
-            .list_type_ident = common.findIdent("List") orelse unreachable,
-            .box_type_ident = common.findIdent("Box") orelse unreachable,
-            .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
-            .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
-            .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
-            .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
-            .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
-            .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
-            .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
-            .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
-            .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
-            .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
-            .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
-            .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
-            .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .builtin_try_ident = self.builtin_try_ident,
+            .builtin_numeral_ident = self.builtin_numeral_ident,
+            .list_type_ident = self.list_type_ident,
+            .box_type_ident = self.box_type_ident,
+            .u8_type_ident = self.u8_type_ident,
+            .i8_type_ident = self.i8_type_ident,
+            .u16_type_ident = self.u16_type_ident,
+            .i16_type_ident = self.i16_type_ident,
+            .u32_type_ident = self.u32_type_ident,
+            .i32_type_ident = self.i32_type_ident,
+            .u64_type_ident = self.u64_type_ident,
+            .i64_type_ident = self.i64_type_ident,
+            .u128_type_ident = self.u128_type_ident,
+            .i128_type_ident = self.i128_type_ident,
+            .f32_type_ident = self.f32_type_ident,
+            .f64_type_ident = self.f64_type_ident,
+            .dec_type_ident = self.dec_type_ident,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 
