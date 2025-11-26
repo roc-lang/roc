@@ -21,7 +21,8 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - BasicNoAnno.md:7:15:7:25
+MISSING METHOD - BasicNoAnno.md:9:15:9:26
 # PROBLEMS
 **MISSING METHOD**
 This **to_str** method is being called on the type **BasicNoAnno**, which has no method with that name:

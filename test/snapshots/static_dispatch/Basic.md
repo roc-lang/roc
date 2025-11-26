@@ -26,7 +26,9 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - Basic.md:6:20:6:33
+MISSING METHOD - Basic.md:10:15:10:25
+MISSING METHOD - Basic.md:13:15:13:26
 # PROBLEMS
 **MISSING METHOD**
 This **to_str** method is being called on the type **Basic**, which has no method with that name:

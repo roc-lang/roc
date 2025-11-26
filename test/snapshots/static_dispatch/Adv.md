@@ -44,9 +44,10 @@ main = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - Adv.md:17:28:17:31
+MISSING METHOD - Adv.md:17:13:17:32
 MISSING METHOD - Adv.md:23:13:23:33
 MISSING METHOD - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:35:13:35:36
 # PROBLEMS
 **MISSING METHOD**
 This **update_str** method is being called on the type **Adv**, which has no method with that name:

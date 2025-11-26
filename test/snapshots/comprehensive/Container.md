@@ -121,7 +121,9 @@ main = {
 }
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - Container.md:93:16:93:44
+MISSING METHOD - Container.md:94:17:94:41
+MISSING METHOD - Container.md:97:13:98:20
 # PROBLEMS
 **MISSING METHOD**
 This **map** method is being called on the type **Container(a) where [Container(a).from_numeral : Container(a)]**, which has no method with that name:

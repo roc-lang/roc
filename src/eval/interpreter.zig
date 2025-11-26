@@ -6039,13 +6039,32 @@ pub const Interpreter = struct {
         // where TypeName can itself be qualified for nested types (e.g., "Num.U8")
         // but does NOT include the module prefix (that's in origin_module).
         //
-        // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
-        const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
-        const origin_module_text = runtime_ident_store.getText(origin_module);
-        const type_name = runtime_ident_store.getText(nominal_ident);
-        // method_name is from the current environment
-        const current_ident_store = self.env.common.getIdentStore();
-        const method_name_str = current_ident_store.getText(method_name);
+        // The idents may come from different stores (current env, runtime layout env, or builtin env)
+        // We bypass debug store tracking by accessing interners directly.
+        const runtime_interner = &self.runtime_layout_store.env.common.idents.interner;
+        const current_interner = &self.env.common.idents.interner;
+        const builtin_interner = &self.builtins.bool_env.common.idents.interner;
+
+        // Helper to get text from whichever interner contains the ident
+        const getIdentText = struct {
+            fn get(idx: base_pkg.Ident.Idx, rt: *const base_pkg.SmallStringInterner, cur: *const base_pkg.SmallStringInterner, bi: *const base_pkg.SmallStringInterner) []u8 {
+                const interner_idx = @as(base_pkg.SmallStringInterner.Idx, @enumFromInt(@as(u32, idx.idx)));
+                if (idx.idx < rt.bytes.len()) {
+                    return rt.getText(interner_idx);
+                }
+                if (idx.idx < cur.bytes.len()) {
+                    return cur.getText(interner_idx);
+                }
+                if (idx.idx < bi.bytes.len()) {
+                    return bi.getText(interner_idx);
+                }
+                @panic("getMethodQualifiedIdent: ident not found in any store");
+            }
+        }.get;
+
+        const origin_module_text = getIdentText(origin_module, runtime_interner, current_interner, builtin_interner);
+        const type_name = getIdentText(nominal_ident, runtime_interner, current_interner, builtin_interner);
+        const method_name_str = getIdentText(method_name, runtime_interner, current_interner, builtin_interner);
 
         // Build: module_name.type_name.method_name (e.g., "Builtin.Bool.is_eq" or "Builtin.Num.U8.from_numeral")
         return try std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
@@ -6572,8 +6591,30 @@ pub const Interpreter = struct {
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
                                 // Translate the tag name identifier from the source module to the runtime layout store env
                                 // This ensures tag names are consistent when looked up during e_tag evaluation
-                                const name_str = module.getIdent(tag.name);
-                                const translated_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_str));
+                                // The tag name might be from either the module's ident store or the builtin env's ident store
+                                // (for constraints that reference builtin types), so we check both
+                                const layout_env = self.runtime_layout_store.env;
+                                // Get the tag name string, trying multiple ident stores since constraints
+                                // may reference types from other modules with different ident stores.
+                                // We bypass the debug store tracking by accessing the interner directly.
+                                const interner_idx = @as(base_pkg.SmallStringInterner.Idx, @enumFromInt(@as(u32, tag.name.idx)));
+                                const name_str = name_blk: {
+                                    // Try the module's ident store first
+                                    if (tag.name.idx < module.common.idents.interner.bytes.len()) {
+                                        break :name_blk module.common.idents.interner.getText(interner_idx);
+                                    }
+                                    // Try the runtime layout store's env (which contains builtins)
+                                    if (tag.name.idx < layout_env.common.idents.interner.bytes.len()) {
+                                        break :name_blk layout_env.common.idents.interner.getText(interner_idx);
+                                    }
+                                    // Try the Bool env directly
+                                    if (tag.name.idx < self.builtins.bool_env.common.idents.interner.bytes.len()) {
+                                        break :name_blk self.builtins.bool_env.common.idents.interner.getText(interner_idx);
+                                    }
+                                    // Should not reach here - panic with debug info
+                                    @panic("translateTypeVar: tag name not found in any ident store");
+                                };
+                                const translated_name = try layout_env.insertIdent(base_pkg.Ident.for_text(name_str));
                                 tag.* = .{
                                     .name = translated_name,
                                     .args = rt_args_range,

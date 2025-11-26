@@ -45,7 +45,9 @@ main : (Str, Str, Str)
 main = (directCall, result1, extract(result2))
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - MethodDispatch.md:25:14:25:37
+MISSING METHOD - MethodDispatch.md:10:15:10:28
+MISSING METHOD - MethodDispatch.md:14:18:14:33
 # PROBLEMS
 **MISSING METHOD**
 This **get_value** method is being called on the type **Container**, which has no method with that name:

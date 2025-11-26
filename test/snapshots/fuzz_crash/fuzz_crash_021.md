@@ -19,7 +19,7 @@ PARSE ERROR - fuzz_crash_021.md:1:14:1:16
 PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:4:1:4:1
-MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
+MALFORMED TYPE - fuzz_crash_021.md:3:1:3:11
 TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_021.md:1:1:3:15
 # PROBLEMS
 **UNCLOSED STRING**

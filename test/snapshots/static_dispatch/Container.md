@@ -46,7 +46,7 @@ func = {
 }
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - Container.md:33:13:34:20
 # PROBLEMS
 **MISSING METHOD**
 This **map** method is being called on the type **Container(a) where [Container(a).from_numeral : Container(a)]**, which has no method with that name:
