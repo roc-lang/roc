@@ -4495,7 +4495,6 @@ fn handleRecursiveConstraint(
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-
 /// Check a from_numeral constraint - actual validation happens during comptime evaluation
 fn checkNumeralConstraint(
     self: *Self,
