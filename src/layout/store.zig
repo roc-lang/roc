@@ -207,13 +207,6 @@ pub const Store = struct {
         if (constraints.isEmpty()) {
             return false;
         }
-        // Check bounds before slicing - at runtime, constraints may not be available
-        const start: usize = @intFromEnum(constraints.start);
-        const end: usize = start + constraints.count;
-        if (end > self.types_store.static_dispatch_constraints.len()) {
-            // Constraints not available in this types store (e.g., runtime context)
-            return false;
-        }
         for (self.types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
             if (constraint.origin == .from_numeral) {
                 return true;
