@@ -31,34 +31,43 @@ if bool {
 
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Bool**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **if_then_else_9.md:3:11:3:13:**
 ```roc
 } else if 10 { # Comment after else open
 ```
           ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Bool_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _[A]_others_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **if_then_else_9.md:2:2:2:3:**
 ```roc
 	1
 ```
 	^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _[A]_others_
 
 
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _[A]_others_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **if_then_else_9.md:6:2:6:3:**
 ```roc
 	3
 ```
 	^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _[A]_others_
 
 
 # TOKENS

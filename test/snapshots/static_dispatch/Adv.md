@@ -49,35 +49,44 @@ MISSING METHOD - Adv.md:23:13:23:33
 MISSING METHOD - Adv.md:28:13:28:32
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **Adv.md:17:28:17:31:**
 ```roc
 	next_val = val.update_str(100)
 ```
 	                          ^^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **update_strr** method is being called on the type **Adv**, which has no method with that name:
+This **update_strr** method is being called on a value whose type doesn't have that method:
 **Adv.md:23:13:23:33:**
 ```roc
 	next_val = val.update_strr(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^^
 
+The value's type, which does not have a method named **update_strr**, is:
+
+    _Adv_
 
 **Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **update** method is being called on the type **Str**, which has no method with that name:
+This **update** method is being called on a value whose type doesn't have that method:
 **Adv.md:28:13:28:32:**
 ```roc
 	next_val = "Hello".update(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
+The value's type, which does not have a method named **update**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
 
