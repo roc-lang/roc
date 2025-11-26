@@ -2010,12 +2010,15 @@ pub const Interpreter = struct {
                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                    for (caps) |cap_idx2| {
+                    for (caps, 0..) |cap_idx2, cap_i| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
                         const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
                             return error.NotImplemented;
                         };
-                        const idx_opt = accessor.findFieldIndex(cap2.name) orelse {
+                        // Use field_names[cap_i] which was translated to runtime_layout_store.env
+                        // instead of cap2.name which is from self.env (different ident namespace)
+                        const translated_name = field_names[cap_i];
+                        const idx_opt = accessor.findFieldIndex(translated_name) orelse {
                             return error.NotImplemented;
                         };
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
