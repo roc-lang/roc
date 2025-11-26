@@ -2370,17 +2370,17 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time expect failure
     fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) !Report {
+        // Note: data.message contains raw source bytes which we don't display separately
+        // since the source region highlighting already shows the expect expression
         var report = Report.init(self.gpa, "COMPTIME EXPECT FAILED", .runtime_error);
         errdefer report.deinit();
 
-        const owned_message = try report.addOwnedString(data.message);
-
-        try report.document.addText("This definition contains an ");
+        try report.document.addText("This ");
         try report.document.addAnnotated("expect", .keyword);
-        try report.document.addText(" that failed during compile-time evaluation:");
+        try report.document.addText(" failed during compile-time evaluation:");
         try report.document.addLineBreak();
 
-        // Add source region highlighting
+        // Add source region highlighting - shows the expect expression with syntax highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
             region_info,
@@ -2389,14 +2389,6 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
-        try report.document.addLineBreak();
-
-        try report.document.addText("The ");
-        try report.document.addAnnotated("expect", .keyword);
-        try report.document.addText(" failed with this message:");
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_message, .emphasized);
 
         return report;
     }
