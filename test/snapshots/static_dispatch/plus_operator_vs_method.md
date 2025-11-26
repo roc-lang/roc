@@ -24,7 +24,7 @@ result2 = a.plus(b)
 # EXPECTED
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
-MISSING METHOD - plus_operator_vs_method.md:15:11:15:20
+MISSING METHOD - plus_operator_vs_method.md:15:13:15:17
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has the type **MyType**, which has no **plus** method:
@@ -39,11 +39,11 @@ result1 = a + b
 
 **MISSING METHOD**
 This **plus** method is being called on the type **MyType**, which has no method with that name:
-**plus_operator_vs_method.md:15:11:15:20:**
+**plus_operator_vs_method.md:15:13:15:17:**
 ```roc
 result2 = a.plus(b)
 ```
-          ^^^^^^^^^
+            ^^^^
 
 
 **Hint: **For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.

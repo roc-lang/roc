@@ -454,10 +454,17 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is a method type mismatch (both types are functions with where clauses)
+        // Check if this is a method type mismatch (both types are functions with where clauses
+        // that reference method constraints like `.is_eq :` rather than just `from_numeral`)
         const is_method_type_mismatch = self.areBothFunctionSnapshots(expected_content, actual_content) and
             (std.mem.indexOf(u8, owned_actual, "where [") != null or
-            std.mem.indexOf(u8, owned_expected, "where [") != null);
+                std.mem.indexOf(u8, owned_expected, "where [") != null) and
+            // Exclude cases where the only constraint is from_numeral (numeric literals)
+            // These are regular function calls, not method calls
+            (std.mem.indexOf(u8, owned_actual, ".is_eq :") != null or
+                std.mem.indexOf(u8, owned_actual, ".is_ne :") != null or
+                std.mem.indexOf(u8, owned_expected, ".is_eq :") != null or
+                std.mem.indexOf(u8, owned_expected, ".is_ne :") != null);
 
         if (is_method_type_mismatch) {
             try report.document.addReflowingText("This method has an unexpected type:");

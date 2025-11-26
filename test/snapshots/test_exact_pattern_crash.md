@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __arg, _arg2, (e -> e), (h -> h) -> _ret where [i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k, i, j, (e -> e), (h -> h) -> k.from_numeral : i, j, (e -> e), (h -> h) -> k]_
+    __arg, _arg2, (e -> e), (h -> h) -> _ret where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_i, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_j, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_k, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_l, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_m, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_n, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_
