@@ -2256,9 +2256,7 @@ test "imports of non-existent modules produce MODULE NOT FOUND errors" {
         \\    result4 = post
         \\
         \\    # Test multiple qualified access
-        \\    combined = Str.concat
-        \\
-        \\    (
+        \\    combined = Str.concat(
         \\        client,
         \\        parser,
         \\        helper,
