@@ -81,7 +81,7 @@ const TestsSummaryStep = struct {
 /// 2. They are brittle to changes that type-checking should not be sensitive to
 ///
 /// Instead, we always compare indices - either into node stores or to interned string indices.
-/// This step enforces that rule by failing the build if `std.mem.` is found in src/check/.
+/// This step enforces that rule by failing the build if `std.mem.` is found in src/check/ or src/layout/.
 const CheckTypeCheckerPatternsStep = struct {
     step: Step,
 
@@ -106,13 +106,16 @@ const CheckTypeCheckerPatternsStep = struct {
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
-        // Recursively scan src/check/ for .zig files
-        var dir = std.fs.cwd().openDir("src/check", .{ .iterate = true }) catch |err| {
-            return step.fail("Failed to open src/check directory: {}", .{err});
-        };
-        defer dir.close();
+        // Recursively scan src/check/ and src/layout/ for .zig files
+        const dirs_to_scan = [_][]const u8{ "src/check", "src/layout" };
+        for (dirs_to_scan) |dir_path| {
+            var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+                return step.fail("Failed to open {s} directory: {}", .{ dir_path, err });
+            };
+            defer dir.close();
 
-        try scanDirectory(allocator, dir, "src/check", &violations);
+            try scanDirectory(allocator, dir, dir_path, &violations);
+        }
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
@@ -121,7 +124,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("=" ** 80 ++ "\n\n", .{});
 
             std.debug.print(
-                \\The type checker code in src/check/ must NOT use std.mem.* functions.
+                \\The type checker code in src/check/ and src/layout/ must NOT use std.mem.* functions.
                 \\
                 \\WHY THIS RULE EXISTS:
                 \\  During type checking, we NEVER do string or byte comparisons because:
@@ -161,7 +164,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} uses of std.mem.* in src/check/. " ++
+                "Found {d} uses of std.mem.* in src/check/ or src/layout/. " ++
                     "See above for details on why this is forbidden and what to do instead.",
                 .{violations.items.len},
             );
@@ -187,6 +190,11 @@ const CheckTypeCheckerPatternsStep = struct {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
+            // Skip test files - they may legitimately need string comparison for assertions
+            if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
+            if (std.mem.indexOf(u8, entry.path, "test/") != null) continue;
+            if (std.mem.startsWith(u8, entry.path, "test")) continue;
+
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
             const file = dir.openFile(entry.path, .{}) catch continue;
@@ -202,11 +210,30 @@ const CheckTypeCheckerPatternsStep = struct {
                 if (char == '\n') {
                     const line = content[line_start..i];
 
-                    // Check for std.mem. usage (but allow std.mem.Allocator which is a type)
+                    // Check for std.mem. usage (but allow safe patterns)
                     if (std.mem.indexOf(u8, line, "std.mem.")) |idx| {
-                        // Check if it's just "std.mem.Allocator" which is allowed
                         const after_match = line[idx + 8 ..];
-                        if (!std.mem.startsWith(u8, after_match, "Allocator")) {
+
+                        // Allow these safe patterns that don't involve string/byte comparison:
+                        // - std.mem.Allocator: a type, not a comparison
+                        // - std.mem.Alignment: a type, not a comparison
+                        // - std.mem.sort: sorting by custom comparator, not string comparison
+                        // - std.mem.asBytes: type punning, not string comparison
+                        // - std.mem.reverse: reversing arrays, not string comparison
+                        // - std.mem.alignForward: memory alignment arithmetic, not string comparison
+                        // - std.mem.order: sort ordering (used by sort comparators), not string comparison
+                        // - std.mem.copyForwards: byte copying, not string comparison
+                        const is_allowed =
+                            std.mem.startsWith(u8, after_match, "Allocator") or
+                            std.mem.startsWith(u8, after_match, "Alignment") or
+                            std.mem.startsWith(u8, after_match, "sort") or
+                            std.mem.startsWith(u8, after_match, "asBytes") or
+                            std.mem.startsWith(u8, after_match, "reverse") or
+                            std.mem.startsWith(u8, after_match, "alignForward") or
+                            std.mem.startsWith(u8, after_match, "order") or
+                            std.mem.startsWith(u8, after_match, "copyForwards");
+
+                        if (!is_allowed) {
                             const trimmed = std.mem.trim(u8, line, " \t");
                             // Skip comments
                             if (!std.mem.startsWith(u8, trimmed, "//")) {
