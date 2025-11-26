@@ -199,6 +199,9 @@ pub const Interpreter = struct {
     // Runtime unification context
     env: *can.ModuleEnv,
     builtin_module_env: ?*const can.ModuleEnv,
+    /// Array of all module environments, indexed by resolved module index
+    /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
+    all_module_envs: []const *const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
@@ -218,8 +221,6 @@ pub const Interpreter = struct {
     scratch_tags: std.array_list.Managed(types.Tag),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
-    /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
-    imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
     /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
@@ -238,32 +239,6 @@ pub const Interpreter = struct {
         errdefer import_envs.deinit(allocator);
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
-
-        var imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator);
-        errdefer imported_modules.deinit();
-
-        // Add builtin module to imported_modules for cross-module lookups
-        // Builtin imports are not in other_envs (passed separately via builtin_module_env)
-        if (builtin_module_env) |builtin_env| {
-            try imported_modules.put("Builtin", builtin_env);
-        }
-
-        if (other_envs.len > 0) {
-            // Populate imported_modules with platform modules
-            // This allows dynamic lookup by name, which is needed for cross-module calls
-            // when imports are processed in different orders across modules
-            for (other_envs) |module_env| {
-                const module_name = module_env.module_name;
-                // Add full name "Stdout.roc"
-                try imported_modules.put(module_name, module_env);
-
-                // Add name without extension if present "Stdout"
-                if (std.mem.endsWith(u8, module_name, ".roc")) {
-                    const short_name = module_name[0 .. module_name.len - 4];
-                    try imported_modules.put(short_name, module_env);
-                }
-            }
-        }
 
         // Safely access import count
         const import_count = if (env.imports.imports.items.items.len > 0)
@@ -311,7 +286,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, imported_modules, next_id, builtin_types, builtin_module_env);
+        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -322,10 +297,10 @@ pub const Interpreter = struct {
     pub fn initWithModuleEnvs(
         allocator: std.mem.Allocator,
         env: *can.ModuleEnv,
+        all_module_envs: []const *const can.ModuleEnv,
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
-        imported_modules: std.StringHashMap(*const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const can.ModuleEnv,
@@ -346,6 +321,7 @@ pub const Interpreter = struct {
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .builtin_module_env = builtin_module_env,
+            .all_module_envs = all_module_envs,
             .module_envs = module_envs,
             .module_ids = module_ids,
             .import_envs = import_envs,
@@ -2629,49 +2605,17 @@ pub const Interpreter = struct {
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
                 const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
-                    // Fallback: dynamic lookup by name
+                    // Fallback: Use pre-resolved module indices from the current module's imports
                     // This is needed when the current module (self.env) has imports in a different order
                     // than the root module, so the Import.Idx doesn't match what was populated in init().
-                    // We need to get the module name from the import list using the Import.Idx.
-                    if (self.env.imports.map.count() > @intFromEnum(lookup.module_idx)) {
-                        // Retrieve the interned string index for this import
-                        const import_list = self.env.imports.imports.items.items;
-                        if (@intFromEnum(lookup.module_idx) < import_list.len) {
-                            const str_idx = import_list[@intFromEnum(lookup.module_idx)];
-                            const import_name = self.env.common.getString(str_idx);
-
-                            // Try to find it in imported_modules
-                            // First try exact match
-                            if (self.imported_modules.get(import_name)) |env| {
-                                break :blk env;
-                            }
-
-                            // Try stripping .roc if present
-                            if (std.mem.endsWith(u8, import_name, ".roc")) {
-                                const short = import_name[0 .. import_name.len - 4];
-                                if (self.imported_modules.get(short)) |env| {
-                                    break :blk env;
-                                }
-                            }
-
-                            // Try extracting module name from "pf.Module"
-                            if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_idx| {
-                                const short = import_name[dot_idx + 1 ..];
-                                if (self.imported_modules.get(short)) |env| {
-                                    break :blk env;
-                                }
-                            }
-
-                            self.triggerCrash("DEBUG: Failed to resolve import in imported_modules", false, roc_ops);
-                            return error.Crash;
-                        } else {
-                            self.triggerCrash("DEBUG: lookup.module_idx >= import_list.len", false, roc_ops);
-                            return error.Crash;
+                    // Use the pre-resolved index from self.env.imports.resolved_modules
+                    if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
+                        if (resolved_idx < self.all_module_envs.len) {
+                            break :blk self.all_module_envs[resolved_idx];
                         }
-                    } else {
-                        self.triggerCrash("DEBUG: lookup.module_idx >= map.count", false, roc_ops);
-                        return error.Crash;
                     }
+                    self.triggerCrash("DEBUG: Failed to resolve import via pre-resolved index", false, roc_ops);
+                    return error.Crash;
                 };
 
                 // The target_node_idx is a Def.Idx in the other module

@@ -937,10 +937,12 @@ pub const PackageEnv = struct {
             const import_name = env.getString(str_idx);
             const import_idx: can.CIR.Import.Idx = @enumFromInt(import_idx_usize);
 
-            // Skip "Builtin" - it's provided separately via builtin_types_for_eval to the evaluator
-            // and via module_envs_map to the type checker
-            // Leave resolved_modules as UNRESOLVED_MODULE for Builtin imports
+            // Check if this is the Builtin module import
             if (std.mem.eql(u8, import_name, "Builtin")) {
+                // Resolve Builtin import to the builtin module env
+                const resolved_idx: u32 = @intCast(imported_envs.items.len);
+                env.imports.setResolvedModule(import_idx, resolved_idx);
+                try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
                 continue;
             }
 
