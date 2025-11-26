@@ -12,4 +12,5 @@ test "lsp tests" {
     std.testing.refAllDecls(@import("test/protocol_test.zig"));
     std.testing.refAllDecls(@import("test/server_test.zig"));
     std.testing.refAllDecls(@import("test/transport_test.zig"));
+    std.testing.refAllDecls(@import("test/document_store_test.zig"));
 }
