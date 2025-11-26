@@ -11,6 +11,7 @@ Builtin :: [].{
 		with_ascii_uppercased : Str -> Str
 		starts_with : Str, Str -> Bool
 		ends_with : Str, Str -> Bool
+		repeat : Str, U64 -> Str
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

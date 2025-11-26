@@ -128,6 +128,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.ends_with")) |str_ends_with_ident| {
         try low_level_map.put(str_ends_with_ident, .str_ends_with);
     }
+    if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
+        try low_level_map.put(str_repeat_ident, .str_repeat);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

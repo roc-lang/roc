@@ -950,3 +950,41 @@ test "e_low_level_lambda - Str.ends_with with suffix longer than string" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("False", value);
 }
+
+// Str.repeat tests
+
+test "e_low_level_lambda - Str.repeat basic repetition" {
+    const src =
+        \\x = Str.repeat("ab", 3)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"ababab\"", value);
+}
+
+test "e_low_level_lambda - Str.repeat with zero count" {
+    const src =
+        \\x = Str.repeat("hello", 0)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.repeat with one count" {
+    const src =
+        \\x = Str.repeat("hello", 1)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.repeat empty string" {
+    const src =
+        \\x = Str.repeat("", 5)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}

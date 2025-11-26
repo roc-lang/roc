@@ -411,6 +411,7 @@ pub const Expr = union(enum) {
         str_with_ascii_uppercased,
         str_starts_with,
         str_ends_with,
+        str_repeat,
 
         // Numeric to_str operations
         u8_to_str,

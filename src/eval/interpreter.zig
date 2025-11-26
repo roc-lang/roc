@@ -2981,6 +2981,34 @@ pub const Interpreter = struct {
 
                 return try self.makeBoolValue(builtins.str.endsWith(string.*, suffix.*));
             },
+            .str_repeat => {
+                // Str.repeat : Str, U64 -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const count_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const count_value = try self.extractNumericValue(count_arg);
+                const count: u64 = @intCast(count_value.int);
+
+                // Call repeatC to repeat the string
+                const result_str = builtins.str.repeatC(string.*, count, roc_ops);
+
+                // Allocate space for the result string
+                const result_layout = string_arg.layout; // Str layout
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result string structure to the output
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
