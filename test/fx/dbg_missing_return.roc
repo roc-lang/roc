@@ -1,5 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
+import pf.Stdout
+
 main! = || {
-    dbg "this will break, there return value isn't provided I think"
+    dbg "this should work now"
 }

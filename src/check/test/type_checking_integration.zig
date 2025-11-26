@@ -1222,10 +1222,13 @@ test "check type - crash" {
 // debug //
 
 test "check type - debug" {
+    // debug returns {} (not the value it's debugging), so it can be used
+    // as a statement/side-effect without affecting the block's return type
     const source =
         \\y : U64
         \\y = {
         \\  debug 2
+        \\  42
         \\}
         \\
         \\main = {
