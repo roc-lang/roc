@@ -741,45 +741,21 @@ pub const ComptimeEvaluator = struct {
                 };
             };
 
-            // Build the qualified method name: ModuleName.TypeName.from_numeral
-            const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
-            const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
-
-            // Extract just the type name (e.g., "I64" from "Num.I64") for error messages
-            const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
-                type_name_bytes[dot_idx + 1 ..]
-            else
-                type_name_bytes;
-
-            // Build qualified name: Builtin.Num.TypeName.from_numeral
-            // type_name_bytes may be:
-            // - "I64" (simple unqualified name)
-            // - "Num.I64" (partial qualification within module)
-            // - "Builtin.Num.I64" (fully qualified name including module)
-            // If already fully-qualified (starts with module name), don't prefix again
-            var qualified_name_buf: [256]u8 = undefined;
-            const qualified_name = if (std.mem.startsWith(u8, type_name_bytes, origin_env.module_name) and
-                type_name_bytes.len > origin_env.module_name.len and
-                type_name_bytes[origin_env.module_name.len] == '.')
-            blk: {
-                // Already fully qualified, just append method name
-                break :blk try std.fmt.bufPrint(
-                    &qualified_name_buf,
-                    "{s}.{s}",
-                    .{ type_name_bytes, method_name_bytes },
-                );
-            } else blk: {
-                // Need to add module prefix
-                break :blk try std.fmt.bufPrint(
-                    &qualified_name_buf,
-                    "{s}.{s}.{s}",
-                    .{ origin_env.module_name, type_name_bytes, method_name_bytes },
-                );
-            };
-
-            // Look up the identifier in the origin module
-            const ident_in_origin = origin_env.getIdentStoreConst().findByString(qualified_name) orelse {
+            // Look up the method using ident indices directly
+            // The getMethodIdentByIdents function handles qualified name construction internally
+            // Pass self.env as the source since that's where the idents are from
+            const ident_in_origin = origin_env.getMethodIdentByIdents(
+                self.env,
+                nominal_type.ident.ident_idx,
+                literal.constraint.fn_name,
+            ) orelse {
                 // Method not found - the type doesn't have a from_numeral method
+                // Get the type name for the error message
+                const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
+                const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
+                    type_name_bytes[dot_idx + 1 ..]
+                else
+                    type_name_bytes;
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Type {s} does not have a from_numeral method",
@@ -799,6 +775,12 @@ pub const ComptimeEvaluator = struct {
             // Get the definition index
             const node_idx_in_origin = origin_env.getExposedNodeIndexById(ident_in_origin) orelse {
                 // Definition not exposed - this is also an error
+                // Get the type name for the error message
+                const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
+                const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
+                    type_name_bytes[dot_idx + 1 ..]
+                else
+                    type_name_bytes;
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Type {s} does not have an accessible from_numeral method",

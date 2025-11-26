@@ -207,6 +207,9 @@ digits_after_pt_ident: Ident.Idx,
 // Box method idents
 box_method_ident: Ident.Idx,
 unbox_method_ident: Ident.Idx,
+// Try tag idents
+ok_ident: Ident.Idx,
+err_ident: Ident.Idx,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -332,6 +335,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const digits_after_pt_ident = try common.insertIdent(gpa, Ident.for_text("digits_after_pt"));
     const box_method_ident = try common.insertIdent(gpa, Ident.for_text("box"));
     const unbox_method_ident = try common.insertIdent(gpa, Ident.for_text("unbox"));
+    const ok_ident = try common.insertIdent(gpa, Ident.for_text("Ok"));
+    const err_ident = try common.insertIdent(gpa, Ident.for_text("Err"));
 
     return Self{
         .gpa = gpa,
@@ -396,6 +401,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .digits_after_pt_ident = digits_after_pt_ident,
         .box_method_ident = box_method_ident,
         .unbox_method_ident = unbox_method_ident,
+        .ok_ident = ok_ident,
+        .err_ident = err_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1865,6 +1872,8 @@ pub const Serialized = extern struct {
     digits_after_pt_ident: Ident.Idx,
     box_method_ident: Ident.Idx,
     unbox_method_ident: Ident.Idx,
+    ok_ident: Ident.Idx,
+    err_ident: Ident.Idx,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1950,6 +1959,8 @@ pub const Serialized = extern struct {
         self.digits_after_pt_ident = env.digits_after_pt_ident;
         self.box_method_ident = env.box_method_ident;
         self.unbox_method_ident = env.unbox_method_ident;
+        self.ok_ident = env.ok_ident;
+        self.err_ident = env.err_ident;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -2036,6 +2047,8 @@ pub const Serialized = extern struct {
             .digits_after_pt_ident = self.digits_after_pt_ident,
             .box_method_ident = self.box_method_ident,
             .unbox_method_ident = self.unbox_method_ident,
+            .ok_ident = self.ok_ident,
+            .err_ident = self.err_ident,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 
@@ -2719,6 +2732,26 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
         defer self.gpa.free(qualified);
         return self.getIdentStoreConst().findByString(qualified);
     }
+}
+
+/// Looks up a method identifier on a type using ident indices instead of strings.
+/// This is the semantic alternative to string-based method lookup - it takes
+/// the type's ident and method's ident directly, avoiding string manipulation at the call site.
+///
+/// Parameters:
+/// - source_env: The module environment where type_ident and method_ident are from
+///               (may be different from self when doing cross-module lookup)
+/// - type_ident: The type's identifier index (e.g., the ident for "Num.U64" or "Bool")
+/// - method_ident: The method's identifier index (e.g., the ident for "from_numeral")
+///
+/// Returns the qualified method's ident index if found, or null if the method doesn't exist.
+/// This internally resolves the idents to strings and builds the qualified name.
+pub fn getMethodIdentByIdents(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    // Resolve idents from the source environment (where they were defined)
+    const type_name = source_env.getIdent(type_ident);
+    const method_name = source_env.getIdent(method_ident);
+    // Look up in this module's ident store
+    return self.getMethodIdent(type_name, method_name);
 }
 
 /// Returns the line start positions for source code position mapping.

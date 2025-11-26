@@ -1027,6 +1027,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .digits_after_pt_ident = common.findIdent("digits_after_pt") orelse unreachable,
                 .box_method_ident = common.findIdent("box") orelse unreachable,
                 .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
+                .ok_ident = common.findIdent("Ok") orelse unreachable,
+                .err_ident = common.findIdent("Err") orelse unreachable,
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
