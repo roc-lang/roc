@@ -2865,18 +2865,18 @@ fn importAliased(
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
     // 9. Check that this module actually exists, and if not report an error
+    // Only check if module_envs is provided - when it's null, we don't know what modules
+    // exist yet (e.g., during standalone module canonicalization without full project context)
+    // Also skip the check for platform modules (which have requires_types) since they can
+    // import sibling modules that may not be in module_envs yet.
+    const is_platform = self.env.requires_types.items.items.len > 0;
     if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
+        if (!is_platform and !envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,
             } });
         }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
     }
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
@@ -2934,18 +2934,18 @@ fn importWithAlias(
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
     // 8. Check that this module actually exists, and if not report an error
+    // Only check if module_envs is provided - when it's null, we don't know what modules
+    // exist yet (e.g., during standalone module canonicalization without full project context)
+    // Also skip the check for platform modules (which have requires_types) since they can
+    // import sibling modules that may not be in module_envs yet.
+    const is_platform = self.env.requires_types.items.items.len > 0;
     if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
+        if (!is_platform and !envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,
             } });
         }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
     }
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
@@ -2996,18 +2996,18 @@ fn importUnaliased(
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
     // 6. Check that this module actually exists, and if not report an error
+    // Only check if module_envs is provided - when it's null, we don't know what modules
+    // exist yet (e.g., during standalone module canonicalization without full project context)
+    // Also skip the check for platform modules (which have requires_types) since they can
+    // import sibling modules that may not be in module_envs yet.
+    const is_platform = self.env.requires_types.items.items.len > 0;
     if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
+        if (!is_platform and !envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,
             } });
         }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
     }
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
@@ -4059,6 +4059,18 @@ pub fn canonicalizeExpr(
                             try self.scratch_free_vars.append(pattern_idx);
                             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                        }
+
+                        // Check if this is a required identifier from the platform's `requires` clause
+                        const requires_items = self.env.requires_types.items.items;
+                        for (requires_items, 0..) |req, idx| {
+                            if (req.ident == ident) {
+                                // Found a required identifier - create a lookup expression for it
+                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
+                                    .requires_idx = @intCast(idx),
+                                } }, region);
+                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                            }
                         }
 
                         // We did not find the ident in scope or as an exposed item, and forward refs not allowed

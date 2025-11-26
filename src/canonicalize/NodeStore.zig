@@ -144,7 +144,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 36;
+pub const MODULEENV_EXPR_NODE_COUNT = 37;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -383,6 +383,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .module_idx = @enumFromInt(node.data_1),
                 .target_node_idx = @intCast(node.data_2),
                 .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .expr_required_lookup => {
+            // Handle required lookups (platform requires clause)
+            return CIR.Expr{ .e_lookup_required = .{
+                .requires_idx = node.data_1,
             } };
         },
         .expr_num => {
@@ -1469,6 +1475,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_external_lookup;
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = e.target_node_idx;
+        },
+        .e_lookup_required => |e| {
+            // For required lookups (platform requires clause), store the index
+            node.tag = .expr_required_lookup;
+            node.data_1 = e.requires_idx;
         },
         .e_num => |e| {
             node.tag = .expr_num;

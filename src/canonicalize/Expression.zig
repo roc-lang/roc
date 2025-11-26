@@ -128,6 +128,18 @@ pub const Expr = union(enum) {
         target_node_idx: u16,
         region: Region,
     },
+    /// Lookup of a required identifier from the platform's `requires` clause.
+    /// This represents a value that the app provides to the platform.
+    /// ```roc
+    /// platform "..."
+    ///     requires {} { main! : () => {} }
+    /// ...
+    /// main_for_host! = main!  # "main!" here is a required lookup
+    /// ```
+    e_lookup_required: struct {
+        /// Index into env.requires_types for this required identifier
+        requires_idx: u32,
+    },
     /// A sequence of zero or more elements of the same type
     /// ```roc
     /// ["one", "two", "three"]
@@ -777,6 +789,22 @@ pub const Expr = union(enum) {
                     try tree.endNode(field_begin, field_attrs);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_required => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-required");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const requires_items = ir.requires_types.items.items;
+                if (e.requires_idx < requires_items.len) {
+                    const required_type = requires_items[e.requires_idx];
+                    const ident_name = ir.getIdent(required_type.ident);
+                    try tree.pushStringPair("required-ident", ident_name);
                 }
 
                 try tree.endNode(begin, attrs);
