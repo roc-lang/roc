@@ -2864,9 +2864,10 @@ fn importAliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // Note: We don't check if the module exists here because module_envs only contains
-    // builtin types at canonicalization time. Local imports are validated later during
-    // type checking when imported_envs is properly populated with all resolved modules.
+    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
+    // an imported module), remove it from exposed_type_texts so we don't report
+    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -2917,9 +2918,10 @@ fn importWithAlias(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // Note: We don't check if the module exists here because module_envs only contains
-    // builtin types at canonicalization time. Local imports are validated later during
-    // type checking when imported_envs is properly populated with all resolved modules.
+    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
+    // an imported module), remove it from exposed_type_texts so we don't report
+    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -2963,9 +2965,10 @@ fn importUnaliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // Note: We don't check if the module exists here because module_envs only contains
-    // builtin types at canonicalization time. Local imports are validated later during
-    // type checking when imported_envs is properly populated with all resolved modules.
+    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
+    // an imported module), remove it from exposed_type_texts so we don't report
+    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }

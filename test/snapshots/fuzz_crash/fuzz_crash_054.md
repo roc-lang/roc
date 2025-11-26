@@ -9,19 +9,9 @@ app[]{f:platform""}import S exposing[c as
 f]
 ~~~
 # EXPECTED
-MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
+NIL
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `S` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_054.md:1:20:2:3:**
-```roc
-app[]{f:platform""}import S exposing[c as
-f]
-```
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,UpperIdent,KwExposing,OpenSquare,LowerIdent,KwAs,

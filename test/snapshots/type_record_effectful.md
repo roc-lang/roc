@@ -17,20 +17,8 @@ printName = |person| {
 main! = |_| {}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
 UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**type_record_effectful.md:3:1:3:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?

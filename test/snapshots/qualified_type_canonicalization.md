@@ -53,9 +53,6 @@ transform = |result|
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:18
-MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
-MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
-MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
@@ -102,39 +99,6 @@ Other valid examples:
 import Basics.Try
 ```
              ^^^^
-
-
-**MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:9:1:9:13:**
-```roc
-import Color
-```
-^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `ModuleB` was not found in this Roc project.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:10:1:10:40:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `ExternalModule` was not found in this Roc project.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:11:1:11:32:**
-```roc
-import ExternalModule as ExtMod
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**

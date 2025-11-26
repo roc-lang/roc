@@ -34,7 +34,6 @@ PARSE ERROR - underscore_type_decl.md:5:13:5:14
 PARSE ERROR - underscore_type_decl.md:5:20:5:21
 PARSE ERROR - underscore_type_decl.md:5:23:5:24
 PARSE ERROR - underscore_type_decl.md:6:1:6:1
-MODULE NOT FOUND - underscore_type_decl.md:1:1:1:30
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -324,17 +323,6 @@ Other valid examples:
 
 ```
 ^
-
-
-**MODULE NOT FOUND**
-The module `Module` was not found in this Roc project.
-
-You're attempting to use this module here:
-**underscore_type_decl.md:1:1:1:30:**
-```roc
-import Module exposing [Pair]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS

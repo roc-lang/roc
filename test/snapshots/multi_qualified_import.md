@@ -27,7 +27,6 @@ PARSE ERROR - multi_qualified_import.md:12:30:12:31
 PARSE ERROR - multi_qualified_import.md:12:31:12:36
 PARSE ERROR - multi_qualified_import.md:12:36:12:37
 PARSE ERROR - multi_qualified_import.md:12:37:12:38
-MODULE NOT FOUND - multi_qualified_import.md:1:1:1:41
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
@@ -121,17 +120,6 @@ This is an unexpected parsing error. Please check your syntax.
 data = json.Core.Utf8.encode("hello")
 ```
                                     ^
-
-
-**MODULE NOT FOUND**
-The module `json.Core.Utf8` was not found in this Roc project.
-
-You're attempting to use this module here:
-**multi_qualified_import.md:1:1:1:41:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**

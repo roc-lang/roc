@@ -224,12 +224,7 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
 NOT IMPLEMENTED - :0:0:0:0
-MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
-MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
-MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
@@ -382,72 +377,10 @@ This type is referenced here:
 	      ^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:4:1:4:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**MODULE NOT FOUND**
-The module `MALFORMED_IMPORT` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:6:1:12:4:**
-```roc
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-```
-
-
-**MODULE NOT FOUND**
-The module `pkg.Something` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:14:1:14:82:**
-```roc
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `BadName` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:16:1:16:27:**
-```roc
-import BadName as GoodName
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `BadNameMultiline` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:17:1:20:20:**
-```roc
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-```
-
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.

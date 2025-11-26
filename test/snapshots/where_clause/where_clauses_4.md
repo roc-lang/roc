@@ -12,19 +12,9 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-MODULE NOT FOUND - where_clauses_4.md:1:1:1:32
+NIL
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `Decode` was not found in this Roc project.
-
-You're attempting to use this module here:
-**where_clauses_4.md:1:1:1:32:**
-```roc
-import Decode exposing [Decode]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
