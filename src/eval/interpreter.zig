@@ -254,8 +254,6 @@ pub const Interpreter = struct {
 
             // Process ALL imports using pre-resolved module indices
             for (0..import_count) |i| {
-                const str_idx = env.imports.imports.items.items[i];
-                const import_name = env.common.getString(str_idx);
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
 
                 // Use pre-resolved module index - imports must be resolved during compilation
@@ -274,8 +272,8 @@ pub const Interpreter = struct {
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
                 // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
-                const ident_idx = env.common.findIdent(import_name);
-                if (ident_idx) |idx| {
+                // Use pre-stored ident index instead of string lookup
+                if (env.imports.getIdentIdx(import_idx)) |idx| {
                     // Only add to module_envs/module_ids if not already present (to avoid duplicates)
                     if (!module_envs.contains(idx)) {
                         module_envs.putAssumeCapacity(idx, module_env);
@@ -342,11 +340,8 @@ pub const Interpreter = struct {
             .last_error_message = null,
         };
 
-        // Get the "Builtin.Str" identifier from the runtime module's identifier store
-        // (identifiers are per-module, so we need to insert "Builtin.Str" into the runtime module's table)
-        const builtin_str_ident = env.common.findIdent("Builtin.Str");
-
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, builtin_str_ident);
+        // Use the pre-interned "Builtin.Str" identifier from the module env
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.builtin_str_ident);
 
         return result;
     }
@@ -6237,13 +6232,14 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Build the fully-qualified method name: "OriginModule.TypeName.method"
-        // e.g., "Builtin.List.len" or "Builtin.Num.Dec.plus"
-        var qualified_name_buf: [256]u8 = undefined;
-        const qualified_name = try self.getMethodQualifiedIdent(origin_module, nominal_ident, method_name, &qualified_name_buf);
-
-        // Single lookup with the fully-qualified method name - no fallbacks, no retries
-        const method_ident = origin_env.common.findIdent(qualified_name) orelse {
+        // Use semantic method lookup via ident indices
+        // The getMethodIdentByIdents function handles qualified name construction internally
+        // Pass self.env as the source since that's where the idents are from
+        const method_ident = origin_env.getMethodIdentByIdents(
+            self.env,
+            nominal_ident,
+            method_name,
+        ) orelse {
             return error.MethodLookupFailed;
         };
 

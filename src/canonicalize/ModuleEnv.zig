@@ -179,6 +179,7 @@ is_ne_ident: Ident.Idx,
 // These match the nominal types created during type checking
 builtin_try_ident: Ident.Idx,
 builtin_numeral_ident: Ident.Idx,
+builtin_str_ident: Ident.Idx,
 list_type_ident: Ident.Idx,
 box_type_ident: Ident.Idx,
 u8_type_ident: Ident.Idx,
@@ -310,6 +311,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     // Pre-intern fully-qualified type identifiers for type checking and layout generation
     const builtin_try_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Try"));
     const builtin_numeral_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral"));
+    const builtin_str_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Str"));
     const list_type_ident = try common.insertIdent(gpa, Ident.for_text("List"));
     const box_type_ident = try common.insertIdent(gpa, Ident.for_text("Box"));
     const u8_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8"));
@@ -376,6 +378,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .is_ne_ident = is_ne_ident,
         .builtin_try_ident = builtin_try_ident_val,
         .builtin_numeral_ident = builtin_numeral_ident_val,
+        .builtin_str_ident = builtin_str_ident,
         .list_type_ident = list_type_ident,
         .box_type_ident = box_type_ident,
         .u8_type_ident = u8_type_ident,
@@ -1847,6 +1850,7 @@ pub const Serialized = extern struct {
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_try_ident: Ident.Idx,
     builtin_numeral_ident: Ident.Idx,
+    builtin_str_ident: Ident.Idx,
     list_type_ident: Ident.Idx,
     box_type_ident: Ident.Idx,
     u8_type_ident: Ident.Idx,
@@ -1934,6 +1938,7 @@ pub const Serialized = extern struct {
         self.is_ne_ident = env.is_ne_ident;
         self.builtin_try_ident = env.builtin_try_ident;
         self.builtin_numeral_ident = env.builtin_numeral_ident;
+        self.builtin_str_ident = env.builtin_str_ident;
         self.list_type_ident = env.list_type_ident;
         self.box_type_ident = env.box_type_ident;
         self.u8_type_ident = env.u8_type_ident;
@@ -2022,6 +2027,7 @@ pub const Serialized = extern struct {
             // Fully-qualified type identifiers for type checking and layout generation
             .builtin_try_ident = self.builtin_try_ident,
             .builtin_numeral_ident = self.builtin_numeral_ident,
+            .builtin_str_ident = self.builtin_str_ident,
             .list_type_ident = self.list_type_ident,
             .box_type_ident = self.box_type_ident,
             .u8_type_ident = self.u8_type_ident,

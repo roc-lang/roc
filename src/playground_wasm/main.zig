@@ -1002,6 +1002,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 // Fully-qualified type identifiers for type checking and layout generation
                 .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
                 .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+                .builtin_str_ident = common.findIdent("Builtin.Str") orelse unreachable,
                 .list_type_ident = common.findIdent("List") orelse unreachable,
                 .box_type_ident = common.findIdent("Box") orelse unreachable,
                 .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
