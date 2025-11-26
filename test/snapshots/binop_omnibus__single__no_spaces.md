@@ -29,13 +29,16 @@ This feature is not yet implemented: unsupported operator
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Bool**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **binop_omnibus__single__no_spaces.md:1:32:1:34:**
 ```roc
 Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
                                ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Bool_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

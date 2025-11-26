@@ -298,8 +298,8 @@ fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, pal
                     try writer.writeAll(" │ ");
                     try writer.writeAll(palette.reset);
 
-                    // Print spaces up to the start column
-                    try source_region.printSpaces(writer, region.start_column - 1);
+                    // Print leading whitespace, preserving tabs from the source line
+                    try source_region.printLeadingWhitespace(writer, line, region.start_column);
 
                     // Print the underline
                     try writer.writeAll(color);
@@ -370,9 +370,15 @@ fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, pal
                     var col_position: u32 = 1;
                     for (data.underline_regions) |underline| {
                         if (underline.start_line == line_num and underline.start_line == underline.end_line) {
-                            // Print spaces up to the start column
+                            // Print whitespace up to the start column
                             if (underline.start_column > col_position) {
-                                try source_region.printSpaces(writer, underline.start_column - col_position);
+                                if (col_position == 1) {
+                                    // First underline: preserve tabs from source
+                                    try source_region.printLeadingWhitespace(writer, line, underline.start_column);
+                                } else {
+                                    // Subsequent underlines: just use spaces
+                                    try source_region.printSpaces(writer, underline.start_column - col_position);
+                                }
                             }
 
                             // Print the underline

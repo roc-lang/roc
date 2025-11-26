@@ -22,13 +22,16 @@ type=expr
 MISSING METHOD - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _[Ok([Just(_a)]_others)]_others2 where [[Ok([Just(b)]c)]d.from_numeral : [Ok([Just(b)]c)]d]_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **tag_applications_simple.md:2:10:2:12:**
 ```roc
     Some(42),
 ```
          ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _[Ok([Just(a)]_others)]_others2 where [a.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 
 # TOKENS

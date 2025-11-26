@@ -76,14 +76,12 @@ const ConstraintWithDispatcher = struct {
     constraint: types_mod.StaticDispatchConstraint,
 };
 
-/// Initialize a TypeWriter with immutable types and idents references.
-pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
-    // Build import mapping using shared module
-    // Note: We need mutable access to insert display names into the ident store
-    const mutable_idents = @constCast(idents);
-    var import_mapping = try import_mapping_mod.createImportMapping(gpa, mutable_idents);
-    errdefer import_mapping.deinit();
-
+pub fn initFromParts(
+    gpa: std.mem.Allocator,
+    types_store: *const TypesStore,
+    idents: *const Ident.Store,
+    import_mapping: ?import_mapping_mod.ImportMapping,
+) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
         .idents = idents,
@@ -96,7 +94,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
-        .import_mapping = import_mapping,
+        .import_mapping = import_mapping orelse import_mapping_mod.ImportMapping.init(gpa),
     };
 }
 

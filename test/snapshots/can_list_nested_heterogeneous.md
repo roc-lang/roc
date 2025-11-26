@@ -11,13 +11,16 @@ type=expr
 MISSING METHOD - can_list_nested_heterogeneous.md:1:7:1:8
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **can_list_nested_heterogeneous.md:1:7:1:8:**
 ```roc
 [[], [1], ["hello"]]
 ```
       ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

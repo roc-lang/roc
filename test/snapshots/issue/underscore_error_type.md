@@ -122,13 +122,16 @@ BadTuple := (_, U32)
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **BadType**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **underscore_error_type.md:4:7:4:9:**
 ```roc
 foo = 42
 ```
       ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _BadType_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -141,7 +144,7 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(_a) where [List(b).from_numeral : List(b)]_
+    _List(a) where [a.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadList_
@@ -155,7 +158,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: _field2 } where [{ field: Str, other: a }.from_numeral : { field: Str, other: a }]_
+    _{ field: Str, other: a } where [a.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -183,7 +186,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, _field2) where [(Str, a).from_numeral : (Str, a)]_
+    _(Str, a) where [a.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadTuple_

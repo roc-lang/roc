@@ -447,9 +447,18 @@ fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv
     _ = dbg_args;
 }
 
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    // No-op in WASM playground
-    _ = expect_failed_args;
+fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
+    const ctx: *CrashContext = @ptrCast(@alignCast(env));
+    const source_bytes = expect_failed_args.utf8_bytes[0..expect_failed_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate wasm expect failure message", .{});
+    };
+    ctx.recordCrash(formatted) catch |err| {
+        allocator.free(formatted);
+        std.debug.panic("failed to record wasm expect failure: {}", .{err});
+    };
 }
 
 fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
@@ -1000,7 +1009,39 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
                 .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
                 .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+                // Fully-qualified type identifiers for type checking and layout generation
+                .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
+                .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+                .builtin_str_ident = common.findIdent("Builtin.Str") orelse unreachable,
+                .list_type_ident = common.findIdent("List") orelse unreachable,
+                .box_type_ident = common.findIdent("Box") orelse unreachable,
+                .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
+                .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
+                .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
+                .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
+                .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
+                .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
+                .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
+                .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
+                .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
+                .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
+                .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
+                .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
+                .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+                .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
+                .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
+                .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
+                .tag_ident = common.findIdent("tag") orelse unreachable,
+                .payload_ident = common.findIdent("payload") orelse unreachable,
+                .is_negative_ident = common.findIdent("is_negative") orelse unreachable,
+                .digits_before_pt_ident = common.findIdent("digits_before_pt") orelse unreachable,
+                .digits_after_pt_ident = common.findIdent("digits_after_pt") orelse unreachable,
+                .box_method_ident = common.findIdent("box") orelse unreachable,
+                .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
+                .ok_ident = common.findIdent("Ok") orelse unreachable,
+                .err_ident = common.findIdent("Err") orelse unreachable,
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
@@ -1055,6 +1096,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)
@@ -1111,6 +1153,10 @@ fn compileSource(source: []const u8) !CompilerStageData {
     {
         const type_can_ir = result.module_env;
         const imported_envs: []const *ModuleEnv = &.{};
+
+        // Resolve imports - map each import to its index in imported_envs
+        type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
+
         // Use pointer to the stored CIR to ensure solver references valid memory
         var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_common_idents);
         result.solver = solver;
@@ -1592,7 +1638,11 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     // Create interpreter infrastructure for test evaluation
     const empty_modules: []const *const ModuleEnv = &.{};
     const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env) catch {
+    const solver = data.solver orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for test evaluation.");
+        return;
+    };
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env, &solver.import_mapping) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

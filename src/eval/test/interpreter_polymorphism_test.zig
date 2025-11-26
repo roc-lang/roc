@@ -59,7 +59,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
 }
 
 fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
-fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+    // Polymorphism tests never trigger expect failures; retain the callback to satisfy RocOps.
+}
 fn testRocCrashed(_: *const RocCrashed, _: *anyopaque) callconv(.c) void {
     // Polymorphism tests never trigger crashes; retain the callback to satisfy RocOps.
 }
@@ -85,7 +87,7 @@ test "interpreter poly: return a function then call (int)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -106,7 +108,7 @@ test "interpreter poly: return a function then call (string)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -130,7 +132,7 @@ test "interpreter captures (monomorphic): adder" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -151,7 +153,7 @@ test "interpreter captures (monomorphic): constant function" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -175,7 +177,7 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -196,7 +198,7 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -221,7 +223,7 @@ test "interpreter higher-order: apply f then call with 41" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -241,7 +243,7 @@ test "interpreter higher-order: apply f twice" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -261,7 +263,7 @@ test "interpreter higher-order: pass constructed closure and apply" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -281,7 +283,7 @@ test "interpreter higher-order: construct then pass then call" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -301,7 +303,7 @@ test "interpreter higher-order: compose id with +1" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -321,7 +323,7 @@ test "interpreter higher-order: return poly fn using captured +n" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -341,7 +343,7 @@ test "interpreter recursion: simple countdown" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
@@ -360,7 +362,7 @@ test "interpreter if: else-if chain selects middle branch" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
@@ -382,7 +384,7 @@ test "interpreter var and reassign" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -401,7 +403,7 @@ test "interpreter logical or is short-circuiting" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
@@ -423,7 +425,7 @@ test "interpreter logical and is short-circuiting" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
@@ -445,7 +447,7 @@ test "interpreter recursion: factorial 5 -> 120" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
@@ -468,7 +470,7 @@ test "interpreter recursion: fibonacci 5 -> 5" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
@@ -489,7 +491,7 @@ test "interpreter tag union: one-arg tag Ok(42)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
@@ -513,7 +515,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };

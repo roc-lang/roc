@@ -8,6 +8,7 @@ const builtins = @import("builtins");
 
 const StringLiteral = base.StringLiteral;
 const CIR = @import("../CIR.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
 const NodeStore = @import("../NodeStore.zig");
 const RocDec = builtins.dec.RocDec;
 const CalledVia = base.CalledVia;
@@ -243,6 +244,11 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_lookup_required = .{
+            .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(rand.random().int(u32)),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_list = .{
             .elems = CIR.Expr.Span{ .span = rand_span() },
         },
@@ -337,6 +343,7 @@ test "NodeStore round trip - Expressions" {
         .e_dot_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .field_name = rand_ident_idx(),
+            .field_name_region = rand_region(),
             .args = null,
         },
     });

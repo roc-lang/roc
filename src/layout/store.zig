@@ -169,21 +169,21 @@ pub const Store = struct {
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
-            .list_ident = env.common.findIdent("List"),
-            .box_ident = env.common.findIdent("Box"),
-            .u8_ident = env.common.findIdent("Num.U8"),
-            .i8_ident = env.common.findIdent("Num.I8"),
-            .u16_ident = env.common.findIdent("Num.U16"),
-            .i16_ident = env.common.findIdent("Num.I16"),
-            .u32_ident = env.common.findIdent("Num.U32"),
-            .i32_ident = env.common.findIdent("Num.I32"),
-            .u64_ident = env.common.findIdent("Num.U64"),
-            .i64_ident = env.common.findIdent("Num.I64"),
-            .u128_ident = env.common.findIdent("Num.U128"),
-            .i128_ident = env.common.findIdent("Num.I128"),
-            .f32_ident = env.common.findIdent("Num.F32"),
-            .f64_ident = env.common.findIdent("Num.F64"),
-            .dec_ident = env.common.findIdent("Num.Dec"),
+            .list_ident = env.list_type_ident,
+            .box_ident = env.box_type_ident,
+            .u8_ident = env.u8_type_ident,
+            .i8_ident = env.i8_type_ident,
+            .u16_ident = env.u16_type_ident,
+            .i16_ident = env.i16_type_ident,
+            .u32_ident = env.u32_type_ident,
+            .i32_ident = env.i32_type_ident,
+            .u64_ident = env.u64_type_ident,
+            .i64_ident = env.i64_type_ident,
+            .u128_ident = env.u128_type_ident,
+            .i128_ident = env.i128_type_ident,
+            .f32_ident = env.f32_type_ident,
+            .f64_ident = env.f64_type_ident,
+            .dec_ident = env.dec_type_ident,
         };
     }
 
@@ -406,7 +406,7 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
     }
 
-    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
         const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
@@ -421,8 +421,7 @@ pub const Store = struct {
 
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
-            const current_field_name = self.env.getIdent(field.name);
-            if (std.mem.eql(u8, current_field_name, field_name)) {
+            if (field.name == field_name_idx) {
                 return current_offset;
             }
 
@@ -898,6 +897,15 @@ pub const Store = struct {
 
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
+            const cached_layout = self.getLayout(cached_idx);
+            std.debug.print("DEBUG addTypeVar CACHED: var={}, layout.tag={s}, content={s}\n", .{
+                @intFromEnum(current.var_),
+                @tagName(cached_layout.tag),
+                @tagName(current.desc.content),
+            });
+            if (current.desc.content == .structure) {
+                std.debug.print("DEBUG addTypeVar CACHED structure={s}\n", .{@tagName(current.desc.content.structure)});
+            }
             return cached_idx;
         }
 
@@ -1118,6 +1126,10 @@ pub const Store = struct {
                         // Handle tag unions by computing the layout based on:
                         // 1. Discriminant size (based on number of tags)
                         // 2. Maximum payload size and alignment
+                        std.debug.print("DEBUG tag_union START: current.var_={}, pending_containers={}\n", .{
+                            @intFromEnum(current.var_),
+                            self.work.pending_containers.len,
+                        });
 
                         const pending_tags_top = self.work.pending_tags.len;
                         defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
@@ -1144,10 +1156,8 @@ pub const Store = struct {
 
                             if (is_bool) {
                                 // Bool layout: use predefined bool layout
-                                const layout = Layout.boolType();
-                                const bool_layout_idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, bool_layout_idx);
-                                return bool_layout_idx;
+                                // Break to fall through to pending container processing
+                                break :flat_type Layout.boolType();
                             }
                         }
 
@@ -1155,10 +1165,8 @@ pub const Store = struct {
                         // First, determine discriminant size based on number of tags
                         if (num_tags == 0) {
                             // Empty tag union - represents a zero-sized type
-                            const zst_layout = Layout.zst();
-                            const zst_layout_idx = try self.insertLayout(zst_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, zst_layout_idx);
-                            return zst_layout_idx;
+                            // Break to fall through to pending container processing
+                            break :flat_type Layout.zst();
                         }
 
                         const discriminant_layout = if (num_tags <= 256)
@@ -1180,9 +1188,8 @@ pub const Store = struct {
 
                         if (!has_payload) {
                             // Simple tag union with no payloads - just use discriminant
-                            const tag_layout_idx = try self.insertLayout(discriminant_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, tag_layout_idx);
-                            return tag_layout_idx;
+                            // Break to fall through to pending container processing
+                            break :flat_type discriminant_layout;
                         }
 
                         // Complex tag union with payloads
@@ -1227,7 +1234,15 @@ pub const Store = struct {
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
+                                std.debug.print("DEBUG tag_union payload call: arg_var={}, pending_containers_before={}\n", .{
+                                    @intFromEnum(arg_var),
+                                    self.work.pending_containers.len,
+                                });
                                 const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
+                                std.debug.print("DEBUG tag_union payload return: arg_var={}, pending_containers_after={}\n", .{
+                                    @intFromEnum(arg_var),
+                                    self.work.pending_containers.len,
+                                });
                                 const layout_val = self.getLayout(arg_layout_idx);
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
@@ -1274,7 +1289,14 @@ pub const Store = struct {
                             }
                         }
                         // Break to fall through to pending container processing instead of returning directly
-                        break :flat_type self.getLayout(tuple_idx);
+                        const final_tuple_layout = self.getLayout(tuple_idx);
+                        std.debug.print("DEBUG tag_union break: current.var_={}, tuple_idx={}, final_layout.tag={s}, pending_containers={}\n", .{
+                            @intFromEnum(current.var_),
+                            @intFromEnum(tuple_idx),
+                            @tagName(final_tuple_layout.tag),
+                            self.work.pending_containers.len,
+                        });
+                        break :flat_type final_tuple_layout;
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1407,6 +1429,15 @@ pub const Store = struct {
             // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
             layout_idx = try self.insertLayout(layout);
+            std.debug.print("DEBUG addTypeVar store: current.var_={}, layout.tag={s}, content={s}, pending_containers={}\n", .{
+                @intFromEnum(current.var_),
+                @tagName(layout.tag),
+                @tagName(current.desc.content),
+                self.work.pending_containers.len,
+            });
+            if (current.desc.content == .structure) {
+                std.debug.print("DEBUG addTypeVar store structure={s}\n", .{@tagName(current.desc.content.structure)});
+            }
             try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
 
             // If this was part of a pending container that we're working on, update that container.

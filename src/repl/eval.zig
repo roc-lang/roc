@@ -564,6 +564,7 @@ pub const Repl = struct {
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
             .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
         };
 
         // Create canonicalizer with nested types available for qualified name resolution
@@ -615,6 +616,11 @@ pub const Repl = struct {
 
         // Type check - Pass Builtin as imported module
         const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+
+        // Resolve imports - map each import to its index in imported_modules
+        // This uses the same resolution logic as compile_package.zig
+        module_env.imports.resolveImports(module_env, &imported_modules);
+
         var checker = Check.init(
             self.allocator,
             &module_env.types,
@@ -635,7 +641,7 @@ pub const Repl = struct {
 
         // Create interpreter instance with BuiltinTypes containing real Builtin module
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinitAndFreeOtherEnvs();
@@ -765,6 +771,7 @@ pub const Repl = struct {
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
             .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
         };
 
         // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
@@ -826,7 +833,7 @@ pub const Repl = struct {
         };
 
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
         };
         defer interpreter.deinitAndFreeOtherEnvs();

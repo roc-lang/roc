@@ -20,6 +20,9 @@ pub const BuiltinTypes = struct {
     try_env: *const can.ModuleEnv,
     str_env: *const can.ModuleEnv,
 
+    // Full builtin indices for direct ident comparison
+    indices: CIR.BuiltinIndices,
+
     /// Create BuiltinTypes from deserialized builtin indices and module environments.
     /// All parameters are required - there are no optional or dummy values allowed.
     ///
@@ -41,6 +44,7 @@ pub const BuiltinTypes = struct {
             .bool_env = bool_env,
             .try_env = try_env,
             .str_env = str_env,
+            .indices = builtin_indices,
         };
     }
 };

@@ -19,24 +19,30 @@ MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **lambda_annotation_mismatch_error.md:3:27:3:29:**
 ```roc
 string_function = |x| x + 42
 ```
                           ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-The value before this **+** operator has the type **Str**, which has no **plus** method:
+The value before this **+** operator has a type that doesn't have a **plus** method:
 **lambda_annotation_mismatch_error.md:3:23:3:29:**
 ```roc
 string_function = |x| x + 42
 ```
                       ^^^^^^
 
+The value's type, which does not have a method named **plus**, is:
+
+    _Str_
 
 **Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 

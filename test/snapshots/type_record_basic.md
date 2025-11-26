@@ -24,10 +24,10 @@ main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This argument has the type:
-    _{ age: _field, namee: Str } where [{ age: a, namee: Str }.from_numeral : { age: a, namee: Str }]_
+    _{ age: a, namee: Str } where [a.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But `getName` needs the first argument to be:
-    _{ age: Num.U64, name: Str }_
+    _{ age: U64, name: Str }_
 
 # TOKENS
 ~~~zig

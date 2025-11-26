@@ -61,7 +61,6 @@ assigned `x`
 » x + y
 7
 ```
->>>>>>> repl-eval
 
 ## Validation and Testing
 

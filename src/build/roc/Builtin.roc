@@ -115,25 +115,25 @@ Builtin :: [].{
 		    Ok(_) => fallback
 		}
 
-		#eq : Try(ok, err), Try(ok, err) -> Bool
-		#	where [
-		#		ok.equals : ok, ok -> Bool,
-		#		err.equals : ok, ok -> Bool,
-		#	]
-		#eq = |a, b| match a {
-		#	Ok(a_val) => {
-		#		match b {
-		#			Ok(b_val) => a_val.equals(b_val)
-		#			Err(_) => False
-		#		}
-		#	}
-		#	Err(a_val) => {
-		#		match b {
-		#			Ok(_) => False
-		#			Err(b_val) => a_val.equals(b_val)
-		#		}
-		#	}
-		#}
+		is_eq : Try(ok, err), Try(ok, err) -> Bool
+			where [
+				ok.is_eq : ok, ok -> Bool,
+				err.is_eq : err, err -> Bool,
+			]
+		is_eq = |a, b| match a {
+			Ok(a_val) => {
+				match b {
+					Ok(b_val) => a_val.is_eq(b_val)
+					Err(_) => False
+				}
+			}
+			Err(a_val) => {
+				match b {
+					Ok(_) => False
+					Err(b_val) => a_val.is_eq(b_val)
+				}
+			}
+		}
 	}
 
 	Dict :: [EmptyDict].{}
