@@ -1845,21 +1845,19 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .e_dbg => |dbg_expr| {
+                // Evaluate and print the inner expression
                 const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
                 const value = try self.evalExprMinimal(dbg_expr.expr, roc_ops, inner_rt_var);
+                defer value.decref(&self.runtime_layout_store, roc_ops);
                 const rendered = try self.renderValueRocWithType(value, inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
-                // dbg returns {} (empty record), not the inner value
-                // Free the inner value since we're not returning it
-                value.decref(&self.runtime_layout_store, roc_ops);
-                // Return empty record - use the same pattern as e_empty_record
-                // Get the compile-time type of this dbg expression (should be {})
+                // dbg returns {} (empty record) - use same pattern as e_expect
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const rec_layout = try self.getRuntimeLayout(rt_var);
-                return try self.pushRaw(rec_layout, 0);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                return try self.pushRaw(layout_val, 0);
             },
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {

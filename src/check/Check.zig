@@ -3525,10 +3525,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
-            // dbg checks the inner expression but returns {} (like expect)
-            // This allows dbg to be used as the last expression in a block
-            // without affecting the block's return type
-            // dbg is always effectful since it prints to stderr
+            // dbg evaluates its inner expression but returns {} (like expect)
             _ = try self.checkExpr(dbg.expr, env, .no_expectation);
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
