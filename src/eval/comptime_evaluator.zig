@@ -267,6 +267,10 @@ pub const ComptimeEvaluator = struct {
             // Nothing to evaluate at the declaration site for these;
             // by design, they cause crashes when lookups happen on them
             .e_anno_only => return EvalResult{ .success = null },
+            // Required lookups reference values from the app's `main` that provides
+            // values to the platform's `requires` clause. These values are not available
+            // during compile-time evaluation of the platform - they will be linked at runtime.
+            .e_lookup_required => return EvalResult{ .success = null },
             else => false,
         };
 

@@ -602,12 +602,15 @@ pub const PackageEnv = struct {
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
 
         // Use shared canonicalization function to ensure consistency with snapshot tool
-        try canonicalizeModule(
+        // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
+        // reported prematurely for modules that exist but haven't been loaded yet.
+        try canonicalizeModuleWithSiblings(
             self.gpa,
             env,
             &parse_ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
+            self.root_dir,
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -858,6 +861,64 @@ pub const PackageEnv = struct {
             builtin_module_env,
             builtin_indices,
         );
+
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        try czer.canonicalizeFile();
+        czer.deinit();
+    }
+
+    /// Canonicalization function that also discovers sibling .roc files in the same directory.
+    /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
+    fn canonicalizeModuleWithSiblings(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        parse_ast: *AST,
+        builtin_module_env: *const ModuleEnv,
+        builtin_indices: can.CIR.BuiltinIndices,
+        root_dir: []const u8,
+    ) !void {
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        defer module_envs_map.deinit();
+
+        // Populate module_envs with Bool, Try, Dict, Set using shared function
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            builtin_module_env,
+            builtin_indices,
+        );
+
+        // Discover sibling .roc files in the same directory and add them to module_envs
+        // This prevents MODULE NOT FOUND errors for modules that exist but haven't been loaded yet
+        var dir = std.fs.cwd().openDir(root_dir, .{ .iterate = true }) catch {
+            // If we can't open the directory, just proceed without sibling discovery
+            var czer = try Can.init(env, parse_ast, &module_envs_map);
+            try czer.canonicalizeFile();
+            czer.deinit();
+            return;
+        };
+        defer dir.close();
+
+        var dir_iter = dir.iterate();
+        while (dir_iter.next() catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".roc")) continue;
+
+            // Skip "main.roc" and the current module
+            if (std.mem.eql(u8, entry.name, "main.roc")) continue;
+
+            // Extract module name without .roc extension
+            const module_name = entry.name[0 .. entry.name.len - 4];
+
+            // Add to module_envs with a null env (just to pass the "contains" check)
+            // We use builtin_module_env as a placeholder - the actual env will be loaded later
+            const module_ident = try env.insertIdent(base.Ident.for_text(module_name));
+            // Only add if not already present
+            if (!module_envs_map.contains(module_ident)) {
+                try module_envs_map.put(module_ident, .{ .env = builtin_module_env });
+            }
+        }
 
         var czer = try Can.init(env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
