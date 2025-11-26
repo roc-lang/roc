@@ -897,15 +897,6 @@ pub const Store = struct {
 
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
-            const cached_layout = self.getLayout(cached_idx);
-            std.debug.print("DEBUG addTypeVar CACHED: var={}, layout.tag={s}, content={s}\n", .{
-                @intFromEnum(current.var_),
-                @tagName(cached_layout.tag),
-                @tagName(current.desc.content),
-            });
-            if (current.desc.content == .structure) {
-                std.debug.print("DEBUG addTypeVar CACHED structure={s}\n", .{@tagName(current.desc.content.structure)});
-            }
             return cached_idx;
         }
 
@@ -1126,10 +1117,6 @@ pub const Store = struct {
                         // Handle tag unions by computing the layout based on:
                         // 1. Discriminant size (based on number of tags)
                         // 2. Maximum payload size and alignment
-                        std.debug.print("DEBUG tag_union START: current.var_={}, pending_containers={}\n", .{
-                            @intFromEnum(current.var_),
-                            self.work.pending_containers.len,
-                        });
 
                         const pending_tags_top = self.work.pending_tags.len;
                         defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
@@ -1234,15 +1221,7 @@ pub const Store = struct {
                                 continue;
                             } else if (args_slice.len == 1) {
                                 const arg_var = args_slice[0];
-                                std.debug.print("DEBUG tag_union payload call: arg_var={}, pending_containers_before={}\n", .{
-                                    @intFromEnum(arg_var),
-                                    self.work.pending_containers.len,
-                                });
                                 const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
-                                std.debug.print("DEBUG tag_union payload return: arg_var={}, pending_containers_after={}\n", .{
-                                    @intFromEnum(arg_var),
-                                    self.work.pending_containers.len,
-                                });
                                 const layout_val = self.getLayout(arg_layout_idx);
                                 updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
@@ -1289,14 +1268,7 @@ pub const Store = struct {
                             }
                         }
                         // Break to fall through to pending container processing instead of returning directly
-                        const final_tuple_layout = self.getLayout(tuple_idx);
-                        std.debug.print("DEBUG tag_union break: current.var_={}, tuple_idx={}, final_layout.tag={s}, pending_containers={}\n", .{
-                            @intFromEnum(current.var_),
-                            @intFromEnum(tuple_idx),
-                            @tagName(final_tuple_layout.tag),
-                            self.work.pending_containers.len,
-                        });
-                        break :flat_type final_tuple_layout;
+                        break :flat_type self.getLayout(tuple_idx);
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1429,15 +1401,6 @@ pub const Store = struct {
             // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
             layout_idx = try self.insertLayout(layout);
-            std.debug.print("DEBUG addTypeVar store: current.var_={}, layout.tag={s}, content={s}, pending_containers={}\n", .{
-                @intFromEnum(current.var_),
-                @tagName(layout.tag),
-                @tagName(current.desc.content),
-                self.work.pending_containers.len,
-            });
-            if (current.desc.content == .structure) {
-                std.debug.print("DEBUG addTypeVar store structure={s}\n", .{@tagName(current.desc.content.structure)});
-            }
             try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
 
             // If this was part of a pending container that we're working on, update that container.

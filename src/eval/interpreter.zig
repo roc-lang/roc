@@ -1468,21 +1468,7 @@ pub const Interpreter = struct {
                     return error.Crash;
                 };
 
-                // Debug: Print the resolved type content and the rt_var
-                const resolved_for_debug = self.runtime_types.resolveVar(rt_var);
-                const resolved_base_for_debug = self.resolveBaseVar(rt_var);
-                std.debug.print("DEBUG e_tag: rt_var={}, resolved_content={s}, base_content={s}\n", .{
-                    @intFromEnum(rt_var),
-                    @tagName(resolved_for_debug.desc.content),
-                    @tagName(resolved_base_for_debug.desc.content),
-                });
-                if (resolved_for_debug.desc.content == .structure) {
-                    std.debug.print("DEBUG e_tag: structure type={s}\n", .{@tagName(resolved_for_debug.desc.content.structure)});
-                }
-
                 const layout_val = try self.getRuntimeLayout(rt_var);
-
-                std.debug.print("DEBUG e_tag: layout_val.tag={s}\n", .{@tagName(layout_val.tag)});
 
                 if (layout_val.tag == .scalar) {
                     // No payload union
@@ -1735,20 +1721,7 @@ pub const Interpreter = struct {
                         return dest;
                     }
                 }
-                const tag_name = switch (layout_val.tag) {
-                    .scalar => "scalar",
-                    .box => "box",
-                    .box_of_zst => "box_of_zst",
-                    .list => "list",
-                    .list_of_zst => "list_of_zst",
-                    .record => "record",
-                    .tuple => "tuple",
-                    .closure => "closure",
-                    .zst => "zst",
-                };
-                std.debug.print("DEBUG e_tag: unexpected layout type: {s}\n", .{tag_name});
-                const msg = try std.fmt.allocPrint(self.allocator, "e_tag: unexpected layout type: {s}", .{tag_name});
-                self.triggerCrash(msg, true, roc_ops);
+                self.triggerCrash("e_tag: unexpected layout type", false, roc_ops);
                 return error.Crash;
             },
             .e_match => |m| {
@@ -2014,15 +1987,27 @@ pub const Interpreter = struct {
                     }
                 }.go;
 
+                // First, resolve all capture values and collect their actual layouts.
+                // This is critical because type variables may default to Dec, but the actual
+                // captured values (e.g., strings) have their concrete layouts from evaluation.
+                var capture_values = try self.allocator.alloc(StackValue, caps.len);
+                defer self.allocator.free(capture_values);
+
                 for (caps, 0..) |cap_idx, i| {
                     const cap = self.env.store.getCapture(cap_idx);
                     // Translate ident from current env to runtime layout store's env
                     // This is necessary for cross-module closures (e.g., builtin functions)
                     const name_text = self.env.getIdent(cap.name);
                     field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
-                    const cap_ct_var = can.ModuleEnv.varFrom(cap.pattern_idx);
-                    const cap_rt_var = try self.translateTypeVar(self.env, cap_ct_var);
-                    field_layouts[i] = try self.getRuntimeLayout(cap_rt_var);
+
+                    // Resolve the capture value first to get its actual layout
+                    const cap_val = resolveCapture(self, cap, roc_ops) orelse {
+                        self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                        return error.Crash;
+                    };
+                    capture_values[i] = cap_val;
+                    // Use the actual evaluated value's layout, not the type-variable-derived layout
+                    field_layouts[i] = cap_val.layout;
                 }
 
                 const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
@@ -2051,20 +2036,14 @@ pub const Interpreter = struct {
                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                    for (caps, 0..) |cap_idx2, cap_i| {
-                        const cap2 = self.env.store.getCapture(cap_idx2);
-                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
-                            self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
-                            return error.Crash;
-                        };
-                        // Use field_names[cap_i] which was translated to runtime_layout_store.env
-                        // instead of cap2.name which is from self.env (different ident namespace)
+                    for (caps, 0..) |_, cap_i| {
+                        const cap_val = capture_values[cap_i];
                         const translated_name = field_names[cap_i];
                         const idx_opt = accessor.findFieldIndex(translated_name) orelse {
                             self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
                             return error.Crash;
                         };
-                        try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
+                        try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
                     }
                 }
                 return value;
@@ -6448,15 +6427,7 @@ pub const Interpreter = struct {
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
             const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
-            const cached_layout = self.runtime_layout_store.getLayout(layout_idx);
-            std.debug.print("DEBUG getRuntimeLayout CACHED: type_var={}, resolved.var_={}, slot_idx={}, layout.tag={s}, content={s}\n", .{
-                @intFromEnum(type_var),
-                @intFromEnum(resolved.var_),
-                idx,
-                @tagName(cached_layout.tag),
-                @tagName(resolved.desc.content),
-            });
-            return cached_layout;
+            return self.runtime_layout_store.getLayout(layout_idx);
         }
 
         const layout_idx = switch (resolved.desc.content) {
@@ -6467,17 +6438,7 @@ pub const Interpreter = struct {
             else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
         };
         slot_ptr.* = @intFromEnum(layout_idx) + 1;
-        const fresh_layout = self.runtime_layout_store.getLayout(layout_idx);
-        std.debug.print("DEBUG getRuntimeLayout FRESH: type_var={}, resolved.var_={}, layout.tag={s}, content={s}\n", .{
-            @intFromEnum(type_var),
-            @intFromEnum(resolved.var_),
-            @tagName(fresh_layout.tag),
-            @tagName(resolved.desc.content),
-        });
-        if (resolved.desc.content == .structure) {
-            std.debug.print("DEBUG getRuntimeLayout FRESH structure type={s}\n", .{@tagName(resolved.desc.content.structure)});
-        }
-        return fresh_layout;
+        return self.runtime_layout_store.getLayout(layout_idx);
     }
 
     const FieldAccumulator = struct {
