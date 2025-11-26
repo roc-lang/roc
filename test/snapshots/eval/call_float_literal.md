@@ -11,13 +11,16 @@ x = 12.34()
 MISSING METHOD - call_float_literal.md:1:5:1:10
 # PROBLEMS
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _({}) -> _ret_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **call_float_literal.md:1:5:1:10:**
 ```roc
 x = 12.34()
 ```
     ^^^^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _({}) -> _ret_
 
 
 # TOKENS

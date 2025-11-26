@@ -264,3 +264,243 @@ test "fx platform expect with numeric literal" {
     try testing.expectEqualStrings("", run_result.stdout);
     try testing.expectEqualStrings("", run_result.stderr);
 }
+
+test "fx platform match returning string" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run the app that has a match expression returning a string
+    // This tests that match expressions with string returns work correctly
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/match_str_return.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // The app should run successfully and exit with code 0
+    // It outputs "0" from the match expression
+    try testing.expectEqualStrings("0\n", run_result.stdout);
+    try testing.expectEqualStrings("", run_result.stderr);
+}
+
+test "fx platform match with wildcard" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that uses a match expression with a wildcard pattern
+    // This tests that wildcard patterns in match expressions work correctly
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/match_with_wildcard.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+}
+
+test "fx platform dbg missing return value" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that uses dbg as the last expression in main!.
+    // dbg is treated as a statement (side-effect only) when it's the final
+    // expression in a block, so the block returns {} as expected by main!.
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "--no-cache",
+            "test/fx/dbg_missing_return.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify that the dbg output was printed
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "this should work now") != null);
+}
+
+test "fx platform check unused state var reports correct errors" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run `roc check` on an app with unused variables and type annotations
+    // This test checks that the compiler reports the correct errors and doesn't
+    // produce extraneous unrelated errors from platform module resolution
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "check",
+            "test/fx/unused_state_var.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The check should fail with errors
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("ERROR: roc check succeeded but we expected it to fail with errors\n", .{});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            return error.RunFailed;
+        },
+    }
+
+    const stderr = run_result.stderr;
+
+    // Count occurrences of each error type
+    var unused_variable_count: usize = 0;
+    var module_not_found_count: usize = 0;
+    var exposed_but_not_defined_count: usize = 0;
+
+    var line_iter = std.mem.splitScalar(u8, stderr, '\n');
+    while (line_iter.next()) |line| {
+        if (std.mem.indexOf(u8, line, "UNUSED VARIABLE") != null) {
+            unused_variable_count += 1;
+        } else if (std.mem.indexOf(u8, line, "MODULE NOT FOUND") != null) {
+            module_not_found_count += 1;
+        } else if (std.mem.indexOf(u8, line, "EXPOSED BUT NOT DEFINED") != null) {
+            exposed_but_not_defined_count += 1;
+        }
+    }
+
+    // We expect exactly 2 UNUSED VARIABLE errors
+    // We should NOT get MODULE NOT FOUND or EXPOSED BUT NOT DEFINED errors
+    // (those were the extraneous errors this test was created to catch)
+    //
+    // Note: There are other errors (TYPE MISMATCH, UNDEFINED VARIABLE for main!,
+    // COMPTIME CRASH) that are pre-existing bugs related to platform/app interaction
+    // and should be fixed separately.
+    var test_passed = true;
+
+    if (unused_variable_count != 2) {
+        std.debug.print("\n❌ UNUSED VARIABLE count mismatch: expected 2, got {d}\n", .{unused_variable_count});
+        test_passed = false;
+    }
+
+    if (module_not_found_count != 0) {
+        std.debug.print("❌ MODULE NOT FOUND (extraneous): expected 0, got {d}\n", .{module_not_found_count});
+        test_passed = false;
+    }
+
+    if (exposed_but_not_defined_count != 0) {
+        std.debug.print("❌ EXPOSED BUT NOT DEFINED (extraneous): expected 0, got {d}\n", .{exposed_but_not_defined_count});
+        test_passed = false;
+    }
+
+    if (!test_passed) {
+        std.debug.print("\n========== FULL ROC CHECK OUTPUT ==========\n", .{});
+        std.debug.print("STDERR:\n{s}\n", .{stderr});
+        std.debug.print("==========================================\n\n", .{});
+        return error.ExtraneousErrorsFound;
+    }
+}
+
+test "fx platform checked directly finds sibling modules" {
+    // When checking a platform module directly (not through an app), sibling .roc
+    // files in the same directory should be discovered automatically. This means
+    // we should NOT get MODULE NOT FOUND errors for Stdout/Stderr/Stdin since
+    // those files exist in the same directory as main.roc.
+    const allocator = std.testing.allocator;
+
+    // Check the platform module directly (not through an app)
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "check",
+            "test/fx/platform/main.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    const stderr = run_result.stderr;
+
+    // Count MODULE NOT FOUND errors - we should get 0 since sibling modules are discovered
+    var module_not_found_count: usize = 0;
+
+    var line_iter = std.mem.splitScalar(u8, stderr, '\n');
+    while (line_iter.next()) |line| {
+        if (std.mem.indexOf(u8, line, "MODULE NOT FOUND") != null) {
+            module_not_found_count += 1;
+        }
+    }
+
+    // When checking a platform directly, sibling modules should be discovered,
+    // so we should NOT get MODULE NOT FOUND errors for valid imports.
+    if (module_not_found_count != 0) {
+        std.debug.print("\n❌ Expected 0 MODULE NOT FOUND errors (siblings should be discovered), got {d}\n", .{module_not_found_count});
+        std.debug.print("\n========== FULL ROC CHECK OUTPUT ==========\n", .{});
+        std.debug.print("STDERR:\n{s}\n", .{stderr});
+        std.debug.print("==========================================\n\n", .{});
+        return error.UnexpectedModuleNotFoundErrors;
+    }
+}

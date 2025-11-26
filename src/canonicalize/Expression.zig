@@ -128,6 +128,18 @@ pub const Expr = union(enum) {
         target_node_idx: u16,
         region: Region,
     },
+    /// Lookup of a required identifier from the platform's `requires` clause.
+    /// This represents a value that the app provides to the platform.
+    /// ```roc
+    /// platform "..."
+    ///     requires {} { main! : () => {} }
+    /// ...
+    /// main_for_host! = main!  # "main!" here is a required lookup
+    /// ```
+    e_lookup_required: struct {
+        /// Index into env.requires_types for this required identifier
+        requires_idx: ModuleEnv.RequiredType.SafeList.Idx,
+    },
     /// A sequence of zero or more elements of the same type
     /// ```roc
     /// ["one", "two", "three"]
@@ -303,6 +315,7 @@ pub const Expr = union(enum) {
     e_dot_access: struct {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
+        field_name_region: base.Region, // Region of just the field/method name for error reporting
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
     },
     /// Runtime error expression that crashes when executed.
@@ -402,10 +415,19 @@ pub const Expr = union(enum) {
         // String operations
         str_is_empty,
         str_concat,
+        str_contains,
         str_trim,
+        str_trim_start,
+        str_trim_end,
         str_caseless_ascii_equals,
         str_with_ascii_lowercased,
         str_with_ascii_uppercased,
+        str_starts_with,
+        str_ends_with,
+        str_repeat,
+        str_with_prefix,
+        str_drop_prefix,
+        str_drop_suffix,
 
         // Numeric to_str operations
         u8_to_str,
@@ -768,6 +790,23 @@ pub const Expr = union(enum) {
                     try tree.endNode(field_begin, field_attrs);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_required => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-required");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const requires_items = ir.requires_types.items.items;
+                const idx = e.requires_idx.toU32();
+                if (idx < requires_items.len) {
+                    const required_type = requires_items[idx];
+                    const ident_name = ir.getIdent(required_type.ident);
+                    try tree.pushStringPair("required-ident", ident_name);
                 }
 
                 try tree.endNode(begin, attrs);

@@ -6,8 +6,13 @@ const std = @import("std");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
+const types = @import("types");
+const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const ipc = @import("ipc");
+
+// Static empty import mapping for shim (no type name resolution needed)
+var shim_import_mapping = import_mapping_mod.ImportMapping.init(std.heap.page_allocator);
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
@@ -61,9 +66,13 @@ const ShimError = error{
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
-        ops.crash(msg2);
+        // Only show this generic error if we haven't already crashed with a more specific message
+        // (errors like Crash already triggered roc_crashed with details)
+        if (err != error.Crash) {
+            var buf: [256]u8 = undefined;
+            const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
+            ops.crash(msg2);
+        }
     };
 }
 
@@ -269,7 +278,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, builtin_modules: *const eval.BuiltinMo
         return error.OutOfMemory;
     };
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs) catch {
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

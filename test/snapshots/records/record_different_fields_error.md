@@ -578,7 +578,7 @@ This expression produces a value, but it's not being used:
          ^^^^^
 
 It has the type:
-    __a_
+    _a_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

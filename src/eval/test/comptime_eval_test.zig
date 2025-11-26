@@ -67,6 +67,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Create canonicalizer
@@ -78,6 +79,10 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Type check the module with builtins
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, &imported_envs);
+
     var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -89,7 +94,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,
@@ -144,6 +149,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Set up imports with correct type (AutoHashMap with Ident.Idx keys)
@@ -173,6 +179,9 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try imported_envs.append(gpa, builtin_module.env); // Builtin must be first (auto-import)
     try imported_envs.append(gpa, imported_module); // Then explicit imports
 
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);
     defer checker.deinit();
@@ -188,7 +197,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,

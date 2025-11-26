@@ -2,13 +2,19 @@ Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
 		is_empty : Str -> Bool
 		concat : Str, Str -> Str
+		contains : Str, Str -> Bool
 		trim : Str -> Str
+		trim_start : Str -> Str
+		trim_end : Str -> Str
 		caseless_ascii_equals : Str, Str -> Bool
 		with_ascii_lowercased : Str -> Str
 		with_ascii_uppercased : Str -> Str
-
-		contains : Str, Str -> Bool
-		contains = |_str, _other| True
+		starts_with : Str, Str -> Bool
+		ends_with : Str, Str -> Bool
+		repeat : Str, U64 -> Str
+		with_prefix : Str, Str -> Str
+		drop_prefix : Str, Str -> Str
+		drop_suffix : Str, Str -> Str
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
@@ -102,25 +108,25 @@ Builtin :: [].{
 		    Ok(_) => fallback
 		}
 
-		#eq : Try(ok, err), Try(ok, err) -> Bool
-		#	where [
-		#		ok.equals : ok, ok -> Bool,
-		#		err.equals : ok, ok -> Bool,
-		#	]
-		#eq = |a, b| match a {
-		#	Ok(a_val) => {
-		#		match b {
-		#			Ok(b_val) => a_val.equals(b_val)
-		#			Err(_) => False
-		#		}
-		#	}
-		#	Err(a_val) => {
-		#		match b {
-		#			Ok(_) => False
-		#			Err(b_val) => a_val.equals(b_val)
-		#		}
-		#	}
-		#}
+		is_eq : Try(ok, err), Try(ok, err) -> Bool
+			where [
+				ok.is_eq : ok, ok -> Bool,
+				err.is_eq : err, err -> Bool,
+			]
+		is_eq = |a, b| match a {
+			Ok(a_val) => {
+				match b {
+					Ok(b_val) => a_val.is_eq(b_val)
+					Err(_) => False
+				}
+			}
+			Err(a_val) => {
+				match b {
+					Ok(_) => False
+					Err(b_val) => a_val.is_eq(b_val)
+				}
+			}
+		}
 	}
 
 	Dict :: [EmptyDict].{}

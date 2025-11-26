@@ -11,13 +11,16 @@ type=expr
 MISSING METHOD - can_list_triple_nested_heterogeneous.md:1:12:1:13
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **can_list_triple_nested_heterogeneous.md:1:12:1:13:**
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
            ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

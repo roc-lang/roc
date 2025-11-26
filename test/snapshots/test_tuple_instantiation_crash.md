@@ -27,7 +27,7 @@ main = swap(1, 2)
        ^^^^^^^^^^
 
 It has the type:
-    __arg, _arg2 -> _ret where [c, d -> e.from_numeral : c, d -> e, c, d -> e.from_numeral : c, d -> e]_
+    _c, d -> _ret where [c.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _(a, b) -> (b, a)_

@@ -316,10 +316,11 @@ pub fn setupAutoImportedBuiltinTypes(
         // but compile_package.zig has special handling to not try parsing it as a local file.
 
         const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
-        const builtin_import_idx = try self.env.imports.getOrPut(
+        const builtin_import_idx = try self.env.imports.getOrPutWithIdent(
             gpa,
             self.env.common.getStringStore(),
             "Builtin",
+            builtin_ident,
         );
 
         const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
@@ -1700,6 +1701,10 @@ pub fn canonicalizeFile(
         .platform => |h| {
             self.env.module_kind = .platform;
             try self.createExposedScope(h.exposes);
+            // Extract required type signatures for type checking
+            // This stores the types in env.requires_types without creating local definitions
+            // Pass requires_rigids so R1, R2, etc. are in scope when processing signatures
+            try self.processRequiresSignatures(h.requires_rigids, h.requires_signatures);
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -2589,6 +2594,82 @@ fn createExposedScope(
     }
 }
 
+/// Process the requires_signatures from a platform header.
+///
+/// This extracts the required type signatures (like `main! : () => {}`) from the platform
+/// header and stores them in `env.requires_types`. These are used during app type checking
+/// to ensure the app's provided values match the platform's expected types.
+///
+/// The requires_rigids parameter contains the type variables declared in `requires { R1, R2 }`.
+/// These are introduced into scope before processing the signatures so that references to
+/// R1, R2, etc. in the signatures are properly resolved as type variables.
+///
+/// Note: Required identifiers (like `main!`) are NOT introduced into scope here. Instead,
+/// when an identifier is looked up and not found, we check env.requires_types to see if it's
+/// a required identifier from the platform. This avoids conflicts with local definitions.
+fn processRequiresSignatures(self: *Self, requires_rigids_idx: AST.Collection.Idx, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    // First, process the requires_rigids to add them to the type variable scope
+    // This allows R1, R2, etc. to be recognized when processing the signatures
+    const rigids_collection = self.parse_ir.store.getCollection(requires_rigids_idx);
+    for (self.parse_ir.store.exposedItemSlice(.{ .span = rigids_collection.span })) |exposed_idx| {
+        const exposed_item = self.parse_ir.store.getExposedItem(exposed_idx);
+        switch (exposed_item) {
+            .upper_ident => |upper| {
+                // Get the identifier for this rigid type variable (e.g., "R1")
+                const rigid_name = self.parse_ir.tokens.resolveIdentifier(upper.ident) orelse continue;
+                const rigid_region = self.parse_ir.tokenizedRegionToRegion(upper.region);
+
+                // Create a type annotation for this rigid variable
+                const rigid_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                    .name = rigid_name,
+                } }, rigid_region);
+
+                // Introduce it into the type variable scope
+                _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
+            },
+            else => {
+                // Skip lower_ident, upper_ident_star, malformed - these aren't valid for requires rigids
+            },
+        }
+    }
+
+    // Now process the requires_signatures with the rigids in scope
+    const requires_signatures = self.parse_ir.store.getTypeAnno(requires_signatures_idx);
+
+    // The requires_signatures should be a record type like { main! : () => {} }
+    switch (requires_signatures) {
+        .record => |record| {
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => {
+                        // Skip malformed fields
+                        continue;
+                    },
+                };
+
+                // Get the field name (e.g., "main!")
+                const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse continue;
+                const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
+
+                // Canonicalize the type annotation for this required identifier
+                var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnnoHelp(field.ty, &type_anno_ctx);
+
+                // Store the required type in the module env
+                _ = try self.env.requires_types.append(self.env.gpa, .{
+                    .ident = field_name,
+                    .type_anno = type_anno_idx,
+                    .region = field_region,
+                });
+            }
+        },
+        else => {
+            // requires_signatures should always be a record type from parsing
+            // If it's not, just skip processing (parser would have reported an error)
+        },
+    }
+}
+
 fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Start a new scratch space for exports
     const scratch_exports_start = self.env.store.scratchDefTop();
@@ -2745,11 +2826,12 @@ fn importAliased(
 ) std.mem.Allocator.Error!?Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
-    // 1. Get or create Import.Idx for this module
-    const module_import_idx = try self.env.imports.getOrPut(
+    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_name,
     );
 
     // 2. Resolve the alias
@@ -2785,6 +2867,8 @@ fn importAliased(
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
     // 9. Check that this module actually exists, and if not report an error
+    // Only check if module_envs is provided - when it's null, we don't know what modules
+    // exist yet (e.g., during standalone module canonicalization without full project context)
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
@@ -2792,12 +2876,12 @@ fn importAliased(
                 .region = import_region,
             } });
         }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
     }
+
+    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
+    // an imported module), remove it from exposed_type_texts so we don't report
+    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -2812,11 +2896,12 @@ fn importWithAlias(
 ) std.mem.Allocator.Error!Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
-    // 1. Get or create Import.Idx for this module
-    const module_import_idx = try self.env.imports.getOrPut(
+    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_name,
     );
 
     // 2. Add to scope: alias -> module_name mapping
@@ -2849,6 +2934,8 @@ fn importWithAlias(
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
     // 8. Check that this module actually exists, and if not report an error
+    // Only check if module_envs is provided - when it's null, we don't know what modules
+    // exist yet (e.g., during standalone module canonicalization without full project context)
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
@@ -2856,12 +2943,12 @@ fn importWithAlias(
                 .region = import_region,
             } });
         }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
     }
+
+    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
+    // an imported module), remove it from exposed_type_texts so we don't report
+    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -2875,11 +2962,12 @@ fn importUnaliased(
 ) std.mem.Allocator.Error!Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
-    // 1. Get or create Import.Idx for this module
-    const module_import_idx = try self.env.imports.getOrPut(
+    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_name,
     );
 
     // 2. Introduce exposed items into scope (no alias, no auto-expose of main type)
@@ -2906,6 +2994,8 @@ fn importUnaliased(
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
     // 6. Check that this module actually exists, and if not report an error
+    // Only check if module_envs is provided - when it's null, we don't know what modules
+    // exist yet (e.g., during standalone module canonicalization without full project context)
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
@@ -2913,12 +3003,12 @@ fn importUnaliased(
                 .region = import_region,
             } });
         }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
     }
+
+    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
+    // an imported module), remove it from exposed_type_texts so we don't report
+    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -3172,11 +3262,15 @@ fn introduceItemsAliased(
                         break :blk module_env.getExposedNodeIndexById(main_type_ident);
                     };
 
+                    // Get the type name text from the target module's ident store
+                    const original_type_name = module_env.getIdent(main_type_ident);
+
                     try self.setExternalTypeBinding(
                         current_scope,
                         module_alias,
                         module_name,
                         main_type_ident,
+                        original_type_name,
                         target_node_idx,
                         module_import_idx,
                         import_region,
@@ -3337,11 +3431,15 @@ fn introduceItemsUnaliased(
                 try self.scopeIntroduceExposedItem(local_ident, item_info);
 
                 if (is_type_name) {
+                    // Get the original type name text from current module's ident store
+                    const original_type_name = self.env.getIdent(exposed_item.name);
+
                     try self.setExternalTypeBinding(
                         current_scope,
                         local_ident,
                         module_name,
                         exposed_item.name,
+                        original_type_name,
                         target_node_idx,
                         module_import_idx,
                         import_region,
@@ -3376,11 +3474,15 @@ fn introduceItemsUnaliased(
             try self.scopeIntroduceExposedItem(local_ident, item_info);
 
             if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
+                // Get the original type name text from current module's ident store
+                const original_type_name = self.env.getIdent(exposed_item.name);
+
                 try self.setExternalTypeBinding(
                     current_scope,
                     local_ident,
                     module_name,
                     exposed_item.name,
+                    original_type_name,
                     null,
                     module_import_idx,
                     import_region,
@@ -3964,6 +4066,18 @@ pub fn canonicalizeExpr(
                             try self.scratch_free_vars.append(pattern_idx);
                             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                        }
+
+                        // Check if this is a required identifier from the platform's `requires` clause
+                        const requires_items = self.env.requires_types.items.items;
+                        for (requires_items, 0..) |req, idx| {
+                            if (req.ident == ident) {
+                                // Found a required identifier - create a lookup expression for it
+                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
+                                    .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
+                                } }, region);
+                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                            }
                         }
 
                         // We did not find the ident in scope or as an exposed item, and forward refs not allowed
@@ -7111,6 +7225,17 @@ fn canonicalizeTypeAnnoBasicType(
                 }
             }
 
+            // Check if this is a type variable in scope (e.g., R1, R2 from requires { R1, R2 })
+            switch (self.scopeLookupTypeVar(type_name_ident)) {
+                .found => |found_anno_idx| {
+                    // Found a type variable with this name - create a reference to it
+                    return try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
+                        .ref = found_anno_idx,
+                    } }, region);
+                },
+                .not_found => {},
+            }
+
             // Not found anywhere - undeclared type
             return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
                 .name = type_name_ident,
@@ -7803,6 +7928,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const cir_stmt = self.env.store.getStatement(canonicailzed_stmt.idx);
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
+                    .s_decl_gen => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
                     .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
                     else => {},
                 }
@@ -9542,12 +9668,14 @@ pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: S
 }
 
 /// Set an external type binding for an imported nominal type
+/// Also adds the qualified type name to the import mapping for error message display.
 fn setExternalTypeBinding(
     self: *Self,
     scope: *Scope,
     local_ident: Ident.Idx,
     module_ident: Ident.Idx,
     original_ident: Ident.Idx,
+    original_type_name: []const u8,
     target_node_idx: ?u16,
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
@@ -9584,6 +9712,20 @@ fn setExternalTypeBinding(
             .module_not_found = module_found_status == .module_not_found,
         },
     });
+
+    // Add to import mapping: qualified_name -> local_name
+    // This allows error messages to display the user's preferred name for the type
+    const module_name_text = self.env.getIdent(module_ident);
+
+    // Build the fully-qualified type name (e.g., "MyModule.Foo")
+    const qualified_name = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ module_name_text, original_type_name });
+    defer self.env.gpa.free(qualified_name);
+
+    // Intern the qualified name in the current module's ident store
+    const qualified_ident = try self.env.insertIdent(Ident.for_text(qualified_name));
+
+    // Add the mapping from qualified ident to local ident
+    try self.env.import_mapping.put(qualified_ident, local_ident);
 }
 
 /// Look up an exposed item in parent scopes (for shadowing detection)
@@ -9629,11 +9771,15 @@ fn getOrCreateAutoImport(self: *Self, module_name_text: []const u8) std.mem.Allo
         return existing_idx;
     }
 
-    // Create a new import using the imports map
-    const new_import_idx = try self.env.imports.getOrPut(
+    // Create ident for index-based lookups
+    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+
+    // Create a new import using the imports map (with ident for index-based lookups)
+    const new_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_ident,
     );
 
     // Store it in our import map
@@ -9999,12 +10145,13 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
     const receiver_idx = try self.canonicalizeFieldAccessReceiver(field_access) orelse return null;
 
     // Parse the right side - this could be just a field name or a method call
-    const field_name, const args = try self.parseFieldAccessRight(field_access);
+    const field_name, const field_name_region, const args = try self.parseFieldAccessRight(field_access);
 
     const dot_access_expr = CIR.Expr{
         .e_dot_access = .{
             .receiver = receiver_idx,
             .field_name = field_name,
+            .field_name_region = field_name_region,
             .args = args,
         },
     };
@@ -10037,16 +10184,24 @@ fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) std.mem
 /// Parse the right side of field access, handling both plain fields and method calls.
 ///
 /// Examples:
-/// - `user.name` - returns `("name", null)` for plain field access
-/// - `list.map(fn)` - returns `("map", args)` where args contains the canonicalized function
-/// - `obj.method(a, b)` - returns `("method", args)` where args contains canonicalized a and b
-fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!struct { Ident.Idx, ?Expr.Span } {
+/// - `user.name` - returns `("name", region, null)` for plain field access
+/// - `list.map(fn)` - returns `("map", region, args)` where args contains the canonicalized function
+/// - `obj.method(a, b)` - returns `("method", region, args)` where args contains canonicalized a and b
+fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!struct { Ident.Idx, Region, ?Expr.Span } {
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
 
     return switch (right_expr) {
         .apply => |apply| try self.parseMethodCall(apply),
-        .ident => |ident| .{ try self.resolveIdentOrFallback(ident.token), null },
-        else => .{ try self.createUnknownIdent(), null },
+        .ident => |ident| .{
+            try self.resolveIdentOrFallback(ident.token),
+            self.parse_ir.tokenizedRegionToRegion(ident.region),
+            null,
+        },
+        else => .{
+            try self.createUnknownIdent(),
+            self.parse_ir.tokenizedRegionToRegion(field_access.region), // fallback to whole region
+            null,
+        },
     };
 }
 
@@ -10056,11 +10211,25 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator
 /// - `.map(transform)` - extracts "map" as method name and canonicalizes `transform` argument
 /// - `.filter(predicate)` - extracts "filter" and canonicalizes `predicate`
 /// - `.fold(0, combine)` - extracts "fold" and canonicalizes both `0` and `combine` arguments
-fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) std.mem.Allocator.Error!struct { Ident.Idx, ?Expr.Span } {
+fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) std.mem.Allocator.Error!struct { Ident.Idx, Region, ?Expr.Span } {
     const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
-    const field_name = switch (method_expr) {
-        .ident => |ident| try self.resolveIdentOrFallback(ident.token),
-        else => try self.createUnknownIdent(),
+    const field_name, const field_name_region = switch (method_expr) {
+        .ident => |ident| blk: {
+            const raw_region = self.parse_ir.tokenizedRegionToRegion(ident.region);
+            // Skip the leading dot if present (parser includes it in ident region for field access)
+            const adjusted_region = if (raw_region.end.offset > raw_region.start.offset)
+                Region{ .start = .{ .offset = raw_region.start.offset + 1 }, .end = raw_region.end }
+            else
+                raw_region;
+            break :blk .{
+                try self.resolveIdentOrFallback(ident.token),
+                adjusted_region,
+            };
+        },
+        else => .{
+            try self.createUnknownIdent(),
+            self.parse_ir.tokenizedRegionToRegion(apply.region), // fallback
+        },
     };
 
     // Canonicalize the arguments using scratch system
@@ -10070,12 +10239,12 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
             try self.env.store.addScratchExpr(canonicalized.get_idx());
         } else {
             self.env.store.clearScratchExprsFrom(scratch_top);
-            return .{ field_name, null };
+            return .{ field_name, field_name_region, null };
         }
     }
     const args = try self.env.store.exprSpanFrom(scratch_top);
 
-    return .{ field_name, args };
+    return .{ field_name, field_name_region, args };
 }
 
 /// Resolve an identifier token or return a fallback "unknown" identifier.
