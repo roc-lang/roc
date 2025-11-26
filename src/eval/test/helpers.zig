@@ -593,6 +593,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)

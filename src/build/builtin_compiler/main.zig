@@ -627,7 +627,55 @@ pub fn main() !void {
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
     };
+
+    // Validate that BuiltinIndices contains all type declarations under Builtin
+    // This ensures BuiltinIndices stays in sync with the actual Builtin module content
+    try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
+
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
+}
+
+/// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
+/// Iterates through all statements and ensures every s_nominal_decl is present in BuiltinIndices,
+/// with the exception of "Num" which is a container type, not an auto-imported type.
+fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinIndices) !void {
+    // Collect all statement indices from BuiltinIndices using reflection
+    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(std.heap.page_allocator);
+    defer indexed_stmts.deinit();
+
+    const fields = @typeInfo(BuiltinIndices).@"struct".fields;
+    inline for (fields) |field| {
+        const stmt_idx = @field(indices, field.name);
+        try indexed_stmts.put(stmt_idx, {});
+    }
+
+    // Check all nominal type declarations in the Builtin module
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |decl| {
+                const header = env.store.getTypeHeader(decl.header);
+                const ident_text = env.getIdentText(header.name);
+
+                // Skip "Builtin.Num" - it's a container type, not an auto-imported type
+                if (std.mem.eql(u8, ident_text, "Builtin.Num")) {
+                    continue;
+                }
+
+                // Every other nominal type should be in BuiltinIndices
+                if (!indexed_stmts.contains(stmt_idx)) {
+                    std.debug.print("ERROR: Type '{s}' (stmt_idx={d}) is not in BuiltinIndices!\n", .{
+                        ident_text,
+                        @intFromEnum(stmt_idx),
+                    });
+                    std.debug.print("Add this type to BuiltinIndices in CIR.zig and builtin_compiler/main.zig\n", .{});
+                    return error.BuiltinIndicesIncomplete;
+                }
+            },
+            else => continue,
+        }
+    }
 }
 
 const ModuleDep = struct {

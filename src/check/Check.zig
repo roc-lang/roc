@@ -154,6 +154,8 @@ pub const CommonIdents = struct {
     str_stmt: can.CIR.Statement.Idx,
     /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
     builtin_module: ?*const ModuleEnv,
+    /// Indices of auto-imported types in the Builtin module (null when compiling Builtin module itself)
+    builtin_indices: ?can.CIR.BuiltinIndices,
     /// Cached identifier for "from_numeral" (used for numeric literal constraints)
     from_numeral: ?base.Ident.Idx = null,
 };
@@ -170,7 +172,12 @@ pub fn init(
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    var import_mapping = try @import("types").import_mapping.createImportMapping(gpa, mutable_cir.getIdentStore());
+    var import_mapping = try createImportMapping(
+        gpa,
+        mutable_cir.getIdentStore(),
+        common_idents.builtin_module,
+        common_idents.builtin_indices,
+    );
     errdefer import_mapping.deinit();
 
     return .{
@@ -4667,33 +4674,11 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Get the name fully qualified name of the function
-                // Czer creates this as `TypeName.method_name`
+                // The constraint's fn_name is already the fully qualified method name
+                // (e.g., "Basic.to_str" or "Try.is_eq"), created by the canonicalizer.
+                // We need to look up this string in the original env's ident store.
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
-
-                // Calculate the name of the static dispatch function
-                //
-                // TODO: This works for top-level types, but not for deeply
-                // nested types like: MyModule.A.B.C.my_func
-                self.static_dispatch_method_name_buf.clearRetainingCapacity();
-
-                if (nominal_type.ident.ident_idx == original_module_ident) {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}.{s}",
-                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
-                    );
-                }
-                const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
-
-                // Get the ident of this method in the original env
-                const ident_in_original_env = original_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
+                const ident_in_original_env = original_env.getIdentStoreConst().findByString(constraint_fn_name_bytes) orelse {
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -5071,3 +5056,47 @@ const EnvPool = struct {
         };
     }
 };
+
+/// Create the import mapping for auto-imported builtin types.
+/// Uses reflection over BuiltinIndices to automatically include all auto-imported types.
+pub fn createImportMapping(
+    gpa: std.mem.Allocator,
+    idents: *Ident.Store,
+    builtin_module: ?*const ModuleEnv,
+    builtin_indices: ?CIR.BuiltinIndices,
+) std.mem.Allocator.Error!types_mod.import_mapping.ImportMapping {
+    var mapping = types_mod.import_mapping.ImportMapping.init(gpa);
+    errdefer mapping.deinit();
+
+    const builtin_env = builtin_module orelse return mapping;
+    const indices = builtin_indices orelse return mapping;
+
+    const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
+    inline for (fields) |field| {
+        const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
+
+        const stmt = builtin_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |decl| {
+                const header = builtin_env.store.getTypeHeader(decl.header);
+                const qualified_name = builtin_env.getIdentText(header.name);
+
+                // Extract display name (last component after dots)
+                const display_name = blk: {
+                    var last_dot: usize = 0;
+                    for (qualified_name, 0..) |c, i| {
+                        if (c == '.') last_dot = i + 1;
+                    }
+                    break :blk qualified_name[last_dot..];
+                };
+
+                const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+                try mapping.put(qualified_ident, display_ident);
+            },
+            else => @panic("BuiltinIndices contains non-nominal statement"),
+        }
+    }
+
+    return mapping;
+}

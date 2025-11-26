@@ -807,6 +807,7 @@ pub const PackageEnv = struct {
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
         };
 
         var checker = try Check.init(
@@ -872,6 +873,7 @@ pub const PackageEnv = struct {
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
         };
 
         // Create module_envs map for auto-importing builtin types

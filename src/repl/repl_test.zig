@@ -339,6 +339,7 @@ test "Repl - minimal interpreter integration" {
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Step 4: Canonicalize

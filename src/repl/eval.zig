@@ -407,6 +407,7 @@ pub const Repl = struct {
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
             .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
         };
 
         // Create canonicalizer with nested types available for qualified name resolution

@@ -1255,7 +1255,7 @@ const Unifier = struct {
         const method_name = self.module_env.common.getIdent(method_ident);
         const type_name = self.module_env.common.getIdent(nominal_type.ident.ident_idx);
 
-        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, method_name) orelse return null;
+        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, nominal_type.ident.ident_idx, method_name) orelse return null;
 
         const method_def_idx: CIR.Def.Idx = blk: {
             if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {

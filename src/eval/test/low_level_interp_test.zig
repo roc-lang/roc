@@ -62,6 +62,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls to Str, List, etc.)

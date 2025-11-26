@@ -1623,6 +1623,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
+        .builtin_indices = builtin_modules.builtin_indices,
     };
 
     var app_imported_envs = std.ArrayList(*const ModuleEnv).empty;
@@ -1767,6 +1768,7 @@ fn compileModuleToSharedMemory(
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
         .builtin_module = builtin_modules.builtin_module.env,
+        .builtin_indices = builtin_modules.builtin_indices,
     };
 
     const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
@@ -2771,6 +2773,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Parse the source code as a full module

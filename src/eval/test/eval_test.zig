@@ -724,6 +724,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)

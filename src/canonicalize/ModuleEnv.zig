@@ -2454,10 +2454,8 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
 }
 
-/// Initialize a TypeWriter with an immutable ModuleEnv reference.
-/// The TypeWriter will build its own import mapping for auto-imported builtin types.
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore());
+    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
 }
 
 /// Inserts an identifier into the common environment and returns its index.

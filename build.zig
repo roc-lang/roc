@@ -164,7 +164,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} uses of std.mem.* in src/check/ or src/layout/. " ++
+                "Found {d} forbidden patterns (std.mem.* or findByString) in src/check/ or src/layout/. " ++
                     "See above for details on why this is forbidden and what to do instead.",
                 .{violations.items.len},
             );
@@ -210,6 +210,14 @@ const CheckTypeCheckerPatternsStep = struct {
                 if (char == '\n') {
                     const line = content[line_start..i];
 
+                    const trimmed = std.mem.trim(u8, line, " \t");
+                    // Skip comments
+                    if (std.mem.startsWith(u8, trimmed, "//")) {
+                        line_number += 1;
+                        line_start = i + 1;
+                        continue;
+                    }
+
                     // Check for std.mem. usage (but allow safe patterns)
                     if (std.mem.indexOf(u8, line, "std.mem.")) |idx| {
                         const after_match = line[idx + 8 ..];
@@ -234,16 +242,21 @@ const CheckTypeCheckerPatternsStep = struct {
                             std.mem.startsWith(u8, after_match, "copyForwards");
 
                         if (!is_allowed) {
-                            const trimmed = std.mem.trim(u8, line, " \t");
-                            // Skip comments
-                            if (!std.mem.startsWith(u8, trimmed, "//")) {
-                                try violations.append(allocator, .{
-                                    .file_path = full_path,
-                                    .line_number = line_number,
-                                    .line_content = try allocator.dupe(u8, trimmed),
-                                });
-                            }
+                            try violations.append(allocator, .{
+                                .file_path = full_path,
+                                .line_number = line_number,
+                                .line_content = try allocator.dupe(u8, trimmed),
+                            });
                         }
+                    }
+
+                    // Check for findByString usage - should use Ident.Idx comparison instead
+                    if (std.mem.indexOf(u8, line, "findByString") != null) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
                     }
 
                     line_number += 1;

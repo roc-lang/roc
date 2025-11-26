@@ -1140,6 +1140,7 @@ fn processSnapshotContent(
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,
         .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
     };
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
