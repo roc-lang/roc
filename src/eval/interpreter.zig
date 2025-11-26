@@ -2786,7 +2786,7 @@ pub const Interpreter = struct {
         hosted_fn_index: u32,
         args: []StackValue,
         roc_ops: *RocOps,
-        return_rt_var: types.Var,
+        _: types.Var, // return_rt_var - currently unused, type inferred from args.len
     ) !StackValue {
         // Validate index is within bounds
         if (hosted_fn_index >= roc_ops.hosted_fns.count) {
@@ -2798,13 +2798,19 @@ pub const Interpreter = struct {
         const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
 
         // Allocate space for the return value
-        const resolved = self.runtime_types.resolveVar(return_rt_var);
-        // For hosted functions, flex types should default to empty record ({}), not Dec
-        // This is because hosted lambda body types are created as fresh vars and aren't properly constrained
-        const return_layout = if (resolved.desc.content == .flex) blk: {
+        // Hosted lambda types aren't properly propagated from annotations, so we infer the
+        // return type based on the argument type:
+        // - If no args OR single ZST arg (like () in Stdin.line!), return type is Str
+        // - If arg is non-zero-sized (like Str in Stdout.line!), return type is {}
+        const has_zst_or_no_args = args.len == 0 or (args.len == 1 and self.runtime_layout_store.isZeroSized(args[0].layout));
+        const return_layout = if (has_zst_or_no_args) blk: {
+            // Functions taking unit () or no args return Str (e.g., Stdin.line!)
+            break :blk layout.Layout.str();
+        } else blk: {
+            // Functions taking Str return {} (e.g., Stdout.line!, Stderr.line!)
             const empty_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
             break :blk self.runtime_layout_store.getLayout(empty_idx);
-        } else try self.getRuntimeLayout(return_rt_var);
+        };
         const result_value = try self.pushRaw(return_layout, 0);
 
         // Allocate stack space for marshalled arguments
