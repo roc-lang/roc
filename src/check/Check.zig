@@ -5189,7 +5189,16 @@ pub fn createImportMapping(
 
                         const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
                         const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
-                        try mapping.put(qualified_ident, display_ident);
+
+                        // Only add if no mapping exists or if new name is "better"
+                        if (mapping.get(qualified_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
+                                try mapping.put(qualified_ident, display_ident);
+                            }
+                        } else {
+                            try mapping.put(qualified_ident, display_ident);
+                        }
                     },
                     else => @panic("BuiltinIndices contains non-nominal statement"),
                 }
@@ -5208,9 +5217,9 @@ pub fn createImportMapping(
         const local_name = cir.getIdentText(local_ident);
 
         if (mapping.get(qualified_ident)) |existing_display| {
-            // Only replace if the new name is shorter
+            // Only replace if the new name is "better"
             const existing_name = idents.getText(existing_display);
-            if (local_name.len < existing_name.len) {
+            if (displayNameIsBetter(local_name, existing_name)) {
                 try mapping.put(qualified_ident, local_ident);
             }
         } else {
@@ -5221,4 +5230,25 @@ pub fn createImportMapping(
     _ = module_envs; // Not needed anymore - mapping is built during canonicalization
 
     return mapping;
+}
+
+/// Determine if `new_name` is a "better" display name than `existing_name`.
+/// Returns true if new_name should replace existing_name.
+///
+/// The rules are:
+/// 1. Shorter names are better (fewer characters to read in error messages)
+/// 2. For equal lengths, lexicographically smaller wins (deterministic regardless of import order)
+pub fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
+    // Shorter is better
+    if (new_name.len != existing_name.len) {
+        return new_name.len < existing_name.len;
+    }
+    // Equal length: lexicographic comparison (lower byte value wins)
+    for (new_name, existing_name) |new_byte, existing_byte| {
+        if (new_byte != existing_byte) {
+            return new_byte < existing_byte;
+        }
+    }
+    // Identical strings - no replacement needed
+    return false;
 }
