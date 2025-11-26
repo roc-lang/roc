@@ -159,8 +159,11 @@ pub const Interpreter = struct {
         }
         pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
             if (a.module_id != b.module_id or a.func_id != b.func_id or a.args_len != b.args_len) return false;
-            if (a.args_len == 0) return true;
-            return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
+            // Compare type variable indices element-wise
+            for (0..a.args_len) |i| {
+                if (a.args_ptr[i] != b.args_ptr[i]) return false;
+            }
+            return true;
         }
     };
     const Binding = struct {
