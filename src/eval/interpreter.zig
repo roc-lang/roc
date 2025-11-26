@@ -3772,15 +3772,18 @@ pub const Interpreter = struct {
                 var err_index: ?usize = null;
                 var ok_payload_var: ?types.Var = null;
 
+                // Use precomputed idents for direct comparison instead of string matching
+                const ok_ident = self.builtins.indices.ok_ident;
+                const err_ident = self.builtins.indices.err_ident;
+
                 for (tag_list.items, 0..) |tag_info, i| {
-                    const tag_name = self.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name, "Ok")) {
+                    if (tag_info.name == ok_ident) {
                         ok_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                         if (arg_vars.len >= 1) {
                             ok_payload_var = arg_vars[0];
                         }
-                    } else if (std.mem.eql(u8, tag_name, "Err")) {
+                    } else if (tag_info.name == err_ident) {
                         err_index = i;
                     }
                 }

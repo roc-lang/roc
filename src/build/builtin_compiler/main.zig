@@ -559,6 +559,9 @@ pub fn main() !void {
     const f32_ident = builtin_env.common.findIdent("Builtin.Num.F32") orelse unreachable;
     const f64_ident = builtin_env.common.findIdent("Builtin.Num.F64") orelse unreachable;
     const numeral_ident = builtin_env.common.findIdent("Builtin.Num.Numeral") orelse unreachable;
+    // Tag idents for Try type (Ok and Err)
+    const ok_ident = builtin_env.common.findIdent("Ok") orelse unreachable;
+    const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
@@ -635,6 +638,8 @@ pub fn main() !void {
         .f32_ident = f32_ident,
         .f64_ident = f64_ident,
         .numeral_ident = numeral_ident,
+        .ok_ident = ok_ident,
+        .err_ident = err_ident,
     };
 
     // Validate that BuiltinIndices contains all type declarations under Builtin

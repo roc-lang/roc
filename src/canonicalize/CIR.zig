@@ -76,6 +76,9 @@ pub const BuiltinIndices = struct {
     f32_ident: Ident.Idx,
     f64_ident: Ident.Idx,
     numeral_ident: Ident.Idx,
+    // Tag idents for Try type
+    ok_ident: Ident.Idx,
+    err_ident: Ident.Idx,
 
     /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
     /// This allows direct ident comparison instead of string comparison for type identification.
