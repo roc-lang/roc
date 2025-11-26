@@ -54,13 +54,16 @@ UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
 MISSING METHOD - let_polymorphism_records.md:38:2:38:3
 # PROBLEMS
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **let_polymorphism_records.md:26:47:26:49:**
 ```roc
 updated_mismatch = update_data(str_container, 99)
 ```
                                               ^^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -76,13 +79,16 @@ It has the type:
     _{ ..a, data: b }, b -> { ..a, data: b }_
 
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _{ ..a, data: b }, b -> { ..a, data: b }_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **let_polymorphism_records.md:38:2:38:3:**
 ```roc
 	1 + update_data
 ```
 	^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _{ ..a, data: b }, b -> { ..a, data: b }_
 
 
 # TOKENS

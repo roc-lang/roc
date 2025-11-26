@@ -23,13 +23,16 @@ foo = if tru 0
 
 
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _{}_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **expr_if_missing_else.md:1:14:1:15:**
 ```roc
 foo = if tru 0
 ```
              ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _{}_
 
 
 # TOKENS

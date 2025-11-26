@@ -1669,10 +1669,8 @@ pub const ReportBuilder = struct {
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addReflowingText("This ");
-        try report.document.addAnnotated(method_name_str, .inline_code);
-        try report.document.addReflowingText(" method is being called on the type ");
-        try report.document.addAnnotated(snapshot_str, .type_variable);
-        try report.document.addReflowingText(", which has no method with that name:");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(" method is being called on a value whose type doesn't have that method:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -1682,6 +1680,15 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The value's type, which does not have a method named ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(", is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(snapshot_str, .type_variable);
         try report.document.addLineBreak();
 
         return report;
@@ -1713,19 +1720,16 @@ pub const ReportBuilder = struct {
         if (is_plus_operator) {
             try report.document.addReflowingText("The value before this ");
             try report.document.addAnnotated("+", .emphasized);
-            try report.document.addReflowingText(" operator has the type ");
-            try report.document.addAnnotated(snapshot_str, .emphasized);
-            try report.document.addReflowingText(", which has no ");
+            try report.document.addReflowingText(" operator has a type that doesn't have a ");
             try report.document.addAnnotated(method_name_str, .emphasized);
             try report.document.addReflowingText(" method:");
+            try report.document.addLineBreak();
         } else {
             try report.document.addReflowingText("This ");
             try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(" method is being called on the type ");
-            try report.document.addAnnotated(snapshot_str, .emphasized);
-            try report.document.addReflowingText(", which has no method with that name:");
+            try report.document.addReflowingText(" method is being called on a value whose type doesn't have that method:");
+            try report.document.addLineBreak();
         }
-        try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
             region_info,
@@ -1734,6 +1738,21 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
+        try report.document.addLineBreak();
+
+        if (is_plus_operator) {
+            try report.document.addReflowingText("The value's type, which does not have a method named ");
+            try report.document.addAnnotated(method_name_str, .emphasized);
+            try report.document.addReflowingText(", is:");
+        } else {
+            try report.document.addReflowingText("The value's type, which does not have a method named ");
+            try report.document.addAnnotated(method_name_str, .emphasized);
+            try report.document.addReflowingText(", is:");
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(snapshot_str, .type_variable);
 
         // TODO: Find similar method names and show a more helpful error message
         // here
