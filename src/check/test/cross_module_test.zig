@@ -168,3 +168,27 @@ test "cross-module - check type - static dispatch - no annotation & indirection"
     try test_env_b.assertDefType("val2", "A");
     try test_env_b.assertDefType("main", "(Str, Str, Str)");
 }
+
+test "displayNameIsBetter - shorter names are preferred" {
+    // Tests the core comparison logic used when multiple imports provide different
+    // display names for the same type (e.g., `import Foo as F` and `import Foo as Foo`).
+    // The shortest name wins for error message display. For equal lengths, the
+    // lexicographically smaller name wins (deterministic regardless of import order).
+    const displayNameIsBetter = Check.displayNameIsBetter;
+
+    // Shorter is better
+    try testing.expect(displayNameIsBetter("T", "Type"));
+    try testing.expect(displayNameIsBetter("AB", "ABC"));
+    try testing.expect(!displayNameIsBetter("Type", "T"));
+    try testing.expect(!displayNameIsBetter("ABC", "AB"));
+
+    // Equal length: lexicographically smaller wins
+    try testing.expect(displayNameIsBetter("Abc", "Bbc")); // 'A' < 'B'
+    try testing.expect(displayNameIsBetter("Aac", "Abc")); // 'a' < 'b' at position 1
+    try testing.expect(!displayNameIsBetter("Bbc", "Abc"));
+    try testing.expect(!displayNameIsBetter("Abc", "Aac"));
+
+    // Identical strings: no replacement
+    try testing.expect(!displayNameIsBetter("Same", "Same"));
+    try testing.expect(!displayNameIsBetter("", ""));
+}
