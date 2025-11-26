@@ -827,11 +827,10 @@ pub const Store = struct {
         }
 
         // Add origin information if it's from a different module
-        if (self.current_module_name) |current_module| {
-            const origin_module_name = self.idents.getText(nominal_type.origin_module);
-
-            // Only show origin if it's different from the current module
-            if (!std.mem.eql(u8, origin_module_name, current_module)) {
+        if (self.current_module_idx) |current_idx| {
+            // Only show origin if it's different from the current module (O(1) index comparison)
+            if (nominal_type.origin_module != current_idx) {
+                const origin_module_name = self.idents.getText(nominal_type.origin_module);
                 _ = try self.buf.writer().write(" (from ");
                 _ = try self.buf.writer().write(origin_module_name);
                 _ = try self.buf.writer().write(")");
@@ -1309,7 +1308,7 @@ pub const SnapshotWriter = struct {
     snapshots: *const Store,
     idents: *const Ident.Store,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
-    current_module_name: ?[]const u8,
+    current_module_idx: ?Ident.Idx,
     can_ir: ?*const ModuleEnv,
     other_modules: ?[]const *const ModuleEnv,
     next_name_index: u32,
@@ -1328,7 +1327,7 @@ pub const SnapshotWriter = struct {
             .snapshots = snapshots,
             .idents = idents,
             .import_mapping = import_mapping,
-            .current_module_name = null,
+            .current_module_idx = null,
             .can_ir = null,
             .other_modules = null,
             .next_name_index = 0,
@@ -1345,7 +1344,7 @@ pub const SnapshotWriter = struct {
         gpa: std.mem.Allocator,
         snapshots: *const Store,
         idents: *const Ident.Store,
-        current_module_name: []const u8,
+        current_module_idx: Ident.Idx,
         can_ir: *const ModuleEnv,
         other_modules: []const *const ModuleEnv,
     ) Self {
@@ -1353,7 +1352,7 @@ pub const SnapshotWriter = struct {
             .buf = std.array_list.Managed(u8).init(gpa),
             .snapshots = snapshots,
             .idents = idents,
-            .current_module_name = current_module_name,
+            .current_module_idx = current_module_idx,
             .can_ir = can_ir,
             .other_modules = other_modules,
             .next_name_index = 0,
@@ -1703,11 +1702,10 @@ pub const SnapshotWriter = struct {
         }
 
         // Add origin information if it's from a different module
-        if (self.current_module_name) |current_module| {
-            const origin_module_name = self.idents.getText(nominal_type.origin_module);
-
-            // Only show origin if it's different from the current module
-            if (!std.mem.eql(u8, origin_module_name, current_module)) {
+        if (self.current_module_idx) |current_idx| {
+            // Only show origin if it's different from the current module (O(1) index comparison)
+            if (nominal_type.origin_module != current_idx) {
+                const origin_module_name = self.idents.getText(nominal_type.origin_module);
                 _ = try self.buf.writer().write(" (from ");
                 _ = try self.buf.writer().write(origin_module_name);
                 _ = try self.buf.writer().write(")");
