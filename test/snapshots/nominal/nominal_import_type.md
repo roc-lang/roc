@@ -11,9 +11,19 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - nominal_import_type.md:1:1:1:13
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `Color` was not found in this Roc project.
+
+You're attempting to use this module here:
+**nominal_import_type.md:1:1:1:13:**
+```roc
+import Color
+```
+^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

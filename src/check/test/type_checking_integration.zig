@@ -2228,3 +2228,66 @@ test "check type - pure zero-arg function annotation" {
     // Expected: zero-arg pure function returning empty record
     try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
 }
+
+test "imports of non-existent modules produce MODULE NOT FOUND errors" {
+    // This test verifies that importing modules that don't exist produces
+    // MODULE NOT FOUND errors. This is a regression test - a parser change
+    // for zero-arg functions accidentally caused these errors to disappear.
+    //
+    // Source from test/snapshots/can_import_comprehensive.md
+    const source =
+        \\import json.Json
+        \\import http.Client as Http exposing [get, post]
+        \\import utils.String as Str
+        \\
+        \\main = {
+        \\    client = Http.get
+        \\    parser = Json.utf8
+        \\    helper = Str.trim
+        \\
+        \\    # Test direct module access
+        \\    result1 = Json.parse
+        \\
+        \\    # Test aliased module access
+        \\    result2 = Http.post
+        \\
+        \\    # Test exposed items (should work without module prefix)
+        \\    result3 = get
+        \\    result4 = post
+        \\
+        \\    # Test multiple qualified access
+        \\    combined = Str.concat
+        \\
+        \\    (
+        \\        client,
+        \\        parser,
+        \\        helper,
+        \\        result1,
+        \\        result2,
+        \\        result3,
+        \\        result4,
+        \\        combined,
+        \\    )
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+
+    // Count MODULE NOT FOUND errors
+    var module_not_found_count: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .module_not_found) {
+            module_not_found_count += 1;
+        }
+    }
+
+    // We expect exactly 3 MODULE NOT FOUND errors:
+    // 1. json.Json
+    // 2. http.Client
+    // 3. utils.String
+    try testing.expectEqual(@as(usize, 3), module_not_found_count);
+}

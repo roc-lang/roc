@@ -10,8 +10,20 @@ import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
+MODULE NOT FOUND - can_import_json.md:1:1:1:17
 UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_json.md:1:1:1:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `utf8` in this scope.
 Is there an `import` or `exposing` missing up-top?

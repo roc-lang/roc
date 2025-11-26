@@ -200,6 +200,8 @@ PARSE ERROR - everything.md:56:40:56:42
 MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:13:7
 UNDECLARED TYPE - everything.md:43:5:43:6
+MODULE NOT FOUND - everything.md:2:1:5:2
+MODULE NOT FOUND - everything.md:6:1:9:2
 EXPECTED NOMINAL TYPE - everything.md:71:7:74:3
 UNUSED VARIABLE - everything.md:88:5:88:6
 UNUSED VARIABLE - everything.md:93:4:93:5
@@ -1204,6 +1206,32 @@ This type is referenced here:
 ) : C(
 ```
     ^
+
+
+**MODULE NOT FOUND**
+The module `I1` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:2:1:5:2:**
+```roc
+import I1 exposing [
+	I11,
+	I12
+]
+```
+
+
+**MODULE NOT FOUND**
+The module `I2` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:6:1:9:2:**
+```roc
+import I2 exposing [
+	I21 as Ias1,
+	I22 as Ias2
+]
+```
 
 
 **EXPECTED NOMINAL TYPE**

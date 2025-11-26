@@ -2864,6 +2864,21 @@ fn importAliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
+    // 9. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        if (!envs_map.contains(module_name)) {
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report
     // "EXPOSED BUT NOT DEFINED" for re-exported imports.
@@ -2918,6 +2933,21 @@ fn importWithAlias(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
+    // 8. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        if (!envs_map.contains(module_name)) {
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report
     // "EXPOSED BUT NOT DEFINED" for re-exported imports.
@@ -2964,6 +2994,21 @@ fn importUnaliased(
     // 5. Add the module to the current scope so it can be used in qualified lookups
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+
+    // 6. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        if (!envs_map.contains(module_name)) {
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report

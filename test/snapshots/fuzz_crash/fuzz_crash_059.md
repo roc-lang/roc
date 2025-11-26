@@ -17,6 +17,7 @@ PARSE ERROR - fuzz_crash_059.md:2:9:2:13
 PARSE ERROR - fuzz_crash_059.md:2:13:2:14
 PARSE ERROR - fuzz_crash_059.md:2:14:2:15
 PARSE ERROR - fuzz_crash_059.md:2:15:2:16
+MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -104,6 +105,17 @@ This is an unexpected parsing error. Please check your syntax.
 G	if 0{}else||0
 ```
  	            ^
+
+
+**MODULE NOT FOUND**
+The module `B` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_059.md:1:20:2:2:**
+```roc
+app[]{f:platform""}import	B	as
+G	if 0{}else||0
+```
 
 
 # TOKENS

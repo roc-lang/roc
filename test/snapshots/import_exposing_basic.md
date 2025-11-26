@@ -15,9 +15,21 @@ main = {
 }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - import_exposing_basic.md:1:1:1:43
 UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
 UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**import_exposing_basic.md:1:1:1:43:**
+```roc
+import json.Json exposing [decode, encode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `encode` in this scope.
 Is there an `import` or `exposing` missing up-top?

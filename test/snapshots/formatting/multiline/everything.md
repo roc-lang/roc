@@ -123,6 +123,8 @@ h = |x, y| {
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:22:3
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:23:1:33:3
+MODULE NOT FOUND - everything.md:2:1:5:2
+MODULE NOT FOUND - everything.md:6:1:9:2
 EXPECTED NOMINAL TYPE - everything.md:77:7:80:3
 UNUSED VARIABLE - everything.md:94:5:94:6
 UNUSED VARIABLE - everything.md:99:4:99:5
@@ -171,6 +173,32 @@ B(b) : b
 			b,
 		) -> Str,
 	]
+```
+
+
+**MODULE NOT FOUND**
+The module `I1` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:2:1:5:2:**
+```roc
+import I1 exposing [
+	I11,
+	I12,
+]
+```
+
+
+**MODULE NOT FOUND**
+The module `I2` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:6:1:9:2:**
+```roc
+import I2 exposing [
+	I21 as Ias1,
+	I22 as Ias2,
+]
 ```
 
 

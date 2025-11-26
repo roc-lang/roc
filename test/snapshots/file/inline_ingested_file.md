@@ -15,6 +15,7 @@ PARSE ERROR - inline_ingested_file.md:1:8:1:9
 PARSE ERROR - inline_ingested_file.md:1:9:1:19
 PARSE ERROR - inline_ingested_file.md:1:19:1:20
 PARSE ERROR - inline_ingested_file.md:1:21:1:23
+MODULE NOT FOUND - inline_ingested_file.md:2:1:2:12
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 **PARSE ERROR**
@@ -59,6 +60,17 @@ This is an unexpected parsing error. Please check your syntax.
 import "users.json" as data : Str
 ```
                     ^^
+
+
+**MODULE NOT FOUND**
+The module `Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**inline_ingested_file.md:2:1:2:12:**
+```roc
+import Json
+```
+^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

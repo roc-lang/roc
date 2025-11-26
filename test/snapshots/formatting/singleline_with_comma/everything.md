@@ -38,6 +38,8 @@ h = |x, y,| {
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:63
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:63
+MODULE NOT FOUND - everything.md:2:1:2:31
+MODULE NOT FOUND - everything.md:3:1:3:47
 EXPECTED NOMINAL TYPE - everything.md:19:7:19:15
 UNUSED VARIABLE - everything.md:24:10:24:11
 UNUSED VARIABLE - everything.md:25:9:25:10
@@ -69,6 +71,28 @@ You're attempting do this here:
 B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `I1` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:2:1:2:31:**
+```roc
+import I1 exposing [I11, I12,]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `I2` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:3:1:3:47:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **EXPECTED NOMINAL TYPE**

@@ -40,7 +40,10 @@ main = {
 }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - can_import_comprehensive.md:1:1:1:17
+MODULE NOT FOUND - can_import_comprehensive.md:2:1:2:48
 DUPLICATE DEFINITION - can_import_comprehensive.md:3:1:3:27
+MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:27
 UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
 UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
@@ -50,6 +53,28 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
 UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
 UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_comprehensive.md:1:1:1:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_comprehensive.md:2:1:2:48:**
+```roc
+import http.Client as Http exposing [get, post]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **DUPLICATE DEFINITION**
 The name `Str` is being redeclared in this scope.
 
@@ -66,6 +91,17 @@ But `Str` was already defined here:
 import json.Json
 ```
 ^
+
+
+**MODULE NOT FOUND**
+The module `utils.String` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_comprehensive.md:3:1:3:27:**
+```roc
+import utils.String as Str
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

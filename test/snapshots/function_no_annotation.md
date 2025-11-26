@@ -21,8 +21,20 @@ process! = |x| print_number!(multiply(x, 2))
 main! = process!(42)
 ~~~
 # EXPECTED
+MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
 UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**function_no_annotation.md:3:1:3:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?

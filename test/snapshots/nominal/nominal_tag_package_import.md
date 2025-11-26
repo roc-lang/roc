@@ -13,9 +13,19 @@ blue : CC.Color
 blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - nominal_tag_package_import.md:2:1:2:26
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `styles.Color` was not found in this Roc project.
+
+You're attempting to use this module here:
+**nominal_tag_package_import.md:2:1:2:26:**
+```roc
+import styles.Color as CC
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

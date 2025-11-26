@@ -10,8 +10,20 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
+MODULE NOT FOUND - can_import_with_alias.md:1:1:1:27
 UNDEFINED VARIABLE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_with_alias.md:1:1:1:27:**
+```roc
+import json.Json as MyJson
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `decode` in this scope.
 Is there an `import` or `exposing` missing up-top?

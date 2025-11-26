@@ -14,9 +14,19 @@ decode_things # After member name
 				[a.Decode]
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - where_clauses_10.md:1:1:1:32
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `Decode` was not found in this Roc project.
+
+You're attempting to use this module here:
+**where_clauses_10.md:1:1:1:32:**
+```roc
+import Decode exposing [Decode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

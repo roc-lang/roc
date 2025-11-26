@@ -15,9 +15,21 @@ main = {
 }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - import_exposing_alias.md:1:1:1:65
 UNDEFINED VARIABLE - import_exposing_alias.md:5:12:5:18
 UNDEFINED VARIABLE - import_exposing_alias.md:6:12:6:20
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**import_exposing_alias.md:1:1:1:65:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `toJson` in this scope.
 Is there an `import` or `exposing` missing up-top?

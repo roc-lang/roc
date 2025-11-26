@@ -10,9 +10,19 @@ import pf.Stdout exposing [line!, write!]
 main = 42
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - exposed_items_test.md:1:1:1:42
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**exposed_items_test.md:1:1:1:42:**
+```roc
+import pf.Stdout exposing [line!, write!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,
