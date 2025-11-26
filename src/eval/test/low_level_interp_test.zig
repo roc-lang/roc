@@ -53,11 +53,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     errdefer builtin_module.deinit();
 
     try module_env.initCIRFields(gpa, "test");
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
@@ -87,7 +84,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();

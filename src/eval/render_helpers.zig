@@ -149,7 +149,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
-                if (acc.findFieldIndex(ctx.env.tag_ident)) |idx| {
+                if (acc.findFieldIndex(ctx.env.idents.tag)) |idx| {
                     const tag_field = try acc.getFieldByIndex(idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
@@ -165,7 +165,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
-                    if (acc.findFieldIndex(ctx.env.payload_ident)) |pidx| {
+                    if (acc.findFieldIndex(ctx.env.idents.payload)) |pidx| {
                         const payload = try acc.getFieldByIndex(pidx);
                         const args_range = tags.items(.args)[tag_index];
                         const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
@@ -236,7 +236,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
         },
         .nominal_type => |nominal| {
-            if (nominal.ident.ident_idx == ctx.env.box_type_ident) {
+            if (nominal.ident.ident_idx == ctx.env.idents.box) {
                 const args_range = nominal.vars;
                 const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
                 if (arg_vars.len != 1) return error.TypeMismatch;

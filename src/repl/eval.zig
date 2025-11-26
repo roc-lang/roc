@@ -398,11 +398,8 @@ pub const Repl = struct {
         const try_stmt_in_try_module = self.builtin_indices.try_type;
         const str_stmt_in_builtin_module = self.builtin_indices.str_type;
 
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
-            .list = try module_env.insertIdent(base.Ident.for_text("List")),
-            .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = bool_stmt_in_bool_module,
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
@@ -452,7 +449,7 @@ pub const Repl = struct {
             &imported_modules,
             &module_envs_map,
             &cir.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         ) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };

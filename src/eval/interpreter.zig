@@ -226,8 +226,6 @@ pub const Interpreter = struct {
     def_stack: std.array_list.Managed(DefInProgress),
     /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
-    /// Receiver type for method calls (set before calling low-level methods like Try.is_eq)
-    method_receiver_type: ?types.Var,
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
 
@@ -340,12 +338,11 @@ pub const Interpreter = struct {
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
-            .method_receiver_type = null,
             .last_error_message = null,
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.builtin_str_ident);
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str);
 
         return result;
     }
@@ -854,61 +851,61 @@ pub const Interpreter = struct {
             },
             .e_unary_minus => |unary_minus| {
                 // Desugar `-a` to `a.negate()`
-                return try self.dispatchUnaryOpMethod(self.env.negate_ident, unary_minus.expr, roc_ops);
+                return try self.dispatchUnaryOpMethod(self.env.idents.negate, unary_minus.expr, roc_ops);
             },
             .e_unary_not => |unary_not| {
                 // Desugar `!a` to `a.not()`
-                return try self.dispatchUnaryOpMethod(self.env.not_ident, unary_not.expr, roc_ops);
+                return try self.dispatchUnaryOpMethod(self.env.idents.not, unary_not.expr, roc_ops);
             },
             .e_binop => |binop| {
                 switch (binop.op) {
                     .add => {
                         // Desugar `a + b` to `a.plus(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.plus_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.plus, binop.lhs, binop.rhs, roc_ops);
                     },
                     .sub => {
                         // Desugar `a - b` to `a.minus(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.minus_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.minus, binop.lhs, binop.rhs, roc_ops);
                     },
                     .mul => {
                         // Desugar `a * b` to `a.times(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.times_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.times, binop.lhs, binop.rhs, roc_ops);
                     },
                     .div => {
                         // Desugar `a / b` to `a.div_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.div_by_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.div_by, binop.lhs, binop.rhs, roc_ops);
                     },
                     .div_trunc => {
                         // Desugar `a // b` to `a.div_trunc_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.div_trunc_by_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.div_trunc_by, binop.lhs, binop.rhs, roc_ops);
                     },
                     .rem => {
                         // Desugar `a % b` to `a.rem_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.rem_by_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.rem_by, binop.lhs, binop.rhs, roc_ops);
                     },
                     .lt => {
                         // Desugar `a < b` to `a.is_lt(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_lt_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.is_lt, binop.lhs, binop.rhs, roc_ops);
                     },
                     .le => {
                         // Desugar `a <= b` to `a.is_lte(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_lte_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.is_lte, binop.lhs, binop.rhs, roc_ops);
                     },
                     .gt => {
                         // Desugar `a > b` to `a.is_gt(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_gt_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.is_gt, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ge => {
                         // Desugar `a >= b` to `a.is_gte(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_gte_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.is_gte, binop.lhs, binop.rhs, roc_ops);
                     },
                     .eq => {
                         // Desugar `a == b` to `a.is_eq(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_eq_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ne => {
                         // Desugar `a != b` to `a.is_ne(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.is_ne_ident, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.env.idents.is_ne, binop.lhs, binop.rhs, roc_ops);
                     },
                     .@"or" => {
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
@@ -1384,7 +1381,7 @@ pub const Interpreter = struct {
                     // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
+                    const tag_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
                         self.triggerCrash("DEBUG: e_zero_argument_tag tag field not found", false, roc_ops);
                         return error.Crash;
                     };
@@ -1459,11 +1456,11 @@ pub const Interpreter = struct {
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
+                    const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
                         self.triggerCrash("DEBUG: e_tag tag field not found", false, roc_ops);
                         return error.Crash;
                     };
-                    const payload_field_idx = acc.findFieldIndex(self.env.payload_ident) orelse {
+                    const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
                         self.triggerCrash("DEBUG: e_tag payload field not found", false, roc_ops);
                         return error.Crash;
                     };
@@ -2337,13 +2334,13 @@ pub const Interpreter = struct {
                     switch (base_content.structure) {
                         .nominal_type => |nominal| {
                             // Check if this is Box using ident comparison
-                            if (nominal.ident.ident_idx == self.env.box_type_ident) {
-                                if (dot_access.field_name == self.env.box_method_ident) {
+                            if (nominal.ident.ident_idx == self.env.idents.box) {
+                                if (dot_access.field_name == self.env.idents.box_method) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
                                     const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
                                     const result_layout = try self.getRuntimeLayout(result_rt_var);
                                     return try self.makeBoxValueFromLayout(result_layout, arg_values[0], roc_ops);
-                                } else if (dot_access.field_name == self.env.unbox_method_ident) {
+                                } else if (dot_access.field_name == self.env.idents.unbox_method) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
                                     const box_value = arg_values[0];
                                     const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
@@ -3675,8 +3672,8 @@ pub const Interpreter = struct {
                 var ok_payload_var: ?types.Var = null;
 
                 // Use precomputed idents from the module env for direct comparison instead of string matching
-                const ok_ident = self.env.ok_ident;
-                const err_ident = self.env.err_ident;
+                const ok_ident = self.env.idents.ok;
+                const err_ident = self.env.idents.err;
 
                 for (tag_list.items, 0..) |tag_info, i| {
                     if (tag_info.name == ok_ident) {
@@ -3724,10 +3721,10 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
+                    const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
                         return error.NotImplemented;
                     };
-                    const payload_field_idx = acc.findFieldIndex(self.env.payload_ident) orelse {
+                    const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
                         return error.NotImplemented;
                     };
 
@@ -3817,7 +3814,7 @@ pub const Interpreter = struct {
                 // Get is_negative field
                 // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
                 const layout_env = self.runtime_layout_store.env;
-                const is_neg_idx = acc.findFieldIndex(layout_env.is_negative_ident) orelse {
+                const is_neg_idx = acc.findFieldIndex(layout_env.idents.is_negative) orelse {
                     self.triggerCrash("num_from_numeral: missing is_negative field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3828,7 +3825,7 @@ pub const Interpreter = struct {
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
-                const before_idx = acc.findFieldIndex(layout_env.digits_before_pt_ident) orelse {
+                const before_idx = acc.findFieldIndex(layout_env.idents.digits_before_pt) orelse {
                     self.triggerCrash("num_from_numeral: missing digits_before_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3838,7 +3835,7 @@ pub const Interpreter = struct {
                 };
 
                 // Get digits_after_pt field (List(U8))
-                const after_idx = acc.findFieldIndex(layout_env.digits_after_pt_ident) orelse {
+                const after_idx = acc.findFieldIndex(layout_env.idents.digits_after_pt) orelse {
                     self.triggerCrash("num_from_numeral: missing digits_after_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3894,8 +3891,8 @@ pub const Interpreter = struct {
                 var err_payload_var: ?types.Var = null;
 
                 // Use precomputed idents from the module env for direct comparison instead of string matching
-                const ok_ident = self.env.ok_ident;
-                const err_ident = self.env.err_ident;
+                const ok_ident = self.env.idents.ok;
+                const err_ident = self.env.idents.err;
 
                 for (tag_list.items, 0..) |tag_info, i| {
                     if (tag_info.name == ok_ident) {
@@ -4059,10 +4056,10 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env.tag_ident) orelse {
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse {
                         return error.NotImplemented;
                     };
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env.payload_ident) orelse {
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse {
                         return error.NotImplemented;
                     };
 
@@ -4231,7 +4228,7 @@ pub const Interpreter = struct {
 
                                     // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
                                     // Use layout store's env for field lookup to match comptime_evaluator
-                                    if (err_acc.findFieldIndex(layout_env.tag_ident)) |inner_tag_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.idents.tag)) |inner_tag_idx| {
                                         const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx);
                                         if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
                                             var tmp = inner_tag_field;
@@ -4241,7 +4238,7 @@ pub const Interpreter = struct {
                                     }
 
                                     // Set the payload to the Str
-                                    if (err_acc.findFieldIndex(layout_env.payload_ident)) |inner_payload_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.idents.payload)) |inner_payload_idx| {
                                         const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx);
                                         if (inner_payload_field.ptr) |str_ptr| {
                                             const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
@@ -5327,7 +5324,7 @@ pub const Interpreter = struct {
             },
             .record => {
                 var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse return error.TypeMismatch;
+                const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse return error.TypeMismatch;
                 const tag_field = try acc.getFieldByIndex(tag_field_idx);
                 var tag_index: usize = undefined;
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
@@ -5336,7 +5333,7 @@ pub const Interpreter = struct {
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
-                if (acc.findFieldIndex(self.env.payload_ident)) |payload_idx| {
+                if (acc.findFieldIndex(self.env.idents.payload)) |payload_idx| {
                     payload_value = try acc.getFieldByIndex(payload_idx);
                     if (payload_value) |field_value| {
                         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -5908,7 +5905,7 @@ pub const Interpreter = struct {
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
         // Check if it's the Builtin module
-        if (origin_module == self.env.builtin_module_ident) {
+        if (origin_module == self.env.idents.builtin_module) {
             // In shim context, builtins are embedded in the main module env
             // (builtin_module_env is null), so fall back to self.env
             return self.builtin_module_env orelse self.env;
@@ -6006,7 +6003,7 @@ pub const Interpreter = struct {
                     },
                     .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                         // Anonymous structural types have implicit is_eq
-                        if (method_ident == self.env.is_eq_ident) {
+                        if (method_ident == self.env.idents.is_eq) {
                             const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
                                 // If structural equality is not implemented for this type, return false
                                 if (err == error.NotImplemented) {
@@ -6070,11 +6067,6 @@ pub const Interpreter = struct {
         const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
         if (lambda_expr == .e_low_level_lambda) {
             const low_level = lambda_expr.e_low_level_lambda;
-
-            // Set receiver type for methods that need it (like Try.is_eq)
-            const saved_receiver_type = self.method_receiver_type;
-            self.method_receiver_type = lhs_rt_var;
-            defer self.method_receiver_type = saved_receiver_type;
 
             // Dispatch to actual low-level builtin implementation
             // Binary ops don't need return type info (not num_from_int_digits etc)
@@ -6287,7 +6279,7 @@ pub const Interpreter = struct {
 
     /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
     fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
-        const origin_module_id = self.env.builtin_module_ident;
+        const origin_module_id = self.env.idents.builtin_module;
 
         // Use fully-qualified type name "Builtin.Num.U8" etc.
         // This allows method lookup to work correctly

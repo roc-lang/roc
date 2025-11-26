@@ -58,12 +58,14 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
+fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
+    @panic("Polymorphism tests should never trigger dbg");
+}
 fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    // Polymorphism tests never trigger expect failures; retain the callback to satisfy RocOps.
+    @panic("Polymorphism tests should never trigger expect failures");
 }
 fn testRocCrashed(_: *const RocCrashed, _: *anyopaque) callconv(.c) void {
-    // Polymorphism tests never trigger crashes; retain the callback to satisfy RocOps.
+    @panic("Polymorphism tests should never trigger crashes");
 }
 
 fn makeOps(host: *TestHost) RocOps {
