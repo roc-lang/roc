@@ -634,7 +634,7 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where List is defined.
     const origin_module_id = if (self.common_idents.builtin_module) |_|
-        self.cir.builtin_module_ident
+        self.cir.idents.builtin_module
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
@@ -673,7 +673,7 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 /// They have no type parameters and their backing is the empty tag union []
 fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
     const origin_module_id = if (self.common_idents.builtin_module) |_|
-        self.cir.builtin_module_ident
+        self.cir.idents.builtin_module
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
@@ -796,7 +796,7 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Box is defined.
     const origin_module_id = if (self.common_idents.builtin_module) |_|
-        self.cir.builtin_module_ident
+        self.cir.idents.builtin_module
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
@@ -821,14 +821,14 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Try is defined.
     const origin_module_id = if (self.common_idents.builtin_module) |_|
-        self.cir.builtin_module_ident
+        self.cir.idents.builtin_module
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
     // Use the precomputed "Builtin.Try" ident from ModuleEnv
     // This ensures our Try type unifies correctly with the Try type from actual method signatures
     const try_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.builtin_try_ident,
+        .ident_idx = self.cir.idents.builtin_try,
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -851,13 +851,13 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Numeral is defined.
     const origin_module_id = if (self.common_idents.builtin_module) |_|
-        self.cir.builtin_module_ident
+        self.cir.idents.builtin_module
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
     // Use the precomputed "Builtin.Num.Numeral" ident from ModuleEnv
     const numeral_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.builtin_numeral_ident,
+        .ident_idx = self.cir.idents.builtin_numeral,
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -4101,7 +4101,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 
     // Desugar -a to a.negate()
     // Get the negate identifier
-    const method_name = self.cir.negate_ident;
+    const method_name = self.cir.idents.negate;
 
     // Create the function type: operand_type -> ret_type
     const args_range = try self.types.appendVars(&.{operand_var});
@@ -4206,7 +4206,7 @@ fn checkBinopExpr(
             if (is_nominal) {
                 // User-defined nominal type: use static dispatch to call the plus method
                 // Get the pre-cached "plus" identifier from the ModuleEnv
-                const method_name = self.cir.plus_ident;
+                const method_name = self.cir.idents.plus;
 
                 // Create the function type: lhs_type, rhs_type -> ret_type
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
@@ -4327,7 +4327,7 @@ fn checkBinopExpr(
                 try self.unifyWith(expr_var, .err, env);
             } else {
                 // Get the appropriate method name
-                const method_name = if (binop.op == .eq) self.cir.is_eq_ident else self.cir.is_ne_ident;
+                const method_name = if (binop.op == .eq) self.cir.idents.is_eq else self.cir.idents.is_ne;
 
                 // Create the function type: lhs_type, rhs_type -> Bool
                 const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
@@ -4730,7 +4730,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const original_env: *const ModuleEnv = blk: {
                 if (is_this_module) {
                     break :blk self.cir;
-                } else if (original_module_ident == self.cir.builtin_module_ident) {
+                } else if (original_module_ident == self.cir.idents.builtin_module) {
                     // For builtin types, use the builtin module environment directly
                     if (self.common_idents.builtin_module) |builtin_env| {
                         break :blk builtin_env;
@@ -4834,7 +4834,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     const copied_var = try self.copyVar(def_var, original_env, region);
                     // For builtin methods, we need to instantiate the copied var to convert
                     // rigid type variables to flex, so they can unify with the call site
-                    const is_builtin = original_module_ident == self.cir.builtin_module_ident;
+                    const is_builtin = original_module_ident == self.cir.idents.builtin_module;
                     if (is_builtin) {
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     } else {
@@ -4914,7 +4914,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
                 // Check if this is a call to is_eq (anonymous types have implicit structural equality)
-                if (constraint.fn_name == self.cir.is_eq_ident) {
+                if (constraint.fn_name == self.cir.idents.is_eq) {
                     // Check if all components of this anonymous type support is_eq
                     if (self.typeSupportsIsEq(dispatcher_content.structure)) {
                         // All components support is_eq, unify return type with Bool

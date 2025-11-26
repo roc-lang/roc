@@ -169,21 +169,21 @@ pub const Store = struct {
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
-            .list_ident = env.list_type_ident,
-            .box_ident = env.box_type_ident,
-            .u8_ident = env.u8_type_ident,
-            .i8_ident = env.i8_type_ident,
-            .u16_ident = env.u16_type_ident,
-            .i16_ident = env.i16_type_ident,
-            .u32_ident = env.u32_type_ident,
-            .i32_ident = env.i32_type_ident,
-            .u64_ident = env.u64_type_ident,
-            .i64_ident = env.i64_type_ident,
-            .u128_ident = env.u128_type_ident,
-            .i128_ident = env.i128_type_ident,
-            .f32_ident = env.f32_type_ident,
-            .f64_ident = env.f64_type_ident,
-            .dec_ident = env.dec_type_ident,
+            .list_ident = env.idents.list,
+            .box_ident = env.idents.box,
+            .u8_ident = env.idents.u8_type,
+            .i8_ident = env.idents.i8_type,
+            .u16_ident = env.idents.u16_type,
+            .i16_ident = env.idents.i16_type,
+            .u32_ident = env.idents.u32_type,
+            .i32_ident = env.idents.i32_type,
+            .u64_ident = env.idents.u64_type,
+            .i64_ident = env.idents.i64_type,
+            .u128_ident = env.idents.u128_type,
+            .i128_ident = env.idents.i128_type,
+            .f32_ident = env.idents.f32_type,
+            .f64_ident = env.idents.f64_type,
+            .dec_ident = env.idents.dec_type,
         };
     }
 
@@ -931,7 +931,7 @@ pub const Store = struct {
 
                         // Special handling for Builtin.Box
                         const is_builtin_box = if (self.box_ident) |box_ident|
-                            nominal_type.origin_module == self.env.builtin_module_ident and
+                            nominal_type.origin_module == self.env.idents.builtin_module and
                                 nominal_type.ident.ident_idx == box_ident
                         else
                             false;
@@ -971,7 +971,7 @@ pub const Store = struct {
 
                         // Special handling for Builtin.List
                         const is_builtin_list = if (self.list_ident) |list_ident|
-                            nominal_type.origin_module == self.env.builtin_module_ident and
+                            nominal_type.origin_module == self.env.idents.builtin_module and
                                 nominal_type.ident.ident_idx == list_ident
                         else
                             false;
@@ -1015,7 +1015,7 @@ pub const Store = struct {
 
                         // Special handling for built-in numeric types from Builtin module
                         // These have empty tag union backings but need scalar layouts
-                        if (nominal_type.origin_module == self.env.builtin_module_ident) {
+                        if (nominal_type.origin_module == self.env.idents.builtin_module) {
                             const ident_idx = nominal_type.ident.ident_idx;
                             const num_layout: ?Layout = blk: {
                                 if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
