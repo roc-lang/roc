@@ -1386,26 +1386,13 @@ pub const Interpreter = struct {
                 }
                 const tu = resolved.desc.content.structure.tag_union;
                 const tags = self.runtime_types.getTagsSlice(tu.tags);
-                // Find index by name
-                var tag_index: usize = 0;
-                var found = false;
-                const name_text = self.env.getIdent(zero.name);
-                var i: usize = 0;
-                while (i < tags.len) : (i += 1) {
-                    // Use runtime_layout_store.env to look up tag names since that's where
-                    // the runtime type tag idents are stored (after translation)
-                    const tag_name_in_rt = self.runtime_layout_store.env.getIdent(tags.items(.name)[i]);
-                    if (std.mem.eql(u8, tag_name_in_rt, name_text)) {
-                        tag_index = i;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+                // Find tag index by translating the source ident to the runtime store and comparing indices
+                const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+                    const name_text = self.env.getIdent(zero.name);
                     const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
-                }
+                };
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 // If layout is scalar (int), write discriminant directly
                 if (layout_val.tag == .scalar) {
@@ -1469,27 +1456,16 @@ pub const Interpreter = struct {
                     self.triggerCrash("DEBUG: e_tag not tag union", false, roc_ops);
                     return error.Crash;
                 }
-                const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
                 try self.appendUnionTags(rt_var, &tag_list);
-                var tag_index: usize = 0;
-                var found = false;
-                for (tag_list.items, 0..) |tag_info, i| {
-                    // Use runtime_layout_store.env to look up tag names since that's where
-                    // the runtime type tag idents are stored (after translation)
-                    const tag_name_in_rt = self.runtime_layout_store.env.getIdent(tag_info.name);
-                    if (std.mem.eql(u8, tag_name_in_rt, name_text)) {
-                        tag_index = i;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+                // Find tag index by translating the source ident to the runtime store and comparing indices
+                const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
+                    const name_text = self.env.getIdent(tag.name);
                     const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
-                }
+                };
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
 
@@ -5317,6 +5293,56 @@ pub const Interpreter = struct {
         // This ensures tag discriminants are consistent between evaluation and rendering
         // Use runtime_layout_store.env since runtime type tag names are translated to that env
         std.mem.sort(types.Tag, list.items, self.runtime_layout_store.env.common.getIdentStore(), comptime types.Tag.sortByNameAsc);
+    }
+
+    /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
+    /// This avoids string comparison by translating the source ident to the runtime layout store's
+    /// ident store and comparing ident indices directly.
+    ///
+    /// Parameters:
+    /// - source_env: The module environment containing the source tag name ident
+    /// - source_tag_ident: The tag name ident from the source module
+    /// - runtime_tags: MultiArrayList slice of tags from the runtime tag union type
+    ///
+    /// Returns the tag index if found, or null if not found.
+    pub fn findTagIndexByIdent(
+        self: *Interpreter,
+        source_env: *const can.ModuleEnv,
+        source_tag_ident: base_pkg.Ident.Idx,
+        runtime_tags: anytype,
+    ) !?usize {
+        // Translate the source tag name to the runtime layout store's ident store
+        const source_name_str = source_env.getIdent(source_tag_ident);
+        const rt_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+
+        // Compare ident indices directly (O(1) per comparison instead of string comparison)
+        for (runtime_tags.items(.name), 0..) |tag_name_ident, i| {
+            if (tag_name_ident == rt_tag_ident) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    /// Find the index of a tag in a list of runtime tags by translating the source tag name ident.
+    /// This is the list-based variant of findTagIndexByIdent, used when tags come from appendUnionTags.
+    pub fn findTagIndexByIdentInList(
+        self: *Interpreter,
+        source_env: *const can.ModuleEnv,
+        source_tag_ident: base_pkg.Ident.Idx,
+        tag_list: []const types.Tag,
+    ) !?usize {
+        // Translate the source tag name to the runtime layout store's ident store
+        const source_name_str = source_env.getIdent(source_tag_ident);
+        const rt_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+
+        // Compare ident indices directly (O(1) per comparison instead of string comparison)
+        for (tag_list, 0..) |tag_info, i| {
+            if (tag_info.name == rt_tag_ident) {
+                return i;
+            }
+        }
+        return null;
     }
 
     const TagValue = struct {
