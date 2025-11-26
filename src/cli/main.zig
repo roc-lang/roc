@@ -1644,8 +1644,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check with all imported modules
+    // Use the env's module_name_idx so that nominal types' origin_module matches
+    // the env's identity for method resolution at runtime
     const app_common_idents: Check.CommonIdents = .{
-        .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
+        .module_name = app_env.module_name_idx,
         .list = try app_env.insertIdent(base.Ident.for_text("List")),
         .box = try app_env.insertIdent(base.Ident.for_text("Box")),
         .@"try" = try app_env.insertIdent(base.Ident.for_text("Try")),
