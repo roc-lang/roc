@@ -27,7 +27,10 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
-        const notification_handlers = std.StaticStringMap(NotificationPtr).initComptime(.{});
+        const notification_handlers = std.StaticStringMap(NotificationPtr).initComptime(.{
+            .{ "textDocument/didOpen", &DidOpenHandler.call },
+            .{ "textDocument/didChange", &DidChangeHandler.call },
+        });
 
         allocator: std.mem.Allocator,
         transport: TransportType,
