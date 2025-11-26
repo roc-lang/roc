@@ -3108,6 +3108,26 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_with_capacity => {
+                // Str.with_capacity : U64 -> Str
+                std.debug.assert(args.len == 1);
+
+                const capacity_arg = args[0];
+                const capacity_value = try self.extractNumericValue(capacity_arg);
+                const capacity: u64 = @intCast(capacity_value.int);
+
+                const result_str = builtins.str.withCapacityC(capacity, roc_ops);
+
+                const result_layout = layout.Layout.str();
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
