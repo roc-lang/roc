@@ -1073,3 +1073,50 @@ test "e_low_level_lambda - Str.drop_prefix prefix longer than string" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hi\"", value);
 }
+
+// Str.drop_suffix tests
+
+test "e_low_level_lambda - Str.drop_suffix removes matching suffix" {
+    const src =
+        \\x = Str.drop_suffix("hello world", " world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix returns original when no match" {
+    const src =
+        \\x = Str.drop_suffix("hello world", " goodbye")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix with empty suffix" {
+    const src =
+        \\x = Str.drop_suffix("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix removes entire string" {
+    const src =
+        \\x = Str.drop_suffix("hello", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
+    const src =
+        \\x = Str.drop_suffix("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hi\"", value);
+}

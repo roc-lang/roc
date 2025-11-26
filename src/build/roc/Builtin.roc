@@ -14,6 +14,7 @@ Builtin :: [].{
 		repeat : Str, U64 -> Str
 		with_prefix : Str, Str -> Str
 		drop_prefix : Str, Str -> Str
+		drop_suffix : Str, Str -> Str
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

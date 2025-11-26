@@ -743,6 +743,24 @@ pub fn strDropPrefix(
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
+/// Str.drop_suffix - Returns string with suffix removed, or original if no match
+pub fn strDropSuffix(
+    string: RocStr,
+    suffix: RocStr,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    if (!endsWith(string, suffix)) {
+        // Suffix doesn't match, return original (with incref)
+        string.incref(1);
+        return string;
+    }
+
+    const suffix_len = suffix.len();
+    const new_len = string.len() - suffix_len;
+
+    return substringUnsafe(string, 0, new_len, roc_ops);
+}
+
 // Str.repeat
 /// TODO: Document repeatC.
 pub fn repeatC(
