@@ -15,19 +15,9 @@ entrypoint : Str -> Str
 entrypoint = main
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - platform_header_str_simple.md:8:14:8:18
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `main` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**platform_header_str_simple.md:8:14:8:18:**
-```roc
-entrypoint = main
-```
-             ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
@@ -73,7 +63,8 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "entrypoint"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-lookup-required
+			(required-ident "main"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -83,7 +74,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Str -> Str")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Str -> Str"))))
 ~~~

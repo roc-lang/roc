@@ -2867,11 +2867,8 @@ fn importAliased(
     // 9. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip the check for platform modules (which have requires_types) since they can
-    // import sibling modules that may not be in module_envs yet.
-    const is_platform = self.env.requires_types.items.items.len > 0;
     if (self.module_envs) |envs_map| {
-        if (!is_platform and !envs_map.contains(module_name)) {
+        if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,
@@ -2936,11 +2933,8 @@ fn importWithAlias(
     // 8. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip the check for platform modules (which have requires_types) since they can
-    // import sibling modules that may not be in module_envs yet.
-    const is_platform = self.env.requires_types.items.items.len > 0;
     if (self.module_envs) |envs_map| {
-        if (!is_platform and !envs_map.contains(module_name)) {
+        if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,
@@ -2998,11 +2992,8 @@ fn importUnaliased(
     // 6. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip the check for platform modules (which have requires_types) since they can
-    // import sibling modules that may not be in module_envs yet.
-    const is_platform = self.env.requires_types.items.items.len > 0;
     if (self.module_envs) |envs_map| {
-        if (!is_platform and !envs_map.contains(module_name)) {
+        if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,

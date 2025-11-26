@@ -422,3 +422,45 @@ test "fx platform check unused state var reports correct errors" {
         return error.ExtraneousErrorsFound;
     }
 }
+
+test "fx platform checked directly finds sibling modules" {
+    // When checking a platform module directly (not through an app), sibling .roc
+    // files in the same directory should be discovered automatically. This means
+    // we should NOT get MODULE NOT FOUND errors for Stdout/Stderr/Stdin since
+    // those files exist in the same directory as main.roc.
+    const allocator = std.testing.allocator;
+
+    // Check the platform module directly (not through an app)
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "check",
+            "test/fx/platform/main.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    const stderr = run_result.stderr;
+
+    // Count MODULE NOT FOUND errors - we should get 0 since sibling modules are discovered
+    var module_not_found_count: usize = 0;
+
+    var line_iter = std.mem.splitScalar(u8, stderr, '\n');
+    while (line_iter.next()) |line| {
+        if (std.mem.indexOf(u8, line, "MODULE NOT FOUND") != null) {
+            module_not_found_count += 1;
+        }
+    }
+
+    // When checking a platform directly, sibling modules should be discovered,
+    // so we should NOT get MODULE NOT FOUND errors for valid imports.
+    if (module_not_found_count != 0) {
+        std.debug.print("\n❌ Expected 0 MODULE NOT FOUND errors (siblings should be discovered), got {d}\n", .{module_not_found_count});
+        std.debug.print("\n========== FULL ROC CHECK OUTPUT ==========\n", .{});
+        std.debug.print("STDERR:\n{s}\n", .{stderr});
+        std.debug.print("==========================================\n\n", .{});
+        return error.UnexpectedModuleNotFoundErrors;
+    }
+}
