@@ -339,3 +339,44 @@ test "fx platform match with wildcard" {
         },
     }
 }
+
+test "fx platform dbg missing return value" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that uses dbg without providing a return value.
+    // This has a type error (returns Str instead of {}) which should be caught by the type checker.
+    // When run, it should fail gracefully with a TypeMismatch error rather than panicking.
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/dbg_missing_return.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The run should fail with a non-zero exit code due to the type mismatch
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("Run should have failed but succeeded\n", .{});
+                return error.TestFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify that the dbg output was printed before the error
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "this will break") != null);
+
+    // Verify that it crashes with TypeMismatch error rather than a panic
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TypeMismatch") != null);
+}
