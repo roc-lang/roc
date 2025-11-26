@@ -988,3 +988,41 @@ test "e_low_level_lambda - Str.repeat empty string" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"\"", value);
 }
+
+// Str.with_prefix tests
+
+test "e_low_level_lambda - Str.with_prefix basic" {
+    const src =
+        \\x = Str.with_prefix("world", "hello ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.with_prefix empty prefix" {
+    const src =
+        \\x = Str.with_prefix("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.with_prefix empty string" {
+    const src =
+        \\x = Str.with_prefix("", "prefix")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"prefix\"", value);
+}
+
+test "e_low_level_lambda - Str.with_prefix both empty" {
+    const src =
+        \\x = Str.with_prefix("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
