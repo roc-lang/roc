@@ -875,7 +875,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    __f where [Numeral.from_numeral : Numeral -> Try(_j, [InvalidNumeral(Str)])]_
+    __f where [_j.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)])]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -975,7 +975,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [Numeral.from_numeral : Numeral -> Try(_j, [InvalidNumeral(Str)]), Numeral.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)])]_
+    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [_j.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), _l.from_numeral : Numeral -> Try(_o, [InvalidNumeral(Str)])]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

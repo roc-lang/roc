@@ -135,6 +135,9 @@ pub const SnapshotTag = struct {
 pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,
+    /// The type variable that has this constraint (the dispatcher).
+    /// This is the type that the method is called on.
+    dispatcher: SnapshotContentIdx,
 };
 
 const Var = types.Var;
@@ -284,6 +287,8 @@ pub const Store = struct {
         return SnapshotStaticDispatchConstraint{
             .fn_name = constraint.fn_name,
             .fn_content = try self.deepCopyVar(store, constraint.fn_var),
+            // Dispatcher will be set when collecting constraints during write
+            .dispatcher = @enumFromInt(0),
         };
     }
 
@@ -638,32 +643,7 @@ pub const Store = struct {
                     _ = try self.buf.writer().write(", ");
                 }
 
-                const fn_resolved = self.snapshots.getContent(constraint.fn_content);
-
-                if (fn_resolved != .structure) {
-                    _ = try self.buf.writer().write("dispach_fn_error");
-                    continue;
-                }
-
-                // TODO: Find a better way to do this
-                const dispatcher = blk: {
-                    std.debug.assert(fn_resolved == .structure);
-
-                    const fn_args = switch (fn_resolved.structure) {
-                        .fn_effectful => |func| func.args,
-                        .fn_pure => |func| func.args,
-                        .fn_unbound => |func| func.args,
-                        else => {
-                            std.debug.assert(false);
-                            continue;
-                        },
-                    };
-                    std.debug.assert(fn_args.len() > 0);
-
-                    break :blk self.snapshots.sliceVars(fn_args)[0];
-                };
-
-                try self.writeWithContext(dispatcher, .General, idx);
+                try self.writeWithContext(constraint.dispatcher, .General, idx);
                 _ = try self.buf.writer().write(".");
                 _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
                 _ = try self.buf.writer().write(" : ");
@@ -691,14 +671,14 @@ pub const Store = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
 
                 // Useful in debugging to see if a var is rigid or not
@@ -888,7 +868,7 @@ pub const Store = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, flex.idx);
                 }
             },
             .rigid => |rigid| {
@@ -899,7 +879,7 @@ pub const Store = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, record.ext);
                 }
             },
             .unbound, .invalid => {},
@@ -1022,7 +1002,7 @@ pub const Store = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1035,7 +1015,7 @@ pub const Store = struct {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             else => {
@@ -1059,22 +1039,18 @@ pub const Store = struct {
     }
 
     /// Append a constraint to the list, if it doesn't already exist
-    /// Deduplicates based on method name and dispatcher type variable
-    fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
-        // Extract dispatcher (first arg) identity from the constraint to add
-        const add_dispatcher = self.getDispatcherIdentity(constraint_to_add.fn_content);
+    /// Deduplicates based on method name and dispatcher
+    fn appendStaticDispatchConstraint(self: *Self, constraint_base: SnapshotStaticDispatchConstraint, dispatcher: SnapshotContentIdx) std.mem.Allocator.Error!void {
+        // Create the full constraint with the dispatcher
+        const constraint_to_add = SnapshotStaticDispatchConstraint{
+            .fn_name = constraint_base.fn_name,
+            .fn_content = constraint_base.fn_content,
+            .dispatcher = dispatcher,
+        };
 
         for (self.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == constraint_to_add.fn_name) {
-                // Same method name - check if dispatcher identity is the same
-                const existing_dispatcher = self.getDispatcherIdentity(constraint.fn_content);
-                if (dispatcherIdentitiesEqual(add_dispatcher, existing_dispatcher)) {
-                    return; // Duplicate constraint
-                }
-                // Also check fn_content directly for backwards compatibility
-                if (constraint.fn_content == constraint_to_add.fn_content) {
-                    return;
-                }
+            if (constraint.fn_name == constraint_to_add.fn_name and constraint.dispatcher == constraint_to_add.dispatcher) {
+                return; // Duplicate constraint
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
@@ -1512,32 +1488,7 @@ pub const SnapshotWriter = struct {
                     _ = try self.buf.writer().write(", ");
                 }
 
-                const fn_resolved = self.snapshots.getContent(constraint.fn_content);
-
-                if (fn_resolved != .structure) {
-                    _ = try self.buf.writer().write("dispach_fn_error");
-                    continue;
-                }
-
-                // TODO: Find a better way to do this
-                const dispatcher = blk: {
-                    std.debug.assert(fn_resolved == .structure);
-
-                    const fn_args = switch (fn_resolved.structure) {
-                        .fn_effectful => |func| func.args,
-                        .fn_pure => |func| func.args,
-                        .fn_unbound => |func| func.args,
-                        else => {
-                            std.debug.assert(false);
-                            continue;
-                        },
-                    };
-                    std.debug.assert(fn_args.len() > 0);
-
-                    break :blk self.snapshots.sliceVars(fn_args)[0];
-                };
-
-                try self.writeWithContext(dispatcher, .General, idx);
+                try self.writeWithContext(constraint.dispatcher, .General, idx);
                 _ = try self.buf.writer().write(".");
                 _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
                 _ = try self.buf.writer().write(" : ");
@@ -1565,14 +1516,14 @@ pub const SnapshotWriter = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
 
                 // Useful in debugging to see if a var is rigid or not
@@ -1762,7 +1713,7 @@ pub const SnapshotWriter = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, flex.idx);
                 }
             },
             .rigid => |rigid| {
@@ -1773,7 +1724,7 @@ pub const SnapshotWriter = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, record.ext);
                 }
             },
             .unbound, .invalid => {},
@@ -1896,7 +1847,7 @@ pub const SnapshotWriter = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1909,7 +1860,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             else => {
@@ -1933,22 +1884,18 @@ pub const SnapshotWriter = struct {
     }
 
     /// Append a constraint to the list, if it doesn't already exist
-    /// Deduplicates based on method name and dispatcher type variable
-    fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
-        // Extract dispatcher (first arg) identity from the constraint to add
-        const add_dispatcher = self.getDispatcherIdentity(constraint_to_add.fn_content);
+    /// Deduplicates based on method name and dispatcher
+    fn appendStaticDispatchConstraint(self: *Self, constraint_base: SnapshotStaticDispatchConstraint, dispatcher: SnapshotContentIdx) std.mem.Allocator.Error!void {
+        // Create the full constraint with the dispatcher
+        const constraint_to_add = SnapshotStaticDispatchConstraint{
+            .fn_name = constraint_base.fn_name,
+            .fn_content = constraint_base.fn_content,
+            .dispatcher = dispatcher,
+        };
 
         for (self.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == constraint_to_add.fn_name) {
-                // Same method name - check if dispatcher identity is the same
-                const existing_dispatcher = self.getDispatcherIdentity(constraint.fn_content);
-                if (dispatcherIdentitiesEqual(add_dispatcher, existing_dispatcher)) {
-                    return; // Duplicate constraint
-                }
-                // Also check fn_content directly for backwards compatibility
-                if (constraint.fn_content == constraint_to_add.fn_content) {
-                    return;
-                }
+            if (constraint.fn_name == constraint_to_add.fn_name and constraint.dispatcher == constraint_to_add.dispatcher) {
+                return; // Duplicate constraint
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);

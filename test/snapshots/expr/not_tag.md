@@ -19,7 +19,7 @@ This expression is used in an unexpected way:
   ^^^^
 
 It has the type:
-    _[C(_a)][False, True] where [Numeral.from_numeral : Numeral -> Try(_b, [InvalidNumeral(Str)])]_
+    _[C(_a)][False, True] where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _Bool_
