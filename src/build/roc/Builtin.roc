@@ -15,6 +15,7 @@ Builtin :: [].{
 		with_prefix : Str, Str -> Str
 		drop_prefix : Str, Str -> Str
 		drop_suffix : Str, Str -> Str
+		count_utf8_bytes : Str -> U64
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

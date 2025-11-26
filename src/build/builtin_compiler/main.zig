@@ -140,6 +140,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
+    if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
+        try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

@@ -3091,6 +3091,23 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_count_utf8_bytes => {
+                // Str.count_utf8_bytes : Str -> U64
+                std.debug.assert(args.len == 1);
+
+                const string_arg = args[0];
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const byte_count = builtins.str.countUtf8Bytes(string.*);
+
+                const result_layout = layout.Layout.int(.u64);
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+                try out.setInt(@intCast(byte_count));
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
