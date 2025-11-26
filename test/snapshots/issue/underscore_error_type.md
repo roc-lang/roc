@@ -141,7 +141,7 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(_a) where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
+    _List(_a) where [Num.Numeral.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadList_
@@ -155,7 +155,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: _field2 } where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_a, [InvalidNumeral(Str)])]_
+    _{ field: Str, other: _field2 } where [Num.Numeral.from_numeral : Num.Numeral -> Try(_a, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -183,7 +183,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, _field2) where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_a, [InvalidNumeral(Str)])]_
+    _(Str, _field2) where [Num.Numeral.from_numeral : Num.Numeral -> Try(_a, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadTuple_

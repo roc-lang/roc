@@ -1383,13 +1383,12 @@ pub const ReportBuilder = struct {
 
             // Check if there's a tag with the same name in the list of possible tags
 
-            const actual_tag_name_str = self.can_ir.getIdent(actual_tag.name);
             var iter = expected_content.structure.tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
-                const expected_tag_name_str = self.can_ir.getIdent(cur_expected_tag.name);
 
-                if (std.mem.eql(u8, actual_tag_name_str, expected_tag_name_str)) {
+                // Compare tag names by Ident.Idx (O(1) index comparison)
+                if (actual_tag.name == cur_expected_tag.name) {
                     self.snapshot_writer.resetContext();
                     try self.snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);
                     const cur_expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());

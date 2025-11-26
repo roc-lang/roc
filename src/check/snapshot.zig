@@ -810,7 +810,13 @@ pub const Store = struct {
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
-        _ = try self.buf.writer().write(self.idents.getText(display_idx));
+        const type_name = self.idents.getText(display_idx);
+        // Strip "Builtin." prefix - users should see "Bool", not "Builtin.Bool"
+        const display_name = if (std.mem.startsWith(u8, type_name, "Builtin."))
+            type_name[8..]
+        else
+            type_name;
+        _ = try self.buf.writer().write(display_name);
 
         // The 1st var is the nominal type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(nominal_type.vars);
@@ -1685,7 +1691,13 @@ pub const SnapshotWriter = struct {
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
-        _ = try self.buf.writer().write(self.idents.getText(display_idx));
+        const type_name = self.idents.getText(display_idx);
+        // Strip "Builtin." prefix - users should see "Bool", not "Builtin.Bool"
+        const display_name = if (std.mem.startsWith(u8, type_name, "Builtin."))
+            type_name[8..]
+        else
+            type_name;
+        _ = try self.buf.writer().write(display_name);
 
         // The 1st var is the nominal type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(nominal_type.vars);

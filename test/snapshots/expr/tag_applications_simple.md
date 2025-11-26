@@ -22,7 +22,7 @@ type=expr
 MISSING METHOD - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _[Ok([Just(_a)]_others)]_others2 where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_, which has no method with that name:
+This `from_numeral` method is being called on the type _[Ok([Just(_a)]_others)]_others2 where [Num.Numeral.from_numeral : Num.Numeral -> Try(_b, [InvalidNumeral(Str)])]_, which has no method with that name:
 **tag_applications_simple.md:2:10:2:12:**
 ```roc
     Some(42),

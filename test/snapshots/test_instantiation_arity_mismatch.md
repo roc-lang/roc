@@ -24,7 +24,7 @@ This expression is used in an unexpected way:
     ^^^^^^^^^^^^^^
 
 It has the type:
-    __arg, _arg2 -> _ret where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_c, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_d, [InvalidNumeral(Str)])]_
+    __arg, _arg2 -> _ret where [Num.Numeral.from_numeral : Num.Numeral -> Try(_c, [InvalidNumeral(Str)]), Num.Numeral.from_numeral : Num.Numeral -> Try(_d, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _(a, b) -> (a, b)_

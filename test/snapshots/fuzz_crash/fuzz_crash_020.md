@@ -885,7 +885,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    __f where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_j, [InvalidNumeral(Str)])]_
+    __f where [Num.Numeral.from_numeral : Num.Numeral -> Try(_j, [InvalidNumeral(Str)])]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -958,7 +958,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_j, [InvalidNumeral(Str)]), Builtin.Num.Numeral.from_numeral : Builtin.Num.Numeral -> Try(_k, [InvalidNumeral(Str)])]_
+    _(_field, Str, Error, [O]_others, (Error, Error), List(_f)) where [Num.Numeral.from_numeral : Num.Numeral -> Try(_j, [InvalidNumeral(Str)]), Num.Numeral.from_numeral : Num.Numeral -> Try(_k, [InvalidNumeral(Str)])]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

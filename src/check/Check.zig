@@ -4836,10 +4836,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // only if all their components also support is_eq
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
-                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
-
                 // Check if this is a call to is_eq (anonymous types have implicit structural equality)
-                if (std.mem.eql(u8, constraint_fn_name_bytes, "is_eq")) {
+                if (constraint.fn_name == self.cir.is_eq_ident) {
                     // Check if all components of this anonymous type support is_eq
                     if (self.typeSupportsIsEq(dispatcher_content.structure)) {
                         // All components support is_eq, unify return type with Bool

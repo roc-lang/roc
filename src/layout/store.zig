@@ -406,7 +406,7 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
     }
 
-    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
         const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
@@ -421,8 +421,8 @@ pub const Store = struct {
 
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
-            const current_field_name = self.env.getIdent(field.name);
-            if (std.mem.eql(u8, current_field_name, field_name)) {
+            // Compare field names by Ident.Idx (O(1) index comparison)
+            if (field.name == field_name_idx) {
                 return current_offset;
             }
 
