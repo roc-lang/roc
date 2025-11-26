@@ -339,3 +339,110 @@ test "fx platform match with wildcard" {
         },
     }
 }
+
+test "fx platform check unused state var reports correct errors" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run `roc check` on an app with unused variables and type annotations
+    // This test checks that the compiler reports the correct errors and doesn't
+    // produce extraneous unrelated errors
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "check",
+            "test/fx/unused_state_var.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The check should fail with errors
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("ERROR: roc check succeeded but we expected it to fail with errors\n", .{});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            return error.RunFailed;
+        },
+    }
+
+    // Check that we get exactly 2 UNUSED VARIABLE errors and nothing else
+    const stderr = run_result.stderr;
+
+    // Count occurrences of each error type
+    var unused_variable_count: usize = 0;
+    var type_mismatch_count: usize = 0;
+    var module_not_found_count: usize = 0;
+    var undefined_variable_count: usize = 0;
+    var exposed_but_not_defined_count: usize = 0;
+    var comptime_crash_count: usize = 0;
+
+    var line_iter = std.mem.splitScalar(u8, stderr, '\n');
+    while (line_iter.next()) |line| {
+        if (std.mem.indexOf(u8, line, "UNUSED VARIABLE") != null) {
+            unused_variable_count += 1;
+        } else if (std.mem.indexOf(u8, line, "TYPE MISMATCH") != null) {
+            type_mismatch_count += 1;
+        } else if (std.mem.indexOf(u8, line, "MODULE NOT FOUND") != null) {
+            module_not_found_count += 1;
+        } else if (std.mem.indexOf(u8, line, "UNDEFINED VARIABLE") != null) {
+            undefined_variable_count += 1;
+        } else if (std.mem.indexOf(u8, line, "EXPOSED BUT NOT DEFINED") != null) {
+            exposed_but_not_defined_count += 1;
+        } else if (std.mem.indexOf(u8, line, "COMPTIME CRASH") != null) {
+            comptime_crash_count += 1;
+        }
+    }
+
+    // We expect exactly 2 UNUSED VARIABLE errors and 0 of everything else
+    const expected_unused_variable: usize = 2;
+    const expected_other_errors: usize = 0;
+
+    var test_passed = true;
+
+    if (unused_variable_count != expected_unused_variable) {
+        std.debug.print("\n❌ UNUSED VARIABLE count mismatch: expected {d}, got {d}\n", .{ expected_unused_variable, unused_variable_count });
+        test_passed = false;
+    } else {
+        std.debug.print("\n✅ UNUSED VARIABLE count correct: {d}\n", .{unused_variable_count});
+    }
+
+    if (type_mismatch_count != expected_other_errors) {
+        std.debug.print("❌ TYPE MISMATCH (extraneous): expected {d}, got {d}\n", .{ expected_other_errors, type_mismatch_count });
+        test_passed = false;
+    }
+
+    if (module_not_found_count != expected_other_errors) {
+        std.debug.print("❌ MODULE NOT FOUND (extraneous): expected {d}, got {d}\n", .{ expected_other_errors, module_not_found_count });
+        test_passed = false;
+    }
+
+    if (undefined_variable_count != expected_other_errors) {
+        std.debug.print("❌ UNDEFINED VARIABLE (extraneous): expected {d}, got {d}\n", .{ expected_other_errors, undefined_variable_count });
+        test_passed = false;
+    }
+
+    if (exposed_but_not_defined_count != expected_other_errors) {
+        std.debug.print("❌ EXPOSED BUT NOT DEFINED (extraneous): expected {d}, got {d}\n", .{ expected_other_errors, exposed_but_not_defined_count });
+        test_passed = false;
+    }
+
+    if (comptime_crash_count != expected_other_errors) {
+        std.debug.print("❌ COMPTIME CRASH (extraneous): expected {d}, got {d}\n", .{ expected_other_errors, comptime_crash_count });
+        test_passed = false;
+    }
+
+    if (!test_passed) {
+        std.debug.print("\n========== FULL ROC CHECK OUTPUT ==========\n", .{});
+        std.debug.print("STDERR:\n{s}\n", .{stderr});
+        std.debug.print("==========================================\n\n", .{});
+        return error.ExtraneousErrorsFound;
+    }
+}

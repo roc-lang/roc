@@ -2864,20 +2864,9 @@ fn importAliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 9. Check that this module actually exists, and if not report an error
-    if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
-        }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
-    }
+    // Note: We don't check if the module exists here because module_envs only contains
+    // builtin types at canonicalization time. Local imports are validated later during
+    // type checking when imported_envs is properly populated with all resolved modules.
 
     return import_idx;
 }
@@ -2928,20 +2917,9 @@ fn importWithAlias(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 8. Check that this module actually exists, and if not report an error
-    if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
-        }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
-    }
+    // Note: We don't check if the module exists here because module_envs only contains
+    // builtin types at canonicalization time. Local imports are validated later during
+    // type checking when imported_envs is properly populated with all resolved modules.
 
     return import_idx;
 }
@@ -2985,20 +2963,9 @@ fn importUnaliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 6. Check that this module actually exists, and if not report an error
-    if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
-        }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
-    }
+    // Note: We don't check if the module exists here because module_envs only contains
+    // builtin types at canonicalization time. Local imports are validated later during
+    // type checking when imported_envs is properly populated with all resolved modules.
 
     return import_idx;
 }
