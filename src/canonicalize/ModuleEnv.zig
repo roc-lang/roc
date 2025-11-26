@@ -195,10 +195,18 @@ f32_type_ident: Ident.Idx,
 f64_type_ident: Ident.Idx,
 dec_type_ident: Ident.Idx,
 
-// Field/tag names used during type checking
+// Field/tag names used during type checking and evaluation
 before_dot_ident: Ident.Idx,
 after_dot_ident: Ident.Idx,
 provided_by_compiler_ident: Ident.Idx,
+tag_ident: Ident.Idx,
+payload_ident: Ident.Idx,
+is_negative_ident: Ident.Idx,
+digits_before_pt_ident: Ident.Idx,
+digits_after_pt_ident: Ident.Idx,
+// Box method idents
+box_method_ident: Ident.Idx,
+unbox_method_ident: Ident.Idx,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -317,6 +325,13 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const before_dot_ident = try common.insertIdent(gpa, Ident.for_text("before_dot"));
     const after_dot_ident = try common.insertIdent(gpa, Ident.for_text("after_dot"));
     const provided_by_compiler_ident = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler"));
+    const tag_ident = try common.insertIdent(gpa, Ident.for_text("tag"));
+    const payload_ident = try common.insertIdent(gpa, Ident.for_text("payload"));
+    const is_negative_ident = try common.insertIdent(gpa, Ident.for_text("is_negative"));
+    const digits_before_pt_ident = try common.insertIdent(gpa, Ident.for_text("digits_before_pt"));
+    const digits_after_pt_ident = try common.insertIdent(gpa, Ident.for_text("digits_after_pt"));
+    const box_method_ident = try common.insertIdent(gpa, Ident.for_text("box"));
+    const unbox_method_ident = try common.insertIdent(gpa, Ident.for_text("unbox"));
 
     return Self{
         .gpa = gpa,
@@ -374,6 +389,13 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .before_dot_ident = before_dot_ident,
         .after_dot_ident = after_dot_ident,
         .provided_by_compiler_ident = provided_by_compiler_ident,
+        .tag_ident = tag_ident,
+        .payload_ident = payload_ident,
+        .is_negative_ident = is_negative_ident,
+        .digits_before_pt_ident = digits_before_pt_ident,
+        .digits_after_pt_ident = digits_after_pt_ident,
+        .box_method_ident = box_method_ident,
+        .unbox_method_ident = unbox_method_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1836,6 +1858,13 @@ pub const Serialized = extern struct {
     before_dot_ident: Ident.Idx,
     after_dot_ident: Ident.Idx,
     provided_by_compiler_ident: Ident.Idx,
+    tag_ident: Ident.Idx,
+    payload_ident: Ident.Idx,
+    is_negative_ident: Ident.Idx,
+    digits_before_pt_ident: Ident.Idx,
+    digits_after_pt_ident: Ident.Idx,
+    box_method_ident: Ident.Idx,
+    unbox_method_ident: Ident.Idx,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1914,6 +1943,13 @@ pub const Serialized = extern struct {
         self.before_dot_ident = env.before_dot_ident;
         self.after_dot_ident = env.after_dot_ident;
         self.provided_by_compiler_ident = env.provided_by_compiler_ident;
+        self.tag_ident = env.tag_ident;
+        self.payload_ident = env.payload_ident;
+        self.is_negative_ident = env.is_negative_ident;
+        self.digits_before_pt_ident = env.digits_before_pt_ident;
+        self.digits_after_pt_ident = env.digits_after_pt_ident;
+        self.box_method_ident = env.box_method_ident;
+        self.unbox_method_ident = env.unbox_method_ident;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1993,6 +2029,13 @@ pub const Serialized = extern struct {
             .before_dot_ident = self.before_dot_ident,
             .after_dot_ident = self.after_dot_ident,
             .provided_by_compiler_ident = self.provided_by_compiler_ident,
+            .tag_ident = self.tag_ident,
+            .payload_ident = self.payload_ident,
+            .is_negative_ident = self.is_negative_ident,
+            .digits_before_pt_ident = self.digits_before_pt_ident,
+            .digits_after_pt_ident = self.digits_after_pt_ident,
+            .box_method_ident = self.box_method_ident,
+            .unbox_method_ident = self.unbox_method_ident,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 

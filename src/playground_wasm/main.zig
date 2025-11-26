@@ -1020,6 +1020,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
                 .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
                 .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
+                .tag_ident = common.findIdent("tag") orelse unreachable,
+                .payload_ident = common.findIdent("payload") orelse unreachable,
+                .is_negative_ident = common.findIdent("is_negative") orelse unreachable,
+                .digits_before_pt_ident = common.findIdent("digits_before_pt") orelse unreachable,
+                .digits_after_pt_ident = common.findIdent("digits_after_pt") orelse unreachable,
+                .box_method_ident = common.findIdent("box") orelse unreachable,
+                .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});

@@ -149,7 +149,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
-                if (acc.findFieldIndex(ctx.env, "tag")) |idx| {
+                if (acc.findFieldIndex(ctx.env.tag_ident)) |idx| {
                     const tag_field = try acc.getFieldByIndex(idx);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
@@ -165,7 +165,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
-                    if (acc.findFieldIndex(ctx.env, "payload")) |pidx| {
+                    if (acc.findFieldIndex(ctx.env.payload_ident)) |pidx| {
                         const payload = try acc.getFieldByIndex(pidx);
                         const args_range = tags.items(.args)[tag_index];
                         const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
@@ -236,8 +236,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
         },
         .nominal_type => |nominal| {
-            const type_name = ctx.env.getIdent(nominal.ident.ident_idx);
-            if (std.mem.eql(u8, type_name, "Box")) {
+            if (nominal.ident.ident_idx == ctx.env.box_type_ident) {
                 const args_range = nominal.vars;
                 const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
                 if (arg_vars.len != 1) return error.TypeMismatch;
@@ -304,7 +303,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 const name_text = ctx.env.getIdent(f.name);
                 try out.appendSlice(name_text);
                 try out.appendSlice(": ");
-                if (acc.findFieldIndex(ctx.env, name_text)) |idx| {
+                if (acc.findFieldIndex(f.name)) |idx| {
                     const field_val = try acc.getFieldByIndex(idx);
                     const rendered = try renderValueRoc(ctx, field_val);
                     defer gpa.free(rendered);

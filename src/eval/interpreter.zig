@@ -1325,8 +1325,7 @@ pub const Interpreter = struct {
                     var idx: usize = 0;
                     while (idx < base_accessor.getFieldCount()) : (idx += 1) {
                         const info = base_accessor.field_layouts.get(idx);
-                        const field_name = self.env.getIdent(info.name);
-                        const dest_field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                        const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
                         const base_field_value = try base_accessor.getFieldByIndex(idx);
                         try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
                     }
@@ -1334,12 +1333,11 @@ pub const Interpreter = struct {
 
                 for (fields, 0..) |field_idx_enum, explicit_index| {
                     const f = self.env.store.getRecordField(field_idx_enum);
-                    const name_text = self.env.getIdent(f.name);
-                    const dest_field_idx = accessor.findFieldIndex(self.env, name_text) orelse return error.TypeMismatch;
+                    const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
                     const val = field_values.items[explicit_index];
 
                     if (base_accessor_opt) |base_accessor| {
-                        if (base_accessor.findFieldIndex(self.env, name_text) != null) {
+                        if (base_accessor.findFieldIndex(f.name) != null) {
                             const existing = try accessor.getFieldByIndex(dest_field_idx);
                             existing.decref(&self.runtime_layout_store, roc_ops);
                         }
@@ -1455,7 +1453,7 @@ pub const Interpreter = struct {
                     // Record { tag: Discriminant, payload: ZST }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                    const tag_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
                         self.triggerCrash("DEBUG: e_zero_argument_tag tag field not found", false, roc_ops);
                         return error.Crash;
                     };
@@ -1541,11 +1539,11 @@ pub const Interpreter = struct {
                     // Has payload: record { tag, payload }
                     var dest = try self.pushRaw(layout_val, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                    const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
                         self.triggerCrash("DEBUG: e_tag tag field not found", false, roc_ops);
                         return error.Crash;
                     };
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                    const payload_field_idx = acc.findFieldIndex(self.env.payload_ident) orelse {
                         self.triggerCrash("DEBUG: e_tag payload field not found", false, roc_ops);
                         return error.Crash;
                     };
@@ -2018,8 +2016,7 @@ pub const Interpreter = struct {
                                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                                     var rec_acc = (rec_val.asRecord(&self_interp.runtime_layout_store)) catch continue;
-                                    const name_text = self_interp.env.getIdent(cap.name);
-                                    if (rec_acc.findFieldIndex(self_interp.env, name_text)) |fidx| {
+                                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
                                         if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
                                             return field_val;
                                         }
@@ -2099,7 +2096,7 @@ pub const Interpreter = struct {
                         const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse {
                             return error.NotImplemented;
                         };
-                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse {
+                        const idx_opt = accessor.findFieldIndex(cap2.name) orelse {
                             return error.NotImplemented;
                         };
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
@@ -2366,7 +2363,6 @@ pub const Interpreter = struct {
                 defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                 const method_args = dot_access.args;
-                const field_name = self.env.getIdent(dot_access.field_name);
 
                 // Field access vs method call
                 if (method_args == null) {
@@ -2376,7 +2372,7 @@ pub const Interpreter = struct {
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
                     if (rec_data.fields.count == 0) return error.TypeMismatch; // No fields to access
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                    const field_idx = accessor.findFieldIndex(dot_access.field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);
                     return try self.pushCopy(field_value, roc_ops);
                 }
@@ -2405,16 +2401,14 @@ pub const Interpreter = struct {
                 if (base_content == .structure) {
                     switch (base_content.structure) {
                         .nominal_type => |nominal| {
-                            const nominal_name = self.env.getIdent(nominal.ident.ident_idx);
-
-                            // Check if this is Box
-                            if (std.mem.eql(u8, nominal_name, "Box")) {
-                                if (std.mem.eql(u8, field_name, "box")) {
+                            // Check if this is Box using ident comparison
+                            if (nominal.ident.ident_idx == self.env.box_type_ident) {
+                                if (dot_access.field_name == self.env.box_method_ident) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
                                     const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
                                     const result_layout = try self.getRuntimeLayout(result_rt_var);
                                     return try self.makeBoxValueFromLayout(result_layout, arg_values[0], roc_ops);
-                                } else if (std.mem.eql(u8, field_name, "unbox")) {
+                                } else if (dot_access.field_name == self.env.unbox_method_ident) {
                                     if (arg_values.len != 1) return error.TypeMismatch;
                                     const box_value = arg_values[0];
                                     const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
@@ -2460,9 +2454,7 @@ pub const Interpreter = struct {
                 }
 
                 // Try static dispatch for nominal types with method constraints
-                const method_ident = self.env.common.findIdent(field_name) orelse {
-                    return error.MethodNotFound;
-                };
+                const method_ident = dot_access.field_name;
 
                 // Find the nominal type's origin module from the receiver type
                 var receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
@@ -2508,7 +2500,8 @@ pub const Interpreter = struct {
                             full_type_name[dot_idx + 1 ..]
                         else
                             full_type_name;
-                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, field_name }) catch {
+                        const method_name = self.env.getIdent(dot_access.field_name);
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
                             self.triggerCrash("Method not found", false, roc_ops);
                             return error.Crash;
                         };
@@ -2636,7 +2629,7 @@ pub const Interpreter = struct {
                 if (self.active_closures.items.len > 0) {
                     const pat = self.env.store.getPattern(lookup.pattern_idx);
                     if (pat == .assign) {
-                        const var_name = self.env.getIdent(pat.assign.ident);
+                        const var_ident = pat.assign.ident;
                         // Search from innermost to outermost closure
                         var closure_idx: usize = self.active_closures.items.len;
                         while (closure_idx > 0) {
@@ -2658,7 +2651,7 @@ pub const Interpreter = struct {
                                     const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                                    if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
+                                    if (accessor.findFieldIndex(var_ident)) |fidx| {
                                         const field_val = try accessor.getFieldByIndex(fidx);
                                         return try self.pushCopy(field_val, roc_ops);
                                     }
@@ -3823,10 +3816,10 @@ pub const Interpreter = struct {
                     // Record { tag, payload }
                     var dest = try self.pushRaw(result_layout, 0);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse {
+                    const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse {
                         return error.NotImplemented;
                     };
-                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse {
+                    const payload_field_idx = acc.findFieldIndex(self.env.payload_ident) orelse {
                         return error.NotImplemented;
                     };
 
@@ -3916,7 +3909,7 @@ pub const Interpreter = struct {
                 // Get is_negative field
                 // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
                 const layout_env = self.runtime_layout_store.env;
-                const is_neg_idx = acc.findFieldIndex(layout_env, "is_negative") orelse {
+                const is_neg_idx = acc.findFieldIndex(layout_env.is_negative_ident) orelse {
                     self.triggerCrash("num_from_numeral: missing is_negative field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3927,7 +3920,7 @@ pub const Interpreter = struct {
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
-                const before_idx = acc.findFieldIndex(layout_env, "digits_before_pt") orelse {
+                const before_idx = acc.findFieldIndex(layout_env.digits_before_pt_ident) orelse {
                     self.triggerCrash("num_from_numeral: missing digits_before_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -3937,7 +3930,7 @@ pub const Interpreter = struct {
                 };
 
                 // Get digits_after_pt field (List(U8))
-                const after_idx = acc.findFieldIndex(layout_env, "digits_after_pt") orelse {
+                const after_idx = acc.findFieldIndex(layout_env.digits_after_pt_ident) orelse {
                     self.triggerCrash("num_from_numeral: missing digits_after_pt field", false, roc_ops);
                     return error.Crash;
                 };
@@ -4156,10 +4149,10 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0);
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env, "tag") orelse {
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env.tag_ident) orelse {
                         return error.NotImplemented;
                     };
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env, "payload") orelse {
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env.payload_ident) orelse {
                         return error.NotImplemented;
                     };
 
@@ -4360,7 +4353,7 @@ pub const Interpreter = struct {
 
                                     // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
                                     // Use layout store's env for field lookup to match comptime_evaluator
-                                    if (err_acc.findFieldIndex(layout_env, "tag")) |inner_tag_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.tag_ident)) |inner_tag_idx| {
                                         const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx);
                                         if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
                                             var tmp = inner_tag_field;
@@ -4370,7 +4363,7 @@ pub const Interpreter = struct {
                                     }
 
                                     // Set the payload to the Str
-                                    if (err_acc.findFieldIndex(layout_env, "payload")) |inner_payload_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.payload_ident)) |inner_payload_idx| {
                                         const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx);
                                         if (inner_payload_field.ptr) |str_ptr| {
                                             const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
@@ -5427,7 +5420,7 @@ pub const Interpreter = struct {
             },
             .record => {
                 var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field_idx = acc.findFieldIndex(self.env.tag_ident) orelse return error.TypeMismatch;
                 const tag_field = try acc.getFieldByIndex(tag_field_idx);
                 var tag_index: usize = undefined;
                 if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
@@ -5436,7 +5429,7 @@ pub const Interpreter = struct {
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
-                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                if (acc.findFieldIndex(self.env.payload_ident)) |payload_idx| {
                     payload_value = try acc.getFieldByIndex(payload_idx);
                     if (payload_value) |field_value| {
                         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -5870,9 +5863,8 @@ pub const Interpreter = struct {
                 const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.env.getIdent(destruct.label);
 
-                    const field_index = accessor.findFieldIndex(self.env, field_name) orelse return false;
+                    const field_index = accessor.findFieldIndex(destruct.label) orelse return false;
                     const field_value = try accessor.getFieldByIndex(field_index);
                     const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
                     const field_var = try self.translateTypeVar(self.env, field_ct_var);

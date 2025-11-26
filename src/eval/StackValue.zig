@@ -768,13 +768,11 @@ pub const RecordAccessor = struct {
         return self.layout_cache.getLayout(field_layout_info.layout);
     }
 
-    /// Find field index by comparing field names (requires env access for name comparison)
-    pub fn findFieldIndex(self: RecordAccessor, _: anytype, field_name: []const u8) ?usize {
-        // Use the environment from the layout cache, not the passed env parameter
-        // This ensures we use the same environment that was used to create the layout
+    /// Find field index by comparing field ident indices
+    pub fn findFieldIndex(self: RecordAccessor, field_ident: Ident.Idx) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, self.layout_cache.env.getIdent(field.name), field_name)) {
+            if (field.name == field_ident) {
                 return idx;
             }
         }
