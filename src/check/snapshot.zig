@@ -656,11 +656,11 @@ pub const Store = struct {
                     break :blk self.snapshots.sliceVars(fn_args)[0];
                 };
 
-                try self.writeWithContext(idx, .General, dispatcher);
+                try self.writeWithContext(dispatcher, .General, idx);
                 _ = try self.buf.writer().write(".");
                 _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
                 _ = try self.buf.writer().write(" : ");
-                try self.writeWithContext(idx, .General, constraint.fn_content);
+                try self.writeWithContext(constraint.fn_content, .General, idx);
             }
             _ = try self.buf.writer().write("]");
         }
@@ -1048,13 +1048,75 @@ pub const Store = struct {
     }
 
     /// Append a constraint to the list, if it doesn't already exist
+    /// Deduplicates based on method name and dispatcher type variable
     fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
+        // Extract dispatcher (first arg) identity from the constraint to add
+        const add_dispatcher = self.getDispatcherIdentity(constraint_to_add.fn_content);
+
         for (self.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_content == constraint_to_add.fn_content) {
-                return;
+            if (constraint.fn_name == constraint_to_add.fn_name) {
+                // Same method name - check if dispatcher identity is the same
+                const existing_dispatcher = self.getDispatcherIdentity(constraint.fn_content);
+                if (dispatcherIdentitiesEqual(add_dispatcher, existing_dispatcher)) {
+                    return; // Duplicate constraint
+                }
+                // Also check fn_content directly for backwards compatibility
+                if (constraint.fn_content == constraint_to_add.fn_content) {
+                    return;
+                }
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
+    }
+
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive
+    const DispatcherIdentity = union(enum) {
+        flex_var: Var,
+        rigid_name: Ident.Idx,
+        recursive: void, // All recursive types are equivalent for deduplication
+    };
+
+    /// Get the dispatcher (first argument) identity from a function content
+    fn getDispatcherIdentity(self: *Self, fn_content: SnapshotContentIdx) ?DispatcherIdentity {
+        const content = self.snapshots.getContent(fn_content);
+        if (content != .structure) return null;
+
+        const fn_args = switch (content.structure) {
+            .fn_effectful => |func| func.args,
+            .fn_pure => |func| func.args,
+            .fn_unbound => |func| func.args,
+            else => return null,
+        };
+
+        if (fn_args.len() == 0) return null;
+
+        const first_arg_idx = self.snapshots.sliceVars(fn_args)[0];
+        const first_arg_content = self.snapshots.getContent(first_arg_idx);
+
+        return switch (first_arg_content) {
+            .flex => |flex| DispatcherIdentity{ .flex_var = flex.var_ },
+            .rigid => |rigid| DispatcherIdentity{ .rigid_name = rigid.name },
+            .recursive => DispatcherIdentity{ .recursive = {} },
+            else => null,
+        };
+    }
+
+    fn dispatcherIdentitiesEqual(a: ?DispatcherIdentity, b: ?DispatcherIdentity) bool {
+        if (a == null or b == null) return false;
+        return switch (a.?) {
+            .flex_var => |a_var| switch (b.?) {
+                .flex_var => |b_var| a_var == b_var,
+                else => false,
+            },
+            .rigid_name => |a_name| switch (b.?) {
+                .rigid_name => |b_name| a_name == b_name,
+                else => false,
+            },
+            .recursive => switch (b.?) {
+                .recursive => true, // All recursive types are equal
+                else => false,
+            },
+        };
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type
@@ -1464,11 +1526,11 @@ pub const SnapshotWriter = struct {
                     break :blk self.snapshots.sliceVars(fn_args)[0];
                 };
 
-                try self.writeWithContext(idx, .General, dispatcher);
+                try self.writeWithContext(dispatcher, .General, idx);
                 _ = try self.buf.writer().write(".");
                 _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
                 _ = try self.buf.writer().write(" : ");
-                try self.writeWithContext(idx, .General, constraint.fn_content);
+                try self.writeWithContext(constraint.fn_content, .General, idx);
             }
             _ = try self.buf.writer().write("]");
         }
@@ -1856,13 +1918,75 @@ pub const SnapshotWriter = struct {
     }
 
     /// Append a constraint to the list, if it doesn't already exist
+    /// Deduplicates based on method name and dispatcher type variable
     fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
+        // Extract dispatcher (first arg) identity from the constraint to add
+        const add_dispatcher = self.getDispatcherIdentity(constraint_to_add.fn_content);
+
         for (self.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_content == constraint_to_add.fn_content) {
-                return;
+            if (constraint.fn_name == constraint_to_add.fn_name) {
+                // Same method name - check if dispatcher identity is the same
+                const existing_dispatcher = self.getDispatcherIdentity(constraint.fn_content);
+                if (dispatcherIdentitiesEqual(add_dispatcher, existing_dispatcher)) {
+                    return; // Duplicate constraint
+                }
+                // Also check fn_content directly for backwards compatibility
+                if (constraint.fn_content == constraint_to_add.fn_content) {
+                    return;
+                }
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
+    }
+
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive
+    const DispatcherIdentity = union(enum) {
+        flex_var: Var,
+        rigid_name: Ident.Idx,
+        recursive: void, // All recursive types are equivalent for deduplication
+    };
+
+    /// Get the dispatcher (first argument) identity from a function content
+    fn getDispatcherIdentity(self: *Self, fn_content: SnapshotContentIdx) ?DispatcherIdentity {
+        const content = self.snapshots.getContent(fn_content);
+        if (content != .structure) return null;
+
+        const fn_args = switch (content.structure) {
+            .fn_effectful => |func| func.args,
+            .fn_pure => |func| func.args,
+            .fn_unbound => |func| func.args,
+            else => return null,
+        };
+
+        if (fn_args.len() == 0) return null;
+
+        const first_arg_idx = self.snapshots.sliceVars(fn_args)[0];
+        const first_arg_content = self.snapshots.getContent(first_arg_idx);
+
+        return switch (first_arg_content) {
+            .flex => |flex| DispatcherIdentity{ .flex_var = flex.var_ },
+            .rigid => |rigid| DispatcherIdentity{ .rigid_name = rigid.name },
+            .recursive => DispatcherIdentity{ .recursive = {} },
+            else => null,
+        };
+    }
+
+    fn dispatcherIdentitiesEqual(a: ?DispatcherIdentity, b: ?DispatcherIdentity) bool {
+        if (a == null or b == null) return false;
+        return switch (a.?) {
+            .flex_var => |a_var| switch (b.?) {
+                .flex_var => |b_var| a_var == b_var,
+                else => false,
+            },
+            .rigid_name => |a_name| switch (b.?) {
+                .rigid_name => |b_name| a_name == b_name,
+                else => false,
+            },
+            .recursive => switch (b.?) {
+                .recursive => true, // All recursive types are equal
+                else => false,
+            },
+        };
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type
