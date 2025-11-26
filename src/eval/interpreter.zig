@@ -3218,6 +3218,36 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_split_on => {
+                // Str.split_on : Str, Str -> List(Str)
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const delimiter_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(delimiter_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const delimiter: *const RocStr = @ptrCast(@alignCast(delimiter_arg.ptr.?));
+
+                const result_list = builtins.str.strSplitOn(string.*, delimiter.*, roc_ops);
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("str_split_on requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

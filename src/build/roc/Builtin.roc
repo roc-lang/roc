@@ -21,6 +21,7 @@ Builtin :: [].{
 		release_excess_capacity : Str -> Str
 		to_utf8 : Str -> List(U8)
 		from_utf8_lossy : List(U8) -> Str
+		split_on : Str, Str -> List(Str)
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

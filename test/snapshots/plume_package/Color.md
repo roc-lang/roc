@@ -89,7 +89,12 @@ DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
 MISSING METHOD - Color.md:22:15:22:26
-MISSING METHOD - Color.md:29:13:29:26
+MISSING METHOD - Color.md:35:17:35:41
+MISSING METHOD - Color.md:36:21:36:45
+MISSING METHOD - Color.md:37:21:37:45
+MISSING METHOD - Color.md:38:21:38:45
+MISSING METHOD - Color.md:39:21:39:45
+MISSING METHOD - Color.md:40:21:40:45
 TYPE MISMATCH - Color.md:32:5:45:6
 MISSING METHOD - Color.md:62:8:62:28
 MISSING METHOD - Color.md:56:8:56:34
@@ -221,15 +226,70 @@ This **to_frac** method is being called on the type **Num.U8**, which has no met
 **Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_utf8** method is being called on the type **Str**, which has no method with that name:
-**Color.md:29:13:29:26:**
+This **is_char_in_hex_range** method is being called on the type **Num.U8**, which has no method with that name:
+**Color.md:35:17:35:41:**
 ```roc
-    bytes = str.to_utf8()
+                a.is_char_in_hex_range()
 ```
-            ^^^^^^^^^^^^^
+                ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on the type **Num.U8**, which has no method with that name:
+**Color.md:36:21:36:45:**
+```roc
+                and b.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on the type **Num.U8**, which has no method with that name:
+**Color.md:37:21:37:45:**
+```roc
+                and c.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on the type **Num.U8**, which has no method with that name:
+**Color.md:38:21:38:45:**
+```roc
+                and d.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on the type **Num.U8**, which has no method with that name:
+**Color.md:39:21:39:45:**
+```roc
+                and e.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on the type **Num.U8**, which has no method with that name:
+**Color.md:40:21:40:45:**
+```roc
+                and f.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
