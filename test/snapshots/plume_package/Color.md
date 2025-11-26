@@ -210,24 +210,30 @@ It's referenced here:
 
 
 **MISSING METHOD**
-This **to_frac** method is being called on the type **U8**, which has no method with that name:
+This **to_frac** method is being called on a value whose type doesn't have that method:
 **Color.md:22:17:22:24:**
 ```roc
     rounded = a.to_frac() / 255.0
 ```
                 ^^^^^^^
 
+The value's type, which does not have a method named **to_frac**, is:
+
+    _U8_
 
 **Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_utf8** method is being called on the type **Str**, which has no method with that name:
+This **to_utf8** method is being called on a value whose type doesn't have that method:
 **Color.md:29:17:29:24:**
 ```roc
     bytes = str.to_utf8()
 ```
                 ^^^^^^^
 
+The value's type, which does not have a method named **to_utf8**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
 
@@ -258,35 +264,44 @@ But the type annotation says it should have the type:
     _Try(Color, [InvalidHex(Str)])_
 
 **MISSING METHOD**
-This **is_named_color** method is being called on the type **Str**, which has no method with that name:
+This **is_named_color** method is being called on a value whose type doesn't have that method:
 **Color.md:62:12:62:26:**
 ```roc
     if str.is_named_color()
 ```
            ^^^^^^^^^^^^^^
 
+The value's type, which does not have a method named **is_named_color**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_str** method is being called on the type **Color**, which has no method with that name:
+This **to_str** method is being called on a value whose type doesn't have that method:
 **Color.md:56:26:56:32:**
 ```roc
 expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 ```
                          ^^^^^^
 
+The value's type, which does not have a method named **to_str**, is:
+
+    _Color_
 
 **Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_str** method is being called on the type **Color**, which has no method with that name:
+This **to_str** method is being called on a value whose type doesn't have that method:
 **Color.md:57:32:57:38:**
 ```roc
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 ```
                                ^^^^^^
 
+The value's type, which does not have a method named **to_str**, is:
+
+    _Color_
 
 **Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 

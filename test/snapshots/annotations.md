@@ -50,13 +50,16 @@ But the type annotation says it should have the type:
     _Pair(U8)_
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **annotations.md:16:33:16:34:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
                                 ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -75,13 +78,16 @@ But the type annotation says it should have the type:
     _Pair(U64)_
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Str**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **annotations.md:19:32:19:33:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                                ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

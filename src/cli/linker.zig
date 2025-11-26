@@ -107,7 +107,8 @@ pub const LinkError = error{
     OutOfMemory,
     InvalidArguments,
     LLVMNotAvailable,
-};
+    WindowsSDKNotFound,
+} || std.zig.system.DetectError;
 
 /// Link object files into an executable using LLD
 pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
@@ -215,6 +216,35 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
         .windows => {
             // Add linker name for Windows COFF
             try args.append("lld-link");
+
+            const query = std.Target.Query{
+                .cpu_arch = target_arch,
+                .os_tag = .windows,
+                .abi = .msvc,
+                .ofmt = .coff,
+            };
+
+            const target = try std.zig.system.resolveTargetQuery(query);
+
+            const native_libc = std.zig.LibCInstallation.findNative(.{
+                .allocator = allocs.arena,
+                .target = &target,
+            }) catch return error.WindowsSDKNotFound;
+
+            if (native_libc.crt_dir) |lib_dir| {
+                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                try args.append(lib_arg);
+            } else return error.WindowsSDKNotFound;
+
+            if (native_libc.msvc_lib_dir) |lib_dir| {
+                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                try args.append(lib_arg);
+            } else return error.WindowsSDKNotFound;
+
+            if (native_libc.kernel32_lib_dir) |lib_dir| {
+                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                try args.append(lib_arg);
+            } else return error.WindowsSDKNotFound;
 
             // Add output argument using Windows style
             const out_arg = try std.fmt.allocPrint(allocs.arena, "/out:{s}", .{config.output_path});
