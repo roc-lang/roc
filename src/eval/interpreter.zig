@@ -3173,6 +3173,31 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_to_utf8 => {
+                // Str.to_utf8 : Str -> List(U8)
+                std.debug.assert(args.len == 1);
+
+                const string_arg = args[0];
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.
