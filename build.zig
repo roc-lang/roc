@@ -194,6 +194,7 @@ const CheckTypeCheckerPatternsStep = struct {
             if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
             if (std.mem.indexOf(u8, entry.path, "test/") != null) continue;
             if (std.mem.startsWith(u8, entry.path, "test")) continue;
+            if (std.mem.endsWith(u8, entry.path, "test_runner.zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 

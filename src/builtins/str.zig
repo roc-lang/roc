@@ -244,6 +244,25 @@ pub const RocStr = extern struct {
         return true;
     }
 
+    /// Compare this RocStr with a byte slice for equality.
+    pub fn eqlSlice(self: RocStr, slice: []const u8) bool {
+        const self_len = self.len();
+
+        if (self_len != slice.len) {
+            return false;
+        }
+
+        const self_bytes = self.asU8ptr();
+        var b: usize = 0;
+        while (b < self_len) : (b += 1) {
+            if (self_bytes[b] != slice[b]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     pub fn clone(
         str: RocStr,
         roc_ops: *RocOps,

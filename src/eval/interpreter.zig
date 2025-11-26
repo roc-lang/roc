@@ -5040,7 +5040,7 @@ pub const Interpreter = struct {
                     if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
                     const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
                     const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
-                    return std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                    return lhs_str.eql(rhs_str.*);
                 },
                 else => {
                     return error.NotImplemented;
@@ -5730,7 +5730,7 @@ pub const Interpreter = struct {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
                 const lit = self.env.getString(sl.literal);
                 const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
-                return std.mem.eql(u8, rs.asSlice(), lit);
+                return rs.eqlSlice(lit);
             },
             .nominal => |n| {
                 const underlying = self.resolveBaseVar(value_rt_var);
