@@ -1219,15 +1219,15 @@ test "check type - crash" {
     );
 }
 
-// debug //
+// dbg //
 
-test "check type - debug" {
-    // debug returns {} (not the value it's debugging), so it can be used
+test "check type - dbg" {
+    // dbg returns {} (not the value it's debugging), so it can be used
     // as a statement/side-effect without affecting the block's return type
     const source =
         \\y : U64
         \\y = {
-        \\  debug 2
+        \\  dbg 2
         \\  42
         \\}
         \\
