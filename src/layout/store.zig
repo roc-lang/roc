@@ -18,6 +18,7 @@ const Ident = base.Ident;
 const Region = base.Region;
 const Var = types.Var;
 const TypeScope = types.TypeScope;
+const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const RecordField = layout_mod.RecordField;
@@ -196,6 +197,29 @@ pub const Store = struct {
         self.tuple_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
+    }
+
+    /// Check if a constraint range contains a from_numeral constraint.
+    /// This is used to determine if an unbound type variable represents
+    /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
+    fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
+        // Empty constraints can't contain from_numeral
+        if (constraints.isEmpty()) {
+            return false;
+        }
+        // Check bounds before slicing - at runtime, constraints may not be available
+        const start: usize = @intFromEnum(constraints.start);
+        const end: usize = start + constraints.count;
+        if (end > self.types_store.static_dispatch_constraints.len()) {
+            // Constraints not available in this types store (e.g., runtime context)
+            return false;
+        }
+        for (self.types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            if (constraint.origin == .from_numeral) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Insert a Box layout with the given element layout.
@@ -1342,25 +1366,22 @@ pub const Store = struct {
                         continue :outer;
                     }
 
-                    // If the flex var has no constraints, it represents a phantom type parameter
-                    // or unused tag branch that doesn't exist at runtime.
-                    if (flex.constraints.isEmpty()) {
-                        // Flex vars can only be sent to the host if boxed.
-                        // Only return opaque_ptr for truly unconstrained flex vars inside containers.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                break :blk Layout.opaquePtr();
-                            }
-                        }
-                        break :blk Layout.zst();
+                    // Check if this flex var has a from_numeral constraint, indicating
+                    // it's an unresolved numeric type that should default to Dec.
+                    if (self.hasFromNumeralConstraint(flex.constraints)) {
+                        break :blk Layout.default_num();
                     }
 
-                    // Flex vars with constraints appear in REPL/eval contexts where type constraints
-                    // haven't been fully solved. This is a known issue that needs proper constraint
-                    // solving before layout computation. For now, default to Dec for unresolved polymorphic types.
-                    // This includes flex vars inside lists - they should default to Dec, not opaque_ptr.
-                    break :blk Layout.default_num();
+                    // Flex vars without from_numeral constraints are phantom types
+                    // (or have non-numeric constraints like is_eq that don't affect layout).
+                    // They can only be sent to the host if boxed.
+                    if (self.work.pending_containers.len > 0) {
+                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                        if (pending_item.container == .box or pending_item.container == .list) {
+                            break :blk Layout.opaquePtr();
+                        }
+                    }
+                    break :blk Layout.zst();
                 },
                 .rigid => |rigid| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
@@ -1370,24 +1391,22 @@ pub const Store = struct {
                         continue :outer;
                     }
 
-                    // Rigid vars can only be sent to the host if boxed.
+                    // Check if this rigid var has a from_numeral constraint, indicating
+                    // it's an unresolved numeric type that should default to Dec.
+                    if (self.hasFromNumeralConstraint(rigid.constraints)) {
+                        break :blk Layout.default_num();
+                    }
+
+                    // Rigid vars without from_numeral constraints are phantom types
+                    // (or have non-numeric constraints like is_eq that don't affect layout).
+                    // They can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                         if (pending_item.container == .box or pending_item.container == .list) {
                             break :blk Layout.opaquePtr();
                         }
                     }
-
-                    // If the rigid var has no constraints, it represents a phantom type parameter
-                    // or unused tag branch that doesn't exist at runtime (e.g., `_err` in `Try(ok, _err)`).
-                    if (rigid.constraints.isEmpty()) {
-                        break :blk Layout.zst();
-                    }
-
-                    // Rigid vars with constraints should not appear unboxed in layout computation.
-                    // This is likely a bug in the type system where the rigid var should
-                    // have been instantiated based on its constraints.
-                    return LayoutError.BugUnboxedRigidVar;
+                    break :blk Layout.zst();
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item

@@ -13,13 +13,13 @@ type=repl
 » Try.Ok(1) != Try.Ok(1)
 ~~~
 # OUTPUT
-Evaluation error: error.BugUnboxedRigidVar
+Evaluation error: error.NotImplemented
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Evaluation error: error.NotImplemented
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Evaluation error: error.NotImplemented
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Evaluation error: error.NotImplemented
 ---
 Evaluation error: error.MethodLookupFailed
 ---
