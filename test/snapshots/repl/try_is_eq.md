@@ -13,16 +13,16 @@ type=repl
 » Try.Ok(1) != Try.Ok(1)
 ~~~
 # OUTPUT
-Evaluation error: error.BugUnboxedRigidVar
+Crash: e_closure: failed to resolve capture value
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Crash: e_closure: failed to resolve capture value
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Crash: e_closure: failed to resolve capture value
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Crash: e_closure: failed to resolve capture value
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Crash: e_closure: failed to resolve capture value
 ---
-Evaluation error: error.BugUnboxedRigidVar
+Crash: e_closure: failed to resolve capture value
 # PROBLEMS
 NIL

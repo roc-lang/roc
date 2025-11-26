@@ -855,12 +855,13 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the relative name "Num.Numeral" (not "Builtin.Num.Numeral") to match the relative_name in TypeHeader
-    // The origin_module field already captures that this type is from Builtin
-    const numeral_ident_idx = self.cir.common.findIdent("Num.Numeral") orelse blk: {
-        // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Num.Numeral"));
-    };
+    // Use the relative name "Num.Numeral" (not "Builtin.Num.Numeral") with origin_module Builtin
+    // Use the pre-interned ident from builtin_module to avoid string comparison
+    const numeral_ident_idx = if (self.common_idents.builtin_module) |builtin_mod|
+        builtin_mod.numeral_relative_ident
+    else
+        // When compiling Builtin module itself, use the pre-interned ident from self.cir
+        self.cir.numeral_relative_ident;
     const numeral_ident = types_mod.TypeIdent{
         .ident_idx = numeral_ident_idx,
     };
@@ -3563,8 +3564,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
-            does_fx = try self.checkExpr(dbg.expr, env, expected) or does_fx;
-            _ = try self.unify(expr_var, ModuleEnv.varFrom(dbg.expr), env);
+            // dbg evaluates its inner expression but returns {} (like expect)
+            _ = try self.checkExpr(dbg.expr, env, .no_expectation);
+            does_fx = true;
+            try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
@@ -5146,10 +5149,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
                 const constraint = constraints[0];
-                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
 
                 // For is_eq constraints, use the specific equality error message
-                if (std.mem.eql(u8, constraint_fn_name_bytes, "is_eq")) {
+                // Use ident index comparison instead of string comparison
+                if (constraint.fn_name == self.cir.is_eq_ident) {
                     try self.reportEqualityError(
                         deferred_constraint.var_,
                         constraint,

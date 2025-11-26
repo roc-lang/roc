@@ -136,6 +136,9 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
         .ok_ident = common.findIdent("Ok") orelse unreachable,
         .err_ident = common.findIdent("Err") orelse unreachable,
+        .numeral_relative_ident = common.findIdent("Num.Numeral") orelse unreachable,
+        .true_tag_ident = common.findIdent("True") orelse unreachable,
+        .false_tag_ident = common.findIdent("False") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
     };

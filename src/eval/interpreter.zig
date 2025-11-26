@@ -460,7 +460,7 @@ pub const Interpreter = struct {
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             // Only copy result if the result type is compatible with ret_ptr
-            if (try self.shouldCopyResult(result_value, ret_ptr)) {
+            if (try self.shouldCopyResult(result_value, ret_ptr, roc_ops)) {
                 try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
             }
             return;
@@ -470,7 +470,7 @@ pub const Interpreter = struct {
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
         // Only copy result if the result type is compatible with ret_ptr
-        if (try self.shouldCopyResult(result, ret_ptr)) {
+        if (try self.shouldCopyResult(result, ret_ptr, roc_ops)) {
             try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
         }
     }
@@ -478,7 +478,7 @@ pub const Interpreter = struct {
     /// Check if the result should be copied to ret_ptr based on the result's layout.
     /// Returns false for zero-sized types (nothing to copy).
     /// Validates that ret_ptr is properly aligned for the result type.
-    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque) !bool {
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque, _: *RocOps) !bool {
         const result_size = self.runtime_layout_store.layoutSize(result.layout);
         if (result_size == 0) {
             // Zero-sized types don't need copying
@@ -493,7 +493,6 @@ pub const Interpreter = struct {
         const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
         const ret_addr = @intFromPtr(ret_ptr);
         if (ret_addr % required_alignment.toByteUnits() != 0) {
-            // Type mismatch detected at runtime
             return error.TypeMismatch;
         }
 
@@ -1363,9 +1362,9 @@ pub const Interpreter = struct {
                 };
                 var resolved = self.runtime_types.resolveVar(rt_var);
                 // If the type is still flex and this is a True/False tag, use Bool
+                // Use ident index comparison instead of string comparison
                 if (resolved.desc.content == .flex) {
-                    const name_text = self.env.getIdent(zero.name);
-                    if (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False")) {
+                    if (zero.name == self.env.true_tag_ident or zero.name == self.env.false_tag_ident) {
                         rt_var = try self.getCanonicalBoolRuntimeVar();
                         resolved = self.runtime_types.resolveVar(rt_var);
                     }
@@ -1447,8 +1446,7 @@ pub const Interpreter = struct {
                 var resolved = self.resolveBaseVar(rt_var);
                 // If the type is still flex and this is a True/False tag, use Bool
                 if (resolved.desc.content == .flex) {
-                    const name_text = self.env.getIdent(tag.name);
-                    if (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False")) {
+                    if (tag.name == self.env.true_tag_ident or tag.name == self.env.false_tag_ident) {
                         rt_var = try self.getCanonicalBoolRuntimeVar();
                         resolved = self.resolveBaseVar(rt_var);
                     }
@@ -1802,13 +1800,19 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .e_dbg => |dbg_expr| {
+                // Evaluate and print the inner expression
                 const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
                 const value = try self.evalExprMinimal(dbg_expr.expr, roc_ops, inner_rt_var);
+                defer value.decref(&self.runtime_layout_store, roc_ops);
                 const rendered = try self.renderValueRocWithType(value, inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
-                return value;
+                // dbg returns {} (empty record) - use same pattern as e_expect
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                return try self.pushRaw(layout_val, 0);
             },
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {

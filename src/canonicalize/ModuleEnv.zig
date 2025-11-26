@@ -179,6 +179,8 @@ is_ne_ident: Ident.Idx,
 // These match the nominal types created during type checking
 builtin_try_ident: Ident.Idx,
 builtin_numeral_ident: Ident.Idx,
+/// Relative numeral ident "Num.Numeral" - used for creating nominal types where origin_module is Builtin
+numeral_relative_ident: Ident.Idx,
 builtin_str_ident: Ident.Idx,
 list_type_ident: Ident.Idx,
 box_type_ident: Ident.Idx,
@@ -211,6 +213,9 @@ unbox_method_ident: Ident.Idx,
 // Try tag idents
 ok_ident: Ident.Idx,
 err_ident: Ident.Idx,
+// Bool tag idents
+true_tag_ident: Ident.Idx,
+false_tag_ident: Ident.Idx,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -317,6 +322,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     // Pre-intern fully-qualified type identifiers for type checking and layout generation
     const builtin_try_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Try"));
     const builtin_numeral_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral"));
+    const numeral_relative_ident = try common.insertIdent(gpa, Ident.for_text("Num.Numeral"));
     const builtin_str_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Str"));
     const list_type_ident = try common.insertIdent(gpa, Ident.for_text("List"));
     const box_type_ident = try common.insertIdent(gpa, Ident.for_text("Box"));
@@ -345,6 +351,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const unbox_method_ident = try common.insertIdent(gpa, Ident.for_text("unbox"));
     const ok_ident = try common.insertIdent(gpa, Ident.for_text("Ok"));
     const err_ident = try common.insertIdent(gpa, Ident.for_text("Err"));
+    const true_tag_ident = try common.insertIdent(gpa, Ident.for_text("True"));
+    const false_tag_ident = try common.insertIdent(gpa, Ident.for_text("False"));
 
     return Self{
         .gpa = gpa,
@@ -384,6 +392,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .is_ne_ident = is_ne_ident,
         .builtin_try_ident = builtin_try_ident_val,
         .builtin_numeral_ident = builtin_numeral_ident_val,
+        .numeral_relative_ident = numeral_relative_ident,
         .builtin_str_ident = builtin_str_ident,
         .list_type_ident = list_type_ident,
         .box_type_ident = box_type_ident,
@@ -412,6 +421,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .unbox_method_ident = unbox_method_ident,
         .ok_ident = ok_ident,
         .err_ident = err_ident,
+        .true_tag_ident = true_tag_ident,
+        .false_tag_ident = false_tag_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
     };
@@ -1858,6 +1869,7 @@ pub const Serialized = extern struct {
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_try_ident: Ident.Idx,
     builtin_numeral_ident: Ident.Idx,
+    numeral_relative_ident: Ident.Idx,
     builtin_str_ident: Ident.Idx,
     list_type_ident: Ident.Idx,
     box_type_ident: Ident.Idx,
@@ -1886,6 +1898,8 @@ pub const Serialized = extern struct {
     unbox_method_ident: Ident.Idx,
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
+    true_tag_ident: Ident.Idx,
+    false_tag_ident: Ident.Idx,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
 
@@ -1947,6 +1961,7 @@ pub const Serialized = extern struct {
         self.is_ne_ident = env.is_ne_ident;
         self.builtin_try_ident = env.builtin_try_ident;
         self.builtin_numeral_ident = env.builtin_numeral_ident;
+        self.numeral_relative_ident = env.numeral_relative_ident;
         self.builtin_str_ident = env.builtin_str_ident;
         self.list_type_ident = env.list_type_ident;
         self.box_type_ident = env.box_type_ident;
@@ -1975,6 +1990,8 @@ pub const Serialized = extern struct {
         self.unbox_method_ident = env.unbox_method_ident;
         self.ok_ident = env.ok_ident;
         self.err_ident = env.err_ident;
+        self.true_tag_ident = env.true_tag_ident;
+        self.false_tag_ident = env.false_tag_ident;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
     }
@@ -2043,6 +2060,7 @@ pub const Serialized = extern struct {
             // Fully-qualified type identifiers for type checking and layout generation
             .builtin_try_ident = self.builtin_try_ident,
             .builtin_numeral_ident = self.builtin_numeral_ident,
+            .numeral_relative_ident = self.numeral_relative_ident,
             .builtin_str_ident = self.builtin_str_ident,
             .list_type_ident = self.list_type_ident,
             .box_type_ident = self.box_type_ident,
@@ -2071,6 +2089,8 @@ pub const Serialized = extern struct {
             .unbox_method_ident = self.unbox_method_ident,
             .ok_ident = self.ok_ident,
             .err_ident = self.err_ident,
+            .true_tag_ident = self.true_tag_ident,
+            .false_tag_ident = self.false_tag_ident,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         };
