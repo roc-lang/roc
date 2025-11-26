@@ -155,6 +155,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.to_utf8")) |str_to_utf8_ident| {
         try low_level_map.put(str_to_utf8_ident, .str_to_utf8);
     }
+    if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
+        try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

@@ -420,6 +420,7 @@ pub const Expr = union(enum) {
         str_reserve,
         str_release_excess_capacity,
         str_to_utf8,
+        str_from_utf8_lossy,
 
         // Numeric to_str operations
         u8_to_str,
