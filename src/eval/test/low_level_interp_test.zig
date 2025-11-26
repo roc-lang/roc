@@ -538,6 +538,60 @@ test "e_low_level_lambda - Str.trim with a non-whitespace string" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
+test "e_low_level_lambda - Str.trim_start with an empty string" {
+    const src =
+        \\x = Str.trim_start("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with a whitespace string" {
+    const src =
+        \\x = Str.trim_start("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_start with a non-whitespace string" {
+    const src =
+        \\x = Str.trim_start("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello  \"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with an empty string" {
+    const src =
+        \\x = Str.trim_end("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with a whitespace string" {
+    const src =
+        \\x = Str.trim_end("   ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.trim_end with a non-whitespace string" {
+    const src =
+        \\x = Str.trim_end("  hello  ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"  hello\"", value);
+}
+
 test "e_low_level_lambda - List.concat with two non-empty lists" {
     const src =
         \\x = List.concat([1, 2], [3, 4])
@@ -802,4 +856,268 @@ test "e_low_level_lambda - F64.to_str with negative" {
     const value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(value);
     try testing.expect(std.mem.startsWith(u8, value, "\"-123.456"));
+}
+
+// Str.starts_with tests
+
+test "e_low_level_lambda - Str.starts_with returns True for matching prefix" {
+    const src =
+        \\x = Str.starts_with("hello world", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.starts_with returns False for non-matching prefix" {
+    const src =
+        \\x = Str.starts_with("hello world", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.starts_with with empty prefix" {
+    const src =
+        \\x = Str.starts_with("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.starts_with with empty string and empty prefix" {
+    const src =
+        \\x = Str.starts_with("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.starts_with with prefix longer than string" {
+    const src =
+        \\x = Str.starts_with("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+// Str.ends_with tests
+
+test "e_low_level_lambda - Str.ends_with returns True for matching suffix" {
+    const src =
+        \\x = Str.ends_with("hello world", "world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.ends_with returns False for non-matching suffix" {
+    const src =
+        \\x = Str.ends_with("hello world", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+test "e_low_level_lambda - Str.ends_with with empty suffix" {
+    const src =
+        \\x = Str.ends_with("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.ends_with with empty string and empty suffix" {
+    const src =
+        \\x = Str.ends_with("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value);
+}
+
+test "e_low_level_lambda - Str.ends_with with suffix longer than string" {
+    const src =
+        \\x = Str.ends_with("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("False", value);
+}
+
+// Str.repeat tests
+
+test "e_low_level_lambda - Str.repeat basic repetition" {
+    const src =
+        \\x = Str.repeat("ab", 3)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"ababab\"", value);
+}
+
+test "e_low_level_lambda - Str.repeat with zero count" {
+    const src =
+        \\x = Str.repeat("hello", 0)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.repeat with one count" {
+    const src =
+        \\x = Str.repeat("hello", 1)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.repeat empty string" {
+    const src =
+        \\x = Str.repeat("", 5)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// Str.with_prefix tests
+
+test "e_low_level_lambda - Str.with_prefix basic" {
+    const src =
+        \\x = Str.with_prefix("world", "hello ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.with_prefix empty prefix" {
+    const src =
+        \\x = Str.with_prefix("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.with_prefix empty string" {
+    const src =
+        \\x = Str.with_prefix("", "prefix")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"prefix\"", value);
+}
+
+test "e_low_level_lambda - Str.with_prefix both empty" {
+    const src =
+        \\x = Str.with_prefix("", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// Str.drop_prefix tests
+
+test "e_low_level_lambda - Str.drop_prefix removes matching prefix" {
+    const src =
+        \\x = Str.drop_prefix("hello world", "hello ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"world\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_prefix returns original when no match" {
+    const src =
+        \\x = Str.drop_prefix("hello world", "goodbye ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_prefix with empty prefix" {
+    const src =
+        \\x = Str.drop_prefix("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_prefix removes entire string" {
+    const src =
+        \\x = Str.drop_prefix("hello", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_prefix prefix longer than string" {
+    const src =
+        \\x = Str.drop_prefix("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hi\"", value);
+}
+
+// Str.drop_suffix tests
+
+test "e_low_level_lambda - Str.drop_suffix removes matching suffix" {
+    const src =
+        \\x = Str.drop_suffix("hello world", " world")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix returns original when no match" {
+    const src =
+        \\x = Str.drop_suffix("hello world", " goodbye")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix with empty suffix" {
+    const src =
+        \\x = Str.drop_suffix("hello", "")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix removes entire string" {
+    const src =
+        \\x = Str.drop_suffix("hello", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
+    const src =
+        \\x = Str.drop_suffix("hi", "hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hi\"", value);
 }

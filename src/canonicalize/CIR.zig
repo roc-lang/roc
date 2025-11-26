@@ -42,6 +42,8 @@ pub const BuiltinIndices = struct {
     str_type: Statement.Idx,
     /// Statement index of nested List type declaration within Builtin module
     list_type: Statement.Idx,
+    /// Statement index of nested Box type declaration within Builtin module
+    box_type: Statement.Idx,
     /// Statement index of nested U8 type declaration within Builtin module
     u8_type: Statement.Idx,
     /// Statement index of nested I8 type declaration within Builtin module

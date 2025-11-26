@@ -58,6 +58,8 @@ const BuiltinIndices = struct {
     str_type: CIR.Statement.Idx,
     /// Statement index of nested List type declaration within Builtin module
     list_type: CIR.Statement.Idx,
+    /// Statement index of nested Box type declaration within Builtin module
+    box_type: CIR.Statement.Idx,
     /// Statement index of nested U8 type declaration within Builtin module
     u8_type: CIR.Statement.Idx,
     /// Statement index of nested I8 type declaration within Builtin module
@@ -127,6 +129,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.trim")) |str_trim_ident| {
         try low_level_map.put(str_trim_ident, .str_trim);
     }
+    if (env.common.findIdent("Builtin.Str.trim_start")) |str_trim_start_ident| {
+        try low_level_map.put(str_trim_start_ident, .str_trim_start);
+    }
+    if (env.common.findIdent("Builtin.Str.trim_end")) |str_trim_end_ident| {
+        try low_level_map.put(str_trim_end_ident, .str_trim_end);
+    }
     if (env.common.findIdent("Builtin.Str.caseless_ascii_equals")) |str_caseless_ascii_equals_ident| {
         try low_level_map.put(str_caseless_ascii_equals_ident, .str_caseless_ascii_equals);
     }
@@ -135,6 +143,24 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
     if (env.common.findIdent("Builtin.Str.with_ascii_uppercased")) |str_with_ascii_uppercased_ident| {
         try low_level_map.put(str_with_ascii_uppercased_ident, .str_with_ascii_uppercased);
+    }
+    if (env.common.findIdent("Builtin.Str.starts_with")) |str_starts_with_ident| {
+        try low_level_map.put(str_starts_with_ident, .str_starts_with);
+    }
+    if (env.common.findIdent("Builtin.Str.ends_with")) |str_ends_with_ident| {
+        try low_level_map.put(str_ends_with_ident, .str_ends_with);
+    }
+    if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
+        try low_level_map.put(str_repeat_ident, .str_repeat);
+    }
+    if (env.common.findIdent("Builtin.Str.with_prefix")) |str_with_prefix_ident| {
+        try low_level_map.put(str_with_prefix_ident, .str_with_prefix);
+    }
+    if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
+        try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
+    }
+    if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
+        try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
@@ -534,6 +560,7 @@ pub fn main() !void {
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
     const list_type_idx = try findTypeDeclaration(builtin_env, "List");
+    const box_type_idx = try findTypeDeclaration(builtin_env, "Box");
 
     // Find numeric types nested inside Num (e.g., Builtin.Num.U8)
     const u8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U8");
@@ -612,6 +639,7 @@ pub fn main() !void {
         .set_type = set_type_idx,
         .str_type = str_type_idx,
         .list_type = list_type_idx,
+        .box_type = box_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
         .u16_type = u16_type_idx,
@@ -658,8 +686,8 @@ fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinInd
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_text = env.getIdentText(header.name);
 
-                // Skip "Builtin.Num" - it's a container type, not an auto-imported type
-                if (std.mem.eql(u8, ident_text, "Builtin.Num")) {
+                // Skip container types that are not auto-imported types
+                if (std.mem.eql(u8, ident_text, "Builtin") or std.mem.eql(u8, ident_text, "Builtin.Num")) {
                     continue;
                 }
 
@@ -725,6 +753,7 @@ fn compileModule(
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,
         .builtin_module = null,
+        .builtin_indices = null,
     };
 
     // 3. Parse
