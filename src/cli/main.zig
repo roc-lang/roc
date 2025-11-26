@@ -1443,7 +1443,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
                 // Insert the aliased name into the platform env's ident table
                 const aliased_ident = try module_env_ptr.insertIdent(base.Ident.for_text(aliased_name));
 
-                // Add to exposed_items with the same node_idx value
+                // First add to exposed items, then set node index
+                try module_env_ptr.common.exposed_items.addExposedById(shm_allocator, @bitCast(aliased_ident));
                 try module_env_ptr.common.exposed_items.setNodeIndexById(shm_allocator, @bitCast(aliased_ident), entry.value);
             }
         }

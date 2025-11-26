@@ -43,6 +43,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     _ = import2; // Mark as used
 
+    // First add to exposed items, then set node index
+    try original.addExposedById(hello_idx);
     try original.setExposedNodeIndexById(hello_idx, 42);
     original.ensureExposedSorted(gpa);
     original.module_name = "TestModule";

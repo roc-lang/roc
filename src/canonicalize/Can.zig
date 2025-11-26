@@ -2685,6 +2685,13 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
         if (pattern == .assign) {
             // Check if this definition's identifier is in the exposed items
             if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
+                // Skip associated items (qualified names like "Color.as_str").
+                // These are internal implementations registered via setNodeIndexById
+                // during associated block canonicalization, not top-level exports.
+                const ident_text = self.env.getIdent(pattern.assign.ident);
+                if (std.mem.indexOfScalar(u8, ident_text, '.') != null) {
+                    continue;
+                }
                 // Add this definition to the exports scratch space
                 try self.env.store.addScratchDef(def_idx);
             }

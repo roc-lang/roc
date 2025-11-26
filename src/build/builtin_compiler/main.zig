@@ -422,8 +422,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
                 // Insert the alias identifier
                 const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                // Expose the same node under the alias
-                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
+                // First add to exposed items, then set node index
+                try env.common.addExposedById(gpa, alias_ident);
+                env.common.setNodeIndexById(gpa, alias_ident, node_idx);
             }
         }
     }
@@ -564,27 +565,28 @@ pub fn main() !void {
     const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
-    try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
+    // Note: These types are already in exposed_items from canonicalization, we just set their node indices
+    builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
 
-    try builtin_env.common.setNodeIndexById(gpa, u8_ident, @intCast(@intFromEnum(u8_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i8_ident, @intCast(@intFromEnum(i8_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u16_ident, @intCast(@intFromEnum(u16_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i16_ident, @intCast(@intFromEnum(i16_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u32_ident, @intCast(@intFromEnum(u32_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i32_ident, @intCast(@intFromEnum(i32_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u64_ident, @intCast(@intFromEnum(u64_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i64_ident, @intCast(@intFromEnum(i64_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u128_ident, @intCast(@intFromEnum(u128_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i128_ident, @intCast(@intFromEnum(i128_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, u8_ident, @intCast(@intFromEnum(u8_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, i8_ident, @intCast(@intFromEnum(i8_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, u16_ident, @intCast(@intFromEnum(u16_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, i16_ident, @intCast(@intFromEnum(i16_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, u32_ident, @intCast(@intFromEnum(u32_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, i32_ident, @intCast(@intFromEnum(i32_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, u64_ident, @intCast(@intFromEnum(u64_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, i64_ident, @intCast(@intFromEnum(i64_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, u128_ident, @intCast(@intFromEnum(u128_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, i128_ident, @intCast(@intFromEnum(i128_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
+    builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
