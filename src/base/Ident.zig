@@ -81,6 +81,13 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
 pub const Idx = packed struct(u32) {
     attributes: Attributes,
     idx: u29,
+
+    /// Sentinel value representing no/unset ident
+    pub const NONE: Idx = .{ .attributes = .{ .effectful = true, .ignored = true, .reassignable = true }, .idx = std.math.maxInt(u29) };
+
+    pub fn isNone(self: Idx) bool {
+        return self.idx == NONE.idx and @as(u3, @bitCast(self.attributes)) == @as(u3, @bitCast(NONE.attributes));
+    }
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.

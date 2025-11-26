@@ -319,6 +319,16 @@ pub const ReportBuilder = struct {
         self.bytes_buf.deinit();
     }
 
+    /// Check if any static dispatch constraint involves the is_eq method
+    fn hasEqualityConstraint(self: *Self) bool {
+        for (self.snapshot_writer.static_dispatch_constraints.items) |constraint| {
+            if (constraint.fn_name == self.can_ir.is_eq_ident) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Build a report for a problem
     pub fn build(
         self: *Self,
@@ -433,31 +443,37 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
 
         // Check if both types are functions to provide more specific error messages
-        if (types.from_annotation) {
-            // Check the snapshot content to determine if we have function types
-            const expected_content = self.snapshots.getContent(types.expected_snapshot);
-            const actual_content = self.snapshots.getContent(types.actual_snapshot);
+        const expected_content = self.snapshots.getContent(types.expected_snapshot);
+        const actual_content = self.snapshots.getContent(types.actual_snapshot);
 
-            if (self.areBothFunctionSnapshots(expected_content, actual_content)) {
-                // When we have constraint_origin_var, it indicates this error originated from
-                // a specific constraint like a dot access (e.g., str.to_utf8()).
-                // In this case, show a specialized argument type mismatch error.
-                if (types.constraint_origin_var) |origin_var| {
-                    report.deinit();
-                    return self.buildIncompatibleFnCallArg(types, .{
-                        .fn_name = null,
-                        .arg_var = origin_var,
-                        .incompatible_arg_index = 0, // First argument
-                        .num_args = 1, // Single argument lambda
-                    });
-                }
+        if (types.from_annotation and self.areBothFunctionSnapshots(expected_content, actual_content)) {
+            // When we have constraint_origin_var, it indicates this error originated from
+            // a specific constraint like a dot access (e.g., str.to_utf8()).
+            // In this case, show a specialized argument type mismatch error.
+            if (types.constraint_origin_var) |origin_var| {
+                report.deinit();
+                return self.buildIncompatibleFnCallArg(types, .{
+                    .fn_name = null,
+                    .arg_var = origin_var,
+                    .incompatible_arg_index = 0, // First argument
+                    .num_args = 1, // Single argument lambda
+                });
             }
         }
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("This expression is used in an unexpected way:");
+        // Check if this is a method type mismatch (both types are functions with equality constraints)
+        const is_method_type_mismatch = self.areBothFunctionSnapshots(expected_content, actual_content) and
+            self.snapshot_writer.static_dispatch_constraints.items.len > 0 and
+            self.hasEqualityConstraint();
+
+        if (is_method_type_mismatch) {
+            try report.document.addReflowingText("This method has an unexpected type:");
+        } else {
+            try report.document.addReflowingText("This expression is used in an unexpected way:");
+        }
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -484,29 +500,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
-
-        // Add a hint if this looks like a numeric literal size issue
-        const actual_str = owned_actual;
-        const expected_str = owned_expected;
-
-        // Check if we're dealing with numeric types
-        const is_numeric_issue = (std.mem.indexOf(u8, actual_str, "Num(") != null and
-            std.mem.indexOf(u8, expected_str, "Num(") != null);
-
-        // Check if target is a concrete integer type
-        const has_unsigned = std.mem.indexOf(u8, expected_str, "Unsigned") != null;
-        const has_signed = std.mem.indexOf(u8, expected_str, "Signed") != null;
-
-        if (is_numeric_issue and (has_unsigned or has_signed)) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint:", .emphasized);
-            if (has_unsigned) {
-                try report.document.addReflowingText(" This might be because the numeric literal is either negative or too large to fit in the unsigned type.");
-            } else {
-                try report.document.addReflowingText(" This might be because the numeric literal is too large to fit in the target type.");
-            }
-        }
 
         return report;
     }
@@ -1370,13 +1363,11 @@ pub const ReportBuilder = struct {
 
             // Check if there's a tag with the same name in the list of possible tags
 
-            const actual_tag_name_str = self.can_ir.getIdent(actual_tag.name);
             var iter = expected_content.structure.tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
-                const expected_tag_name_str = self.can_ir.getIdent(cur_expected_tag.name);
 
-                if (std.mem.eql(u8, actual_tag_name_str, expected_tag_name_str)) {
+                if (actual_tag.name == cur_expected_tag.name) {
                     self.snapshot_writer.resetContext();
                     try self.snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);
                     const cur_expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());
@@ -2398,17 +2389,17 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time expect failure
     fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) !Report {
+        // Note: data.message contains raw source bytes which we don't display separately
+        // since the source region highlighting already shows the expect expression
         var report = Report.init(self.gpa, "COMPTIME EXPECT FAILED", .runtime_error);
         errdefer report.deinit();
 
-        const owned_message = try report.addOwnedString(data.message);
-
-        try report.document.addText("This definition contains an ");
+        try report.document.addText("This ");
         try report.document.addAnnotated("expect", .keyword);
-        try report.document.addText(" that failed during compile-time evaluation:");
+        try report.document.addText(" failed during compile-time evaluation:");
         try report.document.addLineBreak();
 
-        // Add source region highlighting
+        // Add source region highlighting - shows the expect expression with syntax highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
             region_info,
@@ -2417,14 +2408,6 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
-        try report.document.addLineBreak();
-
-        try report.document.addText("The ");
-        try report.document.addAnnotated("expect", .keyword);
-        try report.document.addText(" failed with this message:");
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_message, .emphasized);
 
         return report;
     }

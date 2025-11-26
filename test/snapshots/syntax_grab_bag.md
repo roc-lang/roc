@@ -813,7 +813,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num.U64_
+    _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -898,7 +898,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+    _d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -925,7 +925,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    __d_
+    _d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

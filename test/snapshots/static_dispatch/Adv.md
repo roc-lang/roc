@@ -45,8 +45,8 @@ main = {
 ~~~
 # EXPECTED
 MISSING METHOD - Adv.md:17:28:17:31
-MISSING METHOD - Adv.md:23:13:23:33
-MISSING METHOD - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:23:17:23:28
+MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -64,11 +64,11 @@ The value's type, which does not have a method named **from_numeral**, is:
 
 **MISSING METHOD**
 This **update_strr** method is being called on a value whose type doesn't have that method:
-**Adv.md:23:13:23:33:**
+**Adv.md:23:17:23:28:**
 ```roc
 	next_val = val.update_strr(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^^
+	               ^^^^^^^^^^^
 
 The value's type, which does not have a method named **update_strr**, is:
 
@@ -78,11 +78,11 @@ The value's type, which does not have a method named **update_strr**, is:
 
 **MISSING METHOD**
 This **update** method is being called on a value whose type doesn't have that method:
-**Adv.md:28:13:28:32:**
+**Adv.md:28:21:28:27:**
 ```roc
 	next_val = "Hello".update(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^
+	                   ^^^^^^
 
 The value's type, which does not have a method named **update**, is:
 

@@ -98,7 +98,19 @@ pub fn SafeList(comptime T: type) type {
         items: std.ArrayList(T) = .{},
 
         /// An index for an item in the list.
-        pub const Idx = enum(u32) { _ };
+        pub const Idx = enum(u32) {
+            _,
+
+            /// Get the raw u32 value for storage
+            pub fn toU32(self: Idx) u32 {
+                return @intFromEnum(self);
+            }
+
+            /// Create from a raw u32 value
+            pub fn fromU32(value: u32) Idx {
+                return @enumFromInt(value);
+            }
+        };
 
         /// A non-type-safe slice of the list.
         pub const Slice = std.ArrayList(T).Slice;

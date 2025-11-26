@@ -47,7 +47,7 @@ It has the type:
     _Pair(Str)_
 
 But the type annotation says it should have the type:
-    _Pair(Num.U8)_
+    _Pair(U8)_
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -75,7 +75,7 @@ It has the type:
     _Pair(Str)_
 
 But the type annotation says it should have the type:
-    _Pair(Num.U64)_
+    _Pair(U64)_
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:

@@ -117,8 +117,6 @@ constraint_origins: std.AutoHashMap(Var, Var),
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
 str_var: Var,
-/// Used when looking up static dispatch functions
-static_dispatch_method_name_buf: std.ArrayList(u8),
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Map representation all top level patterns, and if we've processed them yet
@@ -154,6 +152,8 @@ pub const CommonIdents = struct {
     str_stmt: can.CIR.Statement.Idx,
     /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
     builtin_module: ?*const ModuleEnv,
+    /// Indices of auto-imported types in the Builtin module (null when compiling Builtin module itself)
+    builtin_indices: ?can.CIR.BuiltinIndices,
     /// Cached identifier for "from_numeral" (used for numeric literal constraints)
     from_numeral: ?base.Ident.Idx = null,
 };
@@ -170,7 +170,14 @@ pub fn init(
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    var import_mapping = try @import("types").import_mapping.createImportMapping(gpa, mutable_cir.getIdentStore());
+    var import_mapping = try createImportMapping(
+        gpa,
+        mutable_cir.getIdentStore(),
+        cir,
+        common_idents.builtin_module,
+        common_idents.builtin_indices,
+        module_envs,
+    );
     errdefer import_mapping.deinit();
 
     return .{
@@ -202,7 +209,6 @@ pub fn init(
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
-        .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
     };
@@ -229,7 +235,6 @@ pub fn deinit(self: *Self) void {
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
-    self.static_dispatch_method_name_buf.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
 }
@@ -672,8 +677,9 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Number types are nested in Num module, so the qualified name is "Num.U8", "Num.I32", etc.
-    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Num.{s}", .{type_name});
+    // Use fully-qualified type name "Builtin.Num.U8" etc.
+    // This allows method lookup to work correctly (getMethodIdent builds "Builtin.Num.U8.method_name")
+    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
     defer self.gpa.free(qualified_type_name);
     const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
     const type_ident = types_mod.TypeIdent{
@@ -819,14 +825,10 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the fully qualified name "Builtin.Try" to match how Try is defined in the Builtin module
+    // Use the precomputed "Builtin.Try" ident from ModuleEnv
     // This ensures our Try type unifies correctly with the Try type from actual method signatures
-    const try_ident_idx = self.cir.common.findIdent("Builtin.Try") orelse blk: {
-        // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Try"));
-    };
     const try_ident = types_mod.TypeIdent{
-        .ident_idx = try_ident_idx,
+        .ident_idx = self.cir.builtin_try_ident,
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -853,13 +855,9 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     else
         self.common_idents.module_name; // We're compiling Builtin module itself
 
-    // Use the fully qualified name "Builtin.Num.Numeral" to match how Numeral is defined
-    const numeral_ident_idx = self.cir.common.findIdent("Builtin.Num.Numeral") orelse blk: {
-        // If not found, create it (this handles tests and edge cases)
-        break :blk try @constCast(self.cir).insertIdent(base.Ident.for_text("Builtin.Num.Numeral"));
-    };
+    // Use the precomputed "Builtin.Num.Numeral" ident from ModuleEnv
     const numeral_ident = types_mod.TypeIdent{
-        .ident_idx = numeral_ident_idx,
+        .ident_idx = self.cir.builtin_numeral_ident,
     };
 
     // The backing var doesn't matter here. Nominal types unify based on their ident
@@ -1081,7 +1079,13 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// Check that the app's exported values match the platform's required types.
 /// This should be called after checkFile() to verify that app exports conform
 /// to the platform's requirements.
-pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) std.mem.Allocator.Error!void {
+/// The `platform_to_app_idents` map translates platform ident indices to app ident indices,
+/// built by the caller to avoid string lookups during type checking.
+pub fn checkPlatformRequirements(
+    self: *Self,
+    platform_env: *const ModuleEnv,
+    platform_to_app_idents: *const std.AutoHashMap(Ident.Idx, Ident.Idx),
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1092,9 +1096,8 @@ pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) st
     // Iterate over the platform's required types
     const requires_types_slice = platform_env.requires_types.items.items;
     for (requires_types_slice) |required_type| {
-        // Get the identifier name for this required type
-        const required_ident = required_type.ident;
-        const required_ident_text = platform_env.getIdent(required_ident);
+        // Look up the pre-translated app ident for this platform requirement
+        const app_required_ident = platform_to_app_idents.get(required_type.ident);
 
         // Find the matching export in the app
         const app_exports_slice = self.cir.store.sliceDefs(self.cir.exports);
@@ -1105,8 +1108,8 @@ pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) st
             const pattern = self.cir.store.getPattern(def.pattern);
 
             if (pattern == .assign) {
-                const export_ident_text = self.cir.getIdent(pattern.assign.ident);
-                if (std.mem.eql(u8, export_ident_text, required_ident_text)) {
+                // Compare ident indices - if app_required_ident is null, there's no match
+                if (app_required_ident != null and pattern.assign.ident == app_required_ident.?) {
                     found_export = def_idx;
                     break;
                 }
@@ -3021,6 +3024,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, .err, env);
             }
         },
+        .e_lookup_required => |req| {
+            // Look up the type from the platform's requires clause
+            const requires_items = self.cir.requires_types.items.items;
+            const idx = req.requires_idx.toU32();
+            if (idx < requires_items.len) {
+                const required_type = requires_items[idx];
+                const type_var = ModuleEnv.varFrom(required_type.type_anno);
+                const instantiated_var = try self.instantiateVar(
+                    type_var,
+                    env,
+                    .{ .explicit = expr_region },
+                );
+                _ = try self.unify(expr_var, instantiated_var, env);
+            } else {
+                try self.unifyWith(expr_var, .err, env);
+            }
+        },
         // block //
         .e_block => |block| {
             const anno_free_vars_top = self.anno_free_vars.top();
@@ -3476,11 +3496,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const dispatch_ret_var = try self.fresh(env, expr_region);
 
                     // Now, create the function being dispatched
+                    // Use field_name_region so error messages point at the method name, not the whole expression
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = dispatch_arg_vars_range,
                         .ret = dispatch_ret_var,
                         .needs_instantiation = false,
-                    } } }, env, expr_region);
+                    } } }, env, dot_access.field_name_region);
 
                     // Then, create the static dispatch constraint
                     const constraint = StaticDispatchConstraint{
@@ -3491,10 +3512,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
                     // Create our constrained flex, and unify it with the receiver
+                    // Use field_name_region so error messages point at the method name, not the whole expression
                     const constrained_var = try self.freshFromContent(
                         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
                         env,
-                        expr_region,
+                        dot_access.field_name_region,
                     );
 
                     _ = try self.unify(constrained_var, receiver_var, env);
@@ -4587,7 +4609,6 @@ fn checkNumeralConstraint(
     constraint: types_mod.StaticDispatchConstraint,
     num_lit_info: types_mod.NumeralInfo,
     nominal_type: types_mod.NominalType,
-    type_name_bytes: []const u8,
     env: *Env,
 ) !void {
     // Mark parameters as intentionally unused - validation happens in comptime evaluation
@@ -4596,7 +4617,6 @@ fn checkNumeralConstraint(
     _ = constraint;
     _ = num_lit_info;
     _ = nominal_type;
-    _ = type_name_bytes;
     _ = env;
 
     // All numeric literal validation now happens during comptime evaluation
@@ -4755,46 +4775,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Get the name fully qualified name of the function
-                // Czer creates this as `TypeName.method_name`
-                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
-
-                // Calculate the name of the static dispatch function
-                //
-                // TODO: This works for top-level types, but not for deeply
-                // nested types like: MyModule.A.B.C.my_func
-                self.static_dispatch_method_name_buf.clearRetainingCapacity();
-
-                // Check if type_name_bytes already starts with "module_name."
-                const module_prefix = original_env.module_name;
-                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
-                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
-                    type_name_bytes[module_prefix.len] == '.';
-
-                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else if (already_qualified) {
-                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}",
-                        .{ type_name_bytes, constraint_fn_name_bytes },
-                    );
-                } else {
-                    try self.static_dispatch_method_name_buf.print(
-                        self.gpa,
-                        "{s}.{s}.{s}",
-                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
-                    );
-                }
-                const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
-
-                // Get the ident of this method in the original env
-                const ident_in_original_env = original_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
+                // Look up the method in the original env.
+                // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
+                // Use the module's getMethodIdent to build and look up the qualified name.
+                const method_name_bytes = self.cir.getIdent(constraint.fn_name);
+                const method_ident = original_env.getMethodIdent(type_name_bytes, method_name_bytes) orelse {
+                    // Method name doesn't exist in target module
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -4805,10 +4791,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 };
 
                 // Get the def index in the original env
-                const node_idx_in_original_env = original_env.getExposedNodeIndexById(ident_in_original_env) orelse {
-                    // This can happen if the original module has an ident that
-                    // matches the method/type, but it doesn't actually have
-                    // that method.
+                const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
+                    // The ident exists but isn't exposed as a def
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -4866,10 +4850,13 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const resolved_real = self.types.resolveVar(real_method_var);
                 const mb_real_func = resolved_real.desc.content.unwrapFunc();
                 if (mb_real_func == null) {
-                    // This shouldn't happen - the method should be a function
-                    std.debug.assert(false);
-                    try self.unifyWith(deferred_constraint.var_, .err, env);
-                    try self.unifyWith(resolved_func.ret, .err, env);
+                    // The looked-up definition is not a function - report as missing method
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
                     continue;
                 }
                 const real_func = mb_real_func.?;
@@ -4879,10 +4866,13 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const real_args = self.types.sliceVars(real_func.args);
 
                 if (constraint_args.len != real_args.len) {
-                    // Arity mismatch - shouldn't happen if method was found correctly
-                    std.debug.assert(false);
-                    try self.unifyWith(deferred_constraint.var_, .err, env);
-                    try self.unifyWith(resolved_func.ret, .err, env);
+                    // Arity mismatch - the method exists but has wrong number of arguments
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                        env,
+                    );
                     continue;
                 }
 
@@ -4908,7 +4898,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         constraint,
                         constraint.num_literal.?,
                         nominal_type,
-                        type_name_bytes,
                         env,
                     );
                 }
@@ -4924,10 +4913,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // only if all their components also support is_eq
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
-                const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
-
                 // Check if this is a call to is_eq (anonymous types have implicit structural equality)
-                if (std.mem.eql(u8, constraint_fn_name_bytes, "is_eq")) {
+                if (constraint.fn_name == self.cir.is_eq_ident) {
                     // Check if all components of this anonymous type support is_eq
                     if (self.typeSupportsIsEq(dispatcher_content.structure)) {
                         // All components support is_eq, unify return type with Bool
@@ -5174,3 +5161,83 @@ const EnvPool = struct {
         };
     }
 };
+
+/// Create the import mapping for type display names in error messages.
+///
+/// This builds a mapping from fully-qualified type identifiers to their shortest display names
+/// based on what's in scope. The mapping is built from:
+/// 1. Auto-imported builtin types (e.g., Bool, Str, Dec, U64, etc.)
+/// 2. User import statements with their aliases
+///
+/// When multiple imports could refer to the same type, the shortest name wins.
+/// This ensures error messages show types the way users would write them in their code.
+pub fn createImportMapping(
+    gpa: std.mem.Allocator,
+    idents: *Ident.Store,
+    cir: *const ModuleEnv,
+    builtin_module: ?*const ModuleEnv,
+    builtin_indices: ?CIR.BuiltinIndices,
+    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+) std.mem.Allocator.Error!types_mod.import_mapping.ImportMapping {
+    var mapping = types_mod.import_mapping.ImportMapping.init(gpa);
+    errdefer mapping.deinit();
+
+    // Step 1: Add auto-imported builtin types
+    if (builtin_module) |builtin_env| {
+        if (builtin_indices) |indices| {
+            const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
+            inline for (fields) |field| {
+                // Only process Statement.Idx fields (skip Ident.Idx fields)
+                if (field.type != CIR.Statement.Idx) continue;
+                const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
+
+                const stmt = builtin_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_nominal_decl => |decl| {
+                        const header = builtin_env.store.getTypeHeader(decl.header);
+                        const qualified_name = builtin_env.getIdentText(header.name);
+
+                        // Extract display name (last component after dots)
+                        const display_name = blk: {
+                            var last_dot: usize = 0;
+                            for (qualified_name, 0..) |c, i| {
+                                if (c == '.') last_dot = i + 1;
+                            }
+                            break :blk qualified_name[last_dot..];
+                        };
+
+                        const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                        const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+                        try mapping.put(qualified_ident, display_ident);
+                    },
+                    else => @panic("BuiltinIndices contains non-nominal statement"),
+                }
+            }
+        }
+    }
+
+    // Step 2: Copy user import mappings from the ModuleEnv
+    // These were built during canonicalization when processing import statements
+    var iter = cir.import_mapping.iterator();
+    while (iter.next()) |entry| {
+        const qualified_ident = entry.key_ptr.*;
+        const local_ident = entry.value_ptr.*;
+
+        // Get the text for comparison
+        const local_name = cir.getIdentText(local_ident);
+
+        if (mapping.get(qualified_ident)) |existing_display| {
+            // Only replace if the new name is shorter
+            const existing_name = idents.getText(existing_display);
+            if (local_name.len < existing_name.len) {
+                try mapping.put(qualified_ident, local_ident);
+            }
+        } else {
+            try mapping.put(qualified_ident, local_ident);
+        }
+    }
+
+    _ = module_envs; // Not needed anymore - mapping is built during canonicalization
+
+    return mapping;
+}
