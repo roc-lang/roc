@@ -1198,8 +1198,8 @@ const Unifier = struct {
         const args_slice = self.types_store.sliceVars(func.args);
         if (args_slice.len != 1) return false;
 
-        const before_ident = self.module_env.common.findIdent("before_dot") orelse return false;
-        const after_ident = self.module_env.common.findIdent("after_dot") orelse return false;
+        const before_ident = self.module_env.before_dot_ident;
+        const after_ident = self.module_env.after_dot_ident;
 
         const record_desc = self.types_store.resolveVar(args_slice[0]);
         const record = switch (record_desc.desc.content) {
@@ -1322,7 +1322,7 @@ const Unifier = struct {
         // Create nominal List(U8) - List is from Builtin module
         // If List ident is not found, something is wrong with the environment
         // This should never happen in a properly initialized compiler!
-        const list_ident = self.module_env.common.findIdent("List") orelse unreachable;
+        const list_ident = self.module_env.list_type_ident;
 
         // Use the cached builtin_module_ident which represents the "Builtin" module.
         const origin_module = if (self.module_lookup.get(self.module_env.builtin_module_ident)) |_|
@@ -1341,7 +1341,7 @@ const Unifier = struct {
         }) catch return error.AllocatorError;
 
         // Create the [ProvidedByCompiler] tag
-        const provided_tag_ident = self.module_env.common.findIdent("ProvidedByCompiler") orelse unreachable;
+        const provided_tag_ident = self.module_env.provided_by_compiler_ident;
         const provided_tag = self.types_store.mkTag(provided_tag_ident, &.{}) catch return error.AllocatorError;
 
         const tag_union = TagUnion{
@@ -1394,11 +1394,7 @@ const Unifier = struct {
         }
 
         // Also check for fully qualified Builtin.Try
-        if (self.module_env.common.findIdent("Builtin.Try")) |builtin_try_ident| {
-            return nominal.ident.ident_idx == builtin_try_ident;
-        }
-
-        return false;
+        return nominal.ident.ident_idx == self.module_env.builtin_try_ident;
     }
 
     fn createOutOfRangeTagUnion(self: *Self) Error!Var {

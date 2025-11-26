@@ -642,8 +642,20 @@ pub const BuildEnv = struct {
         );
         defer checker.deinit();
 
+        // Build the platform-to-app ident translation map
+        // This translates platform requirement idents to app idents by name
+        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
+        defer platform_to_app_idents.deinit();
+
+        for (platform_root_env.requires_types.items.items) |required_type| {
+            const platform_ident_text = platform_root_env.getIdent(required_type.ident);
+            if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
+                try platform_to_app_idents.put(required_type.ident, app_ident);
+            }
+        }
+
         // Check platform requirements against app exports
-        try checker.checkPlatformRequirements(platform_root_env);
+        try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);
 
         // If there are type problems, convert them to reports and emit via sink
         if (checker.problems.problems.items.len > 0) {

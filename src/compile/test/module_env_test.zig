@@ -140,6 +140,9 @@ test "ModuleEnv.Serialized roundtrip" {
         .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
         .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
         .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+        .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
+        .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
+        .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
     };
 
@@ -150,7 +153,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
     // ModuleEnv.init() also interns 19 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq, is_ne
     // Plus 17 type identifiers: Builtin.Try, Builtin.Num.Numeral, List, Box, Builtin.Num.{U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec}
-    try testing.expectEqual(@as(u32, 39), original.common.idents.interner.entry_count);
+    // Plus 3 field/tag identifiers: before_dot, after_dot, ProvidedByCompiler
+    try testing.expectEqual(@as(u32, 42), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -159,8 +163,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 39 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 17 type identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 39), env.common.idents.interner.entry_count);
+    // Should have same 42 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 17 type identifiers + 3 field/tag identifiers from ModuleEnv.init()
+    try testing.expectEqual(@as(u32, 42), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

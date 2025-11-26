@@ -1077,7 +1077,13 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// Check that the app's exported values match the platform's required types.
 /// This should be called after checkFile() to verify that app exports conform
 /// to the platform's requirements.
-pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) std.mem.Allocator.Error!void {
+/// The `platform_to_app_idents` map translates platform ident indices to app ident indices,
+/// built by the caller to avoid string lookups during type checking.
+pub fn checkPlatformRequirements(
+    self: *Self,
+    platform_env: *const ModuleEnv,
+    platform_to_app_idents: *const std.AutoHashMap(Ident.Idx, Ident.Idx),
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1088,12 +1094,8 @@ pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) st
     // Iterate over the platform's required types
     const requires_types_slice = platform_env.requires_types.items.items;
     for (requires_types_slice) |required_type| {
-        // Get the identifier name for this required type and translate to app module
-        const required_ident = required_type.ident;
-        const required_ident_text = platform_env.getIdent(required_ident);
-
-        // Translate the platform ident to an app module ident (if it exists)
-        const app_required_ident = self.cir.common.findIdent(required_ident_text);
+        // Look up the pre-translated app ident for this platform requirement
+        const app_required_ident = platform_to_app_idents.get(required_type.ident);
 
         // Find the matching export in the app
         const app_exports_slice = self.cir.store.sliceDefs(self.cir.exports);

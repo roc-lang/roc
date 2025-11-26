@@ -195,6 +195,11 @@ f32_type_ident: Ident.Idx,
 f64_type_ident: Ident.Idx,
 dec_type_ident: Ident.Idx,
 
+// Field/tag names used during type checking
+before_dot_ident: Ident.Idx,
+after_dot_ident: Ident.Idx,
+provided_by_compiler_ident: Ident.Idx,
+
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
 deferred_numeric_literals: DeferredNumericLiteral.SafeList,
@@ -309,6 +314,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const f32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32"));
     const f64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64"));
     const dec_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec"));
+    const before_dot_ident = try common.insertIdent(gpa, Ident.for_text("before_dot"));
+    const after_dot_ident = try common.insertIdent(gpa, Ident.for_text("after_dot"));
+    const provided_by_compiler_ident = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler"));
 
     return Self{
         .gpa = gpa,
@@ -363,6 +371,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .f32_type_ident = f32_type_ident,
         .f64_type_ident = f64_type_ident,
         .dec_type_ident = dec_type_ident,
+        .before_dot_ident = before_dot_ident,
+        .after_dot_ident = after_dot_ident,
+        .provided_by_compiler_ident = provided_by_compiler_ident,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
     };
 }
@@ -1822,6 +1833,9 @@ pub const Serialized = extern struct {
     f32_type_ident: Ident.Idx,
     f64_type_ident: Ident.Idx,
     dec_type_ident: Ident.Idx,
+    before_dot_ident: Ident.Idx,
+    after_dot_ident: Ident.Idx,
+    provided_by_compiler_ident: Ident.Idx,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -1897,6 +1911,9 @@ pub const Serialized = extern struct {
         self.f32_type_ident = env.f32_type_ident;
         self.f64_type_ident = env.f64_type_ident;
         self.dec_type_ident = env.dec_type_ident;
+        self.before_dot_ident = env.before_dot_ident;
+        self.after_dot_ident = env.after_dot_ident;
+        self.provided_by_compiler_ident = env.provided_by_compiler_ident;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1973,6 +1990,9 @@ pub const Serialized = extern struct {
             .f32_type_ident = self.f32_type_ident,
             .f64_type_ident = self.f64_type_ident,
             .dec_type_ident = self.dec_type_ident,
+            .before_dot_ident = self.before_dot_ident,
+            .after_dot_ident = self.after_dot_ident,
+            .provided_by_compiler_ident = self.provided_by_compiler_ident,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
         };
 

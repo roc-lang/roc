@@ -123,6 +123,9 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
         .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
         .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+        .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
+        .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
+        .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
     };
 
