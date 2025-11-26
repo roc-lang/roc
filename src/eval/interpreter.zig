@@ -199,6 +199,8 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
+    /// Root module used for method idents (is_lt, is_eq, etc.) - never changes during execution
+    root_env: *can.ModuleEnv,
     builtin_module_env: ?*const can.ModuleEnv,
     /// Array of all module environments, indexed by resolved module index
     /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
@@ -319,6 +321,7 @@ pub const Interpreter = struct {
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
+            .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
             .all_module_envs = all_module_envs,
             .module_envs = module_envs,
@@ -851,61 +854,66 @@ pub const Interpreter = struct {
             },
             .e_unary_minus => |unary_minus| {
                 // Desugar `-a` to `a.negate()`
-                return try self.dispatchUnaryOpMethod(self.env.idents.negate, unary_minus.expr, roc_ops);
+                // Use root_env.idents because method idents must be consistent across all modules
+                return try self.dispatchUnaryOpMethod(self.root_env.idents.negate, unary_minus.expr, roc_ops);
             },
             .e_unary_not => |unary_not| {
                 // Desugar `!a` to `a.not()`
-                return try self.dispatchUnaryOpMethod(self.env.idents.not, unary_not.expr, roc_ops);
+                // Use root_env.idents because method idents must be consistent across all modules
+                return try self.dispatchUnaryOpMethod(self.root_env.idents.not, unary_not.expr, roc_ops);
             },
             .e_binop => |binop| {
+                // Use root_env.idents for all method dispatches because method idents must be
+                // consistent across all modules. Different modules may have different ident
+                // indices for the same strings, so we always use the root module's indices.
                 switch (binop.op) {
                     .add => {
                         // Desugar `a + b` to `a.plus(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.plus, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.plus, binop.lhs, binop.rhs, roc_ops);
                     },
                     .sub => {
                         // Desugar `a - b` to `a.minus(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.minus, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.minus, binop.lhs, binop.rhs, roc_ops);
                     },
                     .mul => {
                         // Desugar `a * b` to `a.times(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.times, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.times, binop.lhs, binop.rhs, roc_ops);
                     },
                     .div => {
                         // Desugar `a / b` to `a.div_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.div_by, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.div_by, binop.lhs, binop.rhs, roc_ops);
                     },
                     .div_trunc => {
                         // Desugar `a // b` to `a.div_trunc_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.div_trunc_by, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.div_trunc_by, binop.lhs, binop.rhs, roc_ops);
                     },
                     .rem => {
                         // Desugar `a % b` to `a.rem_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.rem_by, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.rem_by, binop.lhs, binop.rhs, roc_ops);
                     },
                     .lt => {
                         // Desugar `a < b` to `a.is_lt(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.is_lt, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_lt, binop.lhs, binop.rhs, roc_ops);
                     },
                     .le => {
                         // Desugar `a <= b` to `a.is_lte(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.is_lte, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_lte, binop.lhs, binop.rhs, roc_ops);
                     },
                     .gt => {
                         // Desugar `a > b` to `a.is_gt(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.is_gt, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_gt, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ge => {
                         // Desugar `a >= b` to `a.is_gte(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.is_gte, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_gte, binop.lhs, binop.rhs, roc_ops);
                     },
                     .eq => {
                         // Desugar `a == b` to `a.is_eq(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ne => {
                         // Desugar `a != b` to `a.is_ne(b)`
-                        return try self.dispatchBinaryOpMethod(self.env.idents.is_ne, binop.lhs, binop.rhs, roc_ops);
+                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_ne, binop.lhs, binop.rhs, roc_ops);
                     },
                     .@"or" => {
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
@@ -2413,20 +2421,24 @@ pub const Interpreter = struct {
                 };
 
                 // Resolve and evaluate the method function
+                // method_ident comes from the CIR (self.env), not root_env
                 const method_func = self.resolveMethodFunction(
                     nominal_info.origin,
                     nominal_info.ident,
                     method_ident,
+                    self.env,
                     roc_ops,
                 ) catch |err| {
                     if (err == error.MethodLookupFailed) {
                         // Get type and method names for a helpful crash message
-                        // Use import mapping to get the user-facing display name
+                        // nominal_info.ident is from runtime_layout_store.env (translated during translateTypeVar)
+                        const layout_env = self.runtime_layout_store.env;
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
-                            self.env.common.getIdentStore(),
+                            layout_env.common.getIdentStore(),
                             nominal_info.ident,
                         );
+                        // method_ident is from self.env (current CIR module)
                         const method_name = self.env.getIdent(dot_access.field_name);
                         const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
                             self.triggerCrash("Method not found", false, roc_ops);
@@ -2559,9 +2571,9 @@ pub const Interpreter = struct {
                 // The captures layout from the type system might not match what's actually captured
                 // Search ALL active closures in reverse order (innermost to outermost) for nested lambdas
                 if (self.active_closures.items.len > 0) {
-                    const pat = self.env.store.getPattern(lookup.pattern_idx);
-                    if (pat == .assign) {
-                        const var_ident = pat.assign.ident;
+                    const pat2 = self.env.store.getPattern(lookup.pattern_idx);
+                    if (pat2 == .assign) {
+                        const var_ident = pat2.assign.ident;
                         // Search from innermost to outermost closure
                         var closure_idx: usize = self.active_closures.items.len;
                         while (closure_idx > 0) {
@@ -5936,7 +5948,8 @@ pub const Interpreter = struct {
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
         // Check if it's the Builtin module
-        if (origin_module == self.env.idents.builtin_module) {
+        // Use root_env.idents for consistent module comparison across all contexts
+        if (origin_module == self.root_env.idents.builtin_module) {
             // In shim context, builtins are embedded in the main module env
             // (builtin_module_env is null), so fall back to self.env
             return self.builtin_module_env orelse self.env;
@@ -6034,7 +6047,8 @@ pub const Interpreter = struct {
                     },
                     .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                         // Anonymous structural types have implicit is_eq
-                        if (method_ident == self.env.idents.is_eq) {
+                        // Use root_env.idents for consistency with method dispatch
+                        if (method_ident == self.root_env.idents.is_eq) {
                             const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
                                 // If structural equality is not implemented for this type, return false
                                 if (err == error.NotImplemented) {
@@ -6058,10 +6072,12 @@ pub const Interpreter = struct {
         }
 
         // Resolve the method function
+        // method_ident comes from root_env.idents (is_lt, is_eq, etc.)
         const method_func = try self.resolveMethodFunction(
             nominal_info.?.origin,
             nominal_info.?.ident,
             method_ident,
+            self.root_env,
             roc_ops,
         );
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
@@ -6167,10 +6183,12 @@ pub const Interpreter = struct {
         };
 
         // Resolve the method function
+        // method_ident comes from root_env.idents (negate, not, etc.)
         const method_func = try self.resolveMethodFunction(
             nominal_info.origin,
             nominal_info.ident,
             method_ident,
+            self.root_env,
             roc_ops,
         );
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
@@ -6243,6 +6261,7 @@ pub const Interpreter = struct {
         origin_module: base_pkg.Ident.Idx,
         nominal_ident: base_pkg.Ident.Idx,
         method_name: base_pkg.Ident.Idx,
+        method_source_env: *const can.ModuleEnv,
         roc_ops: *RocOps,
     ) Error!StackValue {
         // Get the module environment for this type's origin
@@ -6250,14 +6269,15 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Use semantic method lookup via ident indices
-        // The getMethodIdentByIdents function handles qualified name construction internally
-        // Pass self.env as the source since that's where the idents are from
-        const method_ident = origin_env.getMethodIdentByIdents(
-            self.env,
-            nominal_ident,
-            method_name,
-        ) orelse {
+        // Look up the type name from the runtime layout store's env (where the translated ident lives)
+        // and the method name from the source environment (where it was referenced)
+        // Note: nominal_ident was translated to runtime_layout_store.env during translateTypeVar
+        const layout_env = self.runtime_layout_store.env;
+        const nominal_name_str = layout_env.getIdent(nominal_ident);
+        const method_name_str = method_source_env.getIdent(method_name);
+
+        // Look up the qualified method name (e.g., "Try.is_eq") in the origin module
+        const method_ident = origin_env.getMethodIdent(nominal_name_str, method_name_str) orelse {
             return error.MethodLookupFailed;
         };
 
@@ -6310,7 +6330,8 @@ pub const Interpreter = struct {
 
     /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
     fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
-        const origin_module_id = self.env.idents.builtin_module;
+        // Use root_env.idents for consistent module reference
+        const origin_module_id = self.root_env.idents.builtin_module;
 
         // Use fully-qualified type name "Builtin.Num.U8" etc.
         // This allows method lookup to work correctly
