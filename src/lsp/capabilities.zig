@@ -7,7 +7,7 @@ pub const ServerCapabilities = struct {
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
-        change: TextDocumentSyncKind = .none,
+        change: u32 = @intFromEnum(TextDocumentSyncKind.none),
     };
 
     pub const TextDocumentSyncKind = enum(u32) {
@@ -22,7 +22,7 @@ pub fn buildCapabilities() ServerCapabilities {
     return .{
         .textDocumentSync = .{
             .openClose = true,
-            .change = .full,
+            .change = @intFromEnum(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
     };
 }
