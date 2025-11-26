@@ -278,6 +278,17 @@ pub const Store = struct {
         };
     }
 
+    /// Make alias data type from a pre-built range (backing_var already included at start)
+    /// Does not insert content into the types store
+    pub fn mkAliasFromRange(_: *Self, ident: TypeIdent, vars_range: VarSafeList.Range) Content {
+        return Content{
+            .alias = Alias{
+                .ident = ident,
+                .vars = .{ .nonempty = vars_range },
+            },
+        };
+    }
+
     /// Make nominal data type
     /// Does not insert content into the types store
     pub fn mkNominal(
@@ -303,14 +314,57 @@ pub const Store = struct {
         } };
     }
 
+    /// Make nominal data type from a pre-built range (backing_var already included at start)
+    /// Does not insert content into the types store
+    pub fn mkNominalFromRange(
+        _: *Self,
+        ident: TypeIdent,
+        vars_range: VarSafeList.Range,
+        origin_module: base.Ident.Idx,
+    ) Content {
+        return Content{ .structure = FlatType{
+            .nominal_type = NominalType{
+                .ident = ident,
+                .vars = .{ .nonempty = vars_range },
+                .origin_module = origin_module,
+            },
+        } };
+    }
+
     // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
     pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
+        // Check if any arguments need instantiation BEFORE appending,
+        // because appendVars may reallocate and invalidate the args slice
         var needs_inst = false;
         for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        // NOW it's safe to append (which may reallocate)
+        const args_range = try self.appendVars(args);
+
+        return Content{ .structure = .{ .fn_unbound = .{
+            .args = args_range,
+            .ret = ret,
+            .needs_instantiation = needs_inst,
+        } } };
+    }
+
+    // Make a function data type with unbound effectfulness from a pre-existing args range
+    // Use this when args are already stored in types.vars to avoid reallocation issues
+    pub fn mkFuncUnboundFromRange(self: *const Self, args_range: VarSafeList.Range, ret: Var) Content {
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (self.sliceVars(args_range)) |arg| {
             if (self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
@@ -332,11 +386,33 @@ pub const Store = struct {
     // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
+        // Check if any arguments need instantiation BEFORE appending,
+        // because appendVars may reallocate and invalidate the args slice
         var needs_inst = false;
         for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        // NOW it's safe to append (which may reallocate)
+        const args_range = try self.appendVars(args);
+
+        return Content{ .structure = .{ .fn_pure = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+    }
+
+    // Make a pure function data type from a pre-existing args range
+    // Use this when args are already stored in types.vars to avoid reallocation issues
+    pub fn mkFuncPureFromRange(self: *const Self, args_range: VarSafeList.Range, ret: Var) Content {
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (self.sliceVars(args_range)) |arg| {
             if (self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
@@ -354,11 +430,33 @@ pub const Store = struct {
     // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
+        // Check if any arguments need instantiation BEFORE appending,
+        // because appendVars may reallocate and invalidate the args slice
         var needs_inst = false;
         for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        // NOW it's safe to append (which may reallocate)
+        const args_range = try self.appendVars(args);
+
+        return Content{ .structure = .{ .fn_effectful = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+    }
+
+    // Make an effectful function data type from a pre-existing args range
+    // Use this when args are already stored in types.vars to avoid reallocation issues
+    pub fn mkFuncEffectfulFromRange(self: *const Self, args_range: VarSafeList.Range, ret: Var) Content {
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (self.sliceVars(args_range)) |arg| {
             if (self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;

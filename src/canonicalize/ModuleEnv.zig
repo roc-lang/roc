@@ -2084,6 +2084,12 @@ pub fn varFrom(idx: anytype) TypeVar {
     return @enumFromInt(@intFromEnum(idx) + 1);
 }
 
+/// Convert a type var (1-based) back to a node index (0-based)
+/// This is the inverse of varFrom.
+pub fn nodeIdxFromVar(var_: TypeVar) Node.Idx {
+    return @enumFromInt(@intFromEnum(var_) - 1);
+}
+
 /// Adds an identifier to the list of exposed items by its identifier index.
 pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
     return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));

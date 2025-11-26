@@ -733,7 +733,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_dot_access => {
             // Read extra data: field_name_region (2 u32s) + optional args (1 u32)
             const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
             const field_name_region = base.Region{
                 .start = .{ .offset = extra_data[0] },
                 .end = .{ .offset = extra_data[1] },

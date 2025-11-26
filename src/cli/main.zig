@@ -1676,7 +1676,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(allocs.gpa);
         defer platform_to_app_idents.deinit();
 
-        for (penv.requires_types.items.items) |required_type| {
+        for (penv.requires_types.items()) |required_type| {
             const platform_ident_text = penv.getIdent(required_type.ident);
             if (app_env.common.findIdent(platform_ident_text)) |app_ident| {
                 try platform_to_app_idents.put(required_type.ident, app_ident);

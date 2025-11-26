@@ -763,9 +763,9 @@ pub const Import = struct {
                     // Update ident if provided and not already set
                     if (ident_idx) |ident| {
                         if (i < self.import_idents.len()) {
-                            const current = self.import_idents.items.items[i];
+                            const current = self.import_idents.get(@enumFromInt(i + 1)).*;
                             if (current.isNone()) {
-                                self.import_idents.items.items[i] = ident;
+                                self.import_idents.set(@enumFromInt(i + 1), ident);
                             }
                         }
                     }
@@ -790,7 +790,7 @@ pub const Import = struct {
         pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.import_idents.len()) return null;
-            const ident = self.import_idents.items.items[idx];
+            const ident = self.import_idents.get(@enumFromInt(idx + 1)).*;
             if (ident.isNone()) return null;
             return ident;
         }
@@ -799,7 +799,7 @@ pub const Import = struct {
         pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
-            const resolved = self.resolved_modules.items.items[idx];
+            const resolved = self.resolved_modules.get(@enumFromInt(idx + 1)).*;
             if (resolved == Import.UNRESOLVED_MODULE) return null;
             return resolved;
         }
@@ -808,7 +808,7 @@ pub const Import = struct {
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @intFromEnum(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = module_idx;
+                self.resolved_modules.set(@enumFromInt(idx + 1), module_idx);
             }
         }
 
@@ -825,7 +825,7 @@ pub const Import = struct {
             const import_count: usize = @intCast(self.imports.len());
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
-                const str_idx = self.imports.items.items[i];
+                const str_idx = self.imports.get(@enumFromInt(i + 1)).*;
                 const import_name = env.common.getString(str_idx);
 
                 // Find matching module in available_modules by comparing module names

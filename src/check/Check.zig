@@ -105,6 +105,8 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
+/// scratch vars for building header vars (type args converted to Vars)
+scratch_header_vars: std.ArrayListUnmanaged(Var),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -204,6 +206,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
+        .scratch_header_vars = std.ArrayListUnmanaged(Var){},
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
@@ -232,6 +235,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
+    self.scratch_header_vars.deinit(self.gpa);
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
@@ -400,7 +404,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     //
     // Note that we choose `b`s region here, since `b` is the "actual" type
     // (whereas `a` is the "expected" type, like from an annotation)
-    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(b));
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFromVar(b));
     for (self.unify_scratch.fresh_vars.items()) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
@@ -1310,7 +1314,10 @@ fn generateAliasDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const header_vars = try self.generateHeaderVars(header_args, env);
+    // The returned slice uses scratch_header_vars, so we must store the vars in the types store
+    // immediately before any recursive calls that might clobber the scratch space.
+    _ = try self.generateHeaderVars(header_args, env);
+    const header_vars_range = try self.types.appendVars(self.scratch_header_vars.items);
 
     // Now we have a built of list of rigid variables for the decl lhs (header).
     // With this in hand, we can now generate the type for the lhs (body).
@@ -1324,12 +1331,28 @@ fn generateAliasDecl(
         .num_args = @intCast(header_args.len),
     } });
 
+    // Build the combined range: backing_var followed by header_vars
+    // We need backing_var to be immediately before header_vars in memory.
+    // IMPORTANT: We must copy header_vars to scratch space BEFORE any appendVar/appendVars
+    // calls because those might reallocate types.vars and invalidate the slice.
+    self.scratch_header_vars.clearRetainingCapacity();
+    try self.scratch_header_vars.appendSlice(self.gpa, self.types.sliceVars(header_vars_range));
+
+    // Now safe to append - scratch_header_vars won't be invalidated
+    const backing_idx = try self.types.appendVar(backing_var);
+    const args_range = try self.types.appendVars(self.scratch_header_vars.items);
+
+    // Build combined span: starts at backing_idx, includes backing_var + all args
+    const combined_span = Var.SafeList.Range{
+        .start = backing_idx,
+        .count = 1 + args_range.count,
+    };
+
     try self.unifyWith(
         decl_var,
-        try self.types.mkAlias(
+        self.types.mkAliasFromRange(
             .{ .ident_idx = header.name },
-            backing_var,
-            header_vars,
+            combined_span,
         ),
         env,
     );
@@ -1348,7 +1371,10 @@ fn generateNominalDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const header_vars = try self.generateHeaderVars(header_args, env);
+    // The returned slice uses scratch_header_vars, so we must store the vars in the types store
+    // immediately before any recursive calls that might clobber the scratch space.
+    _ = try self.generateHeaderVars(header_args, env);
+    const header_vars_range = try self.types.appendVars(self.scratch_header_vars.items);
 
     // Now we have a built of list of rigid variables for the decl lhs (header).
     // With this in hand, we can now generate the type for the lhs (body).
@@ -1362,12 +1388,28 @@ fn generateNominalDecl(
         .num_args = @intCast(header_args.len),
     } });
 
+    // Build the combined range: backing_var followed by header_vars
+    // We need backing_var to be immediately before header_vars in memory.
+    // IMPORTANT: We must copy header_vars to scratch space BEFORE any appendVar/appendVars
+    // calls because those might reallocate types.vars and invalidate the slice.
+    self.scratch_header_vars.clearRetainingCapacity();
+    try self.scratch_header_vars.appendSlice(self.gpa, self.types.sliceVars(header_vars_range));
+
+    // Now safe to append - scratch_header_vars won't be invalidated
+    const backing_idx = try self.types.appendVar(backing_var);
+    const args_range = try self.types.appendVars(self.scratch_header_vars.items);
+
+    // Build combined span: starts at backing_idx, includes backing_var + all args
+    const combined_span = Var.SafeList.Range{
+        .start = backing_idx,
+        .count = 1 + args_range.count,
+    };
+
     try self.unifyWith(
         decl_var,
-        try self.types.mkNominal(
+        self.types.mkNominalFromRange(
             .{ .ident_idx = header.name },
-            backing_var,
-            header_vars,
+            combined_span,
             self.common_idents.module_name,
         ),
         env,
@@ -1380,6 +1422,9 @@ fn generateHeaderVars(
     header_args: []CIR.TypeAnno.Idx,
     env: *Env,
 ) std.mem.Allocator.Error![]Var {
+    // Clear and rebuild scratch_header_vars to hold the Var values
+    self.scratch_header_vars.clearRetainingCapacity();
+
     for (header_args) |header_arg_idx| {
         const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
         const header_var = ModuleEnv.varFrom(header_arg_idx);
@@ -1398,9 +1443,42 @@ fn generateHeaderVars(
                 try self.unifyWith(header_var, .err, env);
             },
         }
+
+        try self.scratch_header_vars.append(self.gpa, header_var);
     }
 
-    return @ptrCast(header_args);
+    return self.scratch_header_vars.items;
+}
+
+/// Convert a slice of node indices to Vars and append to the type store's vars list.
+/// This is needed because node indices are 0-based but Vars are 1-based (via varFrom).
+/// The @ptrCast approach doesn't work since varFrom adds 1 to each index.
+fn idxSliceToVarsRange(self: *Self, idx_slice: anytype) std.mem.Allocator.Error!Var.SafeList.Range {
+    // Build up vars in scratch, then append to type store
+    // Note: We don't use scratch_header_vars here because this can be called
+    // recursively during type generation, and we need to append to type store
+    // immediately anyway.
+    var scratch = std.ArrayListUnmanaged(Var){};
+    defer scratch.deinit(self.gpa);
+    for (idx_slice) |idx| {
+        const var_ = ModuleEnv.varFrom(idx);
+        try scratch.append(self.gpa, var_);
+    }
+    return try self.types.appendVars(scratch.items);
+}
+
+/// Convert a slice of node indices to Vars using scratch space.
+/// WARNING: The returned slice uses scratch_header_vars and will be invalidated
+/// by subsequent calls to this function or generateHeaderVars!
+/// This is needed because node indices are 0-based but Vars are 1-based (via varFrom).
+fn idxSliceToVars(self: *Self, idx_slice: anytype) std.mem.Allocator.Error![]Var {
+    // Use scratch space for the result - this is safe to pass to functions that
+    // append to types.vars because it's a separate allocation
+    self.scratch_header_vars.clearRetainingCapacity();
+    for (idx_slice) |idx| {
+        try self.scratch_header_vars.append(self.gpa, ModuleEnv.varFrom(idx));
+    }
+    return self.scratch_header_vars.items;
 }
 
 // type gen config //
@@ -1475,14 +1553,16 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
             for (args_anno_slice) |arg_anno_idx| {
                 try self.generateAnnoTypeInPlace(arg_anno_idx, env, .annotation);
             }
-            const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
+            // Get range first - the args will already be stored in types.vars
+            const anno_arg_vars_range = try self.idxSliceToVarsRange(args_anno_slice);
 
             // Generate return type
             try self.generateAnnoTypeInPlace(method.ret, env, .annotation);
             const ret_var = ModuleEnv.varFrom(method.ret);
 
-            // Create the function var
-            const func_content = try self.types.mkFuncUnbound(anno_arg_vars, ret_var);
+            // Create the function var using FromRange variant
+            // since args are already in types.vars
+            const func_content = self.types.mkFuncUnboundFromRange(anno_arg_vars_range, ret_var);
             const func_var = try self.freshFromContent(func_content, env, where_region);
 
             // Add to scratch list
@@ -1653,7 +1733,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             for (anno_args) |anno_arg| {
                 try self.generateAnnoTypeInPlace(anno_arg, env, ctx);
             }
-            const anno_arg_vars: []Var = @ptrCast(anno_args);
+            const anno_arg_vars = try self.idxSliceToVars(anno_args);
 
             switch (a.base) {
                 .builtin => |builtin_type| {
@@ -1858,15 +1938,18 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             for (args_anno_slice) |arg_anno_idx| {
                 try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
             }
-            const args_var_slice: []Var = @ptrCast(args_anno_slice);
+            // Get range now - the args are already stored in types.vars
+            const args_var_range = try self.idxSliceToVarsRange(args_anno_slice);
 
             try self.generateAnnoTypeInPlace(func.ret, env, ctx);
 
+            // Use FromRange variants since args are already in types.vars
+            // This avoids re-appending which could cause slice invalidation
             const fn_type = inner_blk: {
                 if (func.effectful) {
-                    break :inner_blk try self.types.mkFuncEffectful(args_var_slice, ModuleEnv.varFrom(func.ret));
+                    break :inner_blk self.types.mkFuncEffectfulFromRange(args_var_range, ModuleEnv.varFrom(func.ret));
                 } else {
-                    break :inner_blk try self.types.mkFuncPure(args_var_slice, ModuleEnv.varFrom(func.ret));
+                    break :inner_blk self.types.mkFuncPureFromRange(args_var_range, ModuleEnv.varFrom(func.ret));
                 }
             };
             try self.unifyWith(anno_var, fn_type, env);
@@ -1894,7 +1977,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 for (tag_anno_args_slice) |tag_arg_idx| {
                     try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx);
                 }
-                const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
+                const tag_vars_slice = try self.idxSliceToVars(tag_anno_args_slice);
 
                 // Add the processed tag to scratch
                 try self.scratch_tags.append(try self.types.mkTag(
@@ -2244,9 +2327,8 @@ fn checkPatternHelp(
                             _ = try self.checkPatternHelp(arg_expr_idx, env, .no_expectation, out_var);
                         }
 
-                        // Add to types store
-                        // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
-                        break :blk try self.types.appendVars(@ptrCast(arg_ptrn_idx_slice));
+                        // Add to types store (converting indices to vars)
+                        break :blk try self.idxSliceToVarsRange(arg_ptrn_idx_slice);
                     },
                 }
             };
@@ -2857,7 +2939,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Create the type
             const ext_var = try self.fresh(env, expr_region);
 
-            const tag = try self.types.mkTag(e.name, @ptrCast(arg_expr_idx_slice));
+            const tag = try self.types.mkTag(e.name, try self.idxSliceToVars(arg_expr_idx_slice));
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
@@ -3026,10 +3108,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_lookup_required => |req| {
             // Look up the type from the platform's requires clause
-            const requires_items = self.cir.requires_types.items.items;
+            const requires_items = self.cir.requires_types.items();
             const idx = req.requires_idx.toU32();
-            if (idx < requires_items.len) {
-                const required_type = requires_items[idx];
+            if (idx > 0 and idx <= requires_items.len) {
+                const required_type = requires_items[idx - 1];
                 const type_var = ModuleEnv.varFrom(required_type.type_anno);
                 const instantiated_var = try self.instantiateVar(
                     type_var,
@@ -3185,7 +3267,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // expectation checking code at the bottom of this function
                     }
                 }
-                const arg_vars: []Var = @ptrCast(arg_pattern_idxs);
+                // Convert arg pattern indices to vars and persist to types store immediately
+                // before checking the body, which may clobber scratch_header_vars
+                const arg_vars_range = try self.idxSliceToVarsRange(arg_pattern_idxs);
 
                 // Check the the body of the expr
                 // If we have an expected function, use that as the expr's expected type
@@ -3198,11 +3282,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
                 const body_var = ModuleEnv.varFrom(lambda.body);
 
-                // Create the function type
+                // Create the function type using FromRange variants
+                // since args are already stored in types.vars
                 if (does_fx) {
-                    _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
+                    _ = try self.unifyWith(expr_var, self.types.mkFuncEffectfulFromRange(arg_vars_range, body_var), env);
                 } else {
-                    _ = try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
+                    _ = try self.unifyWith(expr_var, self.types.mkFuncUnboundFromRange(arg_vars_range, body_var), env);
                 }
 
                 // Now that we are existing the scope, we must generalize then pop this rank
@@ -3389,7 +3474,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // the actual arguments provoided, unify the
                                 // inferred function type with the expected function
                                 // type to get  the regulare error message
-                                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
+                                const call_arg_vars = try self.idxSliceToVars(call_arg_expr_idxs);
                                 const call_func_ret = try self.fresh(env, expr_region);
                                 const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                                 const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
@@ -3410,7 +3495,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // on how it's being used here. So we create that func
                             // type and unify the function being called against it
 
-                            const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
+                            const call_arg_vars = try self.idxSliceToVars(call_arg_expr_idxs);
                             const call_func_ret = try self.fresh(env, expr_region);
                             const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                             const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
@@ -3482,7 +3567,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // method being dispatched on must accept the type of `thing` as
                     // it's first arg. So, we prepend the `receiver_var` to the args list
                     const first_arg_range = try self.types.appendVars(&.{receiver_var});
-                    const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
+                    const rest_args_range = try self.idxSliceToVarsRange(dispatch_arg_expr_idxs);
                     const dispatch_arg_vars_range = Var.SafeList.Range{
                         .start = first_arg_range.start,
                         .count = rest_args_range.count + 1,

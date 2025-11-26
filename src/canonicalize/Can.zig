@@ -4069,8 +4069,8 @@ pub fn canonicalizeExpr(
                         }
 
                         // Check if this is a required identifier from the platform's `requires` clause
-                        const requires_items = self.env.requires_types.items.items;
-                        for (requires_items, 0..) |req, idx| {
+                        const requires_items = self.env.requires_types.items();
+                        for (requires_items, 1..) |req, idx| {
                             if (req.ident == ident) {
                                 // Found a required identifier - create a lookup expression for it
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{

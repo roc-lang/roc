@@ -801,10 +801,10 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                const requires_items = ir.requires_types.items.items;
+                const requires_items = ir.requires_types.items();
                 const idx = e.requires_idx.toU32();
-                if (idx < requires_items.len) {
-                    const required_type = requires_items[idx];
+                if (idx > 0 and idx <= requires_items.len) {
+                    const required_type = requires_items[idx - 1];
                     const ident_name = ir.getIdent(required_type.ident);
                     try tree.pushStringPair("required-ident", ident_name);
                 }
