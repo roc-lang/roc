@@ -138,7 +138,7 @@ pub const Expr = union(enum) {
     /// ```
     e_lookup_required: struct {
         /// Index into env.requires_types for this required identifier
-        requires_idx: u32,
+        requires_idx: ModuleEnv.RequiredType.SafeList.Idx,
     },
     /// A sequence of zero or more elements of the same type
     /// ```roc
@@ -801,8 +801,9 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 const requires_items = ir.requires_types.items.items;
-                if (e.requires_idx < requires_items.len) {
-                    const required_type = requires_items[e.requires_idx];
+                const idx = e.requires_idx.toU32();
+                if (idx < requires_items.len) {
+                    const required_type = requires_items[idx];
                     const ident_name = ir.getIdent(required_type.ident);
                     try tree.pushStringPair("required-ident", ident_name);
                 }

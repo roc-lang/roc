@@ -4058,7 +4058,7 @@ pub fn canonicalizeExpr(
                             if (req.ident == ident) {
                                 // Found a required identifier - create a lookup expression for it
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
-                                    .requires_idx = @intCast(idx),
+                                    .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
                                 } }, region);
                                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                             }

@@ -3024,8 +3024,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_lookup_required => |req| {
             // Look up the type from the platform's requires clause
             const requires_items = self.cir.requires_types.items.items;
-            if (req.requires_idx < requires_items.len) {
-                const required_type = requires_items[req.requires_idx];
+            const idx = req.requires_idx.toU32();
+            if (idx < requires_items.len) {
+                const required_type = requires_items[idx];
                 const type_var = ModuleEnv.varFrom(required_type.type_anno);
                 const instantiated_var = try self.instantiateVar(
                     type_var,

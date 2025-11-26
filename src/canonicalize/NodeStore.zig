@@ -388,7 +388,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_required_lookup => {
             // Handle required lookups (platform requires clause)
             return CIR.Expr{ .e_lookup_required = .{
-                .requires_idx = node.data_1,
+                .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(node.data_1),
             } };
         },
         .expr_num => {
@@ -1479,7 +1479,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
-            node.data_1 = e.requires_idx;
+            node.data_1 = e.requires_idx.toU32();
         },
         .e_num => |e| {
             node.tag = .expr_num;
