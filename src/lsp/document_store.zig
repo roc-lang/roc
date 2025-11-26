@@ -11,6 +11,13 @@ pub const DocumentStore = struct {
         version: i64,
     };
 
+    pub const Range = struct {
+        start_line: usize,
+        start_character: usize,
+        end_line: usize,
+        end_character: usize,
+    };
+
     /// Creates an empty store backed by the provided allocator.
     pub fn init(allocator: std.mem.Allocator) DocumentStore {
         return .{ .allocator = allocator, .entries = std.StringHashMap(Document).init(allocator) };
@@ -56,5 +63,46 @@ pub const DocumentStore = struct {
             return doc;
         }
         return null;
+    }
+
+    /// Applies a range replacement to an existing document using UTF-16 positions.
+    pub fn applyRangeReplacement(self: *DocumentStore, uri: []const u8, version: i64, range: Range, new_text: []const u8) !void {
+        const entry = self.entries.getPtr(uri) orelse return error.DocumentNotFound;
+        const start_offset = try positionToOffset(entry.text, range.start_line, range.start_character);
+        const end_offset = try positionToOffset(entry.text, range.end_line, range.end_character);
+        if (start_offset > end_offset or end_offset > entry.text.len) return error.InvalidRange;
+
+        const replaced = end_offset - start_offset;
+        const new_len = entry.text.len - replaced + new_text.len;
+        var buffer = try self.allocator.alloc(u8, new_len);
+        errdefer self.allocator.free(buffer);
+
+        @memcpy(buffer[0..start_offset], entry.text[0..start_offset]);
+        @memcpy(buffer[start_offset .. start_offset + new_text.len], new_text);
+        @memcpy(buffer[start_offset + new_text.len ..], entry.text[end_offset..]);
+
+        self.allocator.free(entry.text);
+        entry.text = buffer;
+        entry.version = version;
+    }
+
+    fn positionToOffset(text: []const u8, line: usize, character_utf16: usize) !usize {
+        var current_line: usize = 0;
+        var index: usize = 0;
+        while (current_line < line) : (current_line += 1) {
+            const newline_index = std.mem.indexOfScalarPos(u8, text, index, '\n') orelse return error.InvalidPosition;
+            index = newline_index + 1;
+        }
+
+        var utf16_units: usize = 0;
+        var it = std.unicode.Utf8Iterator{ .bytes = text[index..], .i = 0 };
+        while (utf16_units < character_utf16) {
+            const slice = it.nextCodepointSlice() orelse return error.InvalidPosition;
+            const cp = std.unicode.utf8Decode(slice) catch return error.InvalidPosition;
+            utf16_units += if (cp <= 0xFFFF) 1 else 2;
+        }
+
+        if (utf16_units != character_utf16) return error.InvalidPosition;
+        return index + it.i;
     }
 };
