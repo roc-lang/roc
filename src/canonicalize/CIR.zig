@@ -716,11 +716,17 @@ pub fn fromF64(f: f64) ?RocDec {
 pub const Import = struct {
     pub const Idx = enum(u32) { _ };
 
+    /// Sentinel value indicating unresolved import (max u32)
+    pub const UNRESOLVED_MODULE: u32 = std.math.maxInt(u32);
+
     pub const Store = struct {
         /// Map from interned string idx to Import.Idx for deduplication
         map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
         /// List of interned string IDs indexed by Import.Idx
         imports: collections.SafeList(base.StringLiteral.Idx) = .{},
+        /// Resolved module indices, parallel to imports list
+        /// Each entry is either a valid module index or UNRESOLVED_MODULE
+        resolved_modules: collections.SafeList(u32) = .{},
 
         pub fn init() Store {
             return .{};
@@ -729,10 +735,12 @@ pub const Import = struct {
         pub fn deinit(self: *Store, allocator: std.mem.Allocator) void {
             self.map.deinit(allocator);
             self.imports.deinit(allocator);
+            self.resolved_modules.deinit(allocator);
         }
 
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
+        /// New imports are initially unresolved (UNRESOLVED_MODULE).
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             // First check if we already have this module name by comparing strings
             for (self.imports.items.items, 0..) |existing_string_idx, i| {
@@ -747,11 +755,29 @@ pub const Import = struct {
             const string_idx = try strings.insert(allocator, module_name);
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
-            // Add to both the list and the map
+            // Add to both the list and the map, with unresolved module initially
             _ = try self.imports.append(allocator, string_idx);
+            _ = try self.resolved_modules.append(allocator, Import.UNRESOLVED_MODULE);
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
+        }
+
+        /// Get the resolved module index for an import, or null if unresolved
+        pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.resolved_modules.len()) return null;
+            const resolved = self.resolved_modules.items.items[idx];
+            if (resolved == Import.UNRESOLVED_MODULE) return null;
+            return resolved;
+        }
+
+        /// Set the resolved module index for an import
+        pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
+            const idx = @intFromEnum(import_idx);
+            if (idx < self.resolved_modules.len()) {
+                self.resolved_modules.items.items[idx] = module_idx;
+            }
         }
 
         /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -770,6 +796,7 @@ pub const Import = struct {
             offset_self.* = .{
                 .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
                 .imports = (try self.imports.serialize(allocator, writer)).*,
+                .resolved_modules = (try self.resolved_modules.serialize(allocator, writer)).*,
             };
 
             return @constCast(offset_self);
@@ -778,6 +805,7 @@ pub const Import = struct {
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *Store, offset: isize) void {
             self.imports.relocate(offset);
+            self.resolved_modules.relocate(offset);
         }
 
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
@@ -786,6 +814,7 @@ pub const Import = struct {
             // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
             map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
+            resolved_modules: collections.SafeList(u32).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -796,6 +825,8 @@ pub const Import = struct {
             ) std.mem.Allocator.Error!void {
                 // Serialize the imports SafeList
                 try self.imports.serialize(&store.imports, allocator, writer);
+                // Serialize the resolved_modules SafeList
+                try self.resolved_modules.serialize(&store.resolved_modules, allocator, writer);
 
                 // Set map to all zeros; the space needs to be here,
                 // but the map will be rebuilt during deserialization.
@@ -811,6 +842,7 @@ pub const Import = struct {
                 store.* = .{
                     .map = .{}, // Will be repopulated below
                     .imports = self.imports.deserialize(offset).*,
+                    .resolved_modules = self.resolved_modules.deserialize(offset).*,
                 };
 
                 // Pre-allocate the exact capacity needed for the map

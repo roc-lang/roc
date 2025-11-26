@@ -242,8 +242,14 @@ pub const Interpreter = struct {
         var imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator);
         errdefer imported_modules.deinit();
 
+        // Add builtin module to imported_modules for cross-module lookups
+        // Builtin imports are not in other_envs (passed separately via builtin_module_env)
+        if (builtin_module_env) |builtin_env| {
+            try imported_modules.put("Builtin", builtin_env);
+        }
+
         if (other_envs.len > 0) {
-            // Populate imported_modules with platform modules and builtin module
+            // Populate imported_modules with platform modules
             // This allows dynamic lookup by name, which is needed for cross-module calls
             // when imports are processed in different orders across modules
             for (other_envs) |module_env| {
@@ -271,65 +277,25 @@ pub const Interpreter = struct {
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
 
-            // Process ALL imports, matching each to the appropriate module from other_envs
+            // Process ALL imports using pre-resolved module indices
             for (0..import_count) |i| {
                 const str_idx = env.imports.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
+                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
 
-                // Find matching module in other_envs
-                // Since modules loaded from shared memory may have empty names, we match based on:
-                // 1. "Builtin" imports match the module with module_name="Builtin"
-                // 2. Imports containing "Stdout" match other_env[1] (first platform module)
-                // 3. Imports containing "Stderr" match other_env[2] (second platform module)
-                var matched_module: ?*const can.ModuleEnv = null;
+                // Use pre-resolved module index - imports must be resolved during compilation
+                const resolved_idx = env.imports.getResolvedModule(import_idx) orelse {
+                    continue; // Skip unresolved imports
+                };
 
-                if (std.mem.indexOf(u8, import_name, "Builtin") != null) {
-                    // Match Builtin
-                    for (other_envs) |module_env| {
-                        if (std.mem.indexOf(u8, module_env.module_name, "Builtin") != null) {
-                            matched_module = module_env;
-                            break;
-                        }
-                    }
-                } else {
-                    // Dynamically match any platform module
-                    // First strip .roc extension if present (e.g., "Stdout.roc" -> "Stdout")
-                    const without_ext = if (std.mem.endsWith(u8, import_name, ".roc"))
-                        import_name[0 .. import_name.len - 4]
-                    else
-                        import_name;
-
-                    // Then extract the module name from the import (e.g., "pf.Stdout" -> "Stdout")
-                    const module_name = if (std.mem.lastIndexOf(u8, without_ext, ".")) |dot_idx|
-                        without_ext[dot_idx + 1 ..]
-                    else
-                        without_ext;
-
-                    // Find matching platform module by searching through all other_envs
-                    for (other_envs) |platform_env| {
-                        const platform_module_name = platform_env.module_name;
-
-                        // Strip .roc extension if present for exact matching
-                        const name_without_ext = if (std.mem.endsWith(u8, platform_module_name, ".roc"))
-                            platform_module_name[0 .. platform_module_name.len - 4]
-                        else
-                            platform_module_name;
-
-                        // Match "Stdout" to "Stdout.roc" via exact match, not substring
-                        if (std.mem.eql(u8, name_without_ext, module_name)) {
-                            matched_module = platform_env;
-                            break;
-                        }
-                    }
+                if (resolved_idx >= other_envs.len) {
+                    continue; // Invalid index, skip
                 }
 
-                const module_env = matched_module orelse {
-                    continue; // Skip if no match found
-                };
+                const module_env = other_envs[resolved_idx];
 
                 // Store in import_envs (always, for every import)
                 // This is the critical mapping that e_lookup_external needs!
-                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
                 // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
