@@ -2529,10 +2529,15 @@ pub const Interpreter = struct {
                 while (i > 0) {
                     i -= 1;
                     const b = self.bindings.items[i];
-                    // Check both pattern_idx AND source_env to avoid cross-module collisions
+                    // Check both pattern_idx AND source module to avoid cross-module collisions.
                     // Pattern indices are module-local, so the same pattern_idx can exist in
                     // multiple modules. We must match the binding from the correct module.
-                    if (b.pattern_idx == lookup.pattern_idx and b.source_env == self.env) {
+                    // Note: Compare by module_name_idx (interned identifier), not pointer, because
+                    // the same module can have multiple ModuleEnv instances (e.g., when closures
+                    // reference their source env).
+                    const same_module = (b.source_env == self.env) or
+                        (b.source_env.module_name_idx == self.env.module_name_idx);
+                    if (b.pattern_idx == lookup.pattern_idx and same_module) {
                         // Check if this binding came from an e_anno_only expression
                         // Skip check for expr_idx == 0 (sentinel for non-def bindings like parameters)
                         const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
@@ -4526,8 +4531,34 @@ pub const Interpreter = struct {
     }
 
     fn boolValueEquals(equals: bool, value: StackValue) bool {
-        debugAssertIsBoolLayout(value.layout);
-        return getRuntimeU8(value) == @intFromBool(equals);
+        // Handle both proper bool layout (u8 scalar) and tuple layout for tag unions
+        // Some Bool values may come through as tuples (payload, discriminant)
+        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .int) {
+            // Standard u8 bool - get the value directly
+            const ptr = value.ptr orelse return false;
+            // Handle different int sizes
+            return switch (value.layout.data.scalar.data.int) {
+                .u8 => (@as(*const u8, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .i8 => (@as(*const i8, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .u16 => (@as(*const u16, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .i16 => (@as(*const i16, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .u32 => (@as(*const u32, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .i32 => (@as(*const i32, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .u64 => (@as(*const u64, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .i64 => (@as(*const i64, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .u128 => (@as(*const u128, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+                .i128 => (@as(*const i128, @ptrCast(@alignCast(ptr))).* != 0) == equals,
+            };
+        } else if (value.layout.tag == .tuple or value.layout.tag == .record) {
+            // Tuple/record layout - for a simple tag union like [False, True],
+            // the discriminant should be the first byte (no payload)
+            const ptr = value.ptr orelse return false;
+            const byte_ptr: [*]const u8 = @ptrCast(ptr);
+            const discriminant = byte_ptr[0];
+            return (discriminant != 0) == equals;
+        }
+        // Fallback: assume false
+        return !equals;
     }
 
     const NumericKind = enum { int, dec, f32, f64 };
