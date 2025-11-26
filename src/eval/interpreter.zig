@@ -336,7 +336,6 @@ pub const Interpreter = struct {
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
-            .imported_modules = imported_modules,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
             .method_receiver_type = null,
@@ -5878,7 +5877,6 @@ pub const Interpreter = struct {
         self.active_closures.deinit();
         self.def_stack.deinit();
         self.scratch_tags.deinit();
-        self.imported_modules.deinit();
     }
 
     /// Get the module environment for a given origin module identifier.

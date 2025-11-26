@@ -384,6 +384,10 @@ test "Repl - minimal interpreter integration" {
 
     // Step 5: Type check - Pass Builtin as imported module
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    cir.imports.resolveImports(cir, &imported_envs);
+
     var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
     defer checker.deinit();
 

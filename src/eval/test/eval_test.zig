@@ -745,6 +745,10 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Type check the expression - pass Builtin as imported module
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    original_env.imports.resolveImports(&original_env, &imported_envs);
+
     var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, common_idents);
     defer checker.deinit();
 

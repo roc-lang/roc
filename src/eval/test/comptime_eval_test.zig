@@ -79,6 +79,10 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Type check the module with builtins
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, &imported_envs);
+
     var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -174,6 +178,9 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     defer imported_envs.deinit(gpa);
     try imported_envs.append(gpa, builtin_module.env); // Builtin must be first (auto-import)
     try imported_envs.append(gpa, imported_module); // Then explicit imports
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);

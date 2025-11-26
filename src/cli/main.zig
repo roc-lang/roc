@@ -1658,6 +1658,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         try app_imported_envs.append(allocs.gpa, penv);
     }
 
+    // Resolve imports - map each import to its index in app_imported_envs
+    app_env.imports.resolveImports(&app_env, app_imported_envs.items);
+
     var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_common_idents);
     defer app_checker.deinit();
 
@@ -1819,6 +1822,10 @@ fn compileModuleToSharedMemory(
     };
 
     const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    env.imports.resolveImports(&env, &imported_envs);
+
     var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -2865,6 +2872,9 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
 
     // Build imported_envs array with builtin module
     const imported_envs: []const *const ModuleEnv = &.{builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    env.imports.resolveImports(&env, imported_envs);
 
     // Type check the module
     var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_common_idents) catch |err| {

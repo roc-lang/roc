@@ -440,6 +440,11 @@ pub const Repl = struct {
 
         // Type check - Pass Builtin as imported module
         const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+
+        // Resolve imports - map each import to its index in imported_modules
+        // This uses the same resolution logic as compile_package.zig
+        module_env.imports.resolveImports(module_env, &imported_modules);
+
         var checker = Check.init(
             self.allocator,
             &module_env.types,

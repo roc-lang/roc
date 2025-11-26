@@ -724,6 +724,9 @@ pub const Import = struct {
         map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
         /// List of interned string IDs indexed by Import.Idx
         imports: collections.SafeList(base.StringLiteral.Idx) = .{},
+        /// List of interned ident IDs indexed by Import.Idx (parallel to imports)
+        /// Used for efficient index-based lookups instead of string comparison
+        import_idents: collections.SafeList(base.Ident.Idx) = .{},
         /// Resolved module indices, parallel to imports list
         /// Each entry is either a valid module index or UNRESOLVED_MODULE
         resolved_modules: collections.SafeList(u32) = .{},
@@ -735,18 +738,37 @@ pub const Import = struct {
         pub fn deinit(self: *Store, allocator: std.mem.Allocator) void {
             self.map.deinit(allocator);
             self.imports.deinit(allocator);
+            self.import_idents.deinit(allocator);
             self.resolved_modules.deinit(allocator);
         }
 
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
+            return self.getOrPutWithIdent(allocator, strings, module_name, null);
+        }
+
+        /// Get or create an Import.Idx for the given module name, with an associated ident.
+        /// The module name is first checked against existing imports by comparing strings.
+        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// If ident_idx is provided, it will be stored for index-based lookups.
+        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) !Import.Idx {
             // First check if we already have this module name by comparing strings
             for (self.imports.items.items, 0..) |existing_string_idx, i| {
                 const existing_name = strings.get(existing_string_idx);
                 if (std.mem.eql(u8, existing_name, module_name)) {
                     // Found existing import with same name
+                    // Update ident if provided and not already set
+                    if (ident_idx) |ident| {
+                        if (i < self.import_idents.len()) {
+                            const current = self.import_idents.items.items[i];
+                            if (current.isNone()) {
+                                self.import_idents.items.items[i] = ident;
+                            }
+                        }
+                    }
                     return @as(Import.Idx, @enumFromInt(i));
                 }
             }
@@ -757,10 +779,20 @@ pub const Import = struct {
 
             // Add to both the list and the map, with unresolved module initially
             _ = try self.imports.append(allocator, string_idx);
+            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
             _ = try self.resolved_modules.append(allocator, Import.UNRESOLVED_MODULE);
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
+        }
+
+        /// Get the ident index for an import, or null if not set
+        pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.import_idents.len()) return null;
+            const ident = self.import_idents.items.items[idx];
+            if (ident.isNone()) return null;
+            return ident;
         }
 
         /// Get the resolved module index for an import, or null if unresolved
@@ -780,6 +812,32 @@ pub const Import = struct {
             }
         }
 
+        /// Resolve all imports by matching import names to module names in the provided array.
+        /// This sets the resolved_modules index for each import that matches a module.
+        ///
+        /// Parameters:
+        /// - env: The module environment containing the string store for import names
+        /// - available_modules: Array of module environments to match against
+        ///
+        /// For each import, this finds the module in available_modules whose module_name
+        /// matches the import name and sets the resolved index accordingly.
+        pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
+            const import_count: usize = @intCast(self.imports.len());
+            for (0..import_count) |i| {
+                const import_idx: Import.Idx = @enumFromInt(i);
+                const str_idx = self.imports.items.items[i];
+                const import_name = env.common.getString(str_idx);
+
+                // Find matching module in available_modules by comparing module names
+                for (available_modules, 0..) |module_env, module_idx| {
+                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
+                        self.setResolvedModule(import_idx, @intCast(module_idx));
+                        break;
+                    }
+                }
+            }
+        }
+
         /// Serialize this Store to the given CompactWriter. The resulting Store
         /// in the writer's buffer will have offsets instead of pointers. Calling any
         /// methods on it or dereferencing its internal "pointers" (which are now
@@ -796,6 +854,7 @@ pub const Import = struct {
             offset_self.* = .{
                 .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
                 .imports = (try self.imports.serialize(allocator, writer)).*,
+                .import_idents = (try self.import_idents.serialize(allocator, writer)).*,
                 .resolved_modules = (try self.resolved_modules.serialize(allocator, writer)).*,
             };
 
@@ -805,6 +864,7 @@ pub const Import = struct {
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *Store, offset: isize) void {
             self.imports.relocate(offset);
+            self.import_idents.relocate(offset);
             self.resolved_modules.relocate(offset);
         }
 
@@ -814,6 +874,7 @@ pub const Import = struct {
             // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
             map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
+            import_idents: collections.SafeList(base.Ident.Idx).Serialized,
             resolved_modules: collections.SafeList(u32).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -825,6 +886,8 @@ pub const Import = struct {
             ) std.mem.Allocator.Error!void {
                 // Serialize the imports SafeList
                 try self.imports.serialize(&store.imports, allocator, writer);
+                // Serialize the import_idents SafeList
+                try self.import_idents.serialize(&store.import_idents, allocator, writer);
                 // Serialize the resolved_modules SafeList
                 try self.resolved_modules.serialize(&store.resolved_modules, allocator, writer);
 
@@ -842,6 +905,7 @@ pub const Import = struct {
                 store.* = .{
                     .map = .{}, // Will be repopulated below
                     .imports = self.imports.deserialize(offset).*,
+                    .import_idents = self.import_idents.deserialize(offset).*,
                     .resolved_modules = self.resolved_modules.deserialize(offset).*,
                 };
 

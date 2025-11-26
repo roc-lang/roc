@@ -316,10 +316,11 @@ pub fn setupAutoImportedBuiltinTypes(
         // but compile_package.zig has special handling to not try parsing it as a local file.
 
         const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
-        const builtin_import_idx = try self.env.imports.getOrPut(
+        const builtin_import_idx = try self.env.imports.getOrPutWithIdent(
             gpa,
             self.env.common.getStringStore(),
             "Builtin",
+            builtin_ident,
         );
 
         const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
@@ -2825,11 +2826,12 @@ fn importAliased(
 ) std.mem.Allocator.Error!?Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
-    // 1. Get or create Import.Idx for this module
-    const module_import_idx = try self.env.imports.getOrPut(
+    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_name,
     );
 
     // 2. Resolve the alias
@@ -2892,11 +2894,12 @@ fn importWithAlias(
 ) std.mem.Allocator.Error!Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
-    // 1. Get or create Import.Idx for this module
-    const module_import_idx = try self.env.imports.getOrPut(
+    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_name,
     );
 
     // 2. Add to scope: alias -> module_name mapping
@@ -2955,11 +2958,12 @@ fn importUnaliased(
 ) std.mem.Allocator.Error!Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
-    // 1. Get or create Import.Idx for this module
-    const module_import_idx = try self.env.imports.getOrPut(
+    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_name,
     );
 
     // 2. Introduce exposed items into scope (no alias, no auto-expose of main type)
@@ -9721,11 +9725,15 @@ fn getOrCreateAutoImport(self: *Self, module_name_text: []const u8) std.mem.Allo
         return existing_idx;
     }
 
-    // Create a new import using the imports map
-    const new_import_idx = try self.env.imports.getOrPut(
+    // Create ident for index-based lookups
+    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+
+    // Create a new import using the imports map (with ident for index-based lookups)
+    const new_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
         self.env.common.getStringStore(),
         module_name_text,
+        module_ident,
     );
 
     // Store it in our import map

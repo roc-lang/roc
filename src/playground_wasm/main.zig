@@ -1141,6 +1141,10 @@ fn compileSource(source: []const u8) !CompilerStageData {
     {
         const type_can_ir = result.module_env;
         const imported_envs: []const *ModuleEnv = &.{};
+
+        // Resolve imports - map each import to its index in imported_envs
+        type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
+
         // Use pointer to the stored CIR to ensure solver references valid memory
         var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_common_idents);
         result.solver = solver;

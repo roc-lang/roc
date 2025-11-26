@@ -739,8 +739,25 @@ pub fn build(b: *std.Build) void {
 
     // Clean zig-out/ to ensure a fresh rebuild of builtins
     // Note: We don't delete .zig-cache because it contains build options needed during compilation.
-    // If you need a full clean rebuild, manually run: rm -rf .zig-cache zig-out && zig build rebuild-builtins
     const clean_out_step = b.addRemoveDirTree(b.path("zig-out"));
+
+    // Also clear the roc cache to avoid stale cached modules with old struct layouts
+    // The cache location follows the same logic as src/compile/cache_config.zig:
+    // - XDG_CACHE_HOME/roc if XDG_CACHE_HOME is set
+    // - ~/Library/Caches/roc on macOS
+    // - ~/.cache/roc on Linux
+    const clear_roc_cache_step = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\if [ -n "$XDG_CACHE_HOME" ]; then
+        \\  rm -rf "$XDG_CACHE_HOME/roc"
+        \\elif [ "$(uname)" = "Darwin" ]; then
+        \\  rm -rf "$HOME/Library/Caches/roc"
+        \\else
+        \\  rm -rf "$HOME/.cache/roc"
+        \\fi
+        \\echo "Cleared roc cache"
+        ,
+    });
 
     // Discover .roc files again for the rebuild command
     const roc_files_force = discoverBuiltinRocFiles(b) catch |err| {
@@ -750,6 +767,7 @@ pub fn build(b: *std.Build) void {
 
     const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
     run_builtin_compiler_force.step.dependOn(&clean_out_step.step);
+    run_builtin_compiler_force.step.dependOn(&clear_roc_cache_step.step);
     rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready

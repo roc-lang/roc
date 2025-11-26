@@ -928,21 +928,20 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
 
-        // Build other_modules array according to env.imports order
-        // Also set resolved_modules indices for each import
+        // Build the array of all available modules for this module's imports
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
-        for (env.imports.imports.items.items[0..import_count], 0..) |str_idx, import_idx_usize| {
-            const import_name = env.getString(str_idx);
-            const import_idx: can.CIR.Import.Idx = @enumFromInt(import_idx_usize);
 
-            // Check if this is the Builtin module import
+        // Always include Builtin first
+        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+
+        // Add external and local modules
+        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+            const import_name = env.getString(str_idx);
+
+            // Skip Builtin - already added above
             if (std.mem.eql(u8, import_name, "Builtin")) {
-                // Resolve Builtin import to the builtin module env
-                const resolved_idx: u32 = @intCast(imported_envs.items.len);
-                env.imports.setResolvedModule(import_idx, resolved_idx);
-                try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
                 continue;
             }
 
@@ -952,14 +951,9 @@ pub const PackageEnv = struct {
             if (is_ext) {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
-                        // External env is already a pointer, use it directly
-                        // Set the resolved module index before appending
-                        const resolved_idx: u32 = @intCast(imported_envs.items.len);
-                        env.imports.setResolvedModule(import_idx, resolved_idx);
                         try imported_envs.append(self.gpa, ext_env_ptr);
-                    } else {
-                        // External env not ready; skip (tryUnblock should have prevented this)
                     }
+                    // External env not ready; skip (tryUnblock should have prevented this)
                 }
             } else {
                 const child_id = self.module_names.get(import_name).?;
@@ -967,12 +961,13 @@ pub const PackageEnv = struct {
                 // Get a pointer to the child's env (stored in the modules ArrayList)
                 // This is safe because we don't modify the modules ArrayList during type checking
                 const child_env_ptr = &child.env.?;
-                // Set the resolved module index before appending
-                const resolved_idx: u32 = @intCast(imported_envs.items.len);
-                env.imports.setResolvedModule(import_idx, resolved_idx);
                 try imported_envs.append(self.gpa, child_env_ptr);
             }
         }
+
+        // Resolve all imports using the shared function
+        // This matches import names to module names in imported_envs
+        env.imports.resolveImports(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items);
