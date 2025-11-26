@@ -26,43 +26,9 @@ main : (Str, Str)
 main = (helper1(val), helper2(val))
 ~~~
 # EXPECTED
-MISSING METHOD - Basic.md:6:20:6:33
-MISSING METHOD - Basic.md:10:15:10:25
-MISSING METHOD - Basic.md:13:15:13:26
+NIL
 # PROBLEMS
-**MISSING METHOD**
-This **to_str** method is being called on the type **Basic**, which has no method with that name:
-**Basic.md:6:20:6:33:**
-```roc
-  to_str2 = |test| test.to_str()
-```
-                   ^^^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **to_str** method is being called on the type **Basic**, which has no method with that name:
-**Basic.md:10:15:10:25:**
-```roc
-helper1 = |x| x.to_str()
-```
-              ^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **to_str2** method is being called on the type **Basic**, which has no method with that name:
-**Basic.md:13:15:13:26:**
-```roc
-helper2 = |x| x.to_str2()
-```
-              ^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **to_str2** associated with it in the type's declaration.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -306,19 +272,19 @@ main = (helper1(val), helper2(val))
 (inferred-types
 	(defs
 		(patt (type "Basic -> Str"))
-		(patt (type "Basic -> Error"))
+		(patt (type "Basic -> Str"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
-		(patt (type "(Error, Error)")))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
 		(expr (type "Basic -> Str"))
-		(expr (type "Basic -> Error"))
+		(expr (type "Basic -> Str"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "(Str, Str)"))))
 ~~~

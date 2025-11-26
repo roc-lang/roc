@@ -112,15 +112,15 @@ myNum = Foo.Bar.baz
 (inferred-types
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "Bar"))
+		(patt (type "Foo.Bar"))
 		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Bar")
+		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "Bar"))
+		(expr (type "Foo.Bar"))
 		(expr (type "U64"))))
 ~~~

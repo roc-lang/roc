@@ -147,18 +147,18 @@ deepType = C
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "U64"))
-		(patt (type "Level1.Level2.Level3")))
+		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Level1")
+		(nominal (type "Foo.Level1")
 			(ty-header (name "Foo.Level1")))
-		(nominal (type "Level1.Level2")
+		(nominal (type "Foo.Level1.Level2")
 			(ty-header (name "Foo.Level1.Level2")))
-		(nominal (type "Level1.Level2.Level3")
+		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "U64"))
-		(expr (type "Level1.Level2.Level3"))))
+		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

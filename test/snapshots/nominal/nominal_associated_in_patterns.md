@@ -110,12 +110,12 @@ handleSuccess = |res| "success"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try -> Str")))
+		(patt (type "Foo.Try -> Str")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Try")
+		(nominal (type "Foo.Try")
 			(ty-header (name "Foo.Try"))))
 	(expressions
-		(expr (type "Try -> Str"))))
+		(expr (type "Foo.Try -> Str"))))
 ~~~

@@ -113,7 +113,7 @@ Outer := [A].{
 	(type_decls
 		(nominal (type "Outer")
 			(ty-header (name "Outer")))
-		(nominal (type "Inner")
+		(nominal (type "Outer.Inner")
 			(ty-header (name "simple_scope_test.Outer.Inner"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))

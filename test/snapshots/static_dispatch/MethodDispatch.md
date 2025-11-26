@@ -45,43 +45,9 @@ main : (Str, Str, Str)
 main = (directCall, result1, extract(result2))
 ~~~
 # EXPECTED
-MISSING METHOD - MethodDispatch.md:25:14:25:37
-MISSING METHOD - MethodDispatch.md:10:15:10:28
-MISSING METHOD - MethodDispatch.md:14:18:14:33
+NIL
 # PROBLEMS
-**MISSING METHOD**
-This **get_value** method is being called on the type **Container**, which has no method with that name:
-**MethodDispatch.md:25:14:25:37:**
-```roc
-directCall = myContainer.get_value()
-```
-             ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **get_value** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **get_value** method is being called on the type **Container**, which has no method with that name:
-**MethodDispatch.md:10:15:10:28:**
-```roc
-extract = |x| x.get_value()
-```
-              ^^^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **get_value** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **transform** method is being called on the type **Container**, which has no method with that name:
-**MethodDispatch.md:14:18:14:33:**
-```roc
-modify = |x, fn| x.transform(fn)
-```
-                 ^^^^^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **transform** associated with it in the type's declaration.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -442,10 +408,10 @@ NO CHANGE
 		(patt (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
 		(patt (type "Container"))
 		(patt (type "Container"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "(Error, Error, Error)")))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Container"))
+		(patt (type "(Str, Str, Str)")))
 	(type_decls
 		(nominal (type "Container")
 			(ty-header (name "Container"))))
@@ -456,8 +422,8 @@ NO CHANGE
 		(expr (type "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]"))
 		(expr (type "Container"))
 		(expr (type "Container"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "(Error, Error, Error)"))))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Container"))
+		(expr (type "(Str, Str, Str)"))))
 ~~~

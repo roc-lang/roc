@@ -121,43 +121,9 @@ main = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - Container.md:93:16:93:44
-MISSING METHOD - Container.md:94:17:94:41
-MISSING METHOD - Container.md:97:13:98:20
+NIL
 # PROBLEMS
-**MISSING METHOD**
-This **map** method is being called on the type **Container(a) where [Container(a).from_numeral : Container(a)]**, which has no method with that name:
-**Container.md:93:16:93:44:**
-```roc
-  num_result = num_container.map(|x| x + 1)
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **map** method is being called on the type **Container(Str)**, which has no method with that name:
-**Container.md:94:17:94:41:**
-```roc
-  _str_result = str_container.map(|s| s)
-```
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **map** method is being called on the type **Container(a) where [Container(a).from_numeral : Container(a)]**, which has no method with that name:
-**Container.md:97:13:98:20:**
-```roc
-  chained = num_container
-    .map(|x| x + 1)
-```
-
-
-**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -1255,7 +1221,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: _field, final: Error, id_results: (e, Str, [True]_others), processed: c, transformed: a } where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "{ chained: a, final: a, id_results: (e, Str, [True]_others), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1269,5 +1235,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: _field, final: Error, id_results: (e, Str, [True]_others), processed: c, transformed: a } where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "{ chained: a, final: a, id_results: (e, Str, [True]_others), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -145,18 +145,18 @@ external = Foo.defaultBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bar"))
-		(patt (type "Bar -> Bar"))
-		(patt (type "Bar"))
-		(patt (type "Bar")))
+		(patt (type "Foo.Bar"))
+		(patt (type "Foo.Bar -> Foo.Bar"))
+		(patt (type "Foo.Bar"))
+		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Bar")
+		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Bar"))
-		(expr (type "Bar -> Bar"))
-		(expr (type "Bar"))
-		(expr (type "Bar"))))
+		(expr (type "Foo.Bar"))
+		(expr (type "Foo.Bar -> Foo.Bar"))
+		(expr (type "Foo.Bar"))
+		(expr (type "Foo.Bar"))))
 ~~~

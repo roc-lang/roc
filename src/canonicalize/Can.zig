@@ -820,7 +820,8 @@ fn processAssociatedBlock(
                 const nested_qualified_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
 
                 // Build relative name for the nested type (without module prefix)
-                // If relative_name_idx is null, the nested type is at module level, so its relative name is just the type name
+                // If relative_name_idx is not null, use it as the parent (e.g., "Parent.Nested")
+                // If relative_name_idx is null (module root), just use the nested type's name
                 const nested_relative_idx = if (relative_name_idx) |rel_idx| blk: {
                     const rel_parent_text = self.env.getIdent(rel_idx);
                     break :blk try self.env.insertQualifiedIdent(rel_parent_text, nested_type_text);
@@ -1935,8 +1936,15 @@ pub fn canonicalizeFile(
                 else
                     try self.env.insertQualifiedIdent(module_name_text, type_name_text);
 
-                // For module-level associated blocks, relative_parent is null since items are at the module root
-                try self.processAssociatedBlock(qualified_type_ident, null, type_ident, assoc, false);
+                // For module-level associated blocks, pass the type name as relative_parent
+                // so nested types get correct relative names like "TypeName.NestedType".
+                // Exception: The Builtin module's types (Str, Bool, etc.) should have simple names
+                // since they're implicitly imported into every module's scope.
+                const relative_parent = if (std.mem.eql(u8, module_name_text, "Builtin"))
+                    null
+                else
+                    type_ident;
+                try self.processAssociatedBlock(qualified_type_ident, relative_parent, type_ident, assoc, false);
             }
         }
     }

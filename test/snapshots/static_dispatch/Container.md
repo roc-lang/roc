@@ -46,19 +46,9 @@ func = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - Container.md:33:13:34:20
+NIL
 # PROBLEMS
-**MISSING METHOD**
-This **map** method is being called on the type **Container(a) where [Container(a).from_numeral : Container(a)]**, which has no method with that name:
-**Container.md:33:13:34:20:**
-```roc
-  chained = num_container
-    .map(|x| x + 1)
-```
-
-
-**Hint: **For this to work, the type would need to have a method named **map** associated with it in the type's declaration.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -440,7 +430,7 @@ func = {
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
 		(patt (type "[Value(c), Empty]_others, c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "_c")))
+		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -450,5 +440,5 @@ func = {
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
 		(expr (type "[Value(c), Empty]_others, c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "_c"))))
+		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

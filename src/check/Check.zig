@@ -4948,15 +4948,45 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
 
                 // Calculate the name of the static dispatch function
-                // Format: "ModuleName.TypeName.method_name"
-                // e.g., "Builtin.Bool.is_eq" or "Builtin.Num.U8.from_numeral"
-                // type_name_bytes is the type's relative name (without module prefix)
+                // Format depends on whether the type name equals the module name:
+                // - If type_name == module_name (e.g., type "A" in module "A"): "A.method"
+                // - If type_name is already qualified (e.g., "Builtin.Try"): "Builtin.Try.method"
+                // - Otherwise: "ModuleName.TypeName.method_name"
+                //
+                // Methods are registered as "TypeName.method" where TypeName is the
+                // qualified_name_idx from canonicalization. For module-level types,
+                // qualified_name_idx equals the type name (no module prefix).
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
-                try self.static_dispatch_method_name_buf.print(
-                    self.gpa,
-                    "{s}.{s}.{s}",
-                    .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
-                );
+
+                // Check if type_name_bytes already starts with "module_name."
+                const module_prefix = original_env.module_name;
+                const already_qualified = type_name_bytes.len > module_prefix.len + 1 and
+                    std.mem.startsWith(u8, type_name_bytes, module_prefix) and
+                    type_name_bytes[module_prefix.len] == '.';
+
+                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+                    // Type name equals module name (e.g., type "A" in module "A")
+                    // Methods are registered as "A.to_str", not "A.A.to_str"
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}",
+                        .{ type_name_bytes, constraint_fn_name_bytes },
+                    );
+                } else if (already_qualified) {
+                    // Type name is already qualified (e.g., "Builtin.Try"), just append method
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}",
+                        .{ type_name_bytes, constraint_fn_name_bytes },
+                    );
+                } else {
+                    // Normal case: prepend module name
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}.{s}",
+                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
+                    );
+                }
                 const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
 
                 // Get the ident of this method in the original env

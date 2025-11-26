@@ -170,18 +170,18 @@ nested = { bar: A, count: 1 }
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Bar)"))
-		(patt (type "Try(Bar, Error)"))
-		(patt (type "{ bar: Bar, count: U64 }")))
+		(patt (type "List(Foo.Bar)"))
+		(patt (type "Try(Foo.Bar, Foo.Error)"))
+		(patt (type "{ bar: Foo.Bar, count: U64 }")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "Bar")
+		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar")))
-		(nominal (type "Error")
+		(nominal (type "Foo.Error")
 			(ty-header (name "Foo.Error"))))
 	(expressions
-		(expr (type "List(Bar)"))
-		(expr (type "Try(Bar, Error)"))
-		(expr (type "{ bar: Bar, count: U64 }"))))
+		(expr (type "List(Foo.Bar)"))
+		(expr (type "Try(Foo.Bar, Foo.Error)"))
+		(expr (type "{ bar: Foo.Bar, count: U64 }"))))
 ~~~
