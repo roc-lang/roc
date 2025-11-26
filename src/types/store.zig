@@ -117,7 +117,7 @@ pub const Store = struct {
     /// Ensure that slots & descriptor arrays have at least the provided capacity
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
-        try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+        try self.slots.backing.ensureTotalCapacity(self.gpa, capacity);
     }
 
     /// Deinit the unification table
@@ -192,14 +192,14 @@ pub const Store = struct {
 
     /// Set a type variable to the provided content
     pub fn setVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
-        std.debug.assert(@intFromEnum(target_var) < self.len());
+        std.debug.assert(@intFromEnum(target_var) <= self.len());
         const resolved = self.resolveVar(target_var);
         self.descs.set(resolved.desc_idx, desc);
     }
 
     /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
-        std.debug.assert(@intFromEnum(target_var) < self.len());
+        std.debug.assert(@intFromEnum(target_var) <= self.len());
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
@@ -208,8 +208,8 @@ pub const Store = struct {
 
     /// Set a type variable to redirect to the provided redirect
     pub fn setVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
-        std.debug.assert(@intFromEnum(target_var) < self.len());
-        std.debug.assert(@intFromEnum(redirect_to) < self.len());
+        std.debug.assert(@intFromEnum(target_var) <= self.len());
+        std.debug.assert(@intFromEnum(redirect_to) <= self.len());
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
     }
@@ -1386,7 +1386,7 @@ test "SlotStore.Serialized roundtrip" {
 
     // Add some slots
     _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(100) });
-    _ = try slot_store.insert(gpa, .{ .redirect = @enumFromInt(0) });
+    _ = try slot_store.insert(gpa, .{ .redirect = @enumFromInt(1) });
     _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(200) });
 
     // Create temp file
@@ -1422,9 +1422,9 @@ test "SlotStore.Serialized roundtrip" {
 
     // Verify
     try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
-    try std.testing.expectEqual(Slot{ .root = @enumFromInt(100) }, deserialized.get(@enumFromInt(0)));
-    try std.testing.expectEqual(Slot{ .redirect = @enumFromInt(0) }, deserialized.get(@enumFromInt(1)));
-    try std.testing.expectEqual(Slot{ .root = @enumFromInt(200) }, deserialized.get(@enumFromInt(2)));
+    try std.testing.expectEqual(Slot{ .root = @enumFromInt(100) }, deserialized.get(@enumFromInt(1)));
+    try std.testing.expectEqual(Slot{ .redirect = @enumFromInt(1) }, deserialized.get(@enumFromInt(2)));
+    try std.testing.expectEqual(Slot{ .root = @enumFromInt(200) }, deserialized.get(@enumFromInt(3)));
 }
 
 test "DescStore.Serialized roundtrip" {

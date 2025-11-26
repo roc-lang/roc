@@ -1269,7 +1269,7 @@ test "unify - closed tag union extends open" {
     // check that fresh vars are correct
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
-    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items()[0]);
 }
 
 // unification - recursion //

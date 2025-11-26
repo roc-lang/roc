@@ -255,8 +255,8 @@ pub const Interpreter = struct {
         }
 
         // Safely access import count
-        const import_count = if (env.imports.imports.items.items.len > 0)
-            env.imports.imports.items.items.len
+        const import_count = if (env.imports.imports.items().len > 0)
+            env.imports.imports.items().len
         else
             0;
 
@@ -268,7 +268,7 @@ pub const Interpreter = struct {
 
             // Process ALL imports, matching each to the appropriate module from other_envs
             for (0..import_count) |i| {
-                const str_idx = env.imports.imports.items.items[i];
+                const str_idx = env.imports.imports.items()[i];
                 const import_name = env.common.getString(str_idx);
 
                 // Find matching module in other_envs
@@ -2688,7 +2688,7 @@ pub const Interpreter = struct {
                     // We need to get the module name from the import list using the Import.Idx.
                     if (self.env.imports.map.count() > @intFromEnum(lookup.module_idx)) {
                         // Retrieve the interned string index for this import
-                        const import_list = self.env.imports.imports.items.items;
+                        const import_list = self.env.imports.imports.items();
                         if (@intFromEnum(lookup.module_idx) < import_list.len) {
                             const str_idx = import_list[@intFromEnum(lookup.module_idx)];
                             const import_name = self.env.common.getString(str_idx);

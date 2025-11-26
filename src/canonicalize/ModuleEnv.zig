@@ -1888,9 +1888,9 @@ pub fn nodeIdxFrom(idx: anytype) Node.Idx {
     return @enumFromInt(@intFromEnum(idx));
 }
 
-/// Convert a type into a type var
+/// Convert a node index (0-based) into a type var (1-based)
 pub fn varFrom(idx: anytype) TypeVar {
-    return @enumFromInt(@intFromEnum(idx));
+    return @enumFromInt(@intFromEnum(idx) + 1);
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.
@@ -2194,7 +2194,7 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
             try self.store.getStatement(stmt_idx).pushToSExprTree(self, tree, stmt_idx);
         }
 
-        for (0..@intCast(self.external_decls.len())) |i| {
+        for (1..@intCast(self.external_decls.len() + 1)) |i| {
             const external_decl = self.external_decls.get(@enumFromInt(i));
             try external_decl.pushToSExprTree(self, tree);
         }

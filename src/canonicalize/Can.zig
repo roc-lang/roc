@@ -2802,7 +2802,7 @@ fn bringIngestedFileIntoScope(
 
     // scope.introduce(self: *Scope, comptime item_kind: Level.ItemKind, ident: Ident.Idx)
 
-    for (import.exposing.items.items) |exposed| {
+    for (import.exposing.items()) |exposed| {
         const exposed_ident = switch (exposed) {
             .Value => |ident| ident,
             .Type => |ident| ident,
@@ -6791,21 +6791,21 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
     defer self.scratch_type_var_problems.clearFrom(problems_start);
 
     // Process from the end to avoid index shifting
-    while (self.scratch_type_var_validation.items.items.len > 0) {
+    while (self.scratch_type_var_validation.items().len > 0) {
         // Pop the last item
-        const last_idx = self.scratch_type_var_validation.items.items.len - 1;
-        const first_ident = self.scratch_type_var_validation.items.items[last_idx];
+        const last_idx = self.scratch_type_var_validation.items().len - 1;
+        const first_ident = self.scratch_type_var_validation.items()[last_idx];
         self.scratch_type_var_validation.items.shrinkRetainingCapacity(last_idx);
         var found_another = false;
 
         // Check if there are any other occurrences of this variable
         var i: usize = 0;
-        while (i < self.scratch_type_var_validation.items.items.len) {
-            if (self.scratch_type_var_validation.items.items[i].idx == first_ident.idx) {
+        while (i < self.scratch_type_var_validation.items().len) {
+            if (self.scratch_type_var_validation.items()[i].idx == first_ident.idx) {
                 found_another = true;
                 // Remove this occurrence by swapping with the last element and shrinking
-                const last = self.scratch_type_var_validation.items.items.len - 1;
-                self.scratch_type_var_validation.items.items[i] = self.scratch_type_var_validation.items.items[last];
+                const last = self.scratch_type_var_validation.items().len - 1;
+                self.scratch_type_var_validation.items()[i] = self.scratch_type_var_validation.items()[last];
                 self.scratch_type_var_validation.items.shrinkRetainingCapacity(last);
             } else {
                 i += 1;

@@ -629,11 +629,11 @@ pub const PackageEnv = struct {
         }
 
         // Discover imports from env.imports
-        const import_count = env.imports.imports.items.items.len;
+        const import_count = env.imports.imports.items().len;
         var any_new: bool = false;
         // Mark current node as visiting (gray) before exploring imports
         st.visit_color = 1;
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+        for (env.imports.imports.items()[0..import_count]) |str_idx| {
             const mod_name = env.getString(str_idx);
 
             // Skip "Builtin" - it's handled via the precompiled module in module_envs_map
@@ -926,10 +926,10 @@ pub const PackageEnv = struct {
         var env = &st.env.?;
 
         // Build other_modules array according to env.imports order
-        const import_count = env.imports.imports.items.items.len;
+        const import_count = env.imports.imports.items().len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+        for (env.imports.imports.items()[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
 
             // Skip "Builtin" - it's provided separately via builtin_types_for_eval to the evaluator

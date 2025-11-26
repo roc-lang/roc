@@ -249,7 +249,7 @@ fn copyFunc(
     const end_idx: usize = start_idx + func.args.count;
 
     // Validate the range before slicing
-    if (end_idx > source_store.vars.items.items.len) {
+    if (end_idx > source_store.vars.items().len) {
         // The function's arg range is invalid - this can happen if the function
         // type was created with a range from a different store or the store was modified
         // For now, handle gracefully by returning an empty args function

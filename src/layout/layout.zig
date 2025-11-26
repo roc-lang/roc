@@ -81,26 +81,27 @@ pub const Idx = enum(@Type(.{
     //
     // The layout store's idxFromScalar method relies on these exact numbers being what they are now,
     // so be careful when changing them! (Changing them will, at a minimum, cause tests to fail.)
-    bool = 0,
-    str = 1,
-    opaque_ptr = 2,
+    // Note: These start at 1 because SafeList uses 1-based indexing.
+    bool = 1,
+    str = 2,
+    opaque_ptr = 3,
 
     // ints
-    u8 = 3,
-    i8 = 4,
-    u16 = 5,
-    i16 = 6,
-    u32 = 7,
-    i32 = 8,
-    u64 = 9,
-    i64 = 10,
-    u128 = 11,
-    i128 = 12,
+    u8 = 4,
+    i8 = 5,
+    u16 = 6,
+    i16 = 7,
+    u32 = 8,
+    i32 = 9,
+    u64 = 10,
+    i64 = 11,
+    u128 = 12,
+    i128 = 13,
 
     // fracs
-    f32 = 13,
-    f64 = 14,
-    dec = 15,
+    f32 = 14,
+    f64 = 15,
+    dec = 16,
 
     // Regular indices start from here.
     // num_scalars in store.zig must refer to how many variants we had up to this point.

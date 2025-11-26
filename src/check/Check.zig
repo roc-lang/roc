@@ -327,7 +327,7 @@ const Env = struct {
     fn reset(self: *Env) void {
         self.var_pool.current_rank = .generalized;
         self.var_pool.clearRetainingCapacity();
-        self.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.deferred_static_dispatch_constraints.clearRetainingCapacity();
     }
 
     fn rank(self: *const Env) Rank {
@@ -396,7 +396,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     // Note that we choose `b`s region here, since `b` is the "actual" type
     // (whereas `a` is the "expected" type, like from an annotation)
     const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(b));
-    for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
+    for (self.unify_scratch.fresh_vars.items()) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
         try env.var_pool.addVarToRank(fresh_var, fresh_rank);
@@ -407,7 +407,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     }
 
     // Copy any constraints created during unification into our own array
-    for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
+    for (self.unify_scratch.deferred_constraints.items()) |deferred_constraint| {
         _ = try env.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
     }
 
@@ -576,12 +576,12 @@ fn instantiateVarHelp(
 fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     const idx = @intFromEnum(target_var);
 
-    if (idx >= self.regions.len()) {
-        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
+    if (idx > self.regions.len()) {
+        try self.regions.ensureTotalCapacity(self.gpa, idx);
 
         const empty_region = Region.zero();
-        while (self.regions.len() <= idx) {
-            self.regions.items.appendAssumeCapacity(empty_region);
+        while (self.regions.len() < idx) {
+            _ = self.regions.appendAssumeCapacity(empty_region);
         }
     }
 }
@@ -1071,7 +1071,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 /// Process the requires_types annotations for platform modules.
 /// This generates the actual types from the type annotations stored in requires_types.
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    const requires_types_slice = self.cir.requires_types.items.items;
+    const requires_types_slice = self.cir.requires_types.items();
     for (requires_types_slice) |required_type| {
         // Generate the type from the annotation
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
@@ -1090,7 +1090,7 @@ pub fn checkPlatformRequirements(self: *Self, platform_env: *const ModuleEnv) st
     defer self.env_pool.release(env);
 
     // Iterate over the platform's required types
-    const requires_types_slice = platform_env.requires_types.items.items;
+    const requires_types_slice = platform_env.requires_types.items();
     for (requires_types_slice) |required_type| {
         // Get the identifier name for this required type
         const required_ident = required_type.ident;
@@ -4603,13 +4603,13 @@ fn checkNumeralConstraint(
 }
 
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
+    var deferred_constraint_len = env.deferred_static_dispatch_constraints.items().len;
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
         deferred_constraint_index += 1;
-        deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
+        deferred_constraint_len = env.deferred_static_dispatch_constraints.items().len;
     }) {
-        const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
+        const deferred_constraint = env.deferred_static_dispatch_constraints.items()[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
 
@@ -4974,7 +4974,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
     }
 
     // Now that we've processed all constraints, reset the array
-    env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+    env.deferred_static_dispatch_constraints.clearRetainingCapacity();
 }
 
 /// Check if a structural type supports is_eq.

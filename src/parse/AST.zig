@@ -113,7 +113,7 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
     const start = self.tokens.resolve(region.start);
     const region_end_idx = if (region.end > 0) region.end - 1 else region.end;
     const end = self.tokens.resolve(region_end_idx);
-    const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
+    const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items(), start.start.offset, end.end.offset) catch .{
         .start_line_idx = 0,
         .start_col_idx = 0,
         .end_line_idx = 0,
@@ -172,14 +172,14 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         diagnostic.region.end.offset <= self.env.source.len)
     {
         var env = self.env.*;
-        if (env.line_starts.items.items.len == 0) {
+        if (env.line_starts.items().len == 0) {
             try env.calcLineStarts(allocator);
         }
 
         // Convert region to RegionInfo
         const region_info = base.RegionInfo.position(
             self.env.source,
-            env.line_starts.items.items,
+            env.line_starts.items(),
             diagnostic.region.start.offset,
             diagnostic.region.end.offset,
         ) catch {
@@ -193,7 +193,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
             .error_highlight,
             filename,
             self.env.source,
-            env.line_starts.items.items,
+            env.line_starts.items(),
         );
     }
 
@@ -604,7 +604,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     // Add source context if we have a valid region
     if (region.start.offset <= region.end.offset and region.end.offset <= self.env.source.len) {
         // Use proper region info calculation with converted region
-        const region_info = base.RegionInfo.position(self.env.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
+        const region_info = base.RegionInfo.position(self.env.source, env.line_starts.items(), region.start.offset, region.end.offset) catch {
             return report; // Return report without source context if region calculation fails
         };
 
@@ -613,7 +613,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
         // Use the proper addSourceContext method with owned filename
         const owned_filename = try report.addOwnedString(filename);
-        try report.addSourceContext(region_info, owned_filename, self.env.source, env.line_starts.items.items);
+        try report.addSourceContext(region_info, owned_filename, self.env.source, env.line_starts.items());
     }
 
     return report;

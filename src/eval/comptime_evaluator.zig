@@ -666,7 +666,7 @@ pub const ComptimeEvaluator = struct {
     /// For now, validation is skipped - literals are allowed without validation.
     /// This preserves current behavior while the infrastructure is in place.
     fn validateDeferredNumericLiterals(self: *ComptimeEvaluator) !void {
-        const literals = self.env.deferred_numeric_literals.items.items;
+        const literals = self.env.deferred_numeric_literals.items();
 
         for (literals) |literal| {
             // Step 1: Resolve the type variable to get the concrete type

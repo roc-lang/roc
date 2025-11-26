@@ -94,10 +94,11 @@ pub const Store = struct {
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
     pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
-        // opaque_ptr (tag 0) -> 2
-        // str (tag 1) -> 1
-        // int (tag 2) with precision p -> 3 + p
-        // frac (tag 3) with precision p -> 13 + (p - 2) = 11 + p
+        // opaque_ptr (tag 0) -> 3
+        // str (tag 1) -> 2
+        // int (tag 2) with precision p -> 4 + p
+        // frac (tag 3) with precision p -> 14 + (p - 2) = 12 + p
+        // Note: All indices shifted by 1 for 1-based SafeList indexing.
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -112,10 +113,10 @@ pub const Store = struct {
 
         // Calculate the base index based on tag mappings
         const base_idx = switch (scalar.tag) {
-            .opaque_ptr => @as(u7, 2),
-            .str => @as(u7, 1),
-            .int => @as(u7, 3),
-            .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
+            .opaque_ptr => @as(u7, 3),
+            .str => @as(u7, 2),
+            .int => @as(u7, 4),
+            .frac => @as(u7, 12), // 14 - 2 = 12, so 12 + p gives correct result
         };
 
         // Calculate the final index
@@ -290,7 +291,7 @@ pub const Store = struct {
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
-        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len() + 1) };
         _ = try self.record_data.append(self.env.gpa, .{
             .size = total_size,
             .fields = fields_range,
@@ -360,7 +361,7 @@ pub const Store = struct {
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
-        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len() + 1) };
         _ = try self.tuple_data.append(self.env.gpa, TupleData{ .size = total_size, .fields = fields_range });
         const tuple_layout = Layout.tuple(max_alignment, tuple_idx);
         return try self.insertLayout(tuple_layout);
@@ -467,7 +468,7 @@ pub const Store = struct {
     /// Get or create an empty record layout (for closures with no captures)
     fn getEmptyRecordLayout(self: *Self) !Idx {
         // Check if we already have an empty record layout
-        for (self.record_data.items.items, 0..) |record_data, i| {
+        for (self.record_data.items(), 1..) |record_data, i| {
             if (record_data.size == 0 and record_data.fields.count == 0) {
                 const record_idx = RecordIdx{ .int_idx = @intCast(i) };
                 const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
@@ -476,7 +477,7 @@ pub const Store = struct {
         }
 
         // Create new empty record layout
-        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len() + 1) };
         _ = try self.record_data.append(self.env.gpa, .{
             .size = 0,
             .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
@@ -764,7 +765,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
 
         // Store the record data
-        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len() + 1) };
         _ = try self.record_data.append(self.env.gpa, RecordData{
             .size = total_size,
             .fields = fields_range,
@@ -862,7 +863,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
 
         // Store the tuple data
-        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len() + 1) };
         _ = try self.tuple_data.append(self.env.gpa, TupleData{
             .size = total_size,
             .fields = fields_range,

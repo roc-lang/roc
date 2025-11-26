@@ -182,9 +182,10 @@ comptime {
     std.debug.assert(pattern_fields.len == MODULEENV_PATTERN_NODE_COUNT);
 }
 
-/// Helper function to get a region by node index, handling the type conversion
+/// Helper function to get a region by node index, handling the type conversion.
+/// Node indices are 0-based (from SafeMultiList), but Region indices are 1-based (from SafeList).
 pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
-    const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx) + 1);
     return store.regions.get(idx).*;
 }
 
@@ -235,7 +236,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .expr = @enumFromInt(node.data_2),
                 .anno = blk: {
                     const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items()[extra_start..];
                     const has_anno = extra_data[0] != 0;
                     if (has_anno) {
                         break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
@@ -251,7 +252,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .expr = @enumFromInt(node.data_2),
                 .anno = blk: {
                     const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items()[extra_start..];
                     const has_anno = extra_data[0] != 0;
                     if (has_anno) {
                         break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
@@ -295,7 +296,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         } },
         .statement_import => {
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const alias_data = extra_data[0];
             const qualifier_data = extra_data[1];
@@ -333,7 +334,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         },
         .statement_type_anno => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const name: Ident.Idx = @bitCast(extra_data[1]);
@@ -391,7 +392,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             // Read i128 from extra_data (stored as 4 u32s in data_1)
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
-            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+            const value_as_u32s = store.extra_data.items()[node.data_3..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
             return CIR.Expr{
@@ -418,7 +419,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_call => {
             // Retrieve args span from extra_data
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -446,7 +447,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_dec => {
             // Get value from extra_data
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items()[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Expr{
@@ -509,7 +510,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const target_node_idx: u16 = @intCast(node.data_2);
 
             const extra_data_idx = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const extra_data = store.extra_data.items()[extra_data_idx..][0..2];
             const backing_expr: CIR.Expr.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
@@ -534,7 +535,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_closure => {
             // Retrieve closure data from extra_data
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const lambda_idx = extra_data[0];
             const capture_start = extra_data[1];
@@ -550,7 +551,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_lambda => {
             // Retrieve lambda data from extra_data
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -579,7 +580,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_record => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const fields_start = extra_data[0];
             const fields_len = extra_data[1];
@@ -596,7 +597,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_match => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
             const branches_start = extra_data[1];
@@ -613,7 +614,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_zero_argument_tag => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
             const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -670,7 +671,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
             const index = node.data_2;
             const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -687,7 +688,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // Retrieve low-level lambda data from extra_data
             const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -706,7 +707,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_if_then_else => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const branches_span_start: u32 = extra_data[0];
             const branches_span_end: u32 = extra_data[1];
@@ -825,7 +826,7 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
 
     // Retrieve when branch data from extra_data
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const extra_data = store.extra_data.items()[extra_start..];
 
     const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
     const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
@@ -855,7 +856,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
 /// Returns a slice of match branches from the given span.
 pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
-    const slice = store.extra_data.items.items[span.span.start..(span.span.start + span.span.len)];
+    const slice = store.extra_data.items()[span.span.start..(span.span.start + span.span.len)];
     const result: []CIR.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
@@ -871,7 +872,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             const method_name = @as(Ident.Idx, @bitCast(node.data_2));
 
             const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -951,7 +952,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const target_node_idx: u16 = @intCast(node.data_2);
 
             const extra_data_idx = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const extra_data = store.extra_data.items()[extra_data_idx..][0..2];
             const backing_pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
@@ -976,7 +977,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_list => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items()[extra_start..];
 
             const patterns_start = extra_data[0];
             const patterns_len = extra_data[1];
@@ -1014,7 +1015,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
 
             const extra_data_idx = node.data_3;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items()[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Pattern{
@@ -1038,7 +1039,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_dec_literal => {
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items()[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             const has_suffix = node.data_2 != 0;
@@ -1103,7 +1104,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const name: Ident.Idx = @bitCast(node.data_1);
             const args_start = node.data_2;
 
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items()[node.data_3..];
             const args_len = extra_data[0];
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(extra_data[1]);
             const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
@@ -1140,7 +1141,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const name: Ident.Idx = @bitCast(node.data_1);
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(node.data_2);
 
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items()[node.data_3..];
             const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
                 switch (base_enum) {
                     .builtin => {
@@ -1179,8 +1180,8 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         } },
         .ty_fn => {
             const extra_data_idx = node.data_3;
-            const effectful = store.extra_data.items.items[extra_data_idx] != 0;
-            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[extra_data_idx + 1]);
+            const effectful = store.extra_data.items()[extra_data_idx] != 0;
+            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items()[extra_data_idx + 1]);
             return CIR.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 .ret = ret,
@@ -1237,7 +1238,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const where_flag = node.data_2;
     const where_clause = if (where_flag == 1) blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..];
+        const extra_data = store.extra_data.items()[extra_start..];
 
         const where_start = extra_data[0];
         const where_len = extra_data[1];
@@ -2311,7 +2312,7 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     std.debug.assert(node.tag == .def);
 
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const extra_data = store.extra_data.items()[extra_start..];
 
     const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
@@ -2339,7 +2340,7 @@ pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Id
     const extra_start = node.data_1;
     // The expr field is at offset 1 in the extra_data layout for Def
     // Layout: [0]=pattern, [1]=expr, [2-3]=kind, [4]=annotation
-    store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr);
+    store.extra_data.items()[extra_start + 1] = @intFromEnum(new_expr);
 }
 
 /// Retrieves a capture from the store.
@@ -2375,7 +2376,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
     // Retrieve kind from extra_data if it exists
     const kind = blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..][0..2];
+        const extra_data = store.extra_data.items()[extra_start..][0..2];
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
@@ -2631,7 +2632,7 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
-    return @ptrCast(store.extra_data.items.items[span.start..][0..span.len]);
+    return @ptrCast(store.extra_data.items()[span.start..][0..span.len]);
 }
 
 /// Returns a slice of definitions from the store.
@@ -2681,12 +2682,12 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.Br
 
 /// Creates a slice corresponding to a span.
 pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items.items[span.start]));
+    return @as(T, @enumFromInt(store.extra_data.items()[span.start]));
 }
 
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items.items[span.start + span.len - 1]));
+    return @as(T, @enumFromInt(store.extra_data.items()[span.start + span.len - 1]));
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -3162,7 +3163,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_redundant_exposed => {
-            const extra_data = store.extra_data.items.items[node.data_2..];
+            const extra_data = store.extra_data.items()[node.data_2..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return CIR.Diagnostic{ .redundant_exposed = .{
@@ -3350,7 +3351,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             },
         } },
         .diag_type_shadowed_warning => {
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items()[node.data_3..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return CIR.Diagnostic{ .type_shadowed_warning = .{
@@ -3364,7 +3365,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_type_parameter_conflict => {
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const extra_data = store.extra_data.items()[node.data_3..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return CIR.Diagnostic{ .type_parameter_conflict = .{
@@ -3664,14 +3665,14 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify extra_data
     try testing.expectEqual(@as(usize, 4), deserialized.extra_data.len());
-    const retrieved_u32s = deserialized.extra_data.items.items[0..4];
+    const retrieved_u32s = deserialized.extra_data.items()[0..4];
     const retrieved_bytes: [16]u8 = @bitCast(retrieved_u32s.*);
     const retrieved_value: i128 = @bitCast(retrieved_bytes);
     try testing.expectEqual(@as(i128, 42), retrieved_value);
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
-    const retrieved_region = deserialized.regions.get(@enumFromInt(0));
+    const retrieved_region = deserialized.regions.get(@enumFromInt(1));
     try testing.expectEqual(region.start.offset, retrieved_region.start.offset);
     try testing.expectEqual(region.end.offset, retrieved_region.end.offset);
 }
@@ -3775,14 +3776,14 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify float node and extra data
     const retrieved_float = deserialized.nodes.get(@enumFromInt(2));
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
-    const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
+    const retrieved_float_u32s = deserialized.extra_data.items()[0..2];
     const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);
     const retrieved_float_value: f64 = @bitCast(retrieved_float_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
 
     // Verify regions
     try testing.expectEqual(@as(usize, 3), deserialized.regions.len());
-    for (regions, 0..) |expected_region, i| {
+    for (regions, 1..) |expected_region, i| {
         const retrieved_region = deserialized.regions.get(@enumFromInt(i));
         try testing.expectEqual(expected_region.start.offset, retrieved_region.start.offset);
         try testing.expectEqual(expected_region.end.offset, retrieved_region.end.offset);

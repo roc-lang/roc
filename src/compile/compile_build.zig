@@ -585,7 +585,7 @@ pub const BuildEnv = struct {
         const platform_root_env = platform_sched.getRootEnv() orelse return;
 
         // If the platform has no requires_types, nothing to check
-        if (platform_root_env.requires_types.items.items.len == 0) {
+        if (platform_root_env.requires_types.items().len == 0) {
             return;
         }
 

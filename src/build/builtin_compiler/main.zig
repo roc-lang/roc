@@ -422,7 +422,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     const extra_start = def_node.data_1;
 
                     // Update the expr field (at extra_start + 1)
-                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+                    env.store.extra_data.items()[extra_start + 1] = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -781,8 +781,7 @@ fn compileModule(
             // Copy old def indices
             var i: u32 = 0;
             while (i < old_def_count) : (i += 1) {
-                const idx = @as(collections.SafeList(u32).Idx, @enumFromInt(old_span.start + i));
-                const old_def_idx = module_env.store.extra_data.get(idx).*;
+                const old_def_idx = module_env.store.extra_data.items()[old_span.start + i];
                 _ = try module_env.store.extra_data.append(gpa, old_def_idx);
             }
 

@@ -635,7 +635,7 @@ pub const Import = struct {
         /// The module name is first checked against existing imports by comparing strings.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             // First check if we already have this module name by comparing strings
-            for (self.imports.items.items, 0..) |existing_string_idx, i| {
+            for (self.imports.items(), 0..) |existing_string_idx, i| {
                 const existing_name = strings.get(existing_string_idx);
                 if (std.mem.eql(u8, existing_name, module_name)) {
                     // Found existing import with same name
@@ -714,12 +714,12 @@ pub const Import = struct {
                 };
 
                 // Pre-allocate the exact capacity needed for the map
-                const import_count = store.imports.items.items.len;
+                const import_count = store.imports.items().len;
                 try store.map.ensureTotalCapacity(allocator, @intCast(import_count));
 
                 // Repopulate the map - we know there's enough capacity since we
                 // are deserializing from a Serialized struct
-                for (store.imports.items.items, 0..) |string_idx, i| {
+                for (store.imports.items(), 0..) |string_idx, i| {
                     const import_idx = @as(Import.Idx, @enumFromInt(i));
                     store.map.putAssumeCapacityNoClobber(string_idx, import_idx);
                 }

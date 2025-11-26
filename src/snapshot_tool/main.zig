@@ -1236,8 +1236,8 @@ fn processSnapshotContent(
 
     // Build builtin_modules array in the same order as can_ir.imports
     // Dict and Set are now nested inside Builtin, so we only have one module to add
-    const import_count = can_ir.imports.imports.items.items.len;
-    for (can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
+    const import_count = can_ir.imports.imports.items().len;
+    for (can_ir.imports.imports.items()[0..import_count]) |str_idx| {
         const import_name = can_ir.getString(str_idx);
 
         // Match the import name to the corresponding loaded builtin module

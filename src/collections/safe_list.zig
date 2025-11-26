@@ -77,8 +77,11 @@ pub fn SafeRange(comptime Idx: type) type {
     };
 }
 
-/// Wraps a `std.ArrayList` to provide a list that's safer to access
-/// with arbitrary indices.
+/// A list that's safer to access with arbitrary indices.
+///
+/// Internally uses an offset pointer scheme where Idx 0 is reserved as a
+/// sentinel value (meaning "missing"). The pointer is stored offset by -1
+/// element so that Idx 1 maps to the first actual element at offset 0.
 ///
 /// Use this for values that aren't structs with more than one field.
 /// Those values would likely be better stored in a SafeMultiList.
@@ -94,14 +97,43 @@ pub fn SafeRange(comptime Idx: type) type {
 /// that hold T's, giving type safety. Also, out-of-bounds errors are
 /// less likely since indices are only created for valid list entries.
 pub fn SafeList(comptime T: type) type {
-    return struct {
-        items: std.ArrayList(T) = .{},
+    return extern struct {
+        /// Pointer offset by -1 element. When we allocate memory at address A,
+        /// we store (A - @sizeOf(T)) here. This means Idx 1 maps to A[0],
+        /// Idx 2 maps to A[1], etc. Idx 0 is reserved as a sentinel.
+        offset_ptr: [*]T = undefined,
+        /// Number of actual elements stored (not including the sentinel slot)
+        length: u32 = 0,
+        /// Allocated capacity (not including the sentinel slot)
+        capacity: u32 = 0,
 
-        /// An index for an item in the list.
+        const Self = @This();
+
+        /// An index for an item in the list. Idx 0 is reserved as a sentinel
+        /// meaning "missing" and will never be returned by append operations.
         pub const Idx = enum(u32) { _ };
 
+        /// An index that may be empty (Idx 0 represents "missing").
+        /// Use get() to convert to an optional Idx.
+        pub const MaybeIdx = enum(u32) {
+            none = 0,
+            _,
+
+            /// Convert to an optional Idx. Returns null if this is the sentinel (0).
+            pub fn get(self: MaybeIdx) ?Idx {
+                const int_value = @intFromEnum(self);
+                if (int_value == 0) return null;
+                return @enumFromInt(int_value);
+            }
+
+            /// Create a MaybeIdx from an Idx.
+            pub fn from(idx: Idx) MaybeIdx {
+                return @enumFromInt(@intFromEnum(idx));
+            }
+        };
+
         /// A non-type-safe slice of the list.
-        pub const Slice = std.ArrayList(T).Slice;
+        pub const Slice = []T;
 
         /// A type-safe range of the list.
         pub const Range = SafeRange(Idx);
@@ -121,12 +153,10 @@ pub fn SafeList(comptime T: type) type {
             /// Serialize a SafeList into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
-                safe_list: *const SafeList(T),
+                safe_list: *const Self,
                 allocator: Allocator,
                 writer: *CompactWriter,
             ) Allocator.Error!void {
-                const items = safe_list.items.items;
-
                 // Pad to the alignment of the slice elements.
                 try writer.padToAlignment(allocator, @alignOf(T));
 
@@ -134,39 +164,39 @@ pub fn SafeList(comptime T: type) type {
                 const data_offset = writer.total_bytes;
 
                 // Append the raw data without further padding.
-                if (items.len > 0) {
+                if (safe_list.length > 0) {
+                    // Get the actual data pointer (re-offset from our stored offset_ptr)
+                    const actual_ptr = safe_list.getActualPtr();
                     try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(items.ptr),
-                        .iov_len = items.len * @sizeOf(T),
+                        .iov_base = @ptrCast(actual_ptr),
+                        .iov_len = safe_list.length * @sizeOf(T),
                     });
-                    writer.total_bytes += items.len * @sizeOf(T);
+                    writer.total_bytes += safe_list.length * @sizeOf(T);
                 }
 
                 self.offset = @intCast(data_offset);
-                self.len = items.len;
-                self.capacity = items.len;
+                self.len = safe_list.length;
+                self.capacity = safe_list.length;
             }
 
             /// Deserialize this Serialized struct into a SafeList
-            pub fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
+            pub fn deserialize(self: *Serialized, offset: i64) *Self {
                 // Note: Serialized may be smaller than the runtime struct.
                 // We deserialize by overwriting the Serialized memory with the runtime struct.
-                const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
+                const safe_list = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty list case
                 if (self.len == 0) {
-                    safe_list.* = SafeList(T){
-                        .items = .{},
-                    };
+                    safe_list.* = Self{};
                 } else {
                     // Apply the offset to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(self.offset + offset)));
+                    const actual_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(self.offset + offset)));
 
-                    safe_list.* = SafeList(T){
-                        .items = .{
-                            .items = items_ptr[0..@intCast(self.len)],
-                            .capacity = @intCast(self.capacity),
-                        },
+                    // Store the offset pointer (actual_ptr - 1 element)
+                    safe_list.* = Self{
+                        .offset_ptr = @ptrFromInt(@intFromPtr(actual_ptr) -% @sizeOf(T)),
+                        .length = @intCast(self.len),
+                        .capacity = @intCast(self.capacity),
                     };
                 }
 
@@ -174,83 +204,192 @@ pub fn SafeList(comptime T: type) type {
             }
         };
 
+        /// Get the actual pointer to the start of allocated memory.
+        /// This is offset_ptr + 1 element.
+        inline fn getActualPtr(self: *const Self) [*]T {
+            return @ptrFromInt(@intFromPtr(self.offset_ptr) +% @sizeOf(T));
+        }
+
+        /// Get a slice of all items in this list.
+        pub fn items(self: *const Self) []T {
+            if (self.capacity == 0) return &[_]T{};
+            return self.getActualPtr()[0..self.length];
+        }
+
+        /// Get a mutable slice including capacity beyond current length.
+        /// Use with caution - this allows direct manipulation of internal storage.
+        pub fn rawCapacitySlice(self: *Self) []T {
+            if (self.capacity == 0) return &[_]T{};
+            return self.getActualPtr()[0..self.capacity];
+        }
+
+        /// Directly set the length of the list.
+        /// Use with caution - caller must ensure length <= capacity and
+        /// that all items in the range [0, new_length) are initialized.
+        pub fn setLen(self: *Self, new_length: u32) void {
+            std.debug.assert(new_length <= self.capacity);
+            self.length = new_length;
+        }
+
         /// Initialize the `SafeList` with the specified capacity.
-        pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
-            return .{
-                .items = try std.ArrayList(T).initCapacity(gpa, capacity),
+        pub fn initCapacity(gpa: Allocator, cap: usize) std.mem.Allocator.Error!Self {
+            if (cap == 0) {
+                return Self{};
+            }
+            const actual_ptr = try gpa.alloc(T, cap);
+            return Self{
+                .offset_ptr = @ptrFromInt(@intFromPtr(actual_ptr.ptr) -% @sizeOf(T)),
+                .length = 0,
+                .capacity = @intCast(cap),
             };
         }
 
         /// Deinitialize the memory of this `SafeList`.
-        pub fn deinit(self: *SafeList(T), gpa: Allocator) void {
-            self.items.deinit(gpa);
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+            if (self.capacity == 0) return;
+            // Re-offset the pointer to get the actual allocation address
+            const actual_ptr = self.getActualPtr();
+            gpa.free(actual_ptr[0..self.capacity]);
+            self.* = Self{};
         }
 
         /// Get the length of this list.
-        pub fn len(self: *const SafeList(T)) u64 {
-            return @intCast(self.items.items.len);
+        pub fn len(self: *const Self) u32 {
+            return self.length;
+        }
+
+        /// Clear the list while retaining allocated capacity.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.length = 0;
+        }
+
+        /// Pop the last element from the list.
+        pub fn pop(self: *Self) ?T {
+            if (self.length == 0) return null;
+            const idx = self.length;
+            self.length -= 1;
+            return self.offset_ptr[idx];
+        }
+
+        /// Ensure total capacity for at least `new_capacity` elements.
+        pub fn ensureTotalCapacity(self: *Self, gpa: Allocator, new_capacity: usize) std.mem.Allocator.Error!void {
+            if (new_capacity <= self.capacity) return;
+
+            const new_cap: u32 = @intCast(new_capacity);
+            if (self.capacity == 0) {
+                const actual_ptr = try gpa.alloc(T, new_cap);
+                self.offset_ptr = @ptrFromInt(@intFromPtr(actual_ptr.ptr) -% @sizeOf(T));
+                self.capacity = new_cap;
+            } else {
+                const actual_ptr = self.getActualPtr();
+                const old_slice = actual_ptr[0..self.capacity];
+                if (gpa.resize(old_slice, new_cap)) {
+                    self.capacity = new_cap;
+                } else {
+                    const new_slice = try gpa.alloc(T, new_cap);
+                    @memcpy(new_slice[0..self.length], actual_ptr[0..self.length]);
+                    gpa.free(old_slice);
+                    self.offset_ptr = @ptrFromInt(@intFromPtr(new_slice.ptr) -% @sizeOf(T));
+                    self.capacity = new_cap;
+                }
+            }
+        }
+
+        /// Ensure unused capacity for at least `additional` more elements.
+        pub fn ensureUnusedCapacity(self: *Self, gpa: Allocator, additional: usize) std.mem.Allocator.Error!void {
+            return self.ensureTotalCapacity(gpa, self.length + additional);
+        }
+
+        /// Ensure capacity is exactly `new_capacity` elements.
+        /// Like ensureTotalCapacity but guarantees the exact capacity.
+        pub fn ensureTotalCapacityPrecise(self: *Self, gpa: Allocator, new_capacity: usize) std.mem.Allocator.Error!void {
+            return self.ensureTotalCapacity(gpa, new_capacity);
         }
 
         /// Add an item to the end of this list.
-        pub fn append(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
-            const length = self.len();
-            try self.items.append(gpa, item);
-
-            return @enumFromInt(@as(u32, @intCast(length)));
+        /// Returns an Idx starting from 1 (Idx 0 is reserved as sentinel).
+        pub fn append(self: *Self, gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
+            try self.ensureUnusedCapacity(gpa, 1);
+            return self.appendAssumeCapacity(item);
         }
 
         /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
-        pub fn appendAssumeCapacity(self: *SafeList(T), item: T) Idx {
-            const length = self.len();
-            self.items.appendAssumeCapacity(item);
-
-            return @enumFromInt(@as(u32, @intCast(length)));
+        /// Returns an Idx starting from 1 (Idx 0 is reserved as sentinel).
+        pub fn appendAssumeCapacity(self: *Self, item: T) Idx {
+            std.debug.assert(self.length < self.capacity);
+            const actual_ptr = self.getActualPtr();
+            actual_ptr[self.length] = item;
+            self.length += 1;
+            // Return index + 1 since Idx 0 is reserved
+            return @enumFromInt(self.length);
         }
 
         /// Create a range from the provided idx to the end of the list
-        pub fn rangeToEnd(self: *SafeList(T), start_int: u32) Range {
-            const len_int = self.len();
-            std.debug.assert(start_int <= len_int);
-            return Range{ .start = @enumFromInt(start_int), .count = @intCast(len_int - start_int) };
+        pub fn rangeToEnd(self: *Self, start_int: u32) Range {
+            // Note: start_int is a raw index (1-based for the first element)
+            // Length is the count, and the end index would be length + 1
+            const end_int = self.length + 1;
+            std.debug.assert(start_int <= end_int);
+            return Range{ .start = @enumFromInt(start_int), .count = @intCast(end_int - start_int) };
         }
 
         /// Add all the items in a slice to the end of this list.
-        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
-            const start_length = self.len();
-            try self.items.appendSlice(gpa, items);
-            const end_length = self.len();
-            return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
+        pub fn appendSlice(self: *Self, gpa: Allocator, slice: []const T) std.mem.Allocator.Error!Range {
+            // Start index is current length + 1 (since indices start at 1)
+            const start_idx = self.length + 1;
+            try self.ensureUnusedCapacity(gpa, slice.len);
+            const actual_ptr = self.getActualPtr();
+            @memcpy(actual_ptr[self.length..][0..slice.len], slice);
+            self.length += @intCast(slice.len);
+            return Range{ .start = @enumFromInt(start_idx), .count = @intCast(slice.len) };
         }
 
         /// Extend this list with all items generated by an iterator.
-        pub fn extendFromIter(self: *SafeList(T), gpa: Allocator, iter_extend: anytype) std.mem.Allocator.Error!Range {
-            const start_length = self.len();
-            while (iter_extend.next()) |item| {
-                try self.items.append(gpa, item);
+        pub fn extendFromIter(self: *Self, gpa: Allocator, iter_extend: anytype) std.mem.Allocator.Error!Range {
+            const start_idx = self.length + 1;
+            var iter_copy = iter_extend;
+            while (iter_copy.next()) |item| {
+                _ = try self.append(gpa, item);
             }
-            const end_length = self.len();
-            return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
+            const count = self.length + 1 - start_idx;
+            return Range{ .start = @enumFromInt(start_idx), .count = count };
         }
 
-        /// Convert a range to a slice
-        pub fn sliceRange(self: *const SafeList(T), range: Range) Slice {
-            const start: usize = @intFromEnum(range.start);
+        /// Convert a range to a slice.
+        /// Note: Range indices are 1-based, so we subtract 1 to get the actual array index.
+        pub fn sliceRange(self: *const Self, range: Range) Slice {
+            // Handle empty range specially
+            if (range.count == 0) {
+                return self.items()[0..0];
+            }
+
+            // Convert 1-based Range indices to 0-based array indices
+            const start_idx = @intFromEnum(range.start);
+            std.debug.assert(start_idx >= 1);
+            const start: usize = start_idx - 1;
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
-            std.debug.assert(end <= self.items.items.len);
+            std.debug.assert(end <= self.length);
 
-            return self.items.items[start..end];
+            return self.items()[start..end];
         }
 
         /// Get an item from this list without worrying about out-of-bounds errors.
-        pub fn get(self: *const SafeList(T), id: Idx) *T {
-            return &self.items.items[@as(usize, @intFromEnum(id))];
+        /// Uses wrapping pointer arithmetic since offset_ptr is offset by -1 element.
+        pub fn get(self: *const Self, id: Idx) *T {
+            const idx = @intFromEnum(id);
+            std.debug.assert(idx >= 1 and idx <= self.length);
+            // offset_ptr[idx] gives us the correct element because:
+            // offset_ptr = actual_ptr - 1, so offset_ptr[1] = actual_ptr[0]
+            return &self.offset_ptr[idx];
         }
 
         /// Set the value of an item in this list without worrying about out-of-bounds errors.
-        pub fn set(self: *const SafeList(T), id: Idx, value: T) void {
-            self.items.items[@as(usize, @intFromEnum(id))] = value;
+        pub fn set(self: *Self, id: Idx, value: T) void {
+            const idx = @intFromEnum(id);
+            std.debug.assert(idx >= 1 and idx <= self.length);
+            self.offset_ptr[idx] = value;
         }
 
         /// Returns a SafeList that has had its pointer converted to an offset.
@@ -258,105 +397,111 @@ pub fn SafeList(comptime T: type) type {
         /// methods on it or dereference its internal "pointers" (which are now
         /// offsets) is illegal behavior!
         pub fn serialize(
-            self: *const SafeList(T),
+            self: *const Self,
             allocator: Allocator,
             writer: *CompactWriter,
-        ) Allocator.Error!*const SafeList(T) {
-            const items = self.items.items;
+        ) Allocator.Error!*const Self {
+            const offset_self = try writer.appendAlloc(allocator, Self);
 
-            const offset_self = try writer.appendAlloc(allocator, SafeList(T));
+            if (self.length > 0) {
+                const slice = try writer.appendSlice(allocator, self.items());
 
-            const slice = try writer.appendSlice(allocator, items);
-
-            offset_self.* = .{
-                .items = .{
-                    .items = slice,
-                    .capacity = items.len,
-                },
-            };
+                offset_self.* = Self{
+                    // Store the offset_ptr as (slice.ptr - 1 element)
+                    .offset_ptr = @ptrFromInt(@intFromPtr(slice.ptr) -% @sizeOf(T)),
+                    .length = self.length,
+                    .capacity = self.length,
+                };
+            } else {
+                offset_self.* = Self{};
+            }
 
             return @constCast(offset_self);
         }
 
         /// Add the given offset to the memory addresses of all pointers in `self`.
-        pub fn relocate(self: *SafeList(T), offset: isize) void {
-            if (self.items.capacity == 0) return;
+        pub fn relocate(self: *Self, offset: isize) void {
+            if (self.capacity == 0) return;
 
-            const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
+            const old_addr: isize = @intCast(@intFromPtr(self.offset_ptr));
             const new_addr = @as(usize, @intCast(old_addr + offset));
-            self.items.items.ptr = @as([*]T, @ptrFromInt(new_addr));
+            self.offset_ptr = @ptrFromInt(new_addr);
         }
 
         /// An iterator over all the indices in this list.
+        /// Yields indices starting from 1.
         pub const IndexIterator = struct {
-            len: usize,
-            current: usize,
+            /// End index (exclusive, 1-based: length + 1)
+            end: u32,
+            /// Current index (1-based, starts at 1)
+            current: u32,
 
             pub fn next(self: *IndexIterator) ?Idx {
-                if (self.len == self.current) {
+                if (self.current > self.end - 1) {
                     return null;
                 }
 
                 const curr = self.current;
                 self.current += 1;
 
-                const idx: u32 = @truncate(curr);
-                return @enumFromInt(idx);
+                return @enumFromInt(curr);
             }
         };
 
         /// Iterate over all the indices of the items in this list.
-        pub fn iterIndices(self: *const SafeList(T)) IndexIterator {
+        /// Yields indices starting from 1.
+        pub fn iterIndices(self: *const Self) IndexIterator {
             return IndexIterator{
-                .len = @intCast(self.len()),
-                .current = 0,
+                .end = self.length + 1,
+                .current = 1,
             };
         }
 
-        /// An iterator over all the indices in this list.
+        /// An iterator over all the items in this list.
         pub const Iterator = struct {
-            array: *const SafeList(T),
-            len: u32,
-            current: Idx,
+            array: *const Self,
+            /// End index (exclusive, 1-based)
+            end: u32,
+            /// Current index (1-based)
+            current: u32,
 
             pub fn next(self: *Iterator) ?T {
-                const cur_idx = self.current;
-                const cur_int = @intFromEnum(cur_idx);
-                if (self.len == cur_int) {
+                if (self.current > self.end - 1) {
                     return null;
                 }
-                self.current = @enumFromInt(cur_int + 1);
+                const cur_idx: Idx = @enumFromInt(self.current);
+                self.current += 1;
                 return self.array.get(cur_idx).*;
             }
 
             pub fn count(self: *Iterator) u32 {
-                return self.len - @intFromEnum(self.current);
+                if (self.current > self.end - 1) return 0;
+                return self.end - self.current;
             }
 
             pub fn shift(self: *Iterator) void {
-                const cur_int = @intFromEnum(self.current);
-                if (cur_int < self.len) {
-                    self.current = @as(Idx, @enumFromInt(cur_int + 1));
-                    self.len -= 1;
+                if (self.current < self.end) {
+                    self.current += 1;
+                    self.end -= 1;
                 }
             }
         };
 
         /// Iterate over the elements in a span
-        pub fn iterRange(self: *const SafeList(T), range: Range) Iterator {
+        pub fn iterRange(self: *const Self, range: Range) Iterator {
             return Iterator{
                 .array = self,
-                .len = @intFromEnum(range.start) + range.count,
-                .current = range.start,
+                .end = @intFromEnum(range.start) + range.count,
+                .current = @intFromEnum(range.start),
             };
         }
 
         /// Iterate over all items in this list.
-        pub fn iter(self: *const SafeList(T)) Iterator {
+        pub fn iter(self: *const Self) Iterator {
             return Iterator{
                 .array = self,
-                .len = self.len(),
-                .current = @enumFromInt(0),
+                .end = self.length + 1,
+                .current = 1,
             };
         }
     };
@@ -722,12 +867,12 @@ test "SafeList(u8) appendSlice" {
     defer list.deinit(gpa);
 
     const rangeA = try list.appendSlice(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
-    try testing.expectEqual(0, @intFromEnum(rangeA.start));
-    try testing.expectEqual(4, @intFromEnum(rangeA.end()));
+    try testing.expectEqual(1, @intFromEnum(rangeA.start));
+    try testing.expectEqual(5, @intFromEnum(rangeA.end()));
 
     const rangeB = try list.appendSlice(gpa, &[_]u8{ 'd', 'e', 'f', 'g' });
-    try testing.expectEqual(4, @intFromEnum(rangeB.start));
-    try testing.expectEqual(8, @intFromEnum(rangeB.end()));
+    try testing.expectEqual(5, @intFromEnum(rangeB.start));
+    try testing.expectEqual(9, @intFromEnum(rangeB.end()));
 }
 
 test "SafeList(u8) sliceRange" {
@@ -741,7 +886,8 @@ test "SafeList(u8) sliceRange" {
     try testing.expectEqual('a', sliceA[0]);
     try testing.expectEqual('d', sliceA[3]);
 
-    const rangeB = SafeList(u8).Range{ .start = @enumFromInt(2), .count = 2 };
+    // Idx 3 is the third element ('c'), count 2 gives us 'c' and 'd'
+    const rangeB = SafeList(u8).Range{ .start = @enumFromInt(3), .count = 2 };
     const sliceB = list.sliceRange(rangeB);
     try testing.expectEqual('c', sliceB[0]);
     try testing.expectEqual('d', sliceB[1]);
@@ -949,9 +1095,9 @@ test "SafeList edge cases serialization" {
         const serialized_ptr = @as(*Container.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-        try testing.expectEqual(@as(usize, 0), deserialized.list_u32.len());
-        try testing.expectEqual(@as(usize, 1), deserialized.list_u8.len());
-        try testing.expectEqual(@as(u8, 123), deserialized.list_u8.get(@enumFromInt(0)).*);
+        try testing.expectEqual(@as(u32, 0), deserialized.list_u32.len());
+        try testing.expectEqual(@as(u32, 1), deserialized.list_u8.len());
+        try testing.expectEqual(@as(u8, 123), deserialized.list_u8.get(@enumFromInt(1)).*);
     }
 }
 
@@ -1036,11 +1182,11 @@ test "SafeList CompactWriter complete roundtrip example" {
     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Step 8: Verify data is accessible and correct
-    try testing.expectEqual(@as(usize, 4), deserialized.len());
-    try testing.expectEqual(@as(u32, 100), deserialized.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u32, 200), deserialized.get(@enumFromInt(1)).*);
-    try testing.expectEqual(@as(u32, 300), deserialized.get(@enumFromInt(2)).*);
-    try testing.expectEqual(@as(u32, 400), deserialized.get(@enumFromInt(3)).*);
+    try testing.expectEqual(@as(u32, 4), deserialized.len());
+    try testing.expectEqual(@as(u32, 100), deserialized.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u32, 200), deserialized.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u32, 300), deserialized.get(@enumFromInt(3)).*);
+    try testing.expectEqual(@as(u32, 400), deserialized.get(@enumFromInt(4)).*);
 }
 
 test "SafeList CompactWriter multiple lists with different alignments" {
@@ -1143,10 +1289,10 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
     offset += 3 * @sizeOf(u8);
 
-    try testing.expectEqual(@as(usize, 3), deser_u8.len());
-    try testing.expectEqual(@as(u8, 10), deser_u8.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u8, 20), deser_u8.get(@enumFromInt(1)).*);
-    try testing.expectEqual(@as(u8, 30), deser_u8.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u32, 3), deser_u8.len());
+    try testing.expectEqual(@as(u8, 10), deser_u8.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u8, 20), deser_u8.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u8, 30), deser_u8.get(@enumFromInt(3)).*);
 
     // 2. Deserialize u16 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
@@ -1157,9 +1303,9 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
     offset += 2 * @sizeOf(u16);
 
-    try testing.expectEqual(@as(usize, 2), deser_u16.len());
-    try testing.expectEqual(@as(u16, 1000), deser_u16.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u16, 2000), deser_u16.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u32, 2), deser_u16.len());
+    try testing.expectEqual(@as(u16, 1000), deser_u16.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u16, 2000), deser_u16.get(@enumFromInt(2)).*);
 
     // 3. Deserialize u32 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
@@ -1170,11 +1316,11 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u32));
     offset += 4 * @sizeOf(u32);
 
-    try testing.expectEqual(@as(usize, 4), deser_u32.len());
-    try testing.expectEqual(@as(u32, 100_000), deser_u32.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u32, 200_000), deser_u32.get(@enumFromInt(1)).*);
-    try testing.expectEqual(@as(u32, 300_000), deser_u32.get(@enumFromInt(2)).*);
-    try testing.expectEqual(@as(u32, 400_000), deser_u32.get(@enumFromInt(3)).*);
+    try testing.expectEqual(@as(u32, 4), deser_u32.len());
+    try testing.expectEqual(@as(u32, 100_000), deser_u32.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u32, 200_000), deser_u32.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u32, 300_000), deser_u32.get(@enumFromInt(3)).*);
+    try testing.expectEqual(@as(u32, 400_000), deser_u32.get(@enumFromInt(4)).*);
 
     // 4. Deserialize u64 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
@@ -1185,22 +1331,22 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
     offset += 2 * @sizeOf(u64);
 
-    try testing.expectEqual(@as(usize, 2), deser_u64.len());
-    try testing.expectEqual(@as(u64, 10_000_000_000), deser_u64.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u64, 20_000_000_000), deser_u64.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u32, 2), deser_u64.len());
+    try testing.expectEqual(@as(u64, 10_000_000_000), deser_u64.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u64, 20_000_000_000), deser_u64.get(@enumFromInt(2)).*);
 
     // 5. Deserialize struct list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(AlignedStruct).Serialized));
     const s_struct = @as(*SafeList(AlignedStruct).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
     const deser_struct = s_struct.deserialize(@as(i64, @intCast(base_addr)));
 
-    try testing.expectEqual(@as(usize, 2), deser_struct.len());
-    const item0 = deser_struct.get(@enumFromInt(0));
+    try testing.expectEqual(@as(u32, 2), deser_struct.len());
+    const item0 = deser_struct.get(@enumFromInt(1));
     try testing.expectEqual(@as(u32, 42), item0.x);
     try testing.expectEqual(@as(u64, 1337), item0.y);
     try testing.expectEqual(@as(u8, 255), item0.z);
 
-    const item1 = deser_struct.get(@enumFromInt(1));
+    const item1 = deser_struct.get(@enumFromInt(2));
     try testing.expectEqual(@as(u32, 99), item1.x);
     try testing.expectEqual(@as(u64, 9999), item1.y);
     try testing.expectEqual(@as(u8, 128), item1.z);
@@ -1306,10 +1452,10 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
     offset += 3; // 3 u8 elements
 
-    try testing.expectEqual(@as(usize, 3), d1.len());
-    try testing.expectEqual(@as(u8, 1), d1.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u8, 2), d1.get(@enumFromInt(1)).*);
-    try testing.expectEqual(@as(u8, 3), d1.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u32, 3), d1.len());
+    try testing.expectEqual(@as(u8, 1), d1.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u8, 2), d1.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u8, 3), d1.get(@enumFromInt(3)).*);
 
     // 2. Second list - u64
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
@@ -1319,9 +1465,9 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
     offset += 2 * @sizeOf(u64); // 2 u64 elements
 
-    try testing.expectEqual(@as(usize, 2), d2.len());
-    try testing.expectEqual(@as(u64, 1_000_000), d2.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u64, 2_000_000), d2.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u32, 2), d2.len());
+    try testing.expectEqual(@as(u64, 1_000_000), d2.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u64, 2_000_000), d2.get(@enumFromInt(2)).*);
 
     // 3. Third list - u16
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
@@ -1331,19 +1477,19 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
     offset += 4 * @sizeOf(u16); // 4 u16 elements
 
-    try testing.expectEqual(@as(usize, 4), d3.len());
-    try testing.expectEqual(@as(u16, 100), d3.get(@enumFromInt(0)).*);
-    try testing.expectEqual(@as(u16, 200), d3.get(@enumFromInt(1)).*);
-    try testing.expectEqual(@as(u16, 300), d3.get(@enumFromInt(2)).*);
-    try testing.expectEqual(@as(u16, 400), d3.get(@enumFromInt(3)).*);
+    try testing.expectEqual(@as(u32, 4), d3.len());
+    try testing.expectEqual(@as(u16, 100), d3.get(@enumFromInt(1)).*);
+    try testing.expectEqual(@as(u16, 200), d3.get(@enumFromInt(2)).*);
+    try testing.expectEqual(@as(u16, 300), d3.get(@enumFromInt(3)).*);
+    try testing.expectEqual(@as(u16, 400), d3.get(@enumFromInt(4)).*);
 
     // 4. Fourth list - u32
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
     const s4 = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
     const d4 = s4.deserialize(@as(i64, @intCast(base)));
 
-    try testing.expectEqual(@as(usize, 1), d4.len());
-    try testing.expectEqual(@as(u32, 42), d4.get(@enumFromInt(0)).*);
+    try testing.expectEqual(@as(u32, 1), d4.len());
+    try testing.expectEqual(@as(u32, 42), d4.get(@enumFromInt(1)).*);
 }
 
 test "SafeList CompactWriter brute-force alignment verification" {
@@ -1447,11 +1593,11 @@ test "SafeList CompactWriter brute-force alignment verification" {
             offset = std.mem.alignForward(usize, offset, @alignOf(T));
             offset += length * @sizeOf(T);
 
-            try testing.expectEqual(length, d1.len());
+            try testing.expectEqual(@as(u32, @intCast(length)), d1.len());
             i = 0;
             while (i < length) : (i += 1) {
                 const expected = @as(T, @intCast(i + 1));
-                const actual = d1.get(@enumFromInt(i)).*;
+                const actual = d1.get(@enumFromInt(i + 1)).*;
                 try testing.expectEqual(expected, actual);
             }
 
@@ -1463,15 +1609,15 @@ test "SafeList CompactWriter brute-force alignment verification" {
             offset = std.mem.alignForward(usize, offset, @alignOf(u8));
             offset += 1; // 1 u8 element
 
-            try testing.expectEqual(@as(usize, 1), d_u8.len());
-            try testing.expectEqual(@as(u8, 42), d_u8.get(@enumFromInt(0)).*);
+            try testing.expectEqual(@as(u32, 1), d_u8.len());
+            try testing.expectEqual(@as(u8, 42), d_u8.get(@enumFromInt(1)).*);
 
             // Second list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(T).Serialized));
             const s2 = @as(*SafeList(T).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
             const d2 = s2.deserialize(@as(i64, @intCast(base)));
 
-            try testing.expectEqual(length, d2.len());
+            try testing.expectEqual(@as(u32, @intCast(length)), d2.len());
             i = 0;
             while (i < length) : (i += 1) {
                 const multiplier: T = switch (T) {
@@ -1480,7 +1626,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
                     else => 100000,
                 };
                 const expected = @as(T, @intCast(i + 1)) * multiplier;
-                const actual = d2.get(@enumFromInt(i)).*;
+                const actual = d2.get(@enumFromInt(i + 1)).*;
                 try testing.expectEqual(expected, actual);
             }
         }
@@ -1539,7 +1685,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify the data
-    try testing.expectEqual(@as(usize, 4), deserialized.len());
+    try testing.expectEqual(@as(u32, 4), deserialized.len());
 
     // Verify all the data
     try testing.expectEqual(@as(u32, 100), deserialized.get(@enumFromInt(0)).id);
@@ -1692,7 +1838,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     // Deserialize list1 (at offset1)
     const d1_serialized = @as(*SafeMultiList(Type1).Serialized, @ptrCast(@alignCast(buffer.ptr + offset1)));
     const d1 = d1_serialized.deserialize(base);
-    try testing.expectEqual(@as(usize, 3), d1.len());
+    try testing.expectEqual(@as(u32, 3), d1.len());
     try testing.expectEqual(@as(u8, 10), d1.get(@enumFromInt(0)).a);
     try testing.expectEqual(@as(u16, 100), d1.get(@enumFromInt(0)).b);
     try testing.expectEqual(@as(u8, 20), d1.get(@enumFromInt(1)).a);
@@ -1703,14 +1849,14 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     // Deserialize list2 (at offset2)
     const d2_serialized = @as(*SafeMultiList(Type2).Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
     const d2 = d2_serialized.deserialize(base);
-    try testing.expectEqual(@as(usize, 2), d2.len());
+    try testing.expectEqual(@as(u32, 2), d2.len());
     try testing.expectEqual(@as(u32, 1000), d2.get(@enumFromInt(0)).x);
     try testing.expectEqual(@as(u64, 10000), d2.get(@enumFromInt(0)).y);
 
     // Deserialize list3 (at offset3)
     const d3_serialized = @as(*SafeMultiList(Type3).Serialized, @ptrCast(@alignCast(buffer.ptr + offset3)));
     const d3 = d3_serialized.deserialize(base);
-    try testing.expectEqual(@as(usize, 2), d3.len());
+    try testing.expectEqual(@as(u32, 2), d3.len());
     try testing.expectEqual(@as(u64, 999), d3.get(@enumFromInt(0)).id);
     try testing.expectEqual(@as(u8, 42), d3.get(@enumFromInt(0)).data);
     try testing.expectEqual(true, d3.get(@enumFromInt(0)).flag);
@@ -1803,12 +1949,12 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         const d2_serialized = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
         const d2 = d2_serialized.deserialize(base);
         if (length > 0) {
-            try testing.expectEqual(@as(usize, 1), d2.len());
+            try testing.expectEqual(@as(u32, 1), d2.len());
             try testing.expectEqual(@as(u8, 255), d2.get(@enumFromInt(0)).a);
             try testing.expectEqual(@as(u32, 999999), d2.get(@enumFromInt(0)).b);
             try testing.expectEqual(@as(u64, 888888888), d2.get(@enumFromInt(0)).c);
         } else {
-            try testing.expectEqual(@as(usize, 0), d2.len());
+            try testing.expectEqual(@as(u32, 0), d2.len());
         }
     }
 }

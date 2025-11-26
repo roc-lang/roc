@@ -1972,9 +1972,9 @@ const Unifier = struct {
         std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
 
         // Get the start of index of the new range
-        const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
-        const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len());
-        const both_fields_start: u32 = @intCast(scratch.in_both_fields.len());
+        const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len() + 1);
+        const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len() + 1);
+        const both_fields_start: u32 = @intCast(scratch.in_both_fields.len() + 1);
 
         // Iterate over the fields in order, grouping them
         var a_i: usize = 0;
@@ -2378,9 +2378,9 @@ const Unifier = struct {
         std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
 
         // Get the start of index of the new range
-        const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
-        const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len());
-        const both_tags_start: u32 = @intCast(scratch.in_both_tags.len());
+        const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len() + 1);
+        const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len() + 1);
+        const both_tags_start: u32 = @intCast(scratch.in_both_tags.len() + 1);
 
         // Iterate over the tags in order, grouping them
         var a_i: usize = 0;
@@ -2504,24 +2504,24 @@ const Unifier = struct {
             }
         }
 
-        const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
+        const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len() + 1);
 
         // Ensure we have enough memory for the new contiguous list
         const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
-        self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
+        self.types_store.static_dispatch_constraints.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
         ) catch return Error.AllocatorError;
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
             // Here, we append the constraint's b, but since a & b, it doesn't actually matter
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
+            _ = self.types_store.static_dispatch_constraints.appendAssumeCapacity(two_constraints.b);
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+            _ = self.types_store.static_dispatch_constraints.appendAssumeCapacity(only_a);
         }
         for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
+            _ = self.types_store.static_dispatch_constraints.appendAssumeCapacity(only_b);
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
@@ -2599,9 +2599,9 @@ const Unifier = struct {
         std.mem.sort(StaticDispatchConstraint, b_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
 
         // Get the start of index of the new range
-        const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
-        const b_constraints_start: u32 = @intCast(scratch.only_in_b_static_dispatch_constraints.len());
-        const both_constraints_start: u32 = @intCast(scratch.in_both_static_dispatch_constraints.len());
+        const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len() + 1);
+        const b_constraints_start: u32 = @intCast(scratch.only_in_b_static_dispatch_constraints.len() + 1);
+        const both_constraints_start: u32 = @intCast(scratch.in_both_static_dispatch_constraints.len() + 1);
 
         // Iterate over the fields in order, grouping them
         var a_i: usize = 0;
@@ -2810,18 +2810,18 @@ pub const Scratch = struct {
 
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
-        self.gathered_fields.items.clearRetainingCapacity();
-        self.only_in_a_fields.items.clearRetainingCapacity();
-        self.only_in_b_fields.items.clearRetainingCapacity();
-        self.in_both_fields.items.clearRetainingCapacity();
-        self.gathered_tags.items.clearRetainingCapacity();
-        self.only_in_a_tags.items.clearRetainingCapacity();
-        self.only_in_b_tags.items.clearRetainingCapacity();
-        self.in_both_tags.items.clearRetainingCapacity();
-        self.deferred_constraints.items.clearRetainingCapacity();
-        self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.gathered_fields.clearRetainingCapacity();
+        self.only_in_a_fields.clearRetainingCapacity();
+        self.only_in_b_fields.clearRetainingCapacity();
+        self.in_both_fields.clearRetainingCapacity();
+        self.gathered_tags.clearRetainingCapacity();
+        self.only_in_a_tags.clearRetainingCapacity();
+        self.only_in_b_tags.clearRetainingCapacity();
+        self.in_both_tags.clearRetainingCapacity();
+        self.deferred_constraints.clearRetainingCapacity();
+        self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();
+        self.only_in_b_static_dispatch_constraints.clearRetainingCapacity();
+        self.in_both_static_dispatch_constraints.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.err = null;
     }
@@ -2835,7 +2835,7 @@ pub const Scratch = struct {
         multi_list: *const RecordFieldSafeMultiList,
         range: RecordFieldSafeMultiList.Range,
     ) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        const start_int = self.gathered_fields.len();
+        const start_int = self.gathered_fields.len() + 1;
         const record_fields_slice = multi_list.sliceRange(range);
         for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
             _ = try self.gathered_fields.append(
@@ -2853,7 +2853,7 @@ pub const Scratch = struct {
         multi_list: *const TagSafeMultiList,
         range: TagSafeMultiList.Range,
     ) std.mem.Allocator.Error!TagSafeList.Range {
-        const start_int = self.gathered_tags.len();
+        const start_int = self.gathered_tags.len() + 1;
         const tag_slice = multi_list.sliceRange(range);
         for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
             _ = try self.gathered_tags.append(

@@ -1693,7 +1693,7 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
     }
 
     const source = data.module_env.common.source;
-    const line_starts = data.module_env.common.line_starts.items.items;
+    const line_starts = data.module_env.common.line_starts.items();
 
     if (line_num >= line_starts.len) {
         try writeErrorResponse(response_buffer, .ERROR, "Line number out of range");

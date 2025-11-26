@@ -148,9 +148,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 10), env.common.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 20), env.common.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items()[0]);
+    try testing.expectEqual(@as(u32, 10), env.common.line_starts.items()[1]);
+    try testing.expectEqual(@as(u32, 20), env.common.line_starts.items()[2]);
 
     // TODO restore source using CommonEnv
     // try testing.expectEqualStrings(source, env.source);
@@ -160,8 +160,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 
     // Verify the import strings are correct (they reference string indices in the string store)
-    const import_str1 = env.common.strings.get(env.imports.imports.items.items[0]);
-    const import_str2 = env.common.strings.get(env.imports.imports.items.items[1]);
+    const import_str1 = env.common.strings.get(env.imports.imports.items()[0]);
+    const import_str2 = env.common.strings.get(env.imports.imports.items()[1]);
 
     try testing.expectEqualStrings("json.Json", import_str1);
     try testing.expectEqualStrings("core.List", import_str2);
@@ -406,7 +406,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try testing.expectEqualStrings("test.Hello", deserialized.module_name);
 
 //     // Verify line starts were preserved
-//     try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
+//     try testing.expectEqual(original.line_starts.items().len, deserialized.line_starts.items().len);
 // }
 
 test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
