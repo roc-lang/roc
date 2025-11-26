@@ -3161,9 +3161,17 @@ fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
 }
 
 fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("snapshotRocExpectFailed not implemented yet");
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(snapshot_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate snapshot expect failure message", .{});
+    };
+    snapshot_env.crash.recordCrash(formatted) catch |err| {
+        snapshot_env.allocator.free(formatted);
+        std.debug.panic("failed to store snapshot expect failure: {}", .{err});
+    };
 }
 
 fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {

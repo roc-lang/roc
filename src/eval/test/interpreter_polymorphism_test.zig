@@ -59,7 +59,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
 }
 
 fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
-fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+    // Polymorphism tests never trigger expect failures; retain the callback to satisfy RocOps.
+}
 fn testRocCrashed(_: *const RocCrashed, _: *anyopaque) callconv(.c) void {
     // Polymorphism tests never trigger crashes; retain the callback to satisfy RocOps.
 }

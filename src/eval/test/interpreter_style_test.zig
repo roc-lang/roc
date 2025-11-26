@@ -115,7 +115,19 @@ fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
         std.debug.panic("failed to record dbg message: {}", .{err});
     };
 }
-fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
+    const host: *TestHost = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(host.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate expect failure message", .{});
+    };
+    host.crash.recordCrash(formatted) catch |err| {
+        host.allocator.free(formatted);
+        std.debug.panic("failed to record expect failure: {}", .{err});
+    };
+}
 
 fn recordCrashCallback(args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
     const host: *TestHost = @ptrCast(@alignCast(env));

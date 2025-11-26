@@ -447,9 +447,18 @@ fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv
     _ = dbg_args;
 }
 
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    // No-op in WASM playground
-    _ = expect_failed_args;
+fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
+    const ctx: *CrashContext = @ptrCast(@alignCast(env));
+    const source_bytes = expect_failed_args.utf8_bytes[0..expect_failed_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate wasm expect failure message", .{});
+    };
+    ctx.recordCrash(formatted) catch |err| {
+        allocator.free(formatted);
+        std.debug.panic("failed to record wasm expect failure: {}", .{err});
+    };
 }
 
 fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {

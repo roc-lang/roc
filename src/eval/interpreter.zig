@@ -682,7 +682,7 @@ pub const Interpreter = struct {
                             const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
                             const is_true = boolValueEquals(true, cond_val);
                             if (!is_true) {
-                                try self.handleExpectFailure(expect_stmt.body, roc_ops);
+                                self.handleExpectFailure(expect_stmt.body, roc_ops);
                                 return error.Crash;
                             }
                         },
@@ -1758,7 +1758,7 @@ pub const Interpreter = struct {
                     const layout_val = try self.getRuntimeLayout(rt_var);
                     return try self.pushRaw(layout_val, 0);
                 }
-                try self.handleExpectFailure(expect_expr.body, roc_ops);
+                self.handleExpectFailure(expect_expr.body, roc_ops);
                 return error.Crash;
             },
             .e_dbg => |dbg_expr| {
@@ -4480,19 +4480,19 @@ pub const Interpreter = struct {
         roc_ops.crash(message);
     }
 
-    fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !void {
+    fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) void {
         const region = self.env.store.getExprRegion(snippet_expr_idx);
-        const slice = self.env.getSource(region);
-        const trimmed = std.mem.trim(u8, slice, " \t\n\r");
-        const message = try std.fmt.allocPrint(self.allocator, "Expect failed: {s}", .{trimmed});
-        defer self.allocator.free(message);
+        const source_bytes = self.env.getSource(region);
 
+        // Pass raw source bytes to the host - let the host handle trimming and formatting
         const expect_args = RocExpectFailed{
-            .utf8_bytes = @constCast(message.ptr),
-            .len = message.len,
+            .utf8_bytes = @constCast(source_bytes.ptr),
+            .len = source_bytes.len,
         };
         roc_ops.roc_expect_failed(&expect_args, roc_ops.env);
-        roc_ops.crash(message);
+
+        // Also pass raw source bytes to crash - host handles formatting
+        roc_ops.crash(source_bytes);
     }
 
     fn getRuntimeU8(value: StackValue) u8 {
@@ -4553,7 +4553,7 @@ pub const Interpreter = struct {
         const resolved = self.runtime_types.resolveVar(type_var);
         const map_idx = @intFromEnum(resolved.var_);
         if (map_idx < self.runtime_layout_store.layouts_by_var.entries.len) {
-            self.runtime_layout_store.layouts_by_var.entries[map_idx] = std.mem.zeroes(layout.Idx);
+            self.runtime_layout_store.layouts_by_var.entries[map_idx] = layout.Idx.none;
         }
     }
 
@@ -5900,41 +5900,6 @@ pub const Interpreter = struct {
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
         return self.module_ids.get(origin_module) orelse self.current_module_id;
-    }
-
-    /// Build a fully-qualified method identifier.
-    /// Note: nominal_ident comes from the runtime type store (translated idents),
-    /// while method_name comes from the current environment.
-    ///
-    /// Supports arbitrary nesting depth because type_name can itself be qualified.
-    /// Examples:
-    ///   - "Builtin.List.len" (2 levels: module + type + method)
-    ///   - "Builtin.Num.Dec.plus" (3 levels: module + nested type + method)
-    ///   - "MyModule.Foo.Bar.Baz.method" (5 levels: module + deeply nested type + method)
-    fn getMethodQualifiedIdent(
-        self: *const Interpreter,
-        origin_module: base_pkg.Ident.Idx,
-        nominal_ident: base_pkg.Ident.Idx,
-        method_name: base_pkg.Ident.Idx,
-        buf: []u8,
-    ) ![]const u8 {
-        // Build fully-qualified method name: "OriginModule.TypeName.methodName"
-        // where TypeName can itself be qualified (e.g., "Foo.Bar" for nested types)
-        // nominal_ident is from the translated runtime types, so use runtime_layout_store's env
-        const runtime_ident_store = self.runtime_layout_store.env.common.getIdentStore();
-        const origin_module_text = runtime_ident_store.getText(origin_module);
-        const type_name = runtime_ident_store.getText(nominal_ident);
-        // method_name is from the current environment
-        const current_ident_store = self.env.common.getIdentStore();
-        const method_name_str = current_ident_store.getText(method_name);
-        // Construct: "OriginModule.TypeName.methodName"
-        // Note: TypeName may already contain dots for nested types
-        // If type_name already starts with origin_module, don't duplicate
-        if (std.mem.startsWith(u8, type_name, origin_module_text) and type_name.len > origin_module_text.len and type_name[origin_module_text.len] == '.') {
-            // type_name already includes the module prefix, just append method
-            return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
-        }
-        return std.fmt.bufPrint(buf, "{s}.{s}.{s}", .{ origin_module_text, type_name, method_name_str });
     }
 
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.

@@ -104,8 +104,15 @@ fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
-    evaluator.expect.recordCrash(msg_slice) catch {
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Record the formatted message
+    const formatted = std.fmt.allocPrint(evaluator.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        evaluator.halted = true;
+        return;
+    };
+    evaluator.expect.recordCrash(formatted) catch {
+        evaluator.allocator.free(formatted);
         // If we can't record the expect failure, halt evaluation
         // This is the only case where expect should halt
         evaluator.halted = true;
