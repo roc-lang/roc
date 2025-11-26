@@ -237,7 +237,17 @@ pub const Store = struct {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
-                else => null,
+                .recursion_var => |rec_var| rec_var.name,
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    // Other structures can appear as backing vars for nominal types.
+                    // E.g., List(a) := [Nil, Cons(a, List(a))] has a tag union as backing.
+                    // These don't have a direct name, so we fall back to contextual naming.
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
+                },
+                // Error types shouldn't create cycles
+                .err => unreachable,
             };
             return try self.contents.append(self.gpa, .{ .recursive = recursive_name });
         }

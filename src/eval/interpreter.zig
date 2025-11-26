@@ -5094,32 +5094,39 @@ pub const Interpreter = struct {
         nom: types.NominalType,
         lhs_var: types.Var,
     ) StructuralEqError!bool {
-        // TODO: Properly dispatch to the nominal type's is_eq method
-        // For now, use a simplified approach:
-        // - If the nominal type is a wrapper around a scalar or simple structure, compare directly
-        // - Otherwise, fall back to structural comparison of the backing type
+        _ = lhs_var;
 
-        // Get the backing var of the nominal type
+        // First check if this is a simple scalar comparison (numbers, bools represented as scalars)
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+            const lhs_scalar = lhs.layout.data.scalar;
+            const rhs_scalar = rhs.layout.data.scalar;
+            if (lhs_scalar.tag == rhs_scalar.tag) {
+                switch (lhs_scalar.tag) {
+                    .int, .frac => {
+                        const order = self.compareNumericScalars(lhs, rhs) catch {
+                            return error.NotImplemented;
+                        };
+                        return order == .eq;
+                    },
+                    .str => {
+                        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
+                        const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
+                        const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                        return lhs_str.eql(rhs_str.*);
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        // Fall back to structural comparison of the backing type
+        // This handles nominal types like Try that wrap tag unions
         const backing_var = self.runtime_types.getNominalBackingVar(nom);
         const backing_resolved = self.runtime_types.resolveVar(backing_var);
 
-        // If the backing type is a structure, recursively compare
         if (backing_resolved.desc.content == .structure) {
             return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var);
         }
-
-        // For other cases, fall back to attempting scalar comparison
-        // This handles cases like Bool which wraps a tag union but is represented as a scalar
-        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const order = self.compareNumericScalars(lhs, rhs) catch {
-                return error.NotImplemented;
-            };
-            return order == .eq;
-        }
-
-        // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
-        // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
-        _ = lhs_var;
 
         return error.NotImplemented;
     }
