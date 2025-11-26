@@ -161,6 +161,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.split_on")) |str_split_on_ident| {
         try low_level_map.put(str_split_on_ident, .str_split_on);
     }
+    if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
+        try low_level_map.put(str_join_with_ident, .str_join_with);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

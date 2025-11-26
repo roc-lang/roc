@@ -1318,3 +1318,49 @@ test "e_low_level_lambda - Str.split_on empty string" {
     const value = try evalModuleAndGetInt(src, 0);
     try testing.expectEqual(@as(i128, 1), value);
 }
+
+// join_with tests
+test "e_low_level_lambda - Str.join_with basic join" {
+    const src =
+        \\x = Str.join_with(["hello", "world"], " ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with multiple elements" {
+    const src =
+        \\x = Str.join_with(["a", "b", "c", "d"], ",")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"a,b,c,d\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with single element" {
+    const src =
+        \\x = Str.join_with(["hello"], "-")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with empty list" {
+    const src =
+        \\x = Str.join_with([], ",")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
+    const src =
+        \\x = Str.join_with(Str.split_on("hello world", " "), " ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}

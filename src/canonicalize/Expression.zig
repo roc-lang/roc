@@ -422,6 +422,7 @@ pub const Expr = union(enum) {
         str_to_utf8,
         str_from_utf8_lossy,
         str_split_on,
+        str_join_with,
 
         // Numeric to_str operations
         u8_to_str,
