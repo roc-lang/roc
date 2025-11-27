@@ -336,6 +336,100 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // U8 conversion operations
+    if (env.common.findIdent("Builtin.Num.U8.to_i8_wrap")) |ident| {
+        try low_level_map.put(ident, .u8_to_i8_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i8_try")) |ident| {
+        try low_level_map.put(ident, .u8_to_i8_try);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i16")) |ident| {
+        try low_level_map.put(ident, .u8_to_i16);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i32")) |ident| {
+        try low_level_map.put(ident, .u8_to_i32);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i64")) |ident| {
+        try low_level_map.put(ident, .u8_to_i64);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i128")) |ident| {
+        try low_level_map.put(ident, .u8_to_i128);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u16")) |ident| {
+        try low_level_map.put(ident, .u8_to_u16);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u32")) |ident| {
+        try low_level_map.put(ident, .u8_to_u32);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u64")) |ident| {
+        try low_level_map.put(ident, .u8_to_u64);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u128")) |ident| {
+        try low_level_map.put(ident, .u8_to_u128);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_f32")) |ident| {
+        try low_level_map.put(ident, .u8_to_f32);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_f64")) |ident| {
+        try low_level_map.put(ident, .u8_to_f64);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_dec")) |ident| {
+        try low_level_map.put(ident, .u8_to_dec);
+    }
+
+    // I8 conversion operations
+    if (env.common.findIdent("Builtin.Num.I8.to_i16")) |ident| {
+        try low_level_map.put(ident, .i8_to_i16);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_i32")) |ident| {
+        try low_level_map.put(ident, .i8_to_i32);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_i64")) |ident| {
+        try low_level_map.put(ident, .i8_to_i64);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_i128")) |ident| {
+        try low_level_map.put(ident, .i8_to_i128);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u8_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u8_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u8_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u8_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u16_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u16_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u16_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u16_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u32_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u32_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u32_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u32_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u64_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u64_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u64_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u64_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u128_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u128_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u128_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u128_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_f32")) |ident| {
+        try low_level_map.put(ident, .i8_to_f32);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_f64")) |ident| {
+        try low_level_map.put(ident, .i8_to_f64);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_dec")) |ident| {
+        try low_level_map.put(ident, .i8_to_dec);
+    }
+
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     const all_defs = env.store.sliceDefs(env.all_defs);
     for (all_defs) |def_idx| {
@@ -420,6 +514,48 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 // Insert the alias identifier
                 const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
                 // First add to exposed items, then set node index
+                try env.common.addExposedById(gpa, alias_ident);
+                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
+            }
+        }
+    }
+
+    // Expose U8 conversion operations under aliases like "Builtin.U8.to_i16" for user code lookups.
+    const u8_conversions = [_][]const u8{
+        "to_i8_wrap", "to_i8_try", "to_i16", "to_i32", "to_i64", "to_i128",
+        "to_u16",     "to_u32",    "to_u64", "to_u128", "to_f32", "to_f64", "to_dec",
+    };
+    for (u8_conversions) |conv| {
+        var canonical_buf: [256]u8 = undefined;
+        var alias_buf: [256]u8 = undefined;
+        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.U8.{s}", .{conv});
+        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.U8.{s}", .{conv});
+
+        if (env.common.findIdent(canonical_name)) |canonical_ident| {
+            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
+                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
+                try env.common.addExposedById(gpa, alias_ident);
+                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
+            }
+        }
+    }
+
+    // Expose I8 conversion operations under aliases like "Builtin.I8.to_i16" for user code lookups.
+    const i8_conversions = [_][]const u8{
+        "to_i16",     "to_i32",     "to_i64",     "to_i128",
+        "to_u8_wrap", "to_u8_try",  "to_u16_wrap", "to_u16_try",
+        "to_u32_wrap", "to_u32_try", "to_u64_wrap", "to_u64_try",
+        "to_u128_wrap", "to_u128_try", "to_f32", "to_f64", "to_dec",
+    };
+    for (i8_conversions) |conv| {
+        var canonical_buf: [256]u8 = undefined;
+        var alias_buf: [256]u8 = undefined;
+        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.I8.{s}", .{conv});
+        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.I8.{s}", .{conv});
+
+        if (env.common.findIdent(canonical_name)) |canonical_ident| {
+            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
+                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
                 try env.common.addExposedById(gpa, alias_ident);
                 try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
             }

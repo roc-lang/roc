@@ -4535,6 +4535,40 @@ pub const Interpreter = struct {
             .i128_to_str => return self.intToStr(i128, args, roc_ops),
             .f32_to_str => return self.floatToStr(f32, args, roc_ops),
             .f64_to_str => return self.floatToStr(f64, args, roc_ops),
+
+            // U8 conversion operations
+            .u8_to_i8_wrap => return self.intConvertWrap(u8, i8, args, roc_ops),
+            .u8_to_i8_try => return self.intConvertTry(u8, i8, args, roc_ops, return_rt_var),
+            .u8_to_i16 => return self.intConvert(u8, i16, args, roc_ops),
+            .u8_to_i32 => return self.intConvert(u8, i32, args, roc_ops),
+            .u8_to_i64 => return self.intConvert(u8, i64, args, roc_ops),
+            .u8_to_i128 => return self.intConvert(u8, i128, args, roc_ops),
+            .u8_to_u16 => return self.intConvert(u8, u16, args, roc_ops),
+            .u8_to_u32 => return self.intConvert(u8, u32, args, roc_ops),
+            .u8_to_u64 => return self.intConvert(u8, u64, args, roc_ops),
+            .u8_to_u128 => return self.intConvert(u8, u128, args, roc_ops),
+            .u8_to_f32 => return self.intToFloat(u8, f32, args, roc_ops),
+            .u8_to_f64 => return self.intToFloat(u8, f64, args, roc_ops),
+            .u8_to_dec => return self.intToDec(u8, args, roc_ops),
+
+            // I8 conversion operations
+            .i8_to_i16 => return self.intConvert(i8, i16, args, roc_ops),
+            .i8_to_i32 => return self.intConvert(i8, i32, args, roc_ops),
+            .i8_to_i64 => return self.intConvert(i8, i64, args, roc_ops),
+            .i8_to_i128 => return self.intConvert(i8, i128, args, roc_ops),
+            .i8_to_u8_wrap => return self.intConvertWrap(i8, u8, args, roc_ops),
+            .i8_to_u8_try => return self.intConvertTry(i8, u8, args, roc_ops, return_rt_var),
+            .i8_to_u16_wrap => return self.intConvertWrap(i8, u16, args, roc_ops),
+            .i8_to_u16_try => return self.intConvertTry(i8, u16, args, roc_ops, return_rt_var),
+            .i8_to_u32_wrap => return self.intConvertWrap(i8, u32, args, roc_ops),
+            .i8_to_u32_try => return self.intConvertTry(i8, u32, args, roc_ops, return_rt_var),
+            .i8_to_u64_wrap => return self.intConvertWrap(i8, u64, args, roc_ops),
+            .i8_to_u64_try => return self.intConvertTry(i8, u64, args, roc_ops, return_rt_var),
+            .i8_to_u128_wrap => return self.intConvertWrap(i8, u128, args, roc_ops),
+            .i8_to_u128_try => return self.intConvertTry(i8, u128, args, roc_ops, return_rt_var),
+            .i8_to_f32 => return self.intToFloat(i8, f32, args, roc_ops),
+            .i8_to_f64 => return self.intToFloat(i8, f64, args, roc_ops),
+            .i8_to_dec => return self.intToDec(i8, args, roc_ops),
         }
     }
 
@@ -4590,6 +4624,274 @@ pub const Interpreter = struct {
         const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
+    }
+
+    /// Helper for safe integer conversions (widening)
+    fn intConvert(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        if (int_arg.ptr == null) {
+            self.triggerCrash("intConvert: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const to_value: To = @intCast(from_value);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for wrapping integer conversions (potentially lossy)
+    fn intConvertWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        if (int_arg.ptr == null) {
+            self.triggerCrash("intConvertWrap: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        // For wrapping conversion:
+        // - Same size: bitCast (reinterpret bits)
+        // - Narrowing: truncate then bitCast
+        // - Widening signed to unsigned: sign-extend to wider signed first, then bitCast to unsigned (so -1i8 -> -1i16 -> 65535u16)
+        // - Widening unsigned to any: zero-extend
+        const to_value: To = if (@bitSizeOf(From) == @bitSizeOf(To))
+            @bitCast(from_value)
+        else if (@bitSizeOf(From) > @bitSizeOf(To))
+            // Narrowing: truncate bits
+            @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(To)), @truncate(@as(std.meta.Int(.unsigned, @bitSizeOf(From)), @bitCast(from_value)))))
+        else if (@typeInfo(From).int.signedness == .signed and @typeInfo(To).int.signedness == .unsigned)
+            // Widening from signed to unsigned: sign-extend to wider signed first, then bitCast to unsigned
+            // e.g., -1i8 -> -1i16 -> 65535u16
+            @bitCast(@as(std.meta.Int(.signed, @bitSizeOf(To)), from_value))
+        else
+            // Widening (signed to signed, or unsigned to any): use standard int cast
+            @intCast(from_value);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for try integer conversions (returns Try(To, [OutOfRange]))
+    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        if (int_arg.ptr == null) {
+            self.triggerCrash("intConvertTry: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const result_rt_var = return_rt_var orelse {
+            self.triggerCrash("intConvertTry requires return type info", false, roc_ops);
+            return error.Crash;
+        };
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+
+        // Check if conversion is in range
+        const in_range = std.math.cast(To, from_value) != null;
+
+        // Resolve the Try type to get Ok's payload type
+        const resolved = self.resolveBaseVar(result_rt_var);
+        if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+            self.triggerCrash("intConvertTry: expected Try tag union result type", false, roc_ops);
+            return error.Crash;
+        }
+
+        // Find tag indices for Ok and Err
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        var ok_index: ?usize = null;
+        var err_index: ?usize = null;
+
+        const ok_ident = self.env.idents.ok;
+        const err_ident = self.env.idents.err;
+
+        for (tag_list.items, 0..) |tag_info, i| {
+            if (tag_info.name == ok_ident) {
+                ok_index = i;
+            } else if (tag_info.name == err_ident) {
+                err_index = i;
+            }
+        }
+
+        // Construct the result tag union
+        if (result_layout.tag == .scalar) {
+            // Simple tag with no payload (shouldn't happen for Try with payload)
+            var out = try self.pushRaw(result_layout, 0);
+            out.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try out.setInt(@intCast(tag_idx));
+            out.is_initialized = true;
+            return out;
+        } else if (result_layout.tag == .record) {
+            // Record { tag, payload }
+            var dest = try self.pushRaw(result_layout, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                self.triggerCrash("intConvertTry: record has no 'tag' field", false, roc_ops);
+                return error.Crash;
+            };
+            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                self.triggerCrash("intConvertTry: record has no 'payload' field", false, roc_ops);
+                return error.Crash;
+            };
+
+            // Write tag discriminant
+            const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                try tmp.setInt(@intCast(tag_idx));
+            } else {
+                self.triggerCrash("intConvertTry: tag field is not scalar int", false, roc_ops);
+                return error.Crash;
+            }
+
+            // Clear payload area
+            const payload_field = try acc.getFieldByIndex(payload_field_idx);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                    @memset(bytes, 0);
+                }
+            }
+
+            // Write payload for Ok case
+            if (in_range) {
+                const to_value: To = @intCast(from_value);
+                if (payload_field.ptr) |payload_ptr| {
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                }
+            }
+            // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
+
+            return dest;
+        } else if (result_layout.tag == .tuple) {
+            // Tuple (payload, tag) - tag unions are now represented as tuples
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+            // Element 0 is payload, Element 1 is tag discriminant
+
+            // Write tag discriminant (element 1)
+            const tag_field = try result_acc.getElement(1);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                try tmp.setInt(@intCast(tag_idx));
+            } else {
+                self.triggerCrash("intConvertTry: tuple tag field is not scalar int", false, roc_ops);
+                return error.Crash;
+            }
+
+            // Clear payload area (element 0)
+            const payload_field = try result_acc.getElement(0);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                    @memset(bytes, 0);
+                }
+            }
+
+            // Write payload for Ok case
+            if (in_range) {
+                const to_value: To = @intCast(from_value);
+                if (payload_field.ptr) |payload_ptr| {
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                }
+            }
+            // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
+
+            return dest;
+        }
+
+        self.triggerCrash("intConvertTry: unsupported result layout", false, roc_ops);
+        return error.Crash;
+    }
+
+    /// Helper for integer to float conversions
+    fn intToFloat(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        if (int_arg.ptr == null) {
+            self.triggerCrash("intToFloat: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const to_value: To = @floatFromInt(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for integer to Dec conversions
+    fn intToDec(self: *Interpreter, comptime From: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        if (int_arg.ptr == null) {
+            self.triggerCrash("intToDec: null argument", false, roc_ops);
+            return error.Crash;
+        }
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const dec_value = RocDec{ .num = @as(i128, from_value) * RocDec.one_point_zero_i128 };
+
+        const dec_layout = Layout.frac(.dec);
+        var out = try self.pushRaw(dec_layout, 0);
+        out.is_initialized = false;
+        @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = dec_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Convert Zig integer type to types.Int.Precision
+    fn intTypeFromZigType(comptime T: type) types.Int.Precision {
+        return switch (T) {
+            u8 => .u8,
+            i8 => .i8,
+            u16 => .u16,
+            i16 => .i16,
+            u32 => .u32,
+            i32 => .i32,
+            u64 => .u64,
+            i64 => .i64,
+            u128 => .u128,
+            i128 => .i128,
+            else => @compileError("Unsupported integer type"),
+        };
+    }
+
+    /// Convert Zig float type to types.Frac.Precision
+    fn fracTypeFromZigType(comptime T: type) types.Frac.Precision {
+        return switch (T) {
+            f32 => .f32,
+            f64 => .f64,
+            else => @compileError("Unsupported float type"),
+        };
     }
 
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
