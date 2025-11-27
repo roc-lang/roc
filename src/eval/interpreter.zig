@@ -353,8 +353,9 @@ pub const Interpreter = struct {
     }
 
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
+    // Now uses the stack-safe implementation instead of recursive evaluation
     pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
-        return try self.evalExprMinimal(expr_idx, roc_ops, null);
+        return try self.evalStackSafe(expr_idx, roc_ops, null);
     }
 
     pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
@@ -7171,6 +7172,17 @@ pub const Interpreter = struct {
         /// Bind a declaration pattern to the evaluated value.
         bind_decl: BindDecl,
 
+        /// Collect tuple elements: after evaluating an element, either continue
+        /// collecting more elements or finalize the tuple.
+        tuple_collect: TupleCollect,
+
+        /// Collect list elements: after evaluating an element, either continue
+        /// collecting more elements or finalize the list.
+        list_collect: ListCollect,
+
+        /// Collect record fields: first evaluate extension (if any), then fields.
+        record_collect: RecordCollect,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -7191,7 +7203,7 @@ pub const Interpreter = struct {
             /// The body to evaluate if condition is true
             body: can.CIR.Expr.Idx,
             /// Remaining branches to try (slice indices into store)
-            remaining_branches: []const can.CIR.IfBranch.Idx,
+            remaining_branches: []const can.CIR.Expr.IfBranch.Idx,
             /// The final else expression
             final_else: can.CIR.Expr.Idx,
         };
@@ -7217,15 +7229,48 @@ pub const Interpreter = struct {
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
         };
+
+        pub const TupleCollect = struct {
+            /// Number of collected values on the value stack (collected so far)
+            collected_count: usize,
+            /// Remaining element expressions to evaluate
+            remaining_elems: []const can.CIR.Expr.Idx,
+        };
+
+        pub const ListCollect = struct {
+            /// Number of collected values on the value stack (collected so far)
+            collected_count: usize,
+            /// Remaining element expressions to evaluate
+            remaining_elems: []const can.CIR.Expr.Idx,
+            /// Element runtime type variable (for type-consistent evaluation)
+            elem_rt_var: types.Var,
+            /// List runtime type variable (for layout computation)
+            list_rt_var: types.Var,
+        };
+
+        pub const RecordCollect = struct {
+            /// Number of collected field values on the value stack (plus base record if any)
+            collected_count: usize,
+            /// Remaining field expressions to evaluate
+            remaining_fields: []const can.CIR.RecordField.Idx,
+            /// Record runtime type variable (for layout computation)
+            rt_var: types.Var,
+            /// Expression idx for caching
+            expr_idx: can.CIR.Expr.Idx,
+            /// Whether this record has an extension base (the first value on stack will be the base)
+            has_extension: bool,
+            /// All fields in the record (for name lookup during finalization)
+            all_fields: []const can.CIR.RecordField.Idx,
+        };
     };
 
     /// Work stack for the stack-safe interpreter.
     /// Contains pending operations (eval expressions or apply continuations).
     pub const WorkStack = struct {
-        items: std.ArrayList(WorkItem),
+        items: std.array_list.AlignedManaged(WorkItem, null),
 
-        pub fn init(allocator: std.mem.Allocator) WorkStack {
-            return .{ .items = std.ArrayList(WorkItem).init(allocator) };
+        pub fn init(allocator: std.mem.Allocator) !WorkStack {
+            return .{ .items = try std.array_list.AlignedManaged(WorkItem, null).initCapacity(allocator, 64) };
         }
 
         pub fn deinit(self: *WorkStack) void {
@@ -7237,7 +7282,7 @@ pub const Interpreter = struct {
         }
 
         pub fn pop(self: *WorkStack) ?WorkItem {
-            return self.items.popOrNull();
+            return self.items.pop();
         }
 
         /// Push multiple items in reverse order so they execute in forward order.
@@ -7254,10 +7299,10 @@ pub const Interpreter = struct {
     /// Value stack for the stack-safe interpreter.
     /// Contains intermediate results from evaluated expressions.
     pub const ValueStack = struct {
-        items: std.ArrayList(StackValue),
+        items: std.array_list.AlignedManaged(StackValue, null),
 
-        pub fn init(allocator: std.mem.Allocator) ValueStack {
-            return .{ .items = std.ArrayList(StackValue).init(allocator) };
+        pub fn init(allocator: std.mem.Allocator) !ValueStack {
+            return .{ .items = try std.array_list.AlignedManaged(StackValue, null).initCapacity(allocator, 64) };
         }
 
         pub fn deinit(self: *ValueStack) void {
@@ -7269,7 +7314,7 @@ pub const Interpreter = struct {
         }
 
         pub fn pop(self: *ValueStack) ?StackValue {
-            return self.items.popOrNull();
+            return self.items.pop();
         }
 
         /// Peek at the top value without removing it.
@@ -7288,10 +7333,10 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
-        var work_stack = WorkStack.init(self.allocator);
+        var work_stack = try WorkStack.init(self.allocator);
         defer work_stack.deinit();
 
-        var value_stack = ValueStack.init(self.allocator);
+        var value_stack = try ValueStack.init(self.allocator);
         defer value_stack.deinit();
 
         // Initial work: evaluate the root expression, then return result
@@ -7444,9 +7489,10 @@ pub const Interpreter = struct {
                         } });
                     },
                     else => {
-                        // Other binary operations (arithmetic, comparison) will be implemented
-                        // in a later PR via method dispatch
-                        @panic("Stack-safe interpreter: non-boolean binop not yet implemented");
+                        // Fall back to recursive evaluation for other binops (arithmetic, comparison)
+                        // Will be fully implemented via continuations in a later PR
+                        const value = try self.evalExprMinimal(expr_idx, roc_ops, expected_rt_var);
+                        try value_stack.push(value);
                     },
                 }
             },
@@ -7516,8 +7562,116 @@ pub const Interpreter = struct {
                 }
             },
 
+            // ================================================================
+            // Tuples
+            // ================================================================
+
+            .e_tuple => |tup| {
+                const elems = self.env.store.sliceExpr(tup.elems);
+                if (elems.len == 0) {
+                    // Empty tuple - create immediately
+                    // Compute tuple layout with no elements
+                    const tuple_layout_idx = try self.runtime_layout_store.putTuple(&[0]Layout{});
+                    const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                    const value = try self.pushRaw(tuple_layout, 0);
+                    try value_stack.push(value);
+                } else {
+                    // Schedule collection of elements
+                    // Push tuple_collect continuation (to be executed after first element)
+                    try work_stack.push(.{ .apply_continuation = .{ .tuple_collect = .{
+                        .collected_count = 0,
+                        .remaining_elems = elems,
+                    } } });
+                }
+            },
+
+            // ================================================================
+            // Lists
+            // ================================================================
+
+            .e_list => |list_expr| {
+                const elems = self.env.store.sliceExpr(list_expr.elems);
+
+                // Get list type variable
+                const list_rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+
+                if (elems.len == 0) {
+                    // Empty list - create immediately
+                    const list_layout = try self.getRuntimeLayout(list_rt_var);
+                    const dest = try self.pushRaw(list_layout, 0);
+                    if (dest.ptr != null) {
+                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                        header.* = RocList.empty();
+                    }
+                    try value_stack.push(dest);
+                } else {
+                    // Get element type variable from first element
+                    const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
+                    const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
+
+                    // Schedule collection of elements
+                    try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
+                        .collected_count = 0,
+                        .remaining_elems = elems,
+                        .elem_rt_var = elem_rt_var,
+                        .list_rt_var = list_rt_var,
+                    } } });
+                }
+            },
+
+            // ================================================================
+            // Records
+            // ================================================================
+
+            .e_record => |rec| {
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const fields = self.env.store.sliceRecordFields(rec.fields);
+
+                if (rec.ext) |ext_idx| {
+                    // Has extension record - schedule extension evaluation first
+                    try work_stack.push(.{ .apply_continuation = .{ .record_collect = .{
+                        .collected_count = 0,
+                        .remaining_fields = fields,
+                        .rt_var = rt_var,
+                        .expr_idx = expr_idx,
+                        .has_extension = true,
+                        .all_fields = fields,
+                    } } });
+                    // Evaluate extension first - it will be the first value on stack
+                    const ext_ct_var = can.ModuleEnv.varFrom(ext_idx);
+                    const ext_rt_var = try self.translateTypeVar(self.env, ext_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ext_idx,
+                        .expected_rt_var = ext_rt_var,
+                    } });
+                } else if (fields.len == 0) {
+                    // Empty record with no extension - create immediately
+                    const rec_layout = try self.getRuntimeLayout(rt_var);
+                    const dest = try self.pushRaw(rec_layout, 0);
+                    try value_stack.push(dest);
+                } else {
+                    // Non-empty record without extension
+                    try work_stack.push(.{ .apply_continuation = .{ .record_collect = .{
+                        .collected_count = 0,
+                        .remaining_fields = fields,
+                        .rt_var = rt_var,
+                        .expr_idx = expr_idx,
+                        .has_extension = false,
+                        .all_fields = fields,
+                    } } });
+                }
+            },
+
             else => {
-                @panic("Stack-safe interpreter: expression type not yet implemented");
+                // Fall back to recursive evaluation for not-yet-implemented expression types.
+                // This allows the stack-safe interpreter to work while we incrementally
+                // add support for more expression types.
+                const value = try self.evalExprMinimal(expr_idx, roc_ops, expected_rt_var);
+                try value_stack.push(value);
             },
         }
     }
@@ -7531,7 +7685,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
-        num_lit: can.CIR.Expr.Num,
+        num_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_num),
     ) Error!StackValue {
         const rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -7580,7 +7734,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
-        lit: can.CIR.Expr.FracF32,
+        lit: @TypeOf(@as(can.CIR.Expr, undefined).e_frac_f32),
     ) Error!StackValue {
         const rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -7600,7 +7754,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
-        lit: can.CIR.Expr.FracF64,
+        lit: @TypeOf(@as(can.CIR.Expr, undefined).e_frac_f64),
     ) Error!StackValue {
         const rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -7620,7 +7774,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
-        dec_lit: can.CIR.Expr.Dec,
+        dec_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_dec),
     ) Error!StackValue {
         const rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -7640,7 +7794,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
-        small: can.CIR.Expr.DecSmall,
+        small: @TypeOf(@as(can.CIR.Expr, undefined).e_dec_small),
     ) Error!StackValue {
         const rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -7660,7 +7814,7 @@ pub const Interpreter = struct {
     /// Evaluate a string segment literal (e_str_segment)
     fn evalStrSegment(
         self: *Interpreter,
-        seg: can.CIR.Expr.StrSegment,
+        seg: @TypeOf(@as(can.CIR.Expr, undefined).e_str_segment),
         roc_ops: *RocOps,
     ) Error!StackValue {
         const content = self.env.getString(seg.literal);
@@ -7719,7 +7873,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
-        zero: can.CIR.Expr.ZeroArgumentTag,
+        zero: @TypeOf(@as(can.CIR.Expr, undefined).e_zero_argument_tag),
         roc_ops: *RocOps,
     ) Error!StackValue {
         const rt_var = expected_rt_var orelse blk: {
@@ -7804,7 +7958,7 @@ pub const Interpreter = struct {
     /// lazy evaluation of top-level definitions.
     fn evalLookupLocal(
         self: *Interpreter,
-        lookup: can.CIR.Expr.LookupLocal,
+        lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_local),
         roc_ops: *RocOps,
     ) Error!StackValue {
         // Search bindings in reverse
@@ -7890,7 +8044,7 @@ pub const Interpreter = struct {
     /// NOTE: This still uses recursive evaluation - will be fully converted in a later PR
     fn evalLookupExternal(
         self: *Interpreter,
-        lookup: can.CIR.Expr.LookupExternal,
+        lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_external),
         expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!StackValue {
@@ -8018,6 +8172,7 @@ pub const Interpreter = struct {
         remaining_stmts: []const can.CIR.Statement.Idx,
         final_expr: can.CIR.Expr.Idx,
         bindings_start: usize,
+        roc_ops: *RocOps,
     ) Error!void {
         switch (stmt) {
             .s_decl => |d| {
@@ -8085,8 +8240,205 @@ pub const Interpreter = struct {
                     .expected_rt_var = null,
                 } });
             },
+            .s_crash => |c| {
+                const msg = self.env.getString(c.msg);
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
+            },
+            .s_expect => |expect_stmt| {
+                // Fall back to recursive for now
+                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
+                const is_true = boolValueEquals(true, cond_val);
+                if (!is_true) {
+                    self.handleExpectFailure(expect_stmt.body, roc_ops);
+                    return error.Crash;
+                }
+                // Continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
+                }
+            },
+            .s_reassign => |r| {
+                // Schedule: evaluate expression, then reassign
+                // For now use recursive fallback for the expression
+                const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
+                // Search through all bindings and reassign
+                var j: usize = self.bindings.items.len;
+                while (j > 0) {
+                    j -= 1;
+                    if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
+                        self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
+                        self.bindings.items[j].value = new_val;
+                        break;
+                    }
+                }
+                // Continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
+                }
+            },
+            .s_dbg => |dbg_stmt| {
+                // Fall back to recursive for now
+                const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                const value = try self.evalExprMinimal(dbg_stmt.expr, roc_ops, inner_rt_var);
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, inner_rt_var);
+                defer self.allocator.free(rendered);
+                roc_ops.dbg(rendered);
+                // Continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
+                }
+            },
+            .s_return => |ret| {
+                // Early return: evaluate expression, store value, signal return
+                const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                const return_value = try self.evalExprMinimal(ret.expr, roc_ops, expr_rt_var);
+                // Store the return value for the caller to consume
+                self.early_return_value = return_value;
+                return error.EarlyReturn;
+            },
+            .s_for => |for_stmt| {
+                // Fall back to recursive evaluation for for loops (complex control flow)
+                // Evaluate the list expression
+                const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                const list_value = try self.evalExprMinimal(for_stmt.expr, roc_ops, expr_rt_var);
+                defer list_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Get the list layout
+                if (list_value.layout.tag != .list) {
+                    return error.TypeMismatch;
+                }
+                const elem_layout_idx = list_value.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                // Get the RocList header
+                const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                const list_len = list_header.len();
+
+                // Get the element type for binding
+                const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
+                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                // Iterate over each element
+                var i: usize = 0;
+                while (i < list_len) : (i += 1) {
+                    // Get pointer to element
+                    const elem_ptr = if (list_header.bytes) |buffer|
+                        buffer + i * elem_size
+                    else
+                        return error.TypeMismatch;
+
+                    // Create a StackValue from the element
+                    var elem_value = StackValue{
+                        .ptr = elem_ptr,
+                        .layout = elem_layout,
+                        .is_initialized = true,
+                    };
+
+                    // Increment refcount since we're creating a new reference
+                    elem_value.incref();
+
+                    // Bind the pattern to the element value
+                    var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                    defer {
+                        self.trimBindingList(&temp_binds, 0, roc_ops);
+                        temp_binds.deinit();
+                    }
+
+                    if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds, @enumFromInt(0))) {
+                        elem_value.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+
+                    // Add bindings to the environment
+                    const loop_bindings_start = self.bindings.items.len;
+                    for (temp_binds.items) |binding| {
+                        try self.bindings.append(binding);
+                    }
+
+                    // Evaluate the body using recursive interpreter
+                    const body_result = self.evalExprMinimal(for_stmt.body, roc_ops, null) catch |err| {
+                        // Clean up before propagating error
+                        self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
+                        elem_value.decref(&self.runtime_layout_store, roc_ops);
+                        return err;
+                    };
+                    body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Clean up bindings for this iteration
+                    self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
+
+                    // Decrement the element reference (it was incremented above)
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                }
+
+                // Continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
+                }
+            },
+            .s_while => |while_stmt| {
+                // Fall back to recursive evaluation for while loops
+                while (true) {
+                    const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
+                    const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                    const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
+
+                    const cond_is_true = boolValueEquals(true, cond_value);
+
+                    if (!cond_is_true) {
+                        break;
+                    }
+
+                    const body_result = self.evalExprMinimal(while_stmt.body, roc_ops, null) catch |err| {
+                        return err;
+                    };
+                    body_result.decref(&self.runtime_layout_store, roc_ops);
+                }
+
+                // Continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
+                }
+            },
             else => {
-                // Other statement types will be implemented in PR 7
+                // Other statement types
                 @panic("Stack-safe interpreter: statement type not yet implemented");
             },
         }
@@ -8204,7 +8556,7 @@ pub const Interpreter = struct {
                 } else {
                     // Process next statement
                     const next_stmt = self.env.store.getStatement(bc.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, bc.remaining_stmts[1..], bc.final_expr, bc.bindings_start);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bc.remaining_stmts[1..], bc.final_expr, bc.bindings_start, roc_ops);
                 }
                 return true;
             },
@@ -8243,7 +8595,307 @@ pub const Interpreter = struct {
                 } else {
                     // Process next statement
                     const next_stmt = self.env.store.getStatement(bd.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, bd.remaining_stmts[1..], bd.final_expr, bd.bindings_start);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bd.remaining_stmts[1..], bd.final_expr, bd.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .tuple_collect => |tc| {
+                // Tuple collection works by evaluating elements one at a time
+                // and tracking how many we've collected
+                if (tc.remaining_elems.len > 0) {
+                    // More elements to evaluate - schedule next one
+                    try work_stack.push(.{ .apply_continuation = .{ .tuple_collect = .{
+                        .collected_count = tc.collected_count + 1,
+                        .remaining_elems = tc.remaining_elems[1..],
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = tc.remaining_elems[0],
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // All elements evaluated - finalize the tuple
+                    // Pop all collected values from the value stack
+                    const total_count = tc.collected_count;
+
+                    if (total_count == 0) {
+                        // Empty tuple (shouldn't happen as it's handled directly)
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(&[0]Layout{});
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                        const tuple_val = try self.pushRaw(tuple_layout, 0);
+                        try value_stack.push(tuple_val);
+                    } else {
+                        // Gather layouts and values
+                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                        defer self.allocator.free(elem_layouts);
+
+                        // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
+                        // We need to pop them and store in correct order
+                        var values = try self.allocator.alloc(StackValue, total_count);
+                        defer self.allocator.free(values);
+
+                        // Pop values in reverse order (last evaluated is on top)
+                        var i: usize = total_count;
+                        while (i > 0) {
+                            i -= 1;
+                            values[i] = value_stack.pop() orelse return error.Crash;
+                            elem_layouts[i] = values[i].layout;
+                        }
+
+                        // Create tuple layout
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                        var dest = try self.pushRaw(tuple_layout, 0);
+                        var accessor = try dest.asTuple(&self.runtime_layout_store);
+
+                        if (total_count != accessor.getElementCount()) return error.TypeMismatch;
+
+                        // Set all elements
+                        for (0..total_count) |idx| {
+                            try accessor.setElement(idx, values[idx], roc_ops);
+                        }
+
+                        // Decref temporary values after they've been copied into the tuple
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        try value_stack.push(dest);
+                    }
+                }
+                return true;
+            },
+            .list_collect => |lc| {
+                // List collection works by evaluating elements one at a time
+                // and tracking how many we've collected
+                if (lc.remaining_elems.len > 0) {
+                    // More elements to evaluate - schedule next one
+                    try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
+                        .collected_count = lc.collected_count + 1,
+                        .remaining_elems = lc.remaining_elems[1..],
+                        .elem_rt_var = lc.elem_rt_var,
+                        .list_rt_var = lc.list_rt_var,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = lc.remaining_elems[0],
+                        .expected_rt_var = lc.elem_rt_var,
+                    } });
+                } else {
+                    // All elements evaluated - finalize the list
+                    const total_count = lc.collected_count;
+
+                    if (total_count == 0) {
+                        // Empty list (shouldn't happen as it's handled directly)
+                        const list_layout = try self.getRuntimeLayout(lc.list_rt_var);
+                        const dest = try self.pushRaw(list_layout, 0);
+                        if (dest.ptr != null) {
+                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                            header.* = RocList.empty();
+                        }
+                        try value_stack.push(dest);
+                    } else {
+                        // Pop all collected values from the value stack
+                        var values = try self.allocator.alloc(StackValue, total_count);
+                        defer self.allocator.free(values);
+
+                        // Pop values in reverse order (last evaluated is on top)
+                        var i: usize = total_count;
+                        while (i > 0) {
+                            i -= 1;
+                            values[i] = value_stack.pop() orelse return error.Crash;
+                        }
+
+                        // Use the actual layout from the first evaluated element
+                        const actual_elem_layout = values[0].layout;
+
+                        // Create the list layout with the correct element layout
+                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
+                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+
+                        const dest = try self.pushRaw(actual_list_layout, 0);
+                        if (dest.ptr == null) {
+                            // Decref all values before returning
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            try value_stack.push(dest);
+                            return true;
+                        }
+
+                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                        const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                        const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
+                        const elements_refcounted = actual_elem_layout.isRefcounted();
+
+                        var runtime_list = RocList.allocateExact(
+                            elem_alignment_u32,
+                            total_count,
+                            elem_size,
+                            elements_refcounted,
+                            roc_ops,
+                        );
+
+                        if (elem_size > 0) {
+                            if (runtime_list.bytes) |buffer| {
+                                for (values, 0..) |val, idx| {
+                                    const dest_ptr = buffer + idx * elem_size;
+                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                }
+                            }
+                        }
+
+                        markListElementCount(&runtime_list, elements_refcounted);
+                        header.* = runtime_list;
+
+                        // Decref temporary values after they've been copied into the list
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        try value_stack.push(dest);
+                    }
+                }
+                return true;
+            },
+            .record_collect => |rc| {
+                // Record collection: evaluate extension (if any), then fields in order
+                if (rc.remaining_fields.len > 0) {
+                    // More fields to evaluate - schedule next one
+                    const next_field_idx = rc.remaining_fields[0];
+                    const f = self.env.store.getRecordField(next_field_idx);
+                    const field_ct_var = can.ModuleEnv.varFrom(f.value);
+                    const field_rt_var = try self.translateTypeVar(self.env, field_ct_var);
+
+                    try work_stack.push(.{ .apply_continuation = .{ .record_collect = .{
+                        .collected_count = rc.collected_count + 1,
+                        .remaining_fields = rc.remaining_fields[1..],
+                        .rt_var = rc.rt_var,
+                        .expr_idx = rc.expr_idx,
+                        .has_extension = rc.has_extension,
+                        .all_fields = rc.all_fields,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = f.value,
+                        .expected_rt_var = field_rt_var,
+                    } });
+                } else {
+                    // All values collected - finalize the record
+                    const total_field_values = rc.collected_count;
+
+                    // Build layout info from collected values
+                    var union_names = std.array_list.AlignedManaged(base_pkg.Ident.Idx, null).init(self.allocator);
+                    defer union_names.deinit();
+                    var union_layouts = std.array_list.AlignedManaged(layout.Layout, null).init(self.allocator);
+                    defer union_layouts.deinit();
+                    var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
+                    defer union_indices.deinit();
+
+                    // Pop field values from stack (in reverse order since last evaluated is on top)
+                    var field_values = try self.allocator.alloc(StackValue, total_field_values);
+                    defer self.allocator.free(field_values);
+
+                    var i: usize = total_field_values;
+                    while (i > 0) {
+                        i -= 1;
+                        field_values[i] = value_stack.pop() orelse return error.Crash;
+                    }
+
+                    // Handle base record if extension exists
+                    var base_value_opt: ?StackValue = null;
+                    if (rc.has_extension) {
+                        base_value_opt = value_stack.pop() orelse return error.Crash;
+                        const base_value = base_value_opt.?;
+                        if (base_value.layout.tag != .record) {
+                            base_value.decref(&self.runtime_layout_store, roc_ops);
+                            for (field_values) |fv| fv.decref(&self.runtime_layout_store, roc_ops);
+                            return error.TypeMismatch;
+                        }
+                        var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+
+                        // Add base record fields to union
+                        var idx: usize = 0;
+                        while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                            const info = base_accessor.field_layouts.get(idx);
+                            const field_layout = self.runtime_layout_store.getLayout(info.layout);
+                            const key: u32 = @bitCast(info.name);
+                            if (union_indices.get(key)) |idx_ptr| {
+                                union_layouts.items[idx_ptr] = field_layout;
+                                union_names.items[idx_ptr] = info.name;
+                            } else {
+                                try union_layouts.append(field_layout);
+                                try union_names.append(info.name);
+                                try union_indices.put(key, union_layouts.items.len - 1);
+                            }
+                        }
+                    }
+
+                    // Add explicit field layouts to union
+                    for (rc.all_fields, 0..) |field_idx_enum, idx| {
+                        const f = self.env.store.getRecordField(field_idx_enum);
+                        const field_layout = field_values[idx].layout;
+                        const key: u32 = @bitCast(f.name);
+                        if (union_indices.get(key)) |idx_ptr| {
+                            union_layouts.items[idx_ptr] = field_layout;
+                            union_names.items[idx_ptr] = f.name;
+                        } else {
+                            try union_layouts.append(field_layout);
+                            try union_names.append(f.name);
+                            try union_indices.put(key, union_layouts.items.len - 1);
+                        }
+                    }
+
+                    // Create record layout
+                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.env, union_layouts.items, union_names.items);
+                    const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
+
+                    // Cache the layout for this var
+                    const resolved_rt = self.runtime_types.resolveVar(rc.rt_var);
+                    const root_idx: usize = @intFromEnum(resolved_rt.var_);
+                    try self.ensureVarLayoutCapacity(root_idx + 1);
+                    self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
+
+                    var dest = try self.pushRaw(rec_layout, 0);
+                    var accessor = try dest.asRecord(&self.runtime_layout_store);
+
+                    // Copy base record fields first
+                    if (base_value_opt) |base_value| {
+                        var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+                        var idx: usize = 0;
+                        while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                            const info = base_accessor.field_layouts.get(idx);
+                            const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
+                            const base_field_value = try base_accessor.getFieldByIndex(idx);
+                            try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
+                        }
+                    }
+
+                    // Set explicit field values (overwriting base values if needed)
+                    for (rc.all_fields, 0..) |field_idx_enum, explicit_index| {
+                        const f = self.env.store.getRecordField(field_idx_enum);
+                        const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
+                        const val = field_values[explicit_index];
+
+                        // If overwriting a base field, decref the existing value
+                        if (base_value_opt) |base_value| {
+                            var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+                            if (base_accessor.findFieldIndex(f.name) != null) {
+                                const existing = try accessor.getFieldByIndex(dest_field_idx);
+                                existing.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
+
+                        try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
+                    }
+
+                    // Decref base value and field values after they've been copied
+                    if (base_value_opt) |base_value| {
+                        base_value.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    for (field_values) |val| {
+                        val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    try value_stack.push(dest);
                 }
                 return true;
             },
