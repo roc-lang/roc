@@ -295,6 +295,27 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : U16 -> I8
+			to_i8_try : U16 -> Try(I8, [OutOfRange])
+			to_i16_wrap : U16 -> I16
+			to_i16_try : U16 -> Try(I16, [OutOfRange])
+			to_i32 : U16 -> I32
+			to_i64 : U16 -> I64
+			to_i128 : U16 -> I128
+
+			# Conversions to unsigned integers
+			to_u8_wrap : U16 -> U8
+			to_u8_try : U16 -> Try(U8, [OutOfRange])
+			to_u32 : U16 -> U32
+			to_u64 : U16 -> U64
+			to_u128 : U16 -> U128
+
+			# Conversions to floating point (all safe)
+			to_f32 : U16 -> F32
+			to_f64 : U16 -> F64
+			to_dec : U16 -> Dec
 		}
 
 		I16 :: [].{
@@ -318,6 +339,30 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : I16 -> I8
+			to_i8_try : I16 -> Try(I8, [OutOfRange])
+			to_i32 : I16 -> I32
+			to_i64 : I16 -> I64
+			to_i128 : I16 -> I128
+
+			# Conversions to unsigned integers (all lossy for negative values)
+			to_u8_wrap : I16 -> U8
+			to_u8_try : I16 -> Try(U8, [OutOfRange])
+			to_u16_wrap : I16 -> U16
+			to_u16_try : I16 -> Try(U16, [OutOfRange])
+			to_u32_wrap : I16 -> U32
+			to_u32_try : I16 -> Try(U32, [OutOfRange])
+			to_u64_wrap : I16 -> U64
+			to_u64_try : I16 -> Try(U64, [OutOfRange])
+			to_u128_wrap : I16 -> U128
+			to_u128_try : I16 -> Try(U128, [OutOfRange])
+
+			# Conversions to floating point (all safe)
+			to_f32 : I16 -> F32
+			to_f64 : I16 -> F64
+			to_dec : I16 -> Dec
 		}
 
 		U32 :: [].{
@@ -338,6 +383,29 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : U32 -> I8
+			to_i8_try : U32 -> Try(I8, [OutOfRange])
+			to_i16_wrap : U32 -> I16
+			to_i16_try : U32 -> Try(I16, [OutOfRange])
+			to_i32_wrap : U32 -> I32
+			to_i32_try : U32 -> Try(I32, [OutOfRange])
+			to_i64 : U32 -> I64
+			to_i128 : U32 -> I128
+
+			# Conversions to unsigned integers
+			to_u8_wrap : U32 -> U8
+			to_u8_try : U32 -> Try(U8, [OutOfRange])
+			to_u16_wrap : U32 -> U16
+			to_u16_try : U32 -> Try(U16, [OutOfRange])
+			to_u64 : U32 -> U64
+			to_u128 : U32 -> U128
+
+			# Conversions to floating point (all safe)
+			to_f32 : U32 -> F32
+			to_f64 : U32 -> F64
+			to_dec : U32 -> Dec
 		}
 
 		I32 :: [].{
@@ -361,6 +429,31 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : I32 -> I8
+			to_i8_try : I32 -> Try(I8, [OutOfRange])
+			to_i16_wrap : I32 -> I16
+			to_i16_try : I32 -> Try(I16, [OutOfRange])
+			to_i64 : I32 -> I64
+			to_i128 : I32 -> I128
+
+			# Conversions to unsigned integers (all lossy for negative values)
+			to_u8_wrap : I32 -> U8
+			to_u8_try : I32 -> Try(U8, [OutOfRange])
+			to_u16_wrap : I32 -> U16
+			to_u16_try : I32 -> Try(U16, [OutOfRange])
+			to_u32_wrap : I32 -> U32
+			to_u32_try : I32 -> Try(U32, [OutOfRange])
+			to_u64_wrap : I32 -> U64
+			to_u64_try : I32 -> Try(U64, [OutOfRange])
+			to_u128_wrap : I32 -> U128
+			to_u128_try : I32 -> Try(U128, [OutOfRange])
+
+			# Conversions to floating point (all safe)
+			to_f32 : I32 -> F32
+			to_f64 : I32 -> F64
+			to_dec : I32 -> Dec
 		}
 
 		U64 :: [].{
@@ -381,6 +474,31 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : U64 -> I8
+			to_i8_try : U64 -> Try(I8, [OutOfRange])
+			to_i16_wrap : U64 -> I16
+			to_i16_try : U64 -> Try(I16, [OutOfRange])
+			to_i32_wrap : U64 -> I32
+			to_i32_try : U64 -> Try(I32, [OutOfRange])
+			to_i64_wrap : U64 -> I64
+			to_i64_try : U64 -> Try(I64, [OutOfRange])
+			to_i128 : U64 -> I128
+
+			# Conversions to unsigned integers
+			to_u8_wrap : U64 -> U8
+			to_u8_try : U64 -> Try(U8, [OutOfRange])
+			to_u16_wrap : U64 -> U16
+			to_u16_try : U64 -> Try(U16, [OutOfRange])
+			to_u32_wrap : U64 -> U32
+			to_u32_try : U64 -> Try(U32, [OutOfRange])
+			to_u128 : U64 -> U128
+
+			# Conversions to floating point (all safe)
+			to_f32 : U64 -> F32
+			to_f64 : U64 -> F64
+			to_dec : U64 -> Dec
 		}
 
 		I64 :: [].{
@@ -404,6 +522,32 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : I64 -> I8
+			to_i8_try : I64 -> Try(I8, [OutOfRange])
+			to_i16_wrap : I64 -> I16
+			to_i16_try : I64 -> Try(I16, [OutOfRange])
+			to_i32_wrap : I64 -> I32
+			to_i32_try : I64 -> Try(I32, [OutOfRange])
+			to_i128 : I64 -> I128
+
+			# Conversions to unsigned integers (all lossy for negative values)
+			to_u8_wrap : I64 -> U8
+			to_u8_try : I64 -> Try(U8, [OutOfRange])
+			to_u16_wrap : I64 -> U16
+			to_u16_try : I64 -> Try(U16, [OutOfRange])
+			to_u32_wrap : I64 -> U32
+			to_u32_try : I64 -> Try(U32, [OutOfRange])
+			to_u64_wrap : I64 -> U64
+			to_u64_try : I64 -> Try(U64, [OutOfRange])
+			to_u128_wrap : I64 -> U128
+			to_u128_try : I64 -> Try(U128, [OutOfRange])
+
+			# Conversions to floating point (all safe)
+			to_f32 : I64 -> F32
+			to_f64 : I64 -> F64
+			to_dec : I64 -> Dec
 		}
 
 		U128 :: [].{
@@ -424,6 +568,33 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : U128 -> I8
+			to_i8_try : U128 -> Try(I8, [OutOfRange])
+			to_i16_wrap : U128 -> I16
+			to_i16_try : U128 -> Try(I16, [OutOfRange])
+			to_i32_wrap : U128 -> I32
+			to_i32_try : U128 -> Try(I32, [OutOfRange])
+			to_i64_wrap : U128 -> I64
+			to_i64_try : U128 -> Try(I64, [OutOfRange])
+			to_i128_wrap : U128 -> I128
+			to_i128_try : U128 -> Try(I128, [OutOfRange])
+
+			# Conversions to unsigned integers
+			to_u8_wrap : U128 -> U8
+			to_u8_try : U128 -> Try(U8, [OutOfRange])
+			to_u16_wrap : U128 -> U16
+			to_u16_try : U128 -> Try(U16, [OutOfRange])
+			to_u32_wrap : U128 -> U32
+			to_u32_try : U128 -> Try(U32, [OutOfRange])
+			to_u64_wrap : U128 -> U64
+			to_u64_try : U128 -> Try(U64, [OutOfRange])
+
+			# Conversions to floating point (all safe)
+			to_f32 : U128 -> F32
+			to_f64 : U128 -> F64
+			to_dec : U128 -> Dec
 		}
 
 		I128 :: [].{
@@ -447,6 +618,33 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers
+			to_i8_wrap : I128 -> I8
+			to_i8_try : I128 -> Try(I8, [OutOfRange])
+			to_i16_wrap : I128 -> I16
+			to_i16_try : I128 -> Try(I16, [OutOfRange])
+			to_i32_wrap : I128 -> I32
+			to_i32_try : I128 -> Try(I32, [OutOfRange])
+			to_i64_wrap : I128 -> I64
+			to_i64_try : I128 -> Try(I64, [OutOfRange])
+
+			# Conversions to unsigned integers (all lossy for negative values)
+			to_u8_wrap : I128 -> U8
+			to_u8_try : I128 -> Try(U8, [OutOfRange])
+			to_u16_wrap : I128 -> U16
+			to_u16_try : I128 -> Try(U16, [OutOfRange])
+			to_u32_wrap : I128 -> U32
+			to_u32_try : I128 -> Try(U32, [OutOfRange])
+			to_u64_wrap : I128 -> U64
+			to_u64_try : I128 -> Try(U64, [OutOfRange])
+			to_u128_wrap : I128 -> U128
+			to_u128_try : I128 -> Try(U128, [OutOfRange])
+
+			# Conversions to floating point (all safe)
+			to_f32 : I128 -> F32
+			to_f64 : I128 -> F64
+			to_dec : I128 -> Dec
 		}
 
 		Dec :: [].{
