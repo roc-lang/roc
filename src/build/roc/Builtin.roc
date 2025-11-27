@@ -95,6 +95,11 @@ Builtin :: [].{
 			False
 		}
 
+		contains : List(a), a -> Bool where [a.is_eq: a, a -> Bool]
+		contains = |list, elt| {
+			List.any(list, |x| x == elt)
+		}
+
 		all : List(a), (a -> Bool) -> Bool
 		all = |list, predicate| {
 			if List.len(list) == 0 {
@@ -108,10 +113,6 @@ Builtin :: [].{
 			True
 		}
 
-		contains : List(a), a -> Bool where [a.is_eq: a, a -> Bool]
-		contains = |list, elt| {
-			List.any(list, |x| x == elt)
-		}
 	}
 
 	Bool := [False, True].{
