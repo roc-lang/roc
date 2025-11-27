@@ -44,10 +44,46 @@ main = {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - Adv.md:16:16:16:18
+TYPE MISMATCH - Adv.md:16:16:16:18
 MISSING METHOD - Adv.md:17:28:17:31
+TYPE MISMATCH - Adv.md:22:16:22:18
+TYPE MISMATCH - Adv.md:22:16:22:18
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
+TYPE MISMATCH - Adv.md:34:16:34:18
+TYPE MISMATCH - Adv.md:34:16:34:18
+TYPE MISMATCH - Adv.md:35:48:35:50
+TYPE MISMATCH - Adv.md:35:48:35:50
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:16:16:16:18:**
+```roc
+	val = Adv.Val(10, "hello")
+```
+	              ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:16:16:16:18:**
+```roc
+	val = Adv.Val(10, "hello")
+```
+	              ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
 **Adv.md:17:28:17:31:**
@@ -61,6 +97,34 @@ The value's type, which does not have a method named **from_numeral**, is:
     _Str_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:22:16:22:18:**
+```roc
+	val = Adv.Val(10, "hello")
+```
+	              ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:22:16:22:18:**
+```roc
+	val = Adv.Val(10, "hello")
+```
+	              ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
 
 **MISSING METHOD**
 This **update_strr** method is being called on a value whose type doesn't have that method:
@@ -89,6 +153,62 @@ The value's type, which does not have a method named **update**, is:
     _Str_
 
 **Hint: **For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:34:16:34:18:**
+```roc
+	val = Adv.Val(10, "hello")
+```
+	              ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:34:16:34:18:**
+```roc
+	val = Adv.Val(10, "hello")
+```
+	              ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:35:48:35:50:**
+```roc
+	next_val = val.update_str("world").update_u64(20)
+```
+	                                              ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:35:48:35:50:**
+```roc
+	next_val = val.update_str("world").update_u64(20)
+```
+	                                              ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
 
 # TOKENS
 ~~~zig

@@ -723,17 +723,11 @@ fn compileModule(
 
     // 2. Create common idents (needed for type checking)
     const module_ident = try module_env.insertIdent(base.Ident.for_text(module_name));
-    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
-    const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
-    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
-    var common_idents: Check.CommonIdents = .{
+    var builtin_ctx: Check.BuiltinContext = .{
         .module_name = module_ident,
-        .list = list_ident,
-        .box = box_ident,
-        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,
@@ -904,10 +898,10 @@ fn compileModule(
             return error.TypeDeclarationNotFound;
         };
 
-        // Update common_idents with the found statement indices
-        common_idents.bool_stmt = found_bool_stmt;
-        common_idents.try_stmt = found_try_stmt;
-        common_idents.str_stmt = found_str_stmt;
+        // Update builtin_ctx with the found statement indices
+        builtin_ctx.bool_stmt = found_bool_stmt;
+        builtin_ctx.try_stmt = found_try_stmt;
+        builtin_ctx.str_stmt = found_str_stmt;
     }
 
     // 6. Type check
@@ -930,7 +924,7 @@ fn compileModule(
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        common_idents,
+        builtin_ctx,
     );
     defer checker.deinit();
 

@@ -22,9 +22,37 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_deep_nesting.md:5:25:5:27
+TYPE MISMATCH - nominal_associated_deep_nesting.md:5:25:5:27
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_deep_nesting.md:5:25:5:27:**
+```roc
+                value = 42
+```
+                        ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_deep_nesting.md:5:25:5:27:**
+```roc
+                value = 42
+```
+                        ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -146,7 +174,7 @@ deepType = C
 (inferred-types
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
+		(patt (type "Error"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
@@ -159,6 +187,6 @@ deepType = C
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
+		(expr (type "Error"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

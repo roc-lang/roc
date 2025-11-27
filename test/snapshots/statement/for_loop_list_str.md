@@ -19,7 +19,34 @@ expect count == 3
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_list_str.md:3:17:3:18:**
+```roc
+	var counter_ = 0
+```
+	               ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_list_str.md:3:17:3:18:**
+```roc
+	var counter_ = 0
+```
+	               ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -113,7 +140,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U64"))))
+		(expr (type "Error"))))
 ~~~

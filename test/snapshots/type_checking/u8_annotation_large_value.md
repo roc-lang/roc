@@ -9,9 +9,37 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - u8_annotation_large_value.md:2:5:2:8
+TYPE MISMATCH - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**u8_annotation_large_value.md:2:5:2:8:**
+```roc
+x = 500
+```
+    ^^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**u8_annotation_large_value.md:2:5:2:8:**
+```roc
+x = 500
+```
+    ^^^
+
+It has the type:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U8, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -46,7 +74,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U8")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U8"))))
+		(expr (type "Error"))))
 ~~~

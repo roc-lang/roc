@@ -483,6 +483,8 @@ UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
+TYPE MISMATCH - associated_items_truly_comprehensive.md:464:13:464:16
+TYPE MISMATCH - associated_items_truly_comprehensive.md:464:13:464:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -529,6 +531,34 @@ The unused variable is declared here:
 ```
            ^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**associated_items_truly_comprehensive.md:464:13:464:16:**
+```roc
+    typed = 888
+```
+            ^^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**associated_items_truly_comprehensive.md:464:13:464:16:**
+```roc
+    typed = 888
+```
+            ^^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
 
 # TOKENS
 ~~~zig
@@ -3616,8 +3646,8 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
-		(patt (type "U64"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
@@ -3691,8 +3721,8 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
-		(patt (type "U64")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "D1_Forward")
 			(ty-header (name "D1_Forward")))
@@ -3950,8 +3980,8 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
-		(expr (type "U64"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
@@ -4025,6 +4055,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
-		(expr (type "U64"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

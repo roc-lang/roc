@@ -34,6 +34,18 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
+TYPE MISMATCH - lambda_parameter_unused.md:5:16:5:18
+TYPE MISMATCH - lambda_parameter_unused.md:5:16:5:18
+TYPE MISMATCH - lambda_parameter_unused.md:9:32:9:33
+TYPE MISMATCH - lambda_parameter_unused.md:9:32:9:33
+TYPE MISMATCH - lambda_parameter_unused.md:13:20:13:23
+TYPE MISMATCH - lambda_parameter_unused.md:13:20:13:23
+TYPE MISMATCH - lambda_parameter_unused.md:17:26:17:27
+TYPE MISMATCH - lambda_parameter_unused.md:17:26:17:27
+TYPE MISMATCH - lambda_parameter_unused.md:20:19:20:20
+TYPE MISMATCH - lambda_parameter_unused.md:20:19:20:20
+TYPE MISMATCH - lambda_parameter_unused.md:22:23:22:24
+TYPE MISMATCH - lambda_parameter_unused.md:22:23:22:24
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `unused` is not used anywhere in your code.
@@ -58,6 +70,174 @@ multiply = |_factor| _factor * 2
 ```
                      ^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:5:16:5:18:**
+```roc
+add = |unused| 42
+```
+               ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:5:16:5:18:**
+```roc
+add = |unused| 42
+```
+               ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:9:32:9:33:**
+```roc
+multiply = |_factor| _factor * 2
+```
+                               ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:9:32:9:33:**
+```roc
+multiply = |_factor| _factor * 2
+```
+                               ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:13:20:13:23:**
+```roc
+process = |_input| 100
+```
+                   ^^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:13:20:13:23:**
+```roc
+process = |_input| 100
+```
+                   ^^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:17:26:17:27:**
+```roc
+double = |value| value * 2
+```
+                         ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:17:26:17:27:**
+```roc
+double = |value| value * 2
+```
+                         ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:20:19:20:20:**
+```roc
+    result1 = add(5)
+```
+                  ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:20:19:20:20:**
+```roc
+    result1 = add(5)
+```
+                  ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:22:23:22:24:**
+```roc
+    result3 = process(7)
+```
+                      ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:22:23:22:24:**
+```roc
+    result3 = process(7)
+```
+                      ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
 
 # TOKENS
 ~~~zig
@@ -302,15 +482,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64 -> U64"))
-		(patt (type "U64 -> U64"))
-		(patt (type "U64 -> U64"))
-		(patt (type "U64 -> U64"))
-		(patt (type "_arg -> U64")))
+		(patt (type "U64 -> Error"))
+		(patt (type "Error -> Error"))
+		(patt (type "U64 -> Error"))
+		(patt (type "Error -> Error"))
+		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "_arg -> U64"))))
+		(expr (type "U64 -> Error"))
+		(expr (type "Error -> Error"))
+		(expr (type "U64 -> Error"))
+		(expr (type "Error -> Error"))
+		(expr (type "_arg -> Error"))))
 ~~~

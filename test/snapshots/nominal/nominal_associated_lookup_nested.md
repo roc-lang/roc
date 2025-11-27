@@ -18,9 +18,37 @@ myNum : U64
 myNum = Foo.Bar.baz
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_lookup_nested.md:3:15:3:16
+TYPE MISMATCH - nominal_associated_lookup_nested.md:3:15:3:16
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_lookup_nested.md:3:15:3:16:**
+```roc
+        baz = 5
+```
+              ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_lookup_nested.md:3:15:3:16:**
+```roc
+        baz = 5
+```
+              ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -113,7 +141,7 @@ myNum = Foo.Bar.baz
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "Foo.Bar"))
-		(patt (type "U64")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -122,5 +150,5 @@ myNum = Foo.Bar.baz
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "Foo.Bar"))
-		(expr (type "U64"))))
+		(expr (type "Error"))))
 ~~~

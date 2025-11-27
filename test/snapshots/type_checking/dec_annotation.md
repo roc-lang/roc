@@ -9,9 +9,37 @@ x : Dec
 x = 123.456
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - dec_annotation.md:2:5:2:12
+TYPE MISMATCH - dec_annotation.md:2:5:2:12
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**dec_annotation.md:2:5:2:12:**
+```roc
+x = 123.456
+```
+    ^^^^^^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**dec_annotation.md:2:5:2:12:**
+```roc
+x = 123.456
+```
+    ^^^^^^^
+
+It has the type:
+    _Try(Dec, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(Dec, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -46,7 +74,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Dec"))))
+		(expr (type "Error"))))
 ~~~

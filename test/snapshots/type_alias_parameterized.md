@@ -26,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^^^^^^^
 
 It has the type:
-    _c, d -> _ret where [c.from_numeral : Num.Numeral -> Try(_e, [InvalidNumeral(Str)]), d.from_numeral : Num.Numeral -> Try(_f, [InvalidNumeral(Str)])]_
+    _c, d -> _ret where [c.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _Pair(a, b) -> Pair(b, a)_

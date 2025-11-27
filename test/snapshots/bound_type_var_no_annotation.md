@@ -46,6 +46,34 @@ The unused variable is declared here:
     ^^^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**bound_type_var_no_annotation.md:11:18:11:19:**
+```roc
+addOne = |n| n + 1
+```
+                 ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**bound_type_var_no_annotation.md:11:18:11:19:**
+```roc
+addOne = |n| n + 1
+```
+                 ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -261,11 +289,11 @@ main! = |_| {
 	(defs
 		(patt (type "c -> c"))
 		(patt (type "a, b -> (a, b)"))
-		(patt (type "U64 -> U64"))
-		(patt (type "_arg -> U64")))
+		(patt (type "Error -> Error"))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "c -> c"))
 		(expr (type "a, b -> (a, b)"))
-		(expr (type "U64 -> U64"))
-		(expr (type "_arg -> U64"))))
+		(expr (type "Error -> Error"))
+		(expr (type "_arg -> Error"))))
 ~~~

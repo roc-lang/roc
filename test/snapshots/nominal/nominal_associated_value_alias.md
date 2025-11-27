@@ -17,9 +17,37 @@ result : U64
 result = myBar
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_value_alias.md:2:11:2:13
+TYPE MISMATCH - nominal_associated_value_alias.md:2:11:2:13
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_value_alias.md:2:11:2:13:**
+```roc
+    bar = 42
+```
+          ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_value_alias.md:2:11:2:13:**
+```roc
+    bar = 42
+```
+          ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -98,13 +126,13 @@ result = myBar
 (inferred-types
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "U64"))
-		(patt (type "U64")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "U64"))
-		(expr (type "U64"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

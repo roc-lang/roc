@@ -103,59 +103,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
-        .minus_ident = common.findIdent("minus") orelse unreachable,
-        .times_ident = common.findIdent("times") orelse unreachable,
-        .div_by_ident = common.findIdent("div_by") orelse unreachable,
-        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
-        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
-        .negate_ident = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
-        .not_ident = common.findIdent("not") orelse unreachable,
-        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
-        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
-        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
-        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
-        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
-        // Fully-qualified type identifiers for type checking and layout generation
-        .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
-        .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
-        .builtin_str_ident = common.findIdent("Builtin.Str") orelse unreachable,
-        .list_type_ident = common.findIdent("List") orelse unreachable,
-        .box_type_ident = common.findIdent("Box") orelse unreachable,
-        .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
-        .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
-        .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
-        .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
-        .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
-        .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
-        .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
-        .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
-        .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
-        .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
-        .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
-        .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
-        .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
-        .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
-        .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
-        .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
-        .tag_ident = common.findIdent("tag") orelse unreachable,
-        .payload_ident = common.findIdent("payload") orelse unreachable,
-        .is_negative_ident = common.findIdent("is_negative") orelse unreachable,
-        .digits_before_pt_ident = common.findIdent("digits_before_pt") orelse unreachable,
-        .digits_after_pt_ident = common.findIdent("digits_after_pt") orelse unreachable,
-        .box_method_ident = common.findIdent("box") orelse unreachable,
-        .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
-        .ok_ident = common.findIdent("Ok") orelse unreachable,
-        .err_ident = common.findIdent("Err") orelse unreachable,
-        .numeral_relative_ident = common.findIdent("Num.Numeral") orelse unreachable,
-        .true_tag_ident = common.findIdent("True") orelse unreachable,
-        .false_tag_ident = common.findIdent("False") orelse unreachable,
+        .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
     };
@@ -170,7 +118,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 3 field/tag identifiers: before_dot, after_dot, ProvidedByCompiler
     // Plus 7 more identifiers: tag, payload, is_negative, digits_before_pt, digits_after_pt, box, unbox
     // Plus 2 Try tag identifiers: Ok, Err
-    // Plus 3 more identifiers: Num.Numeral (relative), True, False
+    // Plus 1 method identifier: from_numeral
+    // Plus 2 Bool tag identifiers: True, False
     try testing.expectEqual(@as(u32, 55), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
@@ -180,7 +129,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 55 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 18 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 3 additional (Num.Numeral relative, True, False) from ModuleEnv.init()
+    // Should have same 55 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 18 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers from ModuleEnv.init()
     try testing.expectEqual(@as(u32, 55), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());

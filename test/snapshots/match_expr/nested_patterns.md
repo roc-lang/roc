@@ -26,6 +26,34 @@ match data {
       ^^^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nested_patterns.md:3:33:3:34:**
+```roc
+    Container({ items: [] }) => 0
+```
+                                ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nested_patterns.md:3:33:3:34:**
+```roc
+    Container({ items: [] }) => 0
+```
+                                ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -130,5 +158,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "U64"))
+(expr (type "Error"))
 ~~~

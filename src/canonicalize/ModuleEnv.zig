@@ -92,6 +92,190 @@ pub const ModuleKind = union(enum) {
     };
 };
 
+/// Well-known identifiers that are interned once and reused throughout compilation.
+/// These are needed for type checking, operator desugaring, and layout generation.
+/// This is an extern struct so it can be embedded in serialized ModuleEnv.
+pub const CommonIdents = extern struct {
+    // Method names for operator desugaring
+    from_int_digits: Ident.Idx,
+    from_dec_digits: Ident.Idx,
+    plus: Ident.Idx,
+    minus: Ident.Idx,
+    times: Ident.Idx,
+    div_by: Ident.Idx,
+    div_trunc_by: Ident.Idx,
+    rem_by: Ident.Idx,
+    negate: Ident.Idx,
+    not: Ident.Idx,
+    is_lt: Ident.Idx,
+    is_lte: Ident.Idx,
+    is_gt: Ident.Idx,
+    is_gte: Ident.Idx,
+    is_eq: Ident.Idx,
+    is_ne: Ident.Idx,
+
+    // Type/module names
+    @"try": Ident.Idx,
+    out_of_range: Ident.Idx,
+    builtin_module: Ident.Idx,
+    list: Ident.Idx,
+    box: Ident.Idx,
+
+    // Fully-qualified type identifiers for type checking and layout generation
+    builtin_try: Ident.Idx,
+    builtin_numeral: Ident.Idx,
+    builtin_str: Ident.Idx,
+    u8_type: Ident.Idx,
+    i8_type: Ident.Idx,
+    u16_type: Ident.Idx,
+    i16_type: Ident.Idx,
+    u32_type: Ident.Idx,
+    i32_type: Ident.Idx,
+    u64_type: Ident.Idx,
+    i64_type: Ident.Idx,
+    u128_type: Ident.Idx,
+    i128_type: Ident.Idx,
+    f32_type: Ident.Idx,
+    f64_type: Ident.Idx,
+    dec_type: Ident.Idx,
+
+    // Field/tag names used during type checking and evaluation
+    before_dot: Ident.Idx,
+    after_dot: Ident.Idx,
+    provided_by_compiler: Ident.Idx,
+    tag: Ident.Idx,
+    payload: Ident.Idx,
+    is_negative: Ident.Idx,
+    digits_before_pt: Ident.Idx,
+    digits_after_pt: Ident.Idx,
+    box_method: Ident.Idx,
+    unbox_method: Ident.Idx,
+    ok: Ident.Idx,
+    err: Ident.Idx,
+    from_numeral: Ident.Idx,
+    true_tag: Ident.Idx,
+    false_tag: Ident.Idx,
+
+    /// Insert all well-known identifiers into a CommonEnv.
+    /// Use this when creating a fresh ModuleEnv from scratch.
+    pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
+        return .{
+            .from_int_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
+            .from_dec_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
+            .plus = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME)),
+            .minus = try common.insertIdent(gpa, Ident.for_text("minus")),
+            .times = try common.insertIdent(gpa, Ident.for_text("times")),
+            .div_by = try common.insertIdent(gpa, Ident.for_text("div_by")),
+            .div_trunc_by = try common.insertIdent(gpa, Ident.for_text("div_trunc_by")),
+            .rem_by = try common.insertIdent(gpa, Ident.for_text("rem_by")),
+            .negate = try common.insertIdent(gpa, Ident.for_text(Ident.NEGATE_METHOD_NAME)),
+            .not = try common.insertIdent(gpa, Ident.for_text("not")),
+            .is_lt = try common.insertIdent(gpa, Ident.for_text("is_lt")),
+            .is_lte = try common.insertIdent(gpa, Ident.for_text("is_lte")),
+            .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
+            .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
+            .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
+            .is_ne = try common.insertIdent(gpa, Ident.for_text("is_ne")),
+            .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
+            .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
+            .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
+            .list = try common.insertIdent(gpa, Ident.for_text("List")),
+            .box = try common.insertIdent(gpa, Ident.for_text("Box")),
+            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
+            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
+            .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
+            .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
+            .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
+            .u16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16")),
+            .i16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16")),
+            .u32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32")),
+            .i32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32")),
+            .u64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64")),
+            .i64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64")),
+            .u128_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U128")),
+            .i128_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I128")),
+            .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
+            .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
+            .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
+            .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
+            .provided_by_compiler = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler")),
+            .tag = try common.insertIdent(gpa, Ident.for_text("tag")),
+            .payload = try common.insertIdent(gpa, Ident.for_text("payload")),
+            .is_negative = try common.insertIdent(gpa, Ident.for_text("is_negative")),
+            .digits_before_pt = try common.insertIdent(gpa, Ident.for_text("digits_before_pt")),
+            .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
+            .box_method = try common.insertIdent(gpa, Ident.for_text("box")),
+            .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
+            .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
+            .err = try common.insertIdent(gpa, Ident.for_text("Err")),
+            .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
+            .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
+            .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
+        };
+    }
+
+    /// Find all well-known identifiers in a CommonEnv that has already interned them.
+    /// Use this when loading a pre-compiled module where identifiers are already present.
+    /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
+    pub fn find(common: *const CommonEnv) CommonIdents {
+        return .{
+            .from_int_digits = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
+            .from_dec_digits = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
+            .plus = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+            .minus = common.findIdent("minus") orelse unreachable,
+            .times = common.findIdent("times") orelse unreachable,
+            .div_by = common.findIdent("div_by") orelse unreachable,
+            .div_trunc_by = common.findIdent("div_trunc_by") orelse unreachable,
+            .rem_by = common.findIdent("rem_by") orelse unreachable,
+            .negate = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
+            .not = common.findIdent("not") orelse unreachable,
+            .is_lt = common.findIdent("is_lt") orelse unreachable,
+            .is_lte = common.findIdent("is_lte") orelse unreachable,
+            .is_gt = common.findIdent("is_gt") orelse unreachable,
+            .is_gte = common.findIdent("is_gte") orelse unreachable,
+            .is_eq = common.findIdent("is_eq") orelse unreachable,
+            .is_ne = common.findIdent("is_ne") orelse unreachable,
+            .@"try" = common.findIdent("Try") orelse unreachable,
+            .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
+            .builtin_module = common.findIdent("Builtin") orelse unreachable,
+            .list = common.findIdent("List") orelse unreachable,
+            .box = common.findIdent("Box") orelse unreachable,
+            .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
+            .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+            .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
+            .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
+            .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
+            .u16_type = common.findIdent("Builtin.Num.U16") orelse unreachable,
+            .i16_type = common.findIdent("Builtin.Num.I16") orelse unreachable,
+            .u32_type = common.findIdent("Builtin.Num.U32") orelse unreachable,
+            .i32_type = common.findIdent("Builtin.Num.I32") orelse unreachable,
+            .u64_type = common.findIdent("Builtin.Num.U64") orelse unreachable,
+            .i64_type = common.findIdent("Builtin.Num.I64") orelse unreachable,
+            .u128_type = common.findIdent("Builtin.Num.U128") orelse unreachable,
+            .i128_type = common.findIdent("Builtin.Num.I128") orelse unreachable,
+            .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
+            .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
+            .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .before_dot = common.findIdent("before_dot") orelse unreachable,
+            .after_dot = common.findIdent("after_dot") orelse unreachable,
+            .provided_by_compiler = common.findIdent("ProvidedByCompiler") orelse unreachable,
+            .tag = common.findIdent("tag") orelse unreachable,
+            .payload = common.findIdent("payload") orelse unreachable,
+            .is_negative = common.findIdent("is_negative") orelse unreachable,
+            .digits_before_pt = common.findIdent("digits_before_pt") orelse unreachable,
+            .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
+            .box_method = common.findIdent("box") orelse unreachable,
+            .unbox_method = common.findIdent("unbox") orelse unreachable,
+            .ok = common.findIdent("Ok") orelse unreachable,
+            .err = common.findIdent("Err") orelse unreachable,
+            .from_numeral = common.findIdent("from_numeral") orelse unreachable,
+            .true_tag = common.findIdent("True") orelse unreachable,
+            .false_tag = common.findIdent("False") orelse unreachable,
+        };
+    }
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -133,89 +317,9 @@ store: NodeStore,
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
-// Cached well-known identifiers for type checking
-// (These are interned once during init to avoid repeated string comparisons during type checking)
-
-/// Interned identifier for "from_int_digits" - used for numeric literal type checking
-from_int_digits_ident: Ident.Idx,
-/// Interned identifier for "from_dec_digits" - used for decimal literal type checking
-from_dec_digits_ident: Ident.Idx,
-/// Interned identifier for "Try" - used for numeric literal type checking
-try_ident: Ident.Idx,
-/// Interned identifier for "OutOfRange" - used for numeric literal type checking
-out_of_range_ident: Ident.Idx,
-/// Interned identifier for "Builtin" - used for numeric literal type checking
-builtin_module_ident: Ident.Idx,
-/// Interned identifier for "plus" - used for + operator desugaring
-plus_ident: Ident.Idx,
-/// Interned identifier for "minus" - used for - operator desugaring
-minus_ident: Ident.Idx,
-/// Interned identifier for "times" - used for * operator desugaring
-times_ident: Ident.Idx,
-/// Interned identifier for "div_by" - used for / operator desugaring
-div_by_ident: Ident.Idx,
-/// Interned identifier for "div_trunc_by" - used for // operator desugaring
-div_trunc_by_ident: Ident.Idx,
-/// Interned identifier for "rem_by" - used for % operator desugaring
-rem_by_ident: Ident.Idx,
-/// Interned identifier for "negate" - used for unary - operator desugaring
-negate_ident: Ident.Idx,
-/// Interned identifier for "not" - used for ! operator desugaring
-not_ident: Ident.Idx,
-/// Interned identifier for "is_lt" - used for < operator desugaring
-is_lt_ident: Ident.Idx,
-/// Interned identifier for "is_lte" - used for <= operator desugaring
-is_lte_ident: Ident.Idx,
-/// Interned identifier for "is_gt" - used for > operator desugaring
-is_gt_ident: Ident.Idx,
-/// Interned identifier for "is_gte" - used for >= operator desugaring
-is_gte_ident: Ident.Idx,
-/// Interned identifier for "is_eq" - used for == operator desugaring
-is_eq_ident: Ident.Idx,
-/// Interned identifier for "is_ne" - used for != operator desugaring
-is_ne_ident: Ident.Idx,
-
-// Fully-qualified type identifiers for type checking and layout generation
-// These match the nominal types created during type checking
-builtin_try_ident: Ident.Idx,
-builtin_numeral_ident: Ident.Idx,
-/// Relative numeral ident "Num.Numeral" - used for creating nominal types where origin_module is Builtin
-numeral_relative_ident: Ident.Idx,
-builtin_str_ident: Ident.Idx,
-list_type_ident: Ident.Idx,
-box_type_ident: Ident.Idx,
-u8_type_ident: Ident.Idx,
-i8_type_ident: Ident.Idx,
-u16_type_ident: Ident.Idx,
-i16_type_ident: Ident.Idx,
-u32_type_ident: Ident.Idx,
-i32_type_ident: Ident.Idx,
-u64_type_ident: Ident.Idx,
-i64_type_ident: Ident.Idx,
-u128_type_ident: Ident.Idx,
-i128_type_ident: Ident.Idx,
-f32_type_ident: Ident.Idx,
-f64_type_ident: Ident.Idx,
-dec_type_ident: Ident.Idx,
-
-// Field/tag names used during type checking and evaluation
-before_dot_ident: Ident.Idx,
-after_dot_ident: Ident.Idx,
-provided_by_compiler_ident: Ident.Idx,
-tag_ident: Ident.Idx,
-payload_ident: Ident.Idx,
-is_negative_ident: Ident.Idx,
-digits_before_pt_ident: Ident.Idx,
-digits_after_pt_ident: Ident.Idx,
-// Box method idents
-box_method_ident: Ident.Idx,
-unbox_method_ident: Ident.Idx,
-// Try tag idents
-ok_ident: Ident.Idx,
-err_ident: Ident.Idx,
-// Bool tag idents
-true_tag_ident: Ident.Idx,
-false_tag_ident: Ident.Idx,
+/// Well-known identifiers for type checking, operator desugaring, and layout generation.
+/// Interned once during init to avoid repeated string comparisons.
+idents: CommonIdents,
 
 /// Deferred numeric literals collected during type checking
 /// These will be validated during comptime evaluation
@@ -297,62 +401,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     var common = try CommonEnv.init(gpa, source);
-
-    // Intern well-known identifiers once during initialization for fast type checking
-    const from_int_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME));
-    const from_dec_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME));
-    const try_ident = try common.insertIdent(gpa, Ident.for_text("Try"));
-    const out_of_range_ident = try common.insertIdent(gpa, Ident.for_text("OutOfRange"));
-    const builtin_module_ident = try common.insertIdent(gpa, Ident.for_text("Builtin"));
-    const plus_ident = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME));
-    const minus_ident = try common.insertIdent(gpa, Ident.for_text("minus"));
-    const times_ident = try common.insertIdent(gpa, Ident.for_text("times"));
-    const div_by_ident = try common.insertIdent(gpa, Ident.for_text("div_by"));
-    const div_trunc_by_ident = try common.insertIdent(gpa, Ident.for_text("div_trunc_by"));
-    const rem_by_ident = try common.insertIdent(gpa, Ident.for_text("rem_by"));
-    const negate_ident = try common.insertIdent(gpa, Ident.for_text(Ident.NEGATE_METHOD_NAME));
-    const not_ident = try common.insertIdent(gpa, Ident.for_text("not"));
-    const is_lt_ident = try common.insertIdent(gpa, Ident.for_text("is_lt"));
-    const is_lte_ident = try common.insertIdent(gpa, Ident.for_text("is_lte"));
-    const is_gt_ident = try common.insertIdent(gpa, Ident.for_text("is_gt"));
-    const is_gte_ident = try common.insertIdent(gpa, Ident.for_text("is_gte"));
-    const is_eq_ident = try common.insertIdent(gpa, Ident.for_text("is_eq"));
-    const is_ne_ident = try common.insertIdent(gpa, Ident.for_text("is_ne"));
-
-    // Pre-intern fully-qualified type identifiers for type checking and layout generation
-    const builtin_try_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Try"));
-    const builtin_numeral_ident_val = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral"));
-    const numeral_relative_ident = try common.insertIdent(gpa, Ident.for_text("Num.Numeral"));
-    const builtin_str_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Str"));
-    const list_type_ident = try common.insertIdent(gpa, Ident.for_text("List"));
-    const box_type_ident = try common.insertIdent(gpa, Ident.for_text("Box"));
-    const u8_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8"));
-    const i8_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8"));
-    const u16_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16"));
-    const i16_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16"));
-    const u32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32"));
-    const i32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32"));
-    const u64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64"));
-    const i64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64"));
-    const u128_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U128"));
-    const i128_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I128"));
-    const f32_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32"));
-    const f64_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64"));
-    const dec_type_ident = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec"));
-    const before_dot_ident = try common.insertIdent(gpa, Ident.for_text("before_dot"));
-    const after_dot_ident = try common.insertIdent(gpa, Ident.for_text("after_dot"));
-    const provided_by_compiler_ident = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler"));
-    const tag_ident = try common.insertIdent(gpa, Ident.for_text("tag"));
-    const payload_ident = try common.insertIdent(gpa, Ident.for_text("payload"));
-    const is_negative_ident = try common.insertIdent(gpa, Ident.for_text("is_negative"));
-    const digits_before_pt_ident = try common.insertIdent(gpa, Ident.for_text("digits_before_pt"));
-    const digits_after_pt_ident = try common.insertIdent(gpa, Ident.for_text("digits_after_pt"));
-    const box_method_ident = try common.insertIdent(gpa, Ident.for_text("box"));
-    const unbox_method_ident = try common.insertIdent(gpa, Ident.for_text("unbox"));
-    const ok_ident = try common.insertIdent(gpa, Ident.for_text("Ok"));
-    const err_ident = try common.insertIdent(gpa, Ident.for_text("Err"));
-    const true_tag_ident = try common.insertIdent(gpa, Ident.for_text("True"));
-    const false_tag_ident = try common.insertIdent(gpa, Ident.for_text("False"));
+    const idents = try CommonIdents.insert(gpa, &common);
 
     return Self{
         .gpa = gpa,
@@ -371,58 +420,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
-        .from_int_digits_ident = from_int_digits_ident,
-        .from_dec_digits_ident = from_dec_digits_ident,
-        .try_ident = try_ident,
-        .out_of_range_ident = out_of_range_ident,
-        .builtin_module_ident = builtin_module_ident,
-        .plus_ident = plus_ident,
-        .minus_ident = minus_ident,
-        .times_ident = times_ident,
-        .div_by_ident = div_by_ident,
-        .div_trunc_by_ident = div_trunc_by_ident,
-        .rem_by_ident = rem_by_ident,
-        .negate_ident = negate_ident,
-        .not_ident = not_ident,
-        .is_lt_ident = is_lt_ident,
-        .is_lte_ident = is_lte_ident,
-        .is_gt_ident = is_gt_ident,
-        .is_gte_ident = is_gte_ident,
-        .is_eq_ident = is_eq_ident,
-        .is_ne_ident = is_ne_ident,
-        .builtin_try_ident = builtin_try_ident_val,
-        .builtin_numeral_ident = builtin_numeral_ident_val,
-        .numeral_relative_ident = numeral_relative_ident,
-        .builtin_str_ident = builtin_str_ident,
-        .list_type_ident = list_type_ident,
-        .box_type_ident = box_type_ident,
-        .u8_type_ident = u8_type_ident,
-        .i8_type_ident = i8_type_ident,
-        .u16_type_ident = u16_type_ident,
-        .i16_type_ident = i16_type_ident,
-        .u32_type_ident = u32_type_ident,
-        .i32_type_ident = i32_type_ident,
-        .u64_type_ident = u64_type_ident,
-        .i64_type_ident = i64_type_ident,
-        .u128_type_ident = u128_type_ident,
-        .i128_type_ident = i128_type_ident,
-        .f32_type_ident = f32_type_ident,
-        .f64_type_ident = f64_type_ident,
-        .dec_type_ident = dec_type_ident,
-        .before_dot_ident = before_dot_ident,
-        .after_dot_ident = after_dot_ident,
-        .provided_by_compiler_ident = provided_by_compiler_ident,
-        .tag_ident = tag_ident,
-        .payload_ident = payload_ident,
-        .is_negative_ident = is_negative_ident,
-        .digits_before_pt_ident = digits_before_pt_ident,
-        .digits_after_pt_ident = digits_after_pt_ident,
-        .box_method_ident = box_method_ident,
-        .unbox_method_ident = unbox_method_ident,
-        .ok_ident = ok_ident,
-        .err_ident = err_ident,
-        .true_tag_ident = true_tag_ident,
-        .false_tag_ident = false_tag_ident,
+        .idents = idents,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
     };
@@ -1847,59 +1845,7 @@ pub const Serialized = extern struct {
     module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
-    from_int_digits_ident: Ident.Idx,
-    from_dec_digits_ident: Ident.Idx,
-    try_ident: Ident.Idx,
-    out_of_range_ident: Ident.Idx,
-    builtin_module_ident: Ident.Idx,
-    plus_ident: Ident.Idx,
-    minus_ident: Ident.Idx,
-    times_ident: Ident.Idx,
-    div_by_ident: Ident.Idx,
-    div_trunc_by_ident: Ident.Idx,
-    rem_by_ident: Ident.Idx,
-    negate_ident: Ident.Idx,
-    not_ident: Ident.Idx,
-    is_lt_ident: Ident.Idx,
-    is_lte_ident: Ident.Idx,
-    is_gt_ident: Ident.Idx,
-    is_gte_ident: Ident.Idx,
-    is_eq_ident: Ident.Idx,
-    is_ne_ident: Ident.Idx,
-    // Fully-qualified type identifiers for type checking and layout generation
-    builtin_try_ident: Ident.Idx,
-    builtin_numeral_ident: Ident.Idx,
-    numeral_relative_ident: Ident.Idx,
-    builtin_str_ident: Ident.Idx,
-    list_type_ident: Ident.Idx,
-    box_type_ident: Ident.Idx,
-    u8_type_ident: Ident.Idx,
-    i8_type_ident: Ident.Idx,
-    u16_type_ident: Ident.Idx,
-    i16_type_ident: Ident.Idx,
-    u32_type_ident: Ident.Idx,
-    i32_type_ident: Ident.Idx,
-    u64_type_ident: Ident.Idx,
-    i64_type_ident: Ident.Idx,
-    u128_type_ident: Ident.Idx,
-    i128_type_ident: Ident.Idx,
-    f32_type_ident: Ident.Idx,
-    f64_type_ident: Ident.Idx,
-    dec_type_ident: Ident.Idx,
-    before_dot_ident: Ident.Idx,
-    after_dot_ident: Ident.Idx,
-    provided_by_compiler_ident: Ident.Idx,
-    tag_ident: Ident.Idx,
-    payload_ident: Ident.Idx,
-    is_negative_ident: Ident.Idx,
-    digits_before_pt_ident: Ident.Idx,
-    digits_after_pt_ident: Ident.Idx,
-    box_method_ident: Ident.Idx,
-    unbox_method_ident: Ident.Idx,
-    ok_ident: Ident.Idx,
-    err_ident: Ident.Idx,
-    true_tag_ident: Ident.Idx,
-    false_tag_ident: Ident.Idx,
+    idents: CommonIdents,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
 
@@ -1940,58 +1886,7 @@ pub const Serialized = extern struct {
         self.evaluation_order_reserved = 0;
 
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
-        self.from_int_digits_ident = env.from_int_digits_ident;
-        self.from_dec_digits_ident = env.from_dec_digits_ident;
-        self.try_ident = env.try_ident;
-        self.out_of_range_ident = env.out_of_range_ident;
-        self.builtin_module_ident = env.builtin_module_ident;
-        self.plus_ident = env.plus_ident;
-        self.minus_ident = env.minus_ident;
-        self.times_ident = env.times_ident;
-        self.div_by_ident = env.div_by_ident;
-        self.div_trunc_by_ident = env.div_trunc_by_ident;
-        self.rem_by_ident = env.rem_by_ident;
-        self.negate_ident = env.negate_ident;
-        self.not_ident = env.not_ident;
-        self.is_lt_ident = env.is_lt_ident;
-        self.is_lte_ident = env.is_lte_ident;
-        self.is_gt_ident = env.is_gt_ident;
-        self.is_gte_ident = env.is_gte_ident;
-        self.is_eq_ident = env.is_eq_ident;
-        self.is_ne_ident = env.is_ne_ident;
-        self.builtin_try_ident = env.builtin_try_ident;
-        self.builtin_numeral_ident = env.builtin_numeral_ident;
-        self.numeral_relative_ident = env.numeral_relative_ident;
-        self.builtin_str_ident = env.builtin_str_ident;
-        self.list_type_ident = env.list_type_ident;
-        self.box_type_ident = env.box_type_ident;
-        self.u8_type_ident = env.u8_type_ident;
-        self.i8_type_ident = env.i8_type_ident;
-        self.u16_type_ident = env.u16_type_ident;
-        self.i16_type_ident = env.i16_type_ident;
-        self.u32_type_ident = env.u32_type_ident;
-        self.i32_type_ident = env.i32_type_ident;
-        self.u64_type_ident = env.u64_type_ident;
-        self.i64_type_ident = env.i64_type_ident;
-        self.u128_type_ident = env.u128_type_ident;
-        self.i128_type_ident = env.i128_type_ident;
-        self.f32_type_ident = env.f32_type_ident;
-        self.f64_type_ident = env.f64_type_ident;
-        self.dec_type_ident = env.dec_type_ident;
-        self.before_dot_ident = env.before_dot_ident;
-        self.after_dot_ident = env.after_dot_ident;
-        self.provided_by_compiler_ident = env.provided_by_compiler_ident;
-        self.tag_ident = env.tag_ident;
-        self.payload_ident = env.payload_ident;
-        self.is_negative_ident = env.is_negative_ident;
-        self.digits_before_pt_ident = env.digits_before_pt_ident;
-        self.digits_after_pt_ident = env.digits_after_pt_ident;
-        self.box_method_ident = env.box_method_ident;
-        self.unbox_method_ident = env.unbox_method_ident;
-        self.ok_ident = env.ok_ident;
-        self.err_ident = env.err_ident;
-        self.true_tag_ident = env.true_tag_ident;
-        self.false_tag_ident = env.false_tag_ident;
+        self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
     }
@@ -2037,60 +1932,7 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
-            // Well-known identifiers - read directly from serialized data (no string lookup needed)
-            .from_int_digits_ident = self.from_int_digits_ident,
-            .from_dec_digits_ident = self.from_dec_digits_ident,
-            .try_ident = self.try_ident,
-            .out_of_range_ident = self.out_of_range_ident,
-            .builtin_module_ident = self.builtin_module_ident,
-            .plus_ident = self.plus_ident,
-            .minus_ident = self.minus_ident,
-            .times_ident = self.times_ident,
-            .div_by_ident = self.div_by_ident,
-            .div_trunc_by_ident = self.div_trunc_by_ident,
-            .rem_by_ident = self.rem_by_ident,
-            .negate_ident = self.negate_ident,
-            .not_ident = self.not_ident,
-            .is_lt_ident = self.is_lt_ident,
-            .is_lte_ident = self.is_lte_ident,
-            .is_gt_ident = self.is_gt_ident,
-            .is_gte_ident = self.is_gte_ident,
-            .is_eq_ident = self.is_eq_ident,
-            .is_ne_ident = self.is_ne_ident,
-            // Fully-qualified type identifiers for type checking and layout generation
-            .builtin_try_ident = self.builtin_try_ident,
-            .builtin_numeral_ident = self.builtin_numeral_ident,
-            .numeral_relative_ident = self.numeral_relative_ident,
-            .builtin_str_ident = self.builtin_str_ident,
-            .list_type_ident = self.list_type_ident,
-            .box_type_ident = self.box_type_ident,
-            .u8_type_ident = self.u8_type_ident,
-            .i8_type_ident = self.i8_type_ident,
-            .u16_type_ident = self.u16_type_ident,
-            .i16_type_ident = self.i16_type_ident,
-            .u32_type_ident = self.u32_type_ident,
-            .i32_type_ident = self.i32_type_ident,
-            .u64_type_ident = self.u64_type_ident,
-            .i64_type_ident = self.i64_type_ident,
-            .u128_type_ident = self.u128_type_ident,
-            .i128_type_ident = self.i128_type_ident,
-            .f32_type_ident = self.f32_type_ident,
-            .f64_type_ident = self.f64_type_ident,
-            .dec_type_ident = self.dec_type_ident,
-            .before_dot_ident = self.before_dot_ident,
-            .after_dot_ident = self.after_dot_ident,
-            .provided_by_compiler_ident = self.provided_by_compiler_ident,
-            .tag_ident = self.tag_ident,
-            .payload_ident = self.payload_ident,
-            .is_negative_ident = self.is_negative_ident,
-            .digits_before_pt_ident = self.digits_before_pt_ident,
-            .digits_after_pt_ident = self.digits_after_pt_ident,
-            .box_method_ident = self.box_method_ident,
-            .unbox_method_ident = self.unbox_method_ident,
-            .ok_ident = self.ok_ident,
-            .err_ident = self.err_ident,
-            .true_tag_ident = self.true_tag_ident,
-            .false_tag_ident = self.false_tag_ident,
+            .idents = self.idents,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         };

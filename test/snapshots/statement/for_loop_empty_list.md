@@ -19,7 +19,34 @@ expect unchanged == 42
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_empty_list.md:3:15:3:17:**
+```roc
+	var value_ = 42
+```
+	             ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_empty_list.md:3:15:3:17:**
+```roc
+	var value_ = 42
+```
+	             ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -96,7 +123,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U64"))))
+		(expr (type "Error"))))
 ~~~

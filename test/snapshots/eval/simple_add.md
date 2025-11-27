@@ -14,7 +14,118 @@ expect addU8(0, 10) == 10
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:4:14:4:15:**
+```roc
+expect addU8(1, 2) == 3
+```
+             ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:4:14:4:15:**
+```roc
+expect addU8(1, 2) == 3
+```
+             ^
+
+It has the type:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:4:23:4:24:**
+```roc
+expect addU8(1, 2) == 3
+```
+                      ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:4:23:4:24:**
+```roc
+expect addU8(1, 2) == 3
+```
+                      ^
+
+It has the type:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:5:14:5:15:**
+```roc
+expect addU8(0, 10) == 10
+```
+             ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:5:14:5:15:**
+```roc
+expect addU8(0, 10) == 10
+```
+             ^
+
+It has the type:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:5:24:5:26:**
+```roc
+expect addU8(0, 10) == 10
+```
+                       ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_add.md:5:24:5:26:**
+```roc
+expect addU8(0, 10) == 10
+```
+                       ^^
+
+It has the type:
+    _Try(U8, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U8, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,

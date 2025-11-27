@@ -21,7 +21,34 @@ expect result == 55
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_every_iteration.md:3:14:3:15:**
+```roc
+	var prev_ = 0
+```
+	            ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**for_loop_var_every_iteration.md:3:14:3:15:**
+```roc
+	var prev_ = 0
+```
+	            ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -132,7 +159,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U64"))))
+		(expr (type "Error"))))
 ~~~

@@ -17,7 +17,34 @@ main! = |_| getUser(100)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_simple.md:6:25:6:27:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+                        ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_simple.md:6:25:6:27:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+                        ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

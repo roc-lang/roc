@@ -13,9 +13,37 @@ extract_age = |person| {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - module_record_destructure.md:5:7:5:8
+TYPE MISMATCH - module_record_destructure.md:5:7:5:8
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**module_record_destructure.md:5:7:5:8:**
+```roc
+	{ a: 0 }.a + age - { a: 0 }.a
+```
+	     ^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**module_record_destructure.md:5:7:5:8:**
+```roc
+	{ a: 0 }.a + age - { a: 0 }.a
+```
+	     ^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,OpArrow,UpperIdent,
@@ -114,7 +142,7 @@ extract_age = |person| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: U64 } -> U64")))
+		(patt (type "{ age: Error } -> Error")))
 	(expressions
-		(expr (type "{ age: U64 } -> U64"))))
+		(expr (type "{ age: Error } -> Error"))))
 ~~~

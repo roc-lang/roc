@@ -17,6 +17,8 @@ wrong_type_function = |x| x * 3.14
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:27:3:29
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -45,6 +47,34 @@ The value's type, which does not have a method named **plus**, is:
     _Str_
 
 **Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:7:31:7:35:**
+```roc
+wrong_type_function = |x| x * 3.14
+```
+                              ^^^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:7:31:7:35:**
+```roc
+wrong_type_function = |x| x * 3.14
+```
+                              ^^^^
+
+It has the type:
+    _Try(I64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(I64, [InvalidNumeral(Str)])_
 
 # TOKENS
 ~~~zig
@@ -123,8 +153,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Str -> Error"))
-		(patt (type "I64 -> I64")))
+		(patt (type "Error -> Error")))
 	(expressions
 		(expr (type "Str -> Error"))
-		(expr (type "I64 -> I64"))))
+		(expr (type "Error -> Error"))))
 ~~~

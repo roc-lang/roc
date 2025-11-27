@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _e, h, (i -> i), (j -> j) -> _ret where [e.from_numeral : Num.Numeral -> Try(_k, [InvalidNumeral(Str)]), h.from_numeral : Num.Numeral -> Try(_l, [InvalidNumeral(Str)]), i.from_numeral : Num.Numeral -> Try(_m, [InvalidNumeral(Str)]), i.from_numeral : Num.Numeral -> Try(_n, [InvalidNumeral(Str)]), j.from_numeral : Num.Numeral -> Try(_o, [InvalidNumeral(Str)]), j.from_numeral : Num.Numeral -> Try(_p, [InvalidNumeral(Str)])]_
+    _e, h, (i -> i), (j -> j) -> _ret where [e.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(_l, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(_m, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(_n, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_o, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_p, [InvalidNumeral(Str)])]_
 
 But I expected it to be:
     _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_

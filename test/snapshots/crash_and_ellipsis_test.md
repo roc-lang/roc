@@ -34,6 +34,12 @@ main! = |_| {
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
+TYPE MISMATCH - crash_and_ellipsis_test.md:20:28:20:30
+TYPE MISMATCH - crash_and_ellipsis_test.md:20:28:20:30
+TYPE MISMATCH - crash_and_ellipsis_test.md:21:25:21:27
+TYPE MISMATCH - crash_and_ellipsis_test.md:21:25:21:27
+TYPE MISMATCH - crash_and_ellipsis_test.md:22:31:22:33
+TYPE MISMATCH - crash_and_ellipsis_test.md:22:31:22:33
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
@@ -70,6 +76,90 @@ The unused variable is declared here:
 ```
     ^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:20:28:20:30:**
+```roc
+    result1 = testEllipsis(42)
+```
+                           ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:20:28:20:30:**
+```roc
+    result1 = testEllipsis(42)
+```
+                           ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:21:25:21:27:**
+```roc
+    result2 = testCrash(42)
+```
+                        ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:21:25:21:27:**
+```roc
+    result2 = testCrash(42)
+```
+                        ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:22:31:22:33:**
+```roc
+    result3 = testCrashSimple(42)
+```
+                              ^^
+
+It has the type:
+    _Numeral_
+
+But I expected it to be:
+    _Num.Numeral_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:22:31:22:33:**
+```roc
+    result3 = testCrashSimple(42)
+```
+                              ^^
+
+It has the type:
+    _Try(U64, [InvalidNumeral(Str)])_
+
+But I expected it to be:
+    _Try(U64, [InvalidNumeral(Str)])_
 
 # TOKENS
 ~~~zig

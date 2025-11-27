@@ -555,11 +555,8 @@ pub const Repl = struct {
         const try_stmt_in_try_module = self.builtin_indices.try_type;
         const str_stmt_in_builtin_module = self.builtin_indices.str_type;
 
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
-            .list = try module_env.insertIdent(base.Ident.for_text("List")),
-            .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = bool_stmt_in_bool_module,
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
@@ -628,7 +625,7 @@ pub const Repl = struct {
             &imported_modules,
             &module_envs_map,
             &cir.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         ) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
@@ -758,22 +755,6 @@ pub const Repl = struct {
         const cir = module_env;
         try cir.initCIRFields(self.allocator, "repl");
 
-        const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
-        const try_stmt_in_try_module = self.builtin_indices.try_type;
-        const str_stmt_in_builtin_module = self.builtin_indices.str_type;
-
-        const module_common_idents: Check.CommonIdents = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
-            .list = try module_env.insertIdent(base.Ident.for_text("List")),
-            .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
-            .bool_stmt = bool_stmt_in_bool_module,
-            .try_stmt = try_stmt_in_try_module,
-            .str_stmt = str_stmt_in_builtin_module,
-            .builtin_module = self.builtin_module.env,
-            .builtin_indices = self.builtin_indices,
-        };
-
         // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
@@ -819,6 +800,15 @@ pub const Repl = struct {
         // Resolve imports - map each import to its index in imported_modules
         module_env.imports.resolveImports(module_env, &imported_modules);
 
+        const builtin_ctx: Check.BuiltinContext = .{
+            .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
+            .bool_stmt = self.builtin_indices.bool_type,
+            .try_stmt = self.builtin_indices.try_type,
+            .str_stmt = self.builtin_indices.str_type,
+            .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
+        };
+
         var checker = Check.init(
             self.allocator,
             &module_env.types,
@@ -826,7 +816,7 @@ pub const Repl = struct {
             &imported_modules,
             &module_envs_map,
             &cir.store.regions,
-            module_common_idents,
+            builtin_ctx,
         ) catch |err| {
             return .{ .type_error = try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err}) };
         };
