@@ -3633,10 +3633,7 @@ pub const Interpreter = struct {
 
                 std.debug.assert(return_rt_var != null);
 
-                const list_layout_idx = self.runtime_layout_store.layouts_by_var.get(return_rt_var.?);
-                std.debug.assert(list_layout_idx != null);
-
-                const list_layout = self.runtime_layout_store.getLayout(list_layout_idx.?);
+                const list_layout = try self.getRuntimeLayout(return_rt_var.?);
                 std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
 
                 // Call listWithCapacity, handling zero-sized types specially
