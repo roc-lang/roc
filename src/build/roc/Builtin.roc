@@ -85,45 +85,27 @@ Builtin :: [].{
 			$state
 		}
 
-		append : List(a), a -> List(a)
-		append = |list, elt| {
-			new_tail : List(a)
-			new_tail = [elt]
-			List.concat(list, new_tail)
-		}
-
-		# append_if_ok : List(a), Try(a, err) -> List(a)
-		# append_if_ok : |list, try| match try {
-		# 		Ok(elt) => List.append(list, elt)
-		# 		Err(_) => list
-		# }
-
-		last : List(a) -> Try(a, [ListWasEmpty])
-		last = |list| {
-			len = List.len(list)
-			if len == 0 {
-				Try.Err(ListWasEmpty)
-			} else {
-				Try.Ok(list_get_unsafe(list, len - 1))
-			}
-		}
-
 		any : List(a), (a -> Bool) -> Bool
-		# any = |list, predicate| {
-		# 	for item in list {
-		# 		if predicate(item) {
-		# 			return True
-		# 		}
-		# 	}
-		# 	False
-		# }
-		any = |list, fn| {
-			List.fold(list, False, |state, item| fn(item) or state)
+		any = |list, predicate| {
+			for item in list {
+				if predicate(item) {
+					return True
+				}
+			}
+			False
 		}
 
 		all : List(a), (a -> Bool) -> Bool
-		all = |list, fn| {
-			List.fold(list, True, |state, item| fn(item) and state)
+		all = |list, predicate| {
+			if List.len(list) == 0 {
+				return False
+			}
+			for item in list {
+				if Bool.not(predicate(item)) {
+					return False
+				}
+			}
+			True
 		}
 
 		contains : List(a), a -> Bool where [a.is_eq: a, a -> Bool]
