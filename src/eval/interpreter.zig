@@ -4543,34 +4543,13 @@ pub const Interpreter = struct {
     }
 
     fn boolValueEquals(equals: bool, value: StackValue) bool {
-        // Handle both proper bool layout (u8 scalar) and tuple layout for tag unions
-        // Some Bool values may come through as tuples (payload, discriminant)
-        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .int) {
-            // Standard u8 bool - get the value directly
-            const ptr = value.ptr orelse return false;
-            // Handle different int sizes
-            return switch (value.layout.data.scalar.data.int) {
-                .u8 => (@as(*const u8, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .i8 => (@as(*const i8, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .u16 => (@as(*const u16, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .i16 => (@as(*const i16, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .u32 => (@as(*const u32, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .i32 => (@as(*const i32, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .u64 => (@as(*const u64, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .i64 => (@as(*const i64, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .u128 => (@as(*const u128, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-                .i128 => (@as(*const i128, @ptrCast(@alignCast(ptr))).* != 0) == equals,
-            };
-        } else if (value.layout.tag == .tuple or value.layout.tag == .record) {
-            // Tuple/record layout - for a simple tag union like [False, True],
-            // the discriminant should be the first byte (no payload)
-            const ptr = value.ptr orelse return false;
-            const byte_ptr: [*]const u8 = @ptrCast(ptr);
-            const discriminant = byte_ptr[0];
-            return (discriminant != 0) == equals;
-        }
-        // Fallback: assume false
-        return !equals;
+        // Bools are u8 scalars
+        std.debug.assert(value.layout.tag == .scalar);
+        std.debug.assert(value.layout.data.scalar.tag == .int);
+        std.debug.assert(value.layout.data.scalar.data.int == .u8);
+        const ptr = value.ptr orelse unreachable;
+        const bool_byte = @as(*const u8, @ptrCast(@alignCast(ptr))).*;
+        return (bool_byte != 0) == equals;
     }
 
     const NumericKind = enum { int, dec, f32, f64 };
