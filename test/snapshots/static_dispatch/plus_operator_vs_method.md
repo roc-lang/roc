@@ -22,70 +22,10 @@ result2 : MyType
 result2 = a.plus(b)
 ~~~
 # EXPECTED
-TYPE MISMATCH - plus_operator_vs_method.md:4:16:4:17
-TYPE MISMATCH - plus_operator_vs_method.md:4:16:4:17
-TYPE MISMATCH - plus_operator_vs_method.md:7:16:7:18
-TYPE MISMATCH - plus_operator_vs_method.md:7:16:7:18
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
 MISSING METHOD - plus_operator_vs_method.md:15:13:15:17
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**plus_operator_vs_method.md:4:16:4:17:**
-```roc
-a = MyType.Val(5)
-```
-               ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**plus_operator_vs_method.md:4:16:4:17:**
-```roc
-a = MyType.Val(5)
-```
-               ^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**plus_operator_vs_method.md:7:16:7:18:**
-```roc
-b = MyType.Val(10)
-```
-               ^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**plus_operator_vs_method.md:7:16:7:18:**
-```roc
-b = MyType.Val(10)
-```
-               ^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
 **plus_operator_vs_method.md:11:11:11:16:**

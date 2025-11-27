@@ -20,62 +20,7 @@ main! = add(1, 2)
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**pure_with_pure_annotation.md:11:13:11:14:**
-```roc
-main! = add(1, 2)
-```
-            ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**pure_with_pure_annotation.md:11:13:11:14:**
-```roc
-main! = add(1, 2)
-```
-            ^
-
-It has the type:
-    _Try(I32, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I32, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**pure_with_pure_annotation.md:11:16:11:17:**
-```roc
-main! = add(1, 2)
-```
-               ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**pure_with_pure_annotation.md:11:16:11:17:**
-```roc
-main! = add(1, 2)
-```
-               ^
-
-It has the type:
-    _Try(I32, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I32, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -200,9 +145,9 @@ NO CHANGE
 	(defs
 		(patt (type "I32, I32 -> I32"))
 		(patt (type "I32 -> I32"))
-		(patt (type "Error")))
+		(patt (type "I32")))
 	(expressions
 		(expr (type "I32, I32 -> I32"))
 		(expr (type "I32 -> I32"))
-		(expr (type "Error"))))
+		(expr (type "I32"))))
 ~~~

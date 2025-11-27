@@ -37,62 +37,6 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**annotations.md:4:21:4:22:**
-```roc
-pairU64 = Pair.Pair(1, 2)
-```
-                    ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:4:21:4:22:**
-```roc
-pairU64 = Pair.Pair(1, 2)
-```
-                    ^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:13:30:13:31:**
-```roc
-succeedPairSameType = mkPair(1, 2)
-```
-                             ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:13:30:13:31:**
-```roc
-succeedPairSameType = mkPair(1, 2)
-```
-                             ^
-
-It has the type:
-    _Try(U8, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U8, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
 **annotations.md:16:21:16:35:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
@@ -396,10 +340,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Pair(Error)"))
+		(patt (type "Pair(U64)"))
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
-		(patt (type "Pair(Error)"))
+		(patt (type "Pair(U8)"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "a, b -> Error")))
@@ -409,10 +353,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Pair(Error)"))
+		(expr (type "Pair(U64)"))
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
-		(expr (type "Pair(Error)"))
+		(expr (type "Pair(U8)"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "a, b -> Error"))))

@@ -141,230 +141,6 @@ f =8
    ^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:2:5:2:8:**
-```roc
-a = 255
-```
-    ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:2:5:2:8:**
-```roc
-a = 255
-```
-    ^^^
-
-It has the type:
-    _Try(U8, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U8, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:5:5:5:10:**
-```roc
-b = 65535
-```
-    ^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:5:5:5:10:**
-```roc
-b = 65535
-```
-    ^^^^^
-
-It has the type:
-    _Try(U16, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U16, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:8:5:8:14:**
-```roc
-c = 429496729 U64
-```
-    ^^^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:8:5:8:14:**
-```roc
-c = 429496729 U64
-```
-    ^^^^^^^^^
-
-It has the type:
-    _Try(U32, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U32, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:12:5:12:48:**
-```roc
-e = 3402823669209384634633746074317682114553.14: I8
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:12:5:12:48:**
-```roc
-e = 3402823669209384634633746074317682114553.14: I8
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Try(U128, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U128, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:16:5:16:11:**
-```roc
-g = -32768
-```
-    ^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:16:5:16:11:**
-```roc
-g = -32768
-```
-    ^^^^^^
-
-It has the type:
-    _Try(I16, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I16, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:19:5:19:12:**
-```roc
-h = -483648
-```
-    ^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:19:5:19:12:**
-```roc
-h = -483648
-```
-    ^^^^^^^
-
-It has the type:
-    _Try(I32, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I32, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:22:5:22:17:**
-```roc
-i = -92233725808
-```
-    ^^^^^^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:22:5:22:17:**
-```roc
-i = -92233725808
-```
-    ^^^^^^^^^^^^
-
-It has the type:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:25:5:25:29:**
-```roc
-j = -17011687303715884105728
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_025.md:25:5:25:29:**
-```roc
-j = -17011687303715884105728
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _Try(I128, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I128, [InvalidNumeral(Str)])_
-
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -517,21 +293,21 @@ j = -17011687303715884105728
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "U8"))
+		(patt (type "U16"))
+		(patt (type "U32"))
+		(patt (type "U128"))
+		(patt (type "I16"))
+		(patt (type "I32"))
+		(patt (type "I64"))
+		(patt (type "I128")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "U8"))
+		(expr (type "U16"))
+		(expr (type "U32"))
+		(expr (type "U128"))
+		(expr (type "I16"))
+		(expr (type "I32"))
+		(expr (type "I64"))
+		(expr (type "I128"))))
 ~~~

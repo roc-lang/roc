@@ -20,37 +20,9 @@ nested : { bar : Foo.Bar, count : U64 }
 nested = { bar: A, count: 1 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:27:13:28
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:27:13:28
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:13:27:13:28:**
-```roc
-nested = { bar: A, count: 1 }
-```
-                          ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:13:27:13:28:**
-```roc
-nested = { bar: A, count: 1 }
-```
-                          ^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -200,7 +172,7 @@ nested = { bar: A, count: 1 }
 	(defs
 		(patt (type "List(Foo.Bar)"))
 		(patt (type "Try(Foo.Bar, Foo.Error)"))
-		(patt (type "{ bar: Foo.Bar, count: Error }")))
+		(patt (type "{ bar: Foo.Bar, count: U64 }")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -211,5 +183,5 @@ nested = { bar: A, count: 1 }
 	(expressions
 		(expr (type "List(Foo.Bar)"))
 		(expr (type "Try(Foo.Bar, Foo.Error)"))
-		(expr (type "{ bar: Foo.Bar, count: Error }"))))
+		(expr (type "{ bar: Foo.Bar, count: U64 }"))))
 ~~~

@@ -453,14 +453,6 @@ UNDEFINED VARIABLE - associated_items_comprehensive.md:428:15:428:24
 UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
 UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
 UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
-TYPE MISMATCH - associated_items_comprehensive.md:260:21:260:24
-TYPE MISMATCH - associated_items_comprehensive.md:260:21:260:24
-TYPE MISMATCH - associated_items_comprehensive.md:256:13:256:16
-TYPE MISMATCH - associated_items_comprehensive.md:256:13:256:16
-TYPE MISMATCH - associated_items_comprehensive.md:318:12:318:15
-TYPE MISMATCH - associated_items_comprehensive.md:318:12:318:15
-TYPE MISMATCH - associated_items_comprehensive.md:331:21:331:23
-TYPE MISMATCH - associated_items_comprehensive.md:331:21:331:23
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `innerItem` in this scope.
@@ -631,118 +623,6 @@ errTryGrand = grandchildVal  # ERROR: not in scope
 ```
               ^^^^^^^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:260:21:260:24:**
-```roc
-        alsoTyped = 111
-```
-                    ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:260:21:260:24:**
-```roc
-        alsoTyped = 111
-```
-                    ^^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:256:13:256:16:**
-```roc
-    typed = 999
-```
-            ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:256:13:256:16:**
-```roc
-    typed = 999
-```
-            ^^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:318:12:318:15:**
-```roc
-    base = 100
-```
-           ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:318:12:318:15:**
-```roc
-    base = 100
-```
-           ^^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:331:21:331:23:**
-```roc
-        b2forward = 50
-```
-                    ^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**associated_items_comprehensive.md:331:21:331:23:**
-```roc
-        b2forward = 50
-```
-                    ^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
 
 # TOKENS
 ~~~zig
@@ -3240,8 +3120,8 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "U64"))
+		(patt (type "U64"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -3251,12 +3131,14 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "_d"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "_d"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -3264,8 +3146,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "_d"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "_d"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "_d"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -3307,19 +3187,19 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "U64"))
+		(patt (type "U64"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -3517,8 +3397,8 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "U64"))
+		(expr (type "U64"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -3528,12 +3408,14 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "_d"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "_d"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -3541,8 +3423,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "_d"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "_d"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "_d"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
@@ -3584,19 +3464,19 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "U64"))
+		(expr (type "U64"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

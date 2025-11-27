@@ -13,37 +13,9 @@ useBar : U64
 useBar = Foo.bar
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_decl.md:2:11:2:13
-TYPE MISMATCH - nominal_associated_lookup_decl.md:2:11:2:13
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_decl.md:2:11:2:13:**
-```roc
-    bar = 42
-```
-          ^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_decl.md:2:11:2:13:**
-```roc
-    bar = 42
-```
-          ^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -105,11 +77,11 @@ useBar = Foo.bar
 (inferred-types
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~

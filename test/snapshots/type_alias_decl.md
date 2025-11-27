@@ -92,62 +92,6 @@ The unused variable is declared here:
     ^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:30:14:30:17:**
-```roc
-    userId = 123
-```
-             ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:30:14:30:17:**
-```roc
-    userId = 123
-```
-             ^^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:33:36:33:38:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-                                   ^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:33:36:33:38:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-                                   ^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -417,7 +361,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> U64")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId")))
@@ -444,5 +388,5 @@ main! = |_| {
 				(ty-args
 					(ty-rigid-var (name "item"))))))
 	(expressions
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> U64"))))
 ~~~

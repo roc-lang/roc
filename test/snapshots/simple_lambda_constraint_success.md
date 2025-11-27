@@ -14,67 +14,9 @@ addTwoF64 : F64 -> F64
 addTwoF64 = |x| x + 2.0
 ~~~
 # EXPECTED
-TYPE MISMATCH - simple_lambda_constraint_success.md:3:18:3:19
-TYPE MISMATCH - simple_lambda_constraint_success.md:3:18:3:19
-TYPE MISMATCH - simple_lambda_constraint_success.md:7:21:7:24
-TYPE MISMATCH - simple_lambda_constraint_success.md:7:21:7:24
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:3:18:3:19:**
-```roc
-addTwo = |x| x + 2
-```
-                 ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:3:18:3:19:**
-```roc
-addTwo = |x| x + 2
-```
-                 ^
-
-It has the type:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:7:21:7:24:**
-```roc
-addTwoF64 = |x| x + 2.0
-```
-                    ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:7:21:7:24:**
-```roc
-addTwoF64 = |x| x + 2.0
-```
-                    ^^^
-
-It has the type:
-    _Try(F64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(F64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -151,9 +93,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error")))
+		(patt (type "I64 -> I64"))
+		(patt (type "F64 -> F64")))
 	(expressions
-		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "I64 -> I64"))
+		(expr (type "F64 -> F64"))))
 ~~~

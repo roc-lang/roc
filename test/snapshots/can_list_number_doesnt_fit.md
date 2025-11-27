@@ -8,37 +8,9 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_list_number_doesnt_fit.md:1:12:1:15
-TYPE MISMATCH - can_list_number_doesnt_fit.md:1:12:1:15
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_list_number_doesnt_fit.md:1:12:1:15:**
-```roc
-[1u8, 2u8, 300]
-```
-           ^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_list_number_doesnt_fit.md:1:12:1:15:**
-```roc
-[1u8, 2u8, 300]
-```
-           ^^^
-
-It has the type:
-    _Try(U8, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U8, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,
@@ -65,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(U8)"))
 ~~~

@@ -29,34 +29,7 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_tag_union.md:18:20:18:21:**
-```roc
-getNumber = |_opt| 0
-```
-                   ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_tag_union.md:18:20:18:21:**
-```roc
-getNumber = |_opt| 0
-```
-                   ^
-
-It has the type:
-    _Try(I32, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I32, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -229,7 +202,7 @@ NO CHANGE
 	(defs
 		(patt (type "MyTry(Str, I32) -> Str"))
 		(patt (type "Option(Str) -> Str"))
-		(patt (type "Option(I32) -> Error"))
+		(patt (type "Option(I32) -> I32"))
 		(patt (type "_arg -> {}")))
 	(type_decls
 		(alias (type "MyTry(ok, err)")
@@ -244,6 +217,6 @@ NO CHANGE
 	(expressions
 		(expr (type "MyTry(Str, I32) -> Str"))
 		(expr (type "Option(Str) -> Str"))
-		(expr (type "Option(I32) -> Error"))
+		(expr (type "Option(I32) -> I32"))
 		(expr (type "_arg -> {}"))))
 ~~~

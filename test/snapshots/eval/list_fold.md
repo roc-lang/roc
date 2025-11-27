@@ -24,34 +24,7 @@ expect sumResult == 10
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**list_fold.md:13:19:13:20:**
-```roc
-sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
-```
-                  ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**list_fold.md:13:19:13:20:**
-```roc
-sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
-```
-                  ^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,Comma,OpenRound,LowerIdent,Comma,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,LowerIdent,
@@ -225,8 +198,8 @@ expect sumResult == 10
 (inferred-types
 	(defs
 		(patt (type "List(item), state, (state, item -> state) -> state"))
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(expressions
 		(expr (type "List(item), state, (state, item -> state) -> state"))
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~

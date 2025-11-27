@@ -870,34 +870,6 @@ Right now, it has the type:
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:53:3:53:4:**
-```roc
-		0
-```
-		^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:53:3:53:4:**
-```roc
-		0
-```
-		^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
 **fuzz_crash_027.md:64:2:**
@@ -999,7 +971,7 @@ It has the type:
     _[Stdoline!(Error)][Err(d), Ok({  })]_
 
 But the type annotation says it should have the type:
-    _Try({  }, d)_
+    _Try(d)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2343,7 +2315,7 @@ expect {
 	(defs
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> Error"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "{}"))
@@ -2380,7 +2352,7 @@ expect {
 	(expressions
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))

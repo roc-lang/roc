@@ -24,62 +24,7 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:7:24:7:25:**
-```roc
-curriedAdd = makeAdder(5)
-```
-                       ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:7:24:7:25:**
-```roc
-curriedAdd = makeAdder(5)
-```
-                       ^
-
-It has the type:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:15:40:15:41:**
-```roc
-addThreeTwice = |n| applyTwice(|x| x + 3, n)
-```
-                                       ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:15:40:15:41:**
-```roc
-addThreeTwice = |n| applyTwice(|x| x + 3, n)
-```
-                                       ^
-
-It has the type:
-    _Try(I64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(I64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,
@@ -252,12 +197,12 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> (a -> a)"))
-		(patt (type "Error -> Error"))
+		(patt (type "I64 -> I64"))
 		(patt (type "(a -> a), a -> a"))
-		(patt (type "Error -> Error")))
+		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "a -> (a -> a)"))
-		(expr (type "Error -> Error"))
+		(expr (type "I64 -> I64"))
 		(expr (type "(a -> a), a -> a"))
-		(expr (type "Error -> Error"))))
+		(expr (type "I64 -> I64"))))
 ~~~

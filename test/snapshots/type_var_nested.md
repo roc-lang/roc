@@ -35,37 +35,9 @@ wrap_in_result = |value| Ok(Ok(value))
 main = |_| "done"
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_nested.md:22:22:22:24
-TYPE MISMATCH - type_var_nested.md:22:22:22:24
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_nested.md:22:22:22:24:**
-```roc
-list_length = |_lst| 42
-```
-                     ^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_nested.md:22:22:22:24:**
-```roc
-list_length = |_lst| 42
-```
-                     ^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -373,14 +345,14 @@ main = |_| "done"
 		(patt (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
-		(patt (type "List(_a) -> Error"))
+		(patt (type "List(_a) -> U64"))
 		(patt (type "a -> Try(Try(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
-		(expr (type "List(_a) -> Error"))
+		(expr (type "List(_a) -> U64"))
 		(expr (type "a -> Try(Try(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

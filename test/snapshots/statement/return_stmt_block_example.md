@@ -18,34 +18,7 @@ foo = |num| {
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**return_stmt_block_example.md:3:21:3:23:**
-```roc
-    str = if (num > 10) {
-```
-                    ^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**return_stmt_block_example.md:3:21:3:23:**
-```roc
-    str = if (num > 10) {
-```
-                    ^^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
@@ -157,7 +130,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Try(Str, [TooBig])")))
+		(patt (type "U64 -> Try(Str, [TooBig])")))
 	(expressions
-		(expr (type "Error -> Try(Str, [TooBig])"))))
+		(expr (type "U64 -> Try(Str, [TooBig])"))))
 ~~~

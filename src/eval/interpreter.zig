@@ -910,8 +910,13 @@ pub const Interpreter = struct {
                         return try self.dispatchBinaryOpMethod(self.root_env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
                     },
                     .ne => {
-                        // Desugar `a != b` to `a.is_ne(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_ne, binop.lhs, binop.rhs, roc_ops);
+                        // Desugar `a != b` to `!(a.is_eq(b))` - negate the result of is_eq
+                        // This matches the type checker which desugars to `a.is_eq(b).not()`
+                        const eq_result = try self.dispatchBinaryOpMethod(self.root_env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
+                        defer eq_result.decref(&self.runtime_layout_store, roc_ops);
+                        // Negate the boolean result
+                        const is_eq = boolValueEquals(true, eq_result);
+                        return try self.makeBoolValue(!is_eq);
                     },
                     .@"or" => {
                         var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
@@ -6033,7 +6038,7 @@ pub const Interpreter = struct {
                         .ident = nom.ident.ident_idx,
                     },
                     .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
-                        // Anonymous structural types have implicit is_eq
+                        // Anonymous structural types have implicit is_eq and is_ne
                         // Use root_env.idents for consistency with method dispatch
                         if (method_ident == self.root_env.idents.is_eq) {
                             const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
@@ -6045,6 +6050,17 @@ pub const Interpreter = struct {
                                 return err;
                             };
                             return try self.makeBoolValue(result);
+                        }
+                        if (method_ident == self.root_env.idents.is_ne) {
+                            const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
+                                // If structural equality is not implemented for this type, return false
+                                if (err == error.NotImplemented) {
+                                    self.triggerCrash("DEBUG: dispatchBinaryOpMethod NotImplemented", false, roc_ops);
+                                    return error.Crash;
+                                }
+                                return err;
+                            };
+                            return try self.makeBoolValue(!result);
                         }
                         break :blk null;
                     },

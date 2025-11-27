@@ -840,7 +840,7 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     else
         self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
-    // Use the relative name "Num.Numeral" (not "Builtin.Num.Numeral") with origin_module Builtin
+    // Use the relative name "Num.Numeral" with origin_module Builtin
     // Use the pre-interned ident from builtin_module to avoid string comparison
     const numeral_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_numeral,
@@ -5388,6 +5388,7 @@ pub fn createImportMapping(
                     .s_nominal_decl => |decl| {
                         const header = builtin_env.store.getTypeHeader(decl.header);
                         const qualified_name = builtin_env.getIdentText(header.name);
+                        const relative_name = builtin_env.getIdentText(header.relative_name);
 
                         // Extract display name (last component after dots)
                         const display_name = blk: {
@@ -5399,9 +5400,10 @@ pub fn createImportMapping(
                         };
 
                         const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                        const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
                         const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
 
-                        // Only add if no mapping exists or if new name is "better"
+                        // Add mapping for qualified_name -> display_name
                         if (mapping.get(qualified_ident)) |existing_ident| {
                             const existing_name = idents.getText(existing_ident);
                             if (displayNameIsBetter(display_name, existing_name)) {
@@ -5409,6 +5411,17 @@ pub fn createImportMapping(
                             }
                         } else {
                             try mapping.put(qualified_ident, display_ident);
+                        }
+
+                        // Also add mapping for relative_name -> display_name
+                        // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                        if (mapping.get(relative_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
+                                try mapping.put(relative_ident, display_ident);
+                            }
+                        } else {
+                            try mapping.put(relative_ident, display_ident);
                         }
                     },
                     else => @panic("BuiltinIndices contains non-nominal statement"),

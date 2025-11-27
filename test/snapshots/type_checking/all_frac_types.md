@@ -15,97 +15,9 @@ c : Dec
 c = 123.456
 ~~~
 # EXPECTED
-TYPE MISMATCH - all_frac_types.md:2:5:2:9
-TYPE MISMATCH - all_frac_types.md:2:5:2:9
-TYPE MISMATCH - all_frac_types.md:5:5:5:12
-TYPE MISMATCH - all_frac_types.md:5:5:5:12
-TYPE MISMATCH - all_frac_types.md:8:5:8:12
-TYPE MISMATCH - all_frac_types.md:8:5:8:12
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:2:5:2:9:**
-```roc
-a = 3.14
-```
-    ^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:2:5:2:9:**
-```roc
-a = 3.14
-```
-    ^^^^
-
-It has the type:
-    _Try(F32, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(F32, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:5:5:5:12:**
-```roc
-b = 2.71828
-```
-    ^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:5:5:5:12:**
-```roc
-b = 2.71828
-```
-    ^^^^^^^
-
-It has the type:
-    _Try(F64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(F64, [InvalidNumeral(Str)])_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:8:5:8:12:**
-```roc
-c = 123.456
-```
-    ^^^^^^^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**all_frac_types.md:8:5:8:12:**
-```roc
-c = 123.456
-```
-    ^^^^^^^
-
-It has the type:
-    _Try(Dec, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(Dec, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -164,11 +76,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "F32"))
+		(patt (type "F64"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "F32"))
+		(expr (type "F64"))
+		(expr (type "Dec"))))
 ~~~

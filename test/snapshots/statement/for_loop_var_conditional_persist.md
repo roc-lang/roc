@@ -25,34 +25,7 @@ expect result == 32
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_var_conditional_persist.md:3:18:3:19:**
-```roc
-	var lastEven_ = 0
-```
-	                ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_var_conditional_persist.md:3:18:3:19:**
-```roc
-	var lastEven_ = 0
-```
-	                ^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -197,7 +170,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~

@@ -19,34 +19,7 @@ expect sum == 15
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_list_u64.md:3:15:3:16:**
-```roc
-	var total_ = 0
-```
-	             ^
-
-It has the type:
-    _Numeral_
-
-But I expected it to be:
-    _Num.Numeral_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**for_loop_list_u64.md:3:15:3:16:**
-```roc
-	var total_ = 0
-```
-	             ^
-
-It has the type:
-    _Try(U64, [InvalidNumeral(Str)])_
-
-But I expected it to be:
-    _Try(U64, [InvalidNumeral(Str)])_
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -139,7 +112,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "U64")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "U64"))))
 ~~~
