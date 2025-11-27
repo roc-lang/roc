@@ -911,12 +911,15 @@ pub const PackageEnv = struct {
             // Extract module name without .roc extension
             const module_name = entry.name[0 .. entry.name.len - 4];
 
-            // Add to module_envs with a null env (just to pass the "contains" check)
+            // Add to module_envs with a placeholder env (just to pass the "contains" check)
             // We use builtin_module_env as a placeholder - the actual env will be loaded later
             const module_ident = try env.insertIdent(base.Ident.for_text(module_name));
+            // For user modules, the qualified name is just the module name itself
+            // Use env (not builtin_module_env) since it's mutable
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(module_name));
             // Only add if not already present
             if (!module_envs_map.contains(module_ident)) {
-                try module_envs_map.put(module_ident, .{ .env = builtin_module_env });
+                try module_envs_map.put(module_ident, .{ .env = builtin_module_env, .qualified_type_ident = qualified_ident });
             }
         }
 
