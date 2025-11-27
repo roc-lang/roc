@@ -1023,8 +1023,9 @@ test "partitionTags - same tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const tag_x = try env.mkTag("X", &[_]Var{@enumFromInt(0)});
-    const tag_y = try env.mkTag("Y", &[_]Var{@enumFromInt(1)});
+    // Var indices are 1-based (0 is sentinel)
+    const tag_x = try env.mkTag("X", &[_]Var{@enumFromInt(1)});
+    const tag_y = try env.mkTag("Y", &[_]Var{@enumFromInt(2)});
 
     const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
@@ -1046,9 +1047,10 @@ test "partitionTags - disjoint fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkTag("A1", &[_]Var{@enumFromInt(0)});
-    const a2 = try env.mkTag("A2", &[_]Var{@enumFromInt(1)});
-    const b1 = try env.mkTag("B1", &[_]Var{@enumFromInt(2)});
+    // Var indices are 1-based (0 is sentinel)
+    const a1 = try env.mkTag("A1", &[_]Var{@enumFromInt(1)});
+    const a2 = try env.mkTag("A2", &[_]Var{@enumFromInt(2)});
+    const b1 = try env.mkTag("B1", &[_]Var{@enumFromInt(3)});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
@@ -1072,9 +1074,10 @@ test "partitionTags - overlapping tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkTag("A", &[_]Var{@enumFromInt(0)});
-    const both = try env.mkTag("Both", &[_]Var{@enumFromInt(1)});
-    const b1 = try env.mkTag("B", &[_]Var{@enumFromInt(2)});
+    // Var indices are 1-based (0 is sentinel)
+    const a1 = try env.mkTag("A", &[_]Var{@enumFromInt(1)});
+    const both = try env.mkTag("Both", &[_]Var{@enumFromInt(2)});
+    const b1 = try env.mkTag("B", &[_]Var{@enumFromInt(3)});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
@@ -1101,9 +1104,10 @@ test "partitionTags - reordering is normalized" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = try env.mkTag("F1", &[_]Var{@enumFromInt(0)});
-    const f2 = try env.mkTag("F2", &[_]Var{@enumFromInt(1)});
-    const f3 = try env.mkTag("F3", &[_]Var{@enumFromInt(2)});
+    // Var indices are 1-based (0 is sentinel)
+    const f1 = try env.mkTag("F1", &[_]Var{@enumFromInt(1)});
+    const f2 = try env.mkTag("F2", &[_]Var{@enumFromInt(2)});
+    const f3 = try env.mkTag("F3", &[_]Var{@enumFromInt(3)});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });

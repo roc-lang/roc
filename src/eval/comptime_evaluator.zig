@@ -472,15 +472,12 @@ pub const ComptimeEvaluator = struct {
         const tag_name_str = if (is_true) "True" else "False";
         const tag_name_ident = try self.env.insertIdent(base.Ident.for_text(tag_name_str));
 
-        // Get variant_var and ext_var
+        // Get variant_var and ext_var from the tag union type
+        // Bool should always be a tag union
         const variant_var: types_mod.Var = bool_rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
+        std.debug.assert(resolved.desc.content == .structure and
+            resolved.desc.content.structure == .tag_union);
+        const ext_var = resolved.desc.content.structure.tag_union.ext;
 
         // Replace the expression with e_zero_argument_tag
         try self.env.store.replaceExprWithZeroArgumentTag(
@@ -518,16 +515,13 @@ pub const ComptimeEvaluator = struct {
             return error.NotImplemented;
         }
 
-        // Get variant_var and ext_var from type information
+        // Get variant_var and ext_var from the tag union type
+        // This function is specifically for tag unions
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
+        std.debug.assert(resolved.desc.content == .structure and
+            resolved.desc.content.structure == .tag_union);
+        const ext_var = resolved.desc.content.structure.tag_union.ext;
 
         // Replace the expression with e_zero_argument_tag
         try self.env.store.replaceExprWithZeroArgumentTag(
@@ -575,16 +569,13 @@ pub const ComptimeEvaluator = struct {
             return error.NotImplemented; // Has payload, can't fold to e_zero_argument_tag
         }
 
-        // Get variant_var and ext_var from type information
+        // Get variant_var and ext_var from the tag union type
+        // This function is specifically for tag unions
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
+        std.debug.assert(resolved.desc.content == .structure and
+            resolved.desc.content.structure == .tag_union);
+        const ext_var = resolved.desc.content.structure.tag_union.ext;
 
         // Get closure name - use an empty ident for now (we don't need it for folded constants)
         const closure_name = tag_info.name; // Reuse tag name as closure name

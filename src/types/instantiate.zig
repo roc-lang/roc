@@ -248,11 +248,17 @@ pub const Instantiator = struct {
     }
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
-        const elems_slice = self.store.sliceVars(tuple.elems);
+        // NOTE: We must not hold a slice across instantiateVar calls, because
+        // instantiateVar can grow self.store.vars which may reallocate the backing array.
+        // Instead, we iterate by index and re-slice on each iteration.
         var fresh_elems = std.ArrayList(Var).empty;
         defer fresh_elems.deinit(self.store.gpa);
 
-        for (elems_slice) |elem_var| {
+        var i: usize = 0;
+        while (i < tuple.elems.count) : (i += 1) {
+            // Re-slice each iteration to get fresh pointer after any reallocation
+            const elems_slice = self.store.sliceVars(tuple.elems);
+            const elem_var = elems_slice[i];
             const fresh_elem = try self.instantiateVar(elem_var);
             try fresh_elems.append(self.store.gpa, fresh_elem);
         }
@@ -261,11 +267,17 @@ pub const Instantiator = struct {
         return Tuple{ .elems = fresh_elems_range };
     }
     fn instantiateFunc(self: *Self, func: Func) std.mem.Allocator.Error!Func {
-        const args_slice = self.store.sliceVars(func.args);
+        // NOTE: We must not hold a slice across instantiateVar calls, because
+        // instantiateVar can grow self.store.vars which may reallocate the backing array.
+        // Instead, we iterate by index and re-slice on each iteration.
         var fresh_args = std.ArrayList(Var).empty;
         defer fresh_args.deinit(self.store.gpa);
 
-        for (args_slice) |arg_var| {
+        var i: usize = 0;
+        while (i < func.args.count) : (i += 1) {
+            // Re-slice each iteration to get fresh pointer after any reallocation
+            const args_slice = self.store.sliceVars(func.args);
+            const arg_var = args_slice[i];
             const fresh_arg = try self.instantiateVar(arg_var);
             try fresh_args.append(self.store.gpa, fresh_arg);
         }
@@ -280,12 +292,18 @@ pub const Instantiator = struct {
     }
 
     fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
-        const fields_slice = self.store.getRecordFieldsSlice(fields);
-
+        // NOTE: We must not hold a slice across instantiateVar calls, because
+        // instantiateVar can grow self.store which may reallocate backing arrays.
+        // Instead, we iterate by index and re-slice on each iteration.
         var fresh_fields = std.ArrayList(RecordField).empty;
         defer fresh_fields.deinit(self.store.gpa);
 
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
+        var i: usize = 0;
+        while (i < fields.count) : (i += 1) {
+            // Re-slice each iteration to get fresh pointer after any reallocation
+            const fields_slice = self.store.getRecordFieldsSlice(fields);
+            const name = fields_slice.items(.name)[i];
+            const type_var = fields_slice.items(.var_)[i];
             const fresh_type = try self.instantiateVar(type_var);
             _ = try fresh_fields.append(self.store.gpa, RecordField{
                 .name = name,
@@ -297,12 +315,18 @@ pub const Instantiator = struct {
     }
 
     fn instantiateRecord(self: *Self, record: Record) std.mem.Allocator.Error!Record {
-        const fields_slice = self.store.getRecordFieldsSlice(record.fields);
-
+        // NOTE: We must not hold a slice across instantiateVar calls, because
+        // instantiateVar can grow self.store which may reallocate backing arrays.
+        // Instead, we iterate by index and re-slice on each iteration.
         var fresh_fields = std.ArrayList(RecordField).empty;
         defer fresh_fields.deinit(self.store.gpa);
 
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
+        var i: usize = 0;
+        while (i < record.fields.count) : (i += 1) {
+            // Re-slice each iteration to get fresh pointer after any reallocation
+            const fields_slice = self.store.getRecordFieldsSlice(record.fields);
+            const name = fields_slice.items(.name)[i];
+            const type_var = fields_slice.items(.var_)[i];
             const fresh_type = try self.instantiateVar(type_var);
             _ = try fresh_fields.append(self.store.gpa, RecordField{
                 .name = name,
@@ -318,17 +342,27 @@ pub const Instantiator = struct {
     }
 
     fn instantiateTagUnion(self: *Self, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const tags_slice = self.store.getTagsSlice(tag_union.tags);
-
+        // NOTE: We must not hold a slice across instantiateVar calls, because
+        // instantiateVar can grow self.store which may reallocate backing arrays.
+        // Instead, we iterate by index and re-slice on each iteration.
         var fresh_tags = std.ArrayList(Tag).empty;
         defer fresh_tags.deinit(self.store.gpa);
 
-        for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
+        var tag_i: usize = 0;
+        while (tag_i < tag_union.tags.count) : (tag_i += 1) {
+            // Re-slice each iteration to get fresh pointer after any reallocation
+            const tags_slice = self.store.getTagsSlice(tag_union.tags);
+            const tag_name = tags_slice.items(.name)[tag_i];
+            const tag_args = tags_slice.items(.args)[tag_i];
+
             var fresh_args = std.ArrayList(Var).empty;
             defer fresh_args.deinit(self.store.gpa);
 
-            const args_slice = self.store.sliceVars(tag_args);
-            for (args_slice) |arg_var| {
+            var arg_i: usize = 0;
+            while (arg_i < tag_args.count) : (arg_i += 1) {
+                // Re-slice each iteration to get fresh pointer after any reallocation
+                const args_slice = self.store.sliceVars(tag_args);
+                const arg_var = args_slice[arg_i];
                 const fresh_arg = try self.instantiateVar(arg_var);
                 try fresh_args.append(self.store.gpa, fresh_arg);
             }
