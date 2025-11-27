@@ -2720,22 +2720,16 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Use the already-created all_defs span
     const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
 
-    // Check each definition to see if it corresponds to an exposed item
+    // Check each definition to see if it corresponds to an exposed item.
+    // We check exposed_scope.idents which only contains items from the exposing clause,
+    // not associated items like "Color.as_str" which are registered separately.
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            // Check if this definition's identifier is in the exposed items
-            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
-                // Skip associated items (qualified names like "Color.as_str").
-                // These are internal implementations registered via setNodeIndexById
-                // during associated block canonicalization, not top-level exports.
-                const ident_text = self.env.getIdent(pattern.assign.ident);
-                if (std.mem.indexOfScalar(u8, ident_text, '.') != null) {
-                    continue;
-                }
-                // Add this definition to the exports scratch space
+            // Check if this identifier was explicitly exposed in the module header
+            if (self.exposed_scope.idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
             }
         }
