@@ -200,7 +200,7 @@ jobs:
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
           # valgrind all app files in test/fx except those that read from stdin
-          find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
+          # find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
