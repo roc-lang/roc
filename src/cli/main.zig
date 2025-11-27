@@ -2069,23 +2069,32 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
 /// - Windows: %LOCALAPPDATA%\roc\packages\
 fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
     // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (std.posix.getenv("XDG_CACHE_HOME")) |xdg_cache| {
+    if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        defer allocator.free(xdg_cache);
         return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
     }
 
     // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
     if (comptime builtin.os.tag == .windows) {
-        if (std.posix.getenv("LOCALAPPDATA")) |local_app_data| {
+        if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+            defer allocator.free(local_app_data);
             return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
         }
     }
 
     // Fall back to ~/.cache/roc/packages (Unix)
-    if (std.posix.getenv("HOME")) |home| {
+    if (getEnvVar(allocator, "HOME")) |home| {
+        defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
     }
 
     return error.NoCacheDir;
+}
+
+/// Cross-platform helper to get environment variable.
+/// Returns null if the variable is not set. Caller must free the returned slice.
+fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
 /// Get native target directory name based on host architecture.
@@ -2146,7 +2155,7 @@ fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.E
 
     // 1. Validate URL and extract hash
     const base58_hash = download.validateUrl(url) catch {
-        std.log.err("Invalid platform URL: {s}", .{url});
+        std.log.debug("Invalid platform URL: {s}", .{url});
         return error.PlatformNotSupported;
     };
 

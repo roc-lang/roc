@@ -1171,25 +1171,35 @@ pub const BuildEnv = struct {
         return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
     }
 
+    /// Cross-platform environment variable lookup.
+    /// Uses std.process.getEnvVarOwned which works on both POSIX and Windows,
+    /// unlike std.posix.getenv which only works on POSIX systems.
+    fn getEnvVar(allocator: Allocator, key: []const u8) ?[]const u8 {
+        return std.process.getEnvVarOwned(allocator, key) catch null;
+    }
+
     /// Get the roc cache directory for downloaded packages.
     /// Standard cache locations by platform:
     /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
     /// - Windows: %LOCALAPPDATA%\roc\packages\
     fn getRocCacheDir(allocator: Allocator) ![]const u8 {
         // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (std.posix.getenv("XDG_CACHE_HOME")) |xdg_cache| {
+        if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+            defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
         }
 
         // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
         if (comptime builtin.os.tag == .windows) {
-            if (std.posix.getenv("LOCALAPPDATA")) |local_app_data| {
+            if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+                defer allocator.free(local_app_data);
                 return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
             }
         }
 
         // Fall back to ~/.cache/roc/packages (Unix)
-        if (std.posix.getenv("HOME")) |home| {
+        if (getEnvVar(allocator, "HOME")) |home| {
+            defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
         }
 
