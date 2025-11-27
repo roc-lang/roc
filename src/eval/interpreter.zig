@@ -7432,6 +7432,9 @@ pub const Interpreter = struct {
         var work_stack = try WorkStack.init(self.allocator);
         defer work_stack.deinit();
 
+        // On error, clean up any pending allocations in continuations
+        errdefer self.cleanupPendingWorkStack(&work_stack);
+
         var value_stack = try ValueStack.init(self.allocator);
         defer value_stack.deinit();
 
@@ -7461,6 +7464,27 @@ pub const Interpreter = struct {
 
         // Should never reach here - return_result should have exited the loop
         return error.Crash;
+    }
+
+    /// Clean up any pending allocations in the work stack when an error occurs.
+    /// This prevents memory leaks when evaluation fails partway through.
+    fn cleanupPendingWorkStack(self: *Interpreter, work_stack: *WorkStack) void {
+        while (work_stack.pop()) |work_item| {
+            switch (work_item) {
+                .apply_continuation => |cont| {
+                    switch (cont) {
+                        .call_invoke_closure => |ci| {
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        },
+                        .call_cleanup => |cc| {
+                            if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        },
+                        else => {},
+                    }
+                },
+                .eval_expr => {},
+            }
+        }
     }
 
     /// Schedule evaluation of an expression by examining it and pushing appropriate work items.
