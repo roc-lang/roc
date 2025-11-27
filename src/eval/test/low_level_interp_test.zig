@@ -84,7 +84,6 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    // Heap-allocate checker so it outlives this function - evaluator holds a pointer to checker.import_mapping
     const checker = try gpa.create(Check);
     errdefer gpa.destroy(checker);
     checker.* = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
@@ -114,16 +113,17 @@ fn cleanupEvalModule(result: anytype) void {
     var problems_mut = result.problems;
     problems_mut.deinit(test_allocator);
     test_allocator.destroy(result.problems);
+
+    // Deinit checker (must happen after evaluator since evaluator holds pointer to import_mapping)
+    var checker_mut = result.checker;
+    checker_mut.deinit();
+    test_allocator.destroy(result.checker);
+
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
 
     var builtin_module_mut = result.builtin_module;
     builtin_module_mut.deinit();
-
-    // Clean up heap-allocated checker
-    var checker_mut = result.checker;
-    checker_mut.deinit();
-    test_allocator.destroy(result.checker);
 }
 
 /// Helper to evaluate multi-declaration modules and get the integer value of a specific declaration
@@ -1751,8 +1751,7 @@ test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-// U8.plus tests
-// These tests verify numeric method calls like a.plus(b) work in the interpreter tests.
+// U8.plus tests - tests both static method call (U8.plus(a, b)) and method call syntax (a.plus(b))
 
 test "e_low_level_lambda - U8.plus basic" {
     const src =
