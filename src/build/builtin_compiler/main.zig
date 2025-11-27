@@ -443,7 +443,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
                 // Insert the alias identifier
                 const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                // Expose the same node under the alias
+                // First add to exposed items, then set node index
+                try env.common.addExposedById(gpa, alias_ident);
                 try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
             }
         }
@@ -585,6 +586,7 @@ pub fn main() !void {
     const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
+    // Note: These types are already in exposed_items from canonicalization, we just set their node indices
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));

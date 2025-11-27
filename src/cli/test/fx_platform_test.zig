@@ -559,6 +559,44 @@ test "fx platform checked directly finds sibling modules" {
     }
 }
 
+test "fx platform opaque type with method" {
+    // Regression test: An opaque type with a method attached causes a segfault
+    // when running the app. This test will pass once the bug is fixed.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/opaque_with_method.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify the output contains the expected string
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "My favourite color is Red") != null);
+}
+
 test "fx platform string interpolation type mismatch" {
     const allocator = testing.allocator;
 
