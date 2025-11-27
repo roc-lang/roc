@@ -1972,8 +1972,7 @@ expect {
 		(e-closure
 			(captures
 				(capture (ident "x"))
-				(capture (ident "x"))
-				(capture (ident "dude")))
+				(capture (ident "x")))
 			(e-lambda
 				(args
 					(p-assign (ident "a"))

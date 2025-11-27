@@ -1008,7 +1008,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^
 
 It has the type:
-    _Bool_
+    _f_
 
 # TOKENS
 ~~~zig
@@ -2019,7 +2019,7 @@ expect {
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
 		(patt (type "Error"))
-		(patt (type "_arg -> [Stdo!(Error)]_others"))
+		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2056,7 +2056,7 @@ expect {
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
 		(expr (type "Error"))
-		(expr (type "_arg -> [Stdo!(Error)]_others"))
+		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

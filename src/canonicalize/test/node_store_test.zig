@@ -134,6 +134,7 @@ test "NodeStore round trip - Statements" {
     try statements.append(gpa, CIR.Statement{
         .s_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
+            .lambda = rand_idx(CIR.Expr.Idx),
         },
     });
 

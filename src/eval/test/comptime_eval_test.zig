@@ -362,7 +362,7 @@ test "comptime eval - cross-module constant works" {
         \\value = 42
     ;
 
-    var result_a = try parseCheckAndEvalModule(src_a);
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
     defer cleanupEvalModule(&result_a);
 
     const summary_a = try result_a.evaluator.evalAll();
@@ -436,7 +436,7 @@ test "comptime eval - unexposed constant cannot be accessed" {
         \\secret = 100
     ;
 
-    var result_a = try parseCheckAndEvalModule(src_a);
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
     defer cleanupEvalModule(&result_a);
 
     const summary_a = try result_a.evaluator.evalAll();

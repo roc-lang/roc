@@ -991,7 +991,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^
 
 It has the type:
-    _Bool_
+    _f_
 
 # TOKENS
 ~~~zig
@@ -1998,7 +1998,7 @@ expect {
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue][ProvidedByCompiler] -> Error"))
 		(patt (type "Error"))
-		(patt (type "_arg -> [Stdo!(Error)]_others"))
+		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2035,7 +2035,7 @@ expect {
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue][ProvidedByCompiler] -> Error"))
 		(expr (type "Error"))
-		(expr (type "_arg -> [Stdo!(Error)]_others"))
+		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

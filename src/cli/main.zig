@@ -1074,14 +1074,12 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
         runWithWindowsHandleInheritance(allocs, exe_path, shm_handle) catch |err| {
-            std.log.err("Failed to run with Windows handle inheritance: {}", .{err});
             return err;
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
         runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager) catch |err| {
-            std.log.err("Failed to run with POSIX fd inheritance: {}", .{err});
             return err;
         };
     }
@@ -3198,6 +3196,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     Crash,
     DivisionByZero,
     IntegerOverflow,
+    InvalidImportIndex,
     InvalidMethodReceiver,
     InvalidNumExt,
     InvalidTagExt,
@@ -3212,6 +3211,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     StringOrderingNotSupported,
     TupleIndexOutOfBounds,
     TypeMismatch,
+    UnresolvedImport,
     ZeroSizedType,
     // Layout errors
     TypeContainedMismatch,

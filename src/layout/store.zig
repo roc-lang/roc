@@ -1160,10 +1160,8 @@ pub const Store = struct {
 
                             if (is_bool) {
                                 // Bool layout: use predefined bool layout
-                                const layout = Layout.boolType();
-                                const bool_layout_idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, bool_layout_idx);
-                                return bool_layout_idx;
+                                // Break to fall through to pending container processing
+                                break :flat_type Layout.boolType();
                             }
                         }
 
@@ -1171,10 +1169,8 @@ pub const Store = struct {
                         // First, determine discriminant size based on number of tags
                         if (num_tags == 0) {
                             // Empty tag union - represents a zero-sized type
-                            const zst_layout = Layout.zst();
-                            const zst_layout_idx = try self.insertLayout(zst_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, zst_layout_idx);
-                            return zst_layout_idx;
+                            // Break to fall through to pending container processing
+                            break :flat_type Layout.zst();
                         }
 
                         const discriminant_layout = if (num_tags <= 256)
@@ -1196,9 +1192,8 @@ pub const Store = struct {
 
                         if (!has_payload) {
                             // Simple tag union with no payloads - just use discriminant
-                            const tag_layout_idx = try self.insertLayout(discriminant_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, tag_layout_idx);
-                            return tag_layout_idx;
+                            // Break to fall through to pending container processing
+                            break :flat_type discriminant_layout;
                         }
 
                         // Complex tag union with payloads
