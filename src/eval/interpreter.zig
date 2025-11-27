@@ -5918,26 +5918,6 @@ pub const Interpreter = struct {
         return self.module_ids.get(origin_module) orelse self.current_module_id;
     }
 
-    /// Get an ident string that may have come from type unification.
-    /// During type checking, types can be unified with builtins, which introduces idents from the
-    /// builtin module into the module's type store. This helper checks the module first (for
-    /// locally-defined idents) and falls back to builtins (for idents introduced via unification).
-    /// This is NOT a generic "try all stores" - it's specific to the semantics of type checking.
-    fn getIdentFromModuleOrBuiltins(self: *const Interpreter, module: *const can.ModuleEnv, idx: base_pkg.Ident.Idx) []const u8 {
-        // Use the debug tracking to check if the ident was created in the module's store.
-        // In debug builds, this uses the known_idxs set. In release, it returns true.
-        if (module.common.idents.containsIdx(idx)) {
-            return module.getIdent(idx);
-        }
-        // Check if it's in builtins (unified during type checking)
-        if (self.builtins.bool_env.common.idents.containsIdx(idx)) {
-            return self.builtins.bool_env.getIdent(idx);
-        }
-        // If neither contains it, the module must be deserialized (no debug tracking).
-        // Fall back to reading from the module directly.
-        return module.getIdent(idx);
-    }
-
     /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
     /// Returns the constraint if found, or MethodNotFound if the receiver doesn't expose the method.
     fn getStaticDispatchConstraint(
@@ -6467,13 +6447,9 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
-                                // Translate the tag name identifier from the source module to the runtime layout store env.
-                                // Tag names may come from the module or from builtins (via type unification).
-                                const layout_env = self.runtime_layout_store.env;
-                                const name_str = self.getIdentFromModuleOrBuiltins(module, tag.name);
-                                const translated_name = try layout_env.insertIdent(base_pkg.Ident.for_text(name_str));
+                                // Keep the original tag name - it should already exist in the module's ident store
                                 tag.* = .{
-                                    .name = translated_name,
+                                    .name = tag.name,
                                     .args = rt_args_range,
                                 };
                             }

@@ -25,9 +25,9 @@ bytes: collections.SafeList(u8) = .{},
 hash_table: collections.SafeList(Idx) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
-/// Whether this interner owns its memory (can be freed/resized).
-/// Deserialized interners start as borrowed and must be made owned before growing.
-is_owned: bool = true,
+/// Debug-only flag to catch invalid inserts into deserialized interners.
+/// Deserialized interners should never have inserts - if they do, it's a bug.
+supports_inserts: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) true else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -68,35 +68,15 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
+/// NOTE: Do NOT call deinit on deserialized interners - their memory is owned by the deserialization buffer.
 pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
-    if (self.is_owned) {
-        self.bytes.deinit(gpa);
-        self.hash_table.deinit(gpa);
+    if (std.debug.runtime_safety) {
+        if (!self.supports_inserts) {
+            @panic("deinit called on deserialized interner - memory is owned by deserialization buffer");
+        }
     }
-    // If not owned, don't free - the memory belongs to someone else (e.g., deserialization buffer)
-}
-
-/// Make this interner own its memory by copying data to new allocations.
-/// This is necessary before growing a deserialized interner whose memory is borrowed.
-pub fn makeOwned(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-    if (self.is_owned) return; // Already owned
-
-    // Copy bytes to new owned allocation
-    const bytes_len: usize = @intCast(self.bytes.len());
-    var new_bytes = try collections.SafeList(u8).initCapacity(gpa, bytes_len * 2); // Extra capacity for growth
-    _ = try new_bytes.appendSlice(gpa, self.bytes.items.items[0..bytes_len]);
-
-    // Copy hash table to new owned allocation
-    const table_len: usize = @intCast(self.hash_table.len());
-    var new_hash_table = try collections.SafeList(Idx).initCapacity(gpa, table_len);
-    try new_hash_table.items.ensureTotalCapacityPrecise(gpa, table_len);
-    new_hash_table.items.items.len = table_len;
-    @memcpy(new_hash_table.items.items, self.hash_table.items.items[0..table_len]);
-
-    // Replace with owned copies (old data isn't freed since we don't own it)
-    self.bytes = new_bytes;
-    self.hash_table = new_hash_table;
-    self.is_owned = true;
+    self.bytes.deinit(gpa);
+    self.hash_table.deinit(gpa);
 }
 
 /// Find a string in the hash table using linear probing.
@@ -160,8 +140,7 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    // First check if string exists - this avoids triggering resize for existing strings
-    // which is important for deserialized interners that can't be grown.
+    // First check if string exists
     const result = self.findStringOrSlot(string);
 
     if (result.idx) |existing_idx| {
@@ -169,9 +148,13 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
         return existing_idx;
     }
 
-    // String doesn't exist, need to insert. Ensure we own our memory first.
-    // This is critical for deserialized interners whose memory is borrowed.
-    try self.makeOwned(gpa);
+    // Debug assertion: deserialized interners should never need new inserts.
+    // If this fires, it's a bug - all idents should already exist in the interner.
+    if (std.debug.runtime_safety) {
+        if (!self.supports_inserts) {
+            @panic("insert called on deserialized interner - this is a bug, ident should already exist");
+        }
+    }
 
     // Check if resize needed.
     if (self.entry_count * 5 >= self.hash_table.len() * 4) {
@@ -259,7 +242,7 @@ pub const Serialized = extern struct {
     bytes: collections.SafeList(u8).Serialized,
     hash_table: collections.SafeList(Idx).Serialized,
     entry_count: u32,
-    /// Padding to maintain alignment with SmallStringInterner's is_owned field
+    /// Padding to maintain struct alignment
     _padding: u32 = 0,
 
     /// Serialize a SmallStringInterner into this Serialized struct, appending data to the writer
@@ -287,8 +270,8 @@ pub const Serialized = extern struct {
             .bytes = self.bytes.deserialize(offset).*,
             .hash_table = self.hash_table.deserialize(offset).*,
             .entry_count = self.entry_count,
-            // Mark as not owned - deserialized interners use memory from the file buffer
-            .is_owned = false,
+            // Debug-only: mark as not supporting inserts - deserialized interners should never need new idents
+            .supports_inserts = if (std.debug.runtime_safety) false else {},
         };
 
         return interner;
