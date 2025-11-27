@@ -120,9 +120,11 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
     const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Json"));
-    try module_envs.put(json_module_ident, .{ .env = json_env });
+    const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("Json"));
+    try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident });
     const utils_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Utils"));
-    try module_envs.put(utils_module_ident, .{ .env = utils_env });
+    const utils_qualified_ident = try utils_env.common.insertIdent(utils_env.gpa, Ident.for_text("Utils"));
+    try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident });
 
     // Canonicalize with module validation
     var can = try Can.init(parse_env, &ast, &module_envs);
@@ -504,7 +506,8 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(multiply_idx), 200);
     try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(pi_idx), 300);
     const math_utils_ident = try temp_idents.insert(allocator, Ident.for_text("MathUtils"));
-    try module_envs.put(math_utils_ident, .{ .env = math_env });
+    const math_utils_qualified_ident = try math_env.common.insertIdent(math_env.gpa, Ident.for_text("MathUtils"));
+    try module_envs.put(math_utils_ident, .{ .env = math_env, .qualified_type_ident = math_utils_qualified_ident });
     // Parse source that uses these exposed items
     const source =
         \\module [calculate]
@@ -564,7 +567,8 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try empty_env.addExposedById(undefined_idx);
     // Don't set node index - should default to 0
     const empty_module_ident = try temp_idents.insert(allocator, Ident.for_text("EmptyModule"));
-    try module_envs.put(empty_module_ident, .{ .env = empty_env });
+    const empty_qualified_ident = try empty_env.common.insertIdent(empty_env.gpa, Ident.for_text("EmptyModule"));
+    try module_envs.put(empty_module_ident, .{ .env = empty_env, .qualified_type_ident = empty_qualified_ident });
     const source2 =
         \\module [test]
         \\

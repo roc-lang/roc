@@ -607,16 +607,16 @@ pub fn main() !void {
     const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
     // Look up idents for each type
-    // Top-level types use simple names: "Bool", "Try", "List", etc.
-    // Numeric types nested under Num use fully-qualified names: "Builtin.Num.U8", etc.
-    // This allows method lookup to work correctly (getMethodIdent builds the full path)
-    const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
-    const try_ident = builtin_env.common.findIdent("Try") orelse unreachable;
-    const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
-    const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
-    const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
-    const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
-    const box_ident = builtin_env.common.findIdent("Box") orelse unreachable;
+    // All types use fully-qualified names for consistent member lookup
+    // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
+    // Nested types under Num: "Builtin.Num.U8", etc.
+    const bool_ident = builtin_env.common.findIdent("Builtin.Bool") orelse unreachable;
+    const try_ident = builtin_env.common.findIdent("Builtin.Try") orelse unreachable;
+    const dict_ident = builtin_env.common.findIdent("Builtin.Dict") orelse unreachable;
+    const set_ident = builtin_env.common.findIdent("Builtin.Set") orelse unreachable;
+    const str_ident = builtin_env.common.findIdent("Builtin.Str") orelse unreachable;
+    const list_ident = builtin_env.common.findIdent("Builtin.List") orelse unreachable;
+    const box_ident = builtin_env.common.findIdent("Builtin.Box") orelse unreachable;
     const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
     const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
     const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
