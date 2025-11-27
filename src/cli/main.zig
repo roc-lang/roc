@@ -6,7 +6,7 @@ const std = @import("std");
 
 /// Configure std library logging to suppress debug messages in production.
 /// This prevents debug logs from polluting stderr which should only contain
-/// actual program output (like Stderr.line! calls).
+/// actual program output (like Stderr.line! calls)..
 pub const std_options: std.Options = .{
     .log_level = .warn,
 };
