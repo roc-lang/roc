@@ -121,6 +121,30 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
+    if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
+        try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
+    }
+    if (env.common.findIdent("Builtin.Str.with_capacity")) |str_with_capacity_ident| {
+        try low_level_map.put(str_with_capacity_ident, .str_with_capacity);
+    }
+    if (env.common.findIdent("Builtin.Str.reserve")) |str_reserve_ident| {
+        try low_level_map.put(str_reserve_ident, .str_reserve);
+    }
+    if (env.common.findIdent("Builtin.Str.release_excess_capacity")) |str_release_excess_capacity_ident| {
+        try low_level_map.put(str_release_excess_capacity_ident, .str_release_excess_capacity);
+    }
+    if (env.common.findIdent("Builtin.Str.to_utf8")) |str_to_utf8_ident| {
+        try low_level_map.put(str_to_utf8_ident, .str_to_utf8);
+    }
+    if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
+        try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
+    }
+    if (env.common.findIdent("Builtin.Str.split_on")) |str_split_on_ident| {
+        try low_level_map.put(str_split_on_ident, .str_split_on);
+    }
+    if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
+        try low_level_map.put(str_join_with_ident, .str_join_with);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

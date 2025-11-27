@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const parse = @import("parse");
-const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
@@ -1179,4 +1178,248 @@ test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hi\"", value);
+}
+
+// count_utf8_bytes tests
+test "e_low_level_lambda - Str.count_utf8_bytes empty string" {
+    const src =
+        \\x = Str.count_utf8_bytes("")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+test "e_low_level_lambda - Str.count_utf8_bytes ASCII string" {
+    const src =
+        \\x = Str.count_utf8_bytes("hello")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 5), value);
+}
+
+test "e_low_level_lambda - Str.count_utf8_bytes multi-byte UTF-8" {
+    const src =
+        \\x = Str.count_utf8_bytes("é")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "e_low_level_lambda - Str.count_utf8_bytes emoji" {
+    const src =
+        \\x = Str.count_utf8_bytes("🎉")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 4), value);
+}
+
+// with_capacity tests
+test "e_low_level_lambda - Str.with_capacity returns empty string" {
+    const src =
+        \\x = Str.with_capacity(0)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.with_capacity with capacity returns empty string" {
+    const src =
+        \\x = Str.with_capacity(100)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// reserve tests
+test "e_low_level_lambda - Str.reserve preserves content" {
+    const src =
+        \\x = Str.reserve("hello", 100)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.reserve empty string" {
+    const src =
+        \\x = Str.reserve("", 50)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// release_excess_capacity tests
+test "e_low_level_lambda - Str.release_excess_capacity preserves content" {
+    const src =
+        \\x = Str.release_excess_capacity("hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.release_excess_capacity empty string" {
+    const src =
+        \\x = Str.release_excess_capacity("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// to_utf8 tests (using List.len to verify)
+test "e_low_level_lambda - Str.to_utf8 empty string" {
+    const src =
+        \\x = List.len(Str.to_utf8(""))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+test "e_low_level_lambda - Str.to_utf8 ASCII string" {
+    const src =
+        \\x = List.len(Str.to_utf8("hello"))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 5), value);
+}
+
+test "e_low_level_lambda - Str.to_utf8 multi-byte UTF-8" {
+    const src =
+        \\x = List.len(Str.to_utf8("é"))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+// from_utf8_lossy tests (roundtrip through to_utf8)
+test "e_low_level_lambda - Str.from_utf8_lossy roundtrip ASCII" {
+    const src =
+        \\x = Str.from_utf8_lossy(Str.to_utf8("hello"))
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.from_utf8_lossy roundtrip empty" {
+    const src =
+        \\x = Str.from_utf8_lossy(Str.to_utf8(""))
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.from_utf8_lossy roundtrip UTF-8" {
+    const src =
+        \\x = Str.from_utf8_lossy(Str.to_utf8("hello 🎉 world"))
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello 🎉 world\"", value);
+}
+
+// split_on tests
+test "e_low_level_lambda - Str.split_on basic split count" {
+    const src =
+        \\x = List.len(Str.split_on("hello world", " "))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "e_low_level_lambda - Str.split_on basic split first element" {
+    const src =
+        \\parts = Str.split_on("hello world", " ")
+        \\first = List.first(parts)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"hello\")", value);
+}
+
+test "e_low_level_lambda - Str.split_on multiple delimiters count" {
+    const src =
+        \\x = List.len(Str.split_on("a,b,c,d", ","))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 4), value);
+}
+
+test "e_low_level_lambda - Str.split_on multiple delimiters first element" {
+    const src =
+        \\parts = Str.split_on("a,b,c,d", ",")
+        \\first = List.first(parts)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"a\")", value);
+}
+
+test "e_low_level_lambda - Str.split_on no match" {
+    const src =
+        \\parts = Str.split_on("hello", "x")
+        \\first = List.first(parts)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"hello\")", value);
+}
+
+test "e_low_level_lambda - Str.split_on empty string" {
+    const src =
+        \\x = List.len(Str.split_on("", ","))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+// join_with tests
+test "e_low_level_lambda - Str.join_with basic join" {
+    const src =
+        \\x = Str.join_with(["hello", "world"], " ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with multiple elements" {
+    const src =
+        \\x = Str.join_with(["a", "b", "c", "d"], ",")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"a,b,c,d\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with single element" {
+    const src =
+        \\x = Str.join_with(["hello"], "-")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with empty list" {
+    const src =
+        \\x = Str.join_with([], ",")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
+    const src =
+        \\x = Str.join_with(Str.split_on("hello world", " "), " ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
 }
