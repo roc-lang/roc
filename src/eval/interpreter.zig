@@ -6038,7 +6038,7 @@ pub const Interpreter = struct {
                         .ident = nom.ident.ident_idx,
                     },
                     .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
-                        // Anonymous structural types have implicit is_eq and is_ne
+                        // Anonymous structural types have implicit is_eq
                         // Use root_env.idents for consistency with method dispatch
                         if (method_ident == self.root_env.idents.is_eq) {
                             const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
@@ -6050,17 +6050,6 @@ pub const Interpreter = struct {
                                 return err;
                             };
                             return try self.makeBoolValue(result);
-                        }
-                        if (method_ident == self.root_env.idents.is_ne) {
-                            const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
-                                // If structural equality is not implemented for this type, return false
-                                if (err == error.NotImplemented) {
-                                    self.triggerCrash("DEBUG: dispatchBinaryOpMethod NotImplemented", false, roc_ops);
-                                    return error.Crash;
-                                }
-                                return err;
-                            };
-                            return try self.makeBoolValue(!result);
                         }
                         break :blk null;
                     },
