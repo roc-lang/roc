@@ -241,8 +241,63 @@ const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
+const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
+
+/// Render type checking problems as diagnostic reports to stderr.
+/// Returns the count of errors (fatal/runtime_error severity).
+/// This is shared between rocCheck and rocRun to ensure consistent error reporting.
+fn renderTypeProblems(
+    gpa: Allocator,
+    checker: *Check,
+    module_env: *ModuleEnv,
+    filename: []const u8,
+) usize {
+    const stderr = stderrWriter();
+
+    var rb = ReportBuilder.init(
+        gpa,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        filename,
+        &.{},
+        &checker.import_mapping,
+    );
+    defer rb.deinit();
+
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    for (checker.problems.problems.items) |prob| {
+        const report = rb.build(prob) catch continue;
+
+        // Render the diagnostic report to stderr
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Print summary if there were any problems
+    if (error_count > 0 or warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            error_count,
+            warning_count,
+            filename,
+        }) catch {};
+    }
+
+    // Flush stderr to ensure all error output is visible
+    stderr_writer.interface.flush() catch {};
+
+    return error_count;
+}
 
 /// Size for shared memory allocator (just virtual address space to reserve)
 ///
@@ -1686,13 +1741,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     try app_checker.checkFile();
 
-    // Check for type errors and fail if any are found
-    const type_problem_count = app_checker.problems.len();
-    if (type_problem_count > 0) {
-        std.log.err("Found {d} type error(s) in {s}. Run 'roc check {s}' for details.", .{ type_problem_count, roc_file_path, roc_file_path });
-        return error.TypeCheckFailed;
-    }
-
     // Check that app exports match platform requirements (if platform exists)
     if (platform_main_env) |penv| {
         // Build the platform-to-app ident translation map
@@ -1707,6 +1755,12 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         }
 
         try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
+    }
+
+    // Render type errors exactly as roc check would, then fail if any errors
+    const error_count = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
+    if (error_count > 0) {
+        return error.TypeCheckFailed;
     }
 
     app_env_ptr.* = app_env;

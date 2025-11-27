@@ -589,6 +589,10 @@ test "fx platform string interpolation type mismatch" {
         },
     }
 
-    // Verify the error message mentions type error
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "type error") != null);
+    // Verify the error output contains proper diagnostic info
+    // Should show TYPE MISMATCH error with the type information
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
 }
