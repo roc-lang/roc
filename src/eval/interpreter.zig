@@ -1959,146 +1959,8 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_closure => |cls| {
-                // Build a closure value with concrete captures. The closure references a lambda.
-                const lam_expr = self.env.store.getExpr(cls.lambda_idx);
-                if (lam_expr != .e_lambda) {
-                    self.triggerCrash("e_closure: lambda_idx does not point to e_lambda", false, roc_ops);
-                    return error.Crash;
-                }
-                const lam = lam_expr.e_lambda;
-
-                // Collect capture layouts and names from current bindings
-                const caps = self.env.store.sliceCaptures(cls.captures);
-                var field_layouts = try self.allocator.alloc(Layout, caps.len);
-                defer self.allocator.free(field_layouts);
-                var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
-                defer self.allocator.free(field_names);
-
-                // Helper: resolve a capture value (from local bindings, active closure captures, or top-level defs)
-                const resolveCapture = struct {
-                    fn go(self_interp: *Interpreter, cap: can.CIR.Expr.Capture, ops: *RocOps) ?StackValue {
-                        // First try local bindings by pattern idx
-                        var i: usize = self_interp.bindings.items.len;
-                        while (i > 0) {
-                            i -= 1;
-                            const b = self_interp.bindings.items[i];
-                            if (b.pattern_idx == cap.pattern_idx) return b.value;
-                        }
-                        // Next try ALL active closure captures in reverse order (innermost to outermost)
-                        // This is critical for deeply nested lambdas where inner closures need to
-                        // capture values from outer closures
-                        if (self_interp.active_closures.items.len > 0) {
-                            var closure_idx: usize = self_interp.active_closures.items.len;
-                            while (closure_idx > 0) {
-                                closure_idx -= 1;
-                                const cls_val = self_interp.active_closures.items[closure_idx];
-                                if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                                    const captures_layout = self_interp.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
-                                    const header_sz = @sizeOf(layout.Closure);
-                                    const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
-                                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
-                                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                                    var rec_acc = (rec_val.asRecord(&self_interp.runtime_layout_store)) catch continue;
-                                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
-                                        if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
-                                            return field_val;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Finally try top-level defs by pattern idx
-                        const all_defs = self_interp.env.store.sliceDefs(self_interp.env.all_defs);
-                        for (all_defs) |def_idx| {
-                            const def = self_interp.env.store.getDef(def_idx);
-                            if (def.pattern == cap.pattern_idx) {
-                                var k: usize = self_interp.def_stack.items.len;
-                                while (k > 0) {
-                                    k -= 1;
-                                    const entry = self_interp.def_stack.items[k];
-                                    if (entry.pattern_idx == cap.pattern_idx) {
-                                        if (entry.value) |val| {
-                                            return val;
-                                        }
-                                    }
-                                }
-                                // Found the def! Evaluate it to get the captured value
-                                const new_entry = DefInProgress{
-                                    .pattern_idx = def.pattern,
-                                    .expr_idx = def.expr,
-                                    .value = null,
-                                };
-                                self_interp.def_stack.append(new_entry) catch return null;
-                                defer _ = self_interp.def_stack.pop();
-                                return self_interp.evalMinimal(def.expr, ops) catch null;
-                            }
-                        }
-                        return null;
-                    }
-                }.go;
-
-                // First, resolve all capture values and collect their actual layouts.
-                // This is critical because type variables may default to Dec, but the actual
-                // captured values (e.g., strings) have their concrete layouts from evaluation.
-                var capture_values = try self.allocator.alloc(StackValue, caps.len);
-                defer self.allocator.free(capture_values);
-
-                for (caps, 0..) |cap_idx, i| {
-                    const cap = self.env.store.getCapture(cap_idx);
-                    // Translate ident from current env to runtime layout store's env
-                    // This is necessary for cross-module closures (e.g., builtin functions)
-                    const name_text = self.env.getIdent(cap.name);
-                    field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
-
-                    // Resolve the capture value first to get its actual layout
-                    const cap_val = resolveCapture(self, cap, roc_ops) orelse {
-                        self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
-                        return error.Crash;
-                    };
-                    capture_values[i] = cap_val;
-                    // Use the actual evaluated value's layout, not the type-variable-derived layout
-                    field_layouts[i] = cap_val.layout;
-                }
-
-                const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
-                const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
-                const closure_layout = Layout.closure(captures_layout_idx);
-                const value = try self.pushRaw(closure_layout, 0);
-                self.registerDefValue(expr_idx, value);
-
-                // Initialize header
-                if (value.ptr) |ptr| {
-                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                    header.* = .{
-                        .body_idx = lam.body,
-                        .params = lam.args,
-                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
-                        .captures_layout_idx = captures_layout_idx,
-                        // Store e_closure expr_idx (not inner e_lambda) so has_real_captures check works in e_lookup_local
-                        .lambda_expr_idx = expr_idx,
-                        .source_env = self.env,
-                    };
-                    // Copy captures into record area following header (aligned)
-                    const header_size = @sizeOf(layout.Closure);
-                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
-                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
-                    const base: [*]u8 = @ptrCast(@alignCast(ptr));
-                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                    var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                    for (caps, 0..) |_, cap_i| {
-                        const cap_val = capture_values[cap_i];
-                        const translated_name = field_names[cap_i];
-                        const idx_opt = accessor.findFieldIndex(translated_name) orelse {
-                            self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
-                            return error.Crash;
-                        };
-                        try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
-                    }
-                }
-                return value;
+                // Use the shared evalClosure helper
+                return try self.evalClosure(expr_idx, cls, roc_ops);
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
@@ -7183,6 +7045,30 @@ pub const Interpreter = struct {
         /// Collect record fields: first evaluate extension (if any), then fields.
         record_collect: RecordCollect,
 
+        /// Handle early return - pop value from stack and signal early return.
+        early_return: EarlyReturn,
+
+        /// Collect tag payload arguments and finalize the tag union value.
+        tag_collect: TagCollect,
+
+        /// Match expression - try branches after scrutinee is evaluated.
+        match_branches: MatchBranches,
+
+        /// Match guard - check guard result and evaluate body or try next branch.
+        match_guard: MatchGuard,
+
+        /// Match cleanup - trim bindings after branch body evaluation.
+        match_cleanup: MatchCleanup,
+
+        /// Expect check - verify condition is true after evaluation.
+        expect_check: ExpectCheck,
+
+        /// Dbg print - print evaluated value and return {}.
+        dbg_print: DbgPrint,
+
+        /// String interpolation - collect segment strings.
+        str_collect: StrCollect,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -7261,6 +7147,90 @@ pub const Interpreter = struct {
             has_extension: bool,
             /// All fields in the record (for name lookup during finalization)
             all_fields: []const can.CIR.RecordField.Idx,
+        };
+
+        /// Return the value on the stack as an early return.
+        pub const EarlyReturn = struct {};
+
+        pub const TagCollect = struct {
+            /// Number of collected payload values on the value stack
+            collected_count: usize,
+            /// Remaining payload expressions to evaluate
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Argument runtime type variables
+            arg_rt_vars: []const types.Var,
+            /// Tag expression index (for type info)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Runtime type variable for the tag union
+            rt_var: types.Var,
+            /// Tag index (discriminant)
+            tag_index: usize,
+            /// Layout type: 0=record, 1=tuple
+            layout_type: u8,
+        };
+
+        /// Match continuation - after scrutinee is evaluated, try branches
+        pub const MatchBranches = struct {
+            /// Match expression index (for result type)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Scrutinee runtime type variable
+            scrutinee_rt_var: types.Var,
+            /// Result runtime type variable
+            result_rt_var: types.Var,
+            /// All branches to try
+            branches: []const can.CIR.Expr.Match.Branch.Idx,
+            /// Current branch index being tried
+            current_branch: usize,
+        };
+
+        /// Match guard continuation - after guard is evaluated, check result
+        pub const MatchGuard = struct {
+            /// Branch body to evaluate if guard passes
+            branch_body: can.CIR.Expr.Idx,
+            /// Result runtime type variable
+            result_rt_var: types.Var,
+            /// Bindings start index (to trim on failure)
+            bindings_start: usize,
+            /// Remaining branches if guard fails
+            remaining_branches: []const can.CIR.Expr.Match.Branch.Idx,
+            /// Match expression index
+            expr_idx: can.CIR.Expr.Idx,
+            /// Scrutinee value (kept on stack)
+            scrutinee_rt_var: types.Var,
+        };
+
+        /// Match cleanup continuation - trim bindings after branch body evaluation
+        pub const MatchCleanup = struct {
+            /// Bindings start index to trim to
+            bindings_start: usize,
+        };
+
+        /// Expect continuation - after condition is evaluated, check if true
+        pub const ExpectCheck = struct {
+            /// Original expect expression index (for failure reporting)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Body expression index (for failure reporting)
+            body_expr: can.CIR.Expr.Idx,
+        };
+
+        /// Dbg continuation - after expression is evaluated, print and return {}
+        pub const DbgPrint = struct {
+            /// Original dbg expression index (for type info)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Inner expression runtime type variable
+            inner_rt_var: types.Var,
+        };
+
+        /// String interpolation continuation - collect segment strings
+        pub const StrCollect = struct {
+            /// Number of segments already collected (as strings on value stack)
+            collected_count: usize,
+            /// Total number of segments
+            total_count: usize,
+            /// Remaining segment expressions to evaluate
+            remaining_segments: []const can.CIR.Expr.Idx,
+            /// Whether we need to convert the top value to a string (just evaluated an expr)
+            needs_conversion: bool,
         };
     };
 
@@ -7415,6 +7385,30 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
+            .e_str => |str_expr| {
+                const segments = self.env.store.sliceExpr(str_expr.span);
+                if (segments.len == 0) {
+                    // Empty string - return immediately
+                    const value = try self.pushStr("");
+                    const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    roc_str.* = RocStr.empty();
+                    try value_stack.push(value);
+                } else {
+                    // Schedule collection of segments
+                    // Push continuation to handle all segments, starting with none collected
+                    try work_stack.push(.{
+                        .apply_continuation = .{
+                            .str_collect = .{
+                                .collected_count = 0,
+                                .total_count = segments.len,
+                                .remaining_segments = segments,
+                                .needs_conversion = false, // No value to convert yet
+                            },
+                        },
+                    });
+                }
+            },
+
             .e_empty_record => {
                 const value = try self.evalEmptyRecord(expr_idx, expected_rt_var);
                 try value_stack.push(value);
@@ -7427,6 +7421,30 @@ pub const Interpreter = struct {
 
             .e_zero_argument_tag => |zero| {
                 const value = try self.evalZeroArgumentTag(expr_idx, expected_rt_var, zero, roc_ops);
+                try value_stack.push(value);
+            },
+
+            // ================================================================
+            // Lambda/Closure creation
+            // ================================================================
+
+            .e_lambda => |lam| {
+                const value = try self.evalLambda(expr_idx, expected_rt_var, lam, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_low_level_lambda => |lam| {
+                const value = try self.evalLowLevelLambda(expr_idx, expected_rt_var, lam);
+                try value_stack.push(value);
+            },
+
+            .e_hosted_lambda => |hosted| {
+                const value = try self.evalHostedLambda(expr_idx, hosted);
+                try value_stack.push(value);
+            },
+
+            .e_closure => |cls| {
+                const value = try self.evalClosure(expr_idx, cls, roc_ops);
                 try value_stack.push(value);
             },
 
@@ -7664,6 +7682,214 @@ pub const Interpreter = struct {
                         .all_fields = fields,
                     } } });
                 }
+            },
+
+            // ================================================================
+            // Nominal types - evaluate backing expression
+            // ================================================================
+
+            .e_nominal => |nom| {
+                // Compute the backing type variable for the nominal
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
+                    try self.getCanonicalBoolRuntimeVar()
+                else switch (nominal_resolved.desc.content) {
+                    .structure => |st| switch (st) {
+                        .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                        else => nominal_rt_var,
+                    },
+                    else => nominal_rt_var,
+                };
+                // Schedule evaluation of the backing expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = nom.backing_expr,
+                    .expected_rt_var = backing_rt_var,
+                } });
+            },
+
+            .e_nominal_external => |nom| {
+                // Compute the backing type variable for the external nominal
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    const backing_rt_var = switch (nominal_resolved.desc.content) {
+                        .structure => |st| switch (st) {
+                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                            else => nominal_rt_var,
+                        },
+                        else => nominal_rt_var,
+                    };
+                    break :blk backing_rt_var;
+                };
+                // Schedule evaluation of the backing expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = nom.backing_expr,
+                    .expected_rt_var = rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Simple error/crash expressions
+            // ================================================================
+
+            .e_crash => |crash_expr| {
+                // Get the crash message string and trigger crash
+                const msg = self.env.getString(crash_expr.msg);
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
+            },
+
+            .e_anno_only => {
+                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
+                return error.Crash;
+            },
+
+            .e_return => |ret| {
+                // Schedule the early return continuation after evaluating the inner expression
+                const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{} } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ret.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Tag unions with payloads
+            // ================================================================
+
+            .e_tag => |tag| {
+                // Determine runtime type and tag index
+                var rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                var resolved = self.resolveBaseVar(rt_var);
+                // Handle flex types for True/False
+                if (resolved.desc.content == .flex) {
+                    if (tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag) {
+                        rt_var = try self.getCanonicalBoolRuntimeVar();
+                        resolved = self.resolveBaseVar(rt_var);
+                    }
+                }
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("e_tag: expected tag_union structure type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(rt_var, &tag_list);
+
+                const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
+                    const name_text = self.env.getIdent(tag.name);
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    self.triggerCrash(msg, true, roc_ops);
+                    return error.Crash;
+                };
+
+                const layout_val = try self.getRuntimeLayout(rt_var);
+
+                if (layout_val.tag == .scalar) {
+                    // No payload union - just set discriminant
+                    var out = try self.pushRaw(layout_val, 0);
+                    if (layout_val.data.scalar.tag == .int) {
+                        out.is_initialized = false;
+                        try out.setInt(@intCast(tag_index));
+                        out.is_initialized = true;
+                        out.rt_var = rt_var;
+                        try value_stack.push(out);
+                    } else {
+                        self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
+                        return error.Crash;
+                    }
+                } else if (layout_val.tag == .record or layout_val.tag == .tuple) {
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+                    const arg_vars_range = tag_list.items[tag_index].args;
+                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+
+                    if (args_exprs.len == 0) {
+                        // No payload args - finalize immediately
+                        const value = try self.finalizeTagNoPayload(expr_idx, rt_var, tag_index, layout_val, roc_ops);
+                        try value_stack.push(value);
+                    } else {
+                        // Has payload args - schedule collection
+                        try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                            .collected_count = 0,
+                            .remaining_args = args_exprs,
+                            .arg_rt_vars = arg_rt_vars,
+                            .expr_idx = expr_idx,
+                            .rt_var = rt_var,
+                            .tag_index = tag_index,
+                            .layout_type = if (layout_val.tag == .record) 0 else 1,
+                        } } });
+                    }
+                } else {
+                    self.triggerCrash("e_tag: unexpected layout type", false, roc_ops);
+                    return error.Crash;
+                }
+            },
+
+            // ================================================================
+            // Pattern matching
+            // ================================================================
+
+            .e_match => |m| {
+                // Get type info for scrutinee and result
+                const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
+                const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
+                const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const match_result_rt_var = try self.translateTypeVar(self.env, match_result_ct_var);
+
+                const branches = self.env.store.matchBranchSlice(m.branches);
+
+                // Schedule: first evaluate scrutinee, then try branches
+                try work_stack.push(.{ .apply_continuation = .{ .match_branches = .{
+                    .expr_idx = expr_idx,
+                    .scrutinee_rt_var = scrutinee_rt_var,
+                    .result_rt_var = match_result_rt_var,
+                    .branches = branches,
+                    .current_branch = 0,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = m.cond,
+                    .expected_rt_var = null,
+                } });
+            },
+
+            // ================================================================
+            // Debugging and assertions
+            // ================================================================
+
+            .e_expect => |expect_expr| {
+                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                // Schedule: first evaluate condition, then check result
+                try work_stack.push(.{ .apply_continuation = .{ .expect_check = .{
+                    .expr_idx = expr_idx,
+                    .body_expr = expect_expr.body,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = expect_expr.body,
+                    .expected_rt_var = bool_rt_var,
+                } });
+            },
+
+            .e_dbg => |dbg_expr| {
+                const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                // Schedule: first evaluate inner expression, then print
+                try work_stack.push(.{ .apply_continuation = .{ .dbg_print = .{
+                    .expr_idx = expr_idx,
+                    .inner_rt_var = inner_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dbg_expr.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
             },
 
             else => {
@@ -7947,6 +8173,283 @@ pub const Interpreter = struct {
         }
         self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
         return error.Crash;
+    }
+
+    /// Finalize a tag with no payload arguments (but may still have record/tuple layout)
+    fn finalizeTagNoPayload(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        rt_var: types.Var,
+        tag_index: usize,
+        layout_val: Layout,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        _ = expr_idx;
+        if (layout_val.tag == .record) {
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                self.triggerCrash("e_tag: tag field not found", false, roc_ops);
+                return error.Crash;
+            };
+            const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        } else if (layout_val.tag == .tuple) {
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asTuple(&self.runtime_layout_store);
+            const tag_field = try acc.getElement(1);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        }
+        self.triggerCrash("e_tag: unexpected layout in finalizeTagNoPayload", false, roc_ops);
+        return error.Crash;
+    }
+
+    // ========================================================================
+    // Helper functions for lambda/closure creation
+    // ========================================================================
+
+    /// Evaluate a lambda expression (e_lambda) - creates a closure value with empty captures
+    fn evalLambda(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        // Build a closure value with empty captures using the runtime layout for the lambda's type
+        const rt_var = if (expected_rt_var) |provided_var|
+            provided_var
+        else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const closure_layout = try self.getRuntimeLayout(rt_var);
+        if (closure_layout.tag != .closure) {
+            self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
+            return error.Crash;
+        }
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = lam.body,
+                .params = lam.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+        }
+        return value;
+    }
+
+    /// Evaluate a low-level lambda expression (e_low_level_lambda) - creates a closure for builtins
+    fn evalLowLevelLambda(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_low_level_lambda),
+    ) Error!StackValue {
+        const rt_var = if (expected_rt_var) |provided_var|
+            provided_var
+        else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const closure_layout = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = lam.body,
+                .params = lam.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+        }
+        return value;
+    }
+
+    /// Evaluate a hosted lambda expression (e_hosted_lambda) - creates a closure for host dispatch
+    fn evalHostedLambda(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        hosted: @TypeOf(@as(can.CIR.Expr, undefined).e_hosted_lambda),
+    ) Error!StackValue {
+        // Manually create a closure layout since hosted functions might have flex types
+        const closure_layout = Layout{
+            .tag = .closure,
+            .data = .{
+                .closure = .{
+                    .captures_layout_idx = @enumFromInt(0),
+                },
+            },
+        };
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = hosted.body,
+                .params = hosted.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+        }
+        return value;
+    }
+
+    /// Evaluate a closure expression (e_closure) - creates a closure with captured values
+    fn evalClosure(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        cls: @TypeOf(@as(can.CIR.Expr, undefined).e_closure),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const lam_expr = self.env.store.getExpr(cls.lambda_idx);
+        if (lam_expr != .e_lambda) {
+            self.triggerCrash("e_closure: lambda_idx does not point to e_lambda", false, roc_ops);
+            return error.Crash;
+        }
+        const lam = lam_expr.e_lambda;
+
+        const caps = self.env.store.sliceCaptures(cls.captures);
+        var field_layouts = try self.allocator.alloc(Layout, caps.len);
+        defer self.allocator.free(field_layouts);
+        var field_names = try self.allocator.alloc(base_pkg.Ident.Idx, caps.len);
+        defer self.allocator.free(field_names);
+
+        // Resolve all capture values
+        var capture_values = try self.allocator.alloc(StackValue, caps.len);
+        defer self.allocator.free(capture_values);
+
+        for (caps, 0..) |cap_idx, i| {
+            const cap = self.env.store.getCapture(cap_idx);
+            const name_text = self.env.getIdent(cap.name);
+            field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
+
+            const cap_val = self.resolveCapture(cap, roc_ops) orelse {
+                self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                return error.Crash;
+            };
+            capture_values[i] = cap_val;
+            field_layouts[i] = cap_val.layout;
+        }
+
+        const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
+        const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
+        const closure_layout = Layout.closure(captures_layout_idx);
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = lam.body,
+                .params = lam.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+            // Copy captures into record area following header
+            const header_size = @sizeOf(layout.Closure);
+            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+            const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+            const base: [*]u8 = @ptrCast(@alignCast(ptr));
+            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+            for (caps, 0..) |_, cap_i| {
+                const cap_val = capture_values[cap_i];
+                const translated_name = field_names[cap_i];
+                const idx_opt = accessor.findFieldIndex(translated_name) orelse {
+                    self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
+                    return error.Crash;
+                };
+                try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
+            }
+        }
+        return value;
+    }
+
+    /// Helper to resolve a capture value from bindings, active closures, or top-level defs
+    fn resolveCapture(self: *Interpreter, cap: can.CIR.Expr.Capture, roc_ops: *RocOps) ?StackValue {
+        // First try local bindings by pattern idx
+        var i: usize = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            const b = self.bindings.items[i];
+            if (b.pattern_idx == cap.pattern_idx) return b.value;
+        }
+        // Next try ALL active closure captures in reverse order
+        if (self.active_closures.items.len > 0) {
+            var closure_idx: usize = self.active_closures.items.len;
+            while (closure_idx > 0) {
+                closure_idx -= 1;
+                const cls_val = self.active_closures.items[closure_idx];
+                if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                    const header_sz = @sizeOf(layout.Closure);
+                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                    var rec_acc = (rec_val.asRecord(&self.runtime_layout_store)) catch continue;
+                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
+                        if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
+                            return field_val;
+                        }
+                    }
+                }
+            }
+        }
+        // Finally try top-level defs by pattern idx
+        const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+        for (all_defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (def.pattern == cap.pattern_idx) {
+                var k: usize = self.def_stack.items.len;
+                while (k > 0) {
+                    k -= 1;
+                    const entry = self.def_stack.items[k];
+                    if (entry.pattern_idx == cap.pattern_idx) {
+                        if (entry.value) |val| {
+                            return val;
+                        }
+                    }
+                }
+                // Found the def! Evaluate it to get the captured value
+                const new_entry = DefInProgress{
+                    .pattern_idx = def.pattern,
+                    .expr_idx = def.expr,
+                    .value = null,
+                };
+                self.def_stack.append(new_entry) catch return null;
+                defer _ = self.def_stack.pop();
+                return self.evalMinimal(def.expr, roc_ops) catch null;
+            }
+        }
+        return null;
     }
 
     // ========================================================================
@@ -8896,6 +9399,455 @@ pub const Interpreter = struct {
                     }
 
                     try value_stack.push(dest);
+                }
+                return true;
+            },
+            .early_return => {
+                // Pop the evaluated value and signal early return
+                const return_value = value_stack.pop() orelse return error.Crash;
+                self.early_return_value = return_value;
+                return error.EarlyReturn;
+            },
+            .tag_collect => |tc| {
+                // Tag payload collection: evaluate each argument, then finalize tag
+                if (tc.remaining_args.len > 0) {
+                    // More arguments to evaluate
+                    const arg_idx = tc.collected_count;
+                    const arg_rt_var = if (arg_idx < tc.arg_rt_vars.len) tc.arg_rt_vars[arg_idx] else null;
+                    try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                        .collected_count = tc.collected_count + 1,
+                        .remaining_args = tc.remaining_args[1..],
+                        .arg_rt_vars = tc.arg_rt_vars,
+                        .expr_idx = tc.expr_idx,
+                        .rt_var = tc.rt_var,
+                        .tag_index = tc.tag_index,
+                        .layout_type = tc.layout_type,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = tc.remaining_args[0],
+                        .expected_rt_var = arg_rt_var,
+                    } });
+                } else {
+                    // All arguments collected - finalize the tag
+                    const total_count = tc.collected_count;
+                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
+
+                    // Pop all collected values
+                    var values = try self.allocator.alloc(StackValue, total_count);
+                    defer self.allocator.free(values);
+                    var i: usize = total_count;
+                    while (i > 0) {
+                        i -= 1;
+                        values[i] = value_stack.pop() orelse return error.Crash;
+                    }
+
+                    if (tc.layout_type == 0) {
+                        // Record layout { tag, payload }
+                        var dest = try self.pushRaw(layout_val, 0);
+                        var acc = try dest.asRecord(&self.runtime_layout_store);
+                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                            for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
+                            self.triggerCrash("e_tag: tag field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                            for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
+                            self.triggerCrash("e_tag: payload field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+
+                        // Write tag discriminant
+                        const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(tc.tag_index));
+                        }
+
+                        // Write payload
+                        const payload_field = try acc.getFieldByIndex(payload_field_idx);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (total_count == 1) {
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else {
+                                // Multiple args - create tuple payload
+                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                                defer self.allocator.free(elem_layouts);
+                                for (values, 0..) |val, idx| {
+                                    elem_layouts[idx] = val.layout;
+                                }
+                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                for (values, 0..) |val, idx| {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
+                            }
+                        }
+
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        dest.rt_var = tc.rt_var;
+                        try value_stack.push(dest);
+                    } else {
+                        // Tuple layout (payload, tag)
+                        var dest = try self.pushRaw(layout_val, 0);
+                        var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                        // Write tag discriminant (element 1)
+                        const tag_field = try acc.getElement(1);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(tc.tag_index));
+                        }
+
+                        // Write payload (element 0)
+                        const payload_field = try acc.getElement(0);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (total_count == 1) {
+                                // Check for layout mismatch and handle it
+                                const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                                const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                                const layouts_differ = arg_size > payload_size or !layoutsEqual(values[0].layout, payload_field.layout);
+
+                                if (layouts_differ) {
+                                    // Create properly-typed tuple with actual arg layout
+                                    var elem_layouts_fixed = [2]Layout{ values[0].layout, tag_field.layout };
+                                    const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
+                                    const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
+                                    var proper_dest = try self.pushRaw(proper_tuple_layout, 0);
+                                    var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                                    // Write tag
+                                    const proper_tag_field = try proper_acc.getElement(1);
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                        var tmp = proper_tag_field;
+                                        tmp.is_initialized = false;
+                                        try tmp.setInt(@intCast(tc.tag_index));
+                                    }
+
+                                    // Write payload
+                                    const proper_payload_field = try proper_acc.getElement(0);
+                                    if (proper_payload_field.ptr) |proper_ptr| {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                    }
+
+                                    for (values) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    proper_dest.rt_var = tc.rt_var;
+                                    try value_stack.push(proper_dest);
+                                    return true;
+                                }
+
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else {
+                                // Multiple args - create tuple payload
+                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                                defer self.allocator.free(elem_layouts);
+                                for (values, 0..) |val, idx| {
+                                    elem_layouts[idx] = val.layout;
+                                }
+                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                for (values, 0..) |val, idx| {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
+                            }
+                        }
+
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        dest.rt_var = tc.rt_var;
+                        try value_stack.push(dest);
+                    }
+                }
+                return true;
+            },
+            .match_branches => |mb| {
+                // Scrutinee is on value stack - get it but keep it there for potential later use
+                const scrutinee_temp = value_stack.pop() orelse return error.Crash;
+                // Make a copy to protect from corruption
+                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
+                scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
+
+                // Try branches starting from current_branch
+                var branch_idx = mb.current_branch;
+                while (branch_idx < mb.branches.len) : (branch_idx += 1) {
+                    const br = self.env.store.getMatchBranch(mb.branches[branch_idx]);
+                    const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
+
+                    for (patterns) |bp_idx| {
+                        var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                        defer {
+                            self.trimBindingList(&temp_binds, 0, roc_ops);
+                            temp_binds.deinit();
+                        }
+
+                        if (!try self.patternMatchesBind(
+                            self.env.store.getMatchBranchPattern(bp_idx).pattern,
+                            scrutinee,
+                            mb.scrutinee_rt_var,
+                            roc_ops,
+                            &temp_binds,
+                            @enumFromInt(0),
+                        )) {
+                            continue;
+                        }
+
+                        // Pattern matched! Add bindings
+                        const start_len = self.bindings.items.len;
+                        try self.bindings.appendSlice(temp_binds.items);
+                        temp_binds.items.len = 0;
+
+                        if (br.guard) |guard_idx| {
+                            // Has guard - need to evaluate it
+                            // Keep scrutinee on stack for potential next branch
+                            try value_stack.push(scrutinee);
+
+                            const guard_ct_var = can.ModuleEnv.varFrom(guard_idx);
+                            const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
+
+                            try work_stack.push(.{ .apply_continuation = .{ .match_guard = .{
+                                .branch_body = br.value,
+                                .result_rt_var = mb.result_rt_var,
+                                .bindings_start = start_len,
+                                .remaining_branches = mb.branches[branch_idx + 1 ..],
+                                .expr_idx = mb.expr_idx,
+                                .scrutinee_rt_var = mb.scrutinee_rt_var,
+                            } } });
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = guard_idx,
+                                .expected_rt_var = guard_rt_var,
+                            } });
+                            return true;
+                        }
+
+                        // No guard - evaluate body directly
+                        scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
+                        try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
+                            .bindings_start = start_len,
+                        } } });
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = br.value,
+                            .expected_rt_var = mb.result_rt_var,
+                        } });
+                        return true;
+                    }
+                }
+
+                // No branch matched
+                scrutinee.decref(&self.runtime_layout_store, roc_ops);
+                self.triggerCrash("non-exhaustive match", false, roc_ops);
+                return error.Crash;
+            },
+            .match_guard => |mg| {
+                // Guard result is on value stack
+                const guard_val = value_stack.pop() orelse return error.Crash;
+                defer guard_val.decref(&self.runtime_layout_store, roc_ops);
+
+                const guard_pass = boolValueEquals(true, guard_val);
+
+                if (guard_pass) {
+                    // Guard passed - evaluate body
+                    // Scrutinee is still on value stack - pop and decref it
+                    const scrutinee = value_stack.pop() orelse return error.Crash;
+                    scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
+                    try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
+                        .bindings_start = mg.bindings_start,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = mg.branch_body,
+                        .expected_rt_var = mg.result_rt_var,
+                    } });
+                } else {
+                    // Guard failed - try remaining branches
+                    self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
+
+                    if (mg.remaining_branches.len == 0) {
+                        // No more branches
+                        const scrutinee = value_stack.pop() orelse return error.Crash;
+                        scrutinee.decref(&self.runtime_layout_store, roc_ops);
+                        self.triggerCrash("non-exhaustive match", false, roc_ops);
+                        return error.Crash;
+                    }
+
+                    // Continue with remaining branches
+                    try work_stack.push(.{ .apply_continuation = .{ .match_branches = .{
+                        .expr_idx = mg.expr_idx,
+                        .scrutinee_rt_var = mg.scrutinee_rt_var,
+                        .result_rt_var = mg.result_rt_var,
+                        .branches = mg.remaining_branches,
+                        .current_branch = 0,
+                    } } });
+                }
+                return true;
+            },
+            .match_cleanup => |mc| {
+                // Result is on value stack - leave it there, just trim bindings
+                self.trimBindingList(&self.bindings, mc.bindings_start, roc_ops);
+                return true;
+            },
+            .expect_check => |ec| {
+                // Pop condition value from stack
+                const cond_val = value_stack.pop() orelse return error.Crash;
+                const succeeded = boolValueEquals(true, cond_val);
+                if (succeeded) {
+                    // Return {} (empty record)
+                    const ct_var = can.ModuleEnv.varFrom(ec.expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const layout_val = try self.getRuntimeLayout(rt_var);
+                    const result = try self.pushRaw(layout_val, 0);
+                    try value_stack.push(result);
+                    return true;
+                }
+                // Expect failed - trigger error
+                self.handleExpectFailure(ec.body_expr, roc_ops);
+                return error.Crash;
+            },
+            .dbg_print => |dp| {
+                // Pop evaluated value from stack
+                const value = value_stack.pop() orelse return error.Crash;
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
+                defer self.allocator.free(rendered);
+                roc_ops.dbg(rendered);
+                // Return {} (empty record)
+                const ct_var = can.ModuleEnv.varFrom(dp.expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const result = try self.pushRaw(layout_val, 0);
+                try value_stack.push(result);
+                return true;
+            },
+            .str_collect => |sc| {
+                // State machine for string interpolation:
+                // 1. If needs_conversion, convert top of value stack to string
+                // 2. If remaining segments, process next one
+                // 3. If no remaining segments, concatenate all collected strings
+
+                var collected_count = sc.collected_count;
+                var remaining = sc.remaining_segments;
+
+                // Step 1: If we just evaluated an expression, convert it to string
+                if (sc.needs_conversion) {
+                    const seg_value = value_stack.pop() orelse return error.Crash;
+
+                    // Convert to RocStr
+                    const segment_str = try self.stackValueToRocStr(seg_value, seg_value.rt_var, roc_ops);
+                    seg_value.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Push as string value
+                    const str_value = try self.pushStr("");
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                    roc_str_ptr.* = segment_str;
+                    try value_stack.push(str_value);
+                    collected_count += 1;
+                    remaining = remaining[1..]; // Move past the segment we just converted
+                }
+
+                // Step 2: Process remaining segments
+                if (remaining.len == 0) {
+                    // Step 3: All segments collected - concatenate them
+                    var segment_strings = try std.array_list.AlignedManaged(RocStr, null).initCapacity(self.allocator, sc.total_count);
+                    defer {
+                        for (segment_strings.items) |s| {
+                            var str_copy = s;
+                            str_copy.decref(roc_ops);
+                        }
+                        segment_strings.deinit();
+                    }
+
+                    // Pop values in reverse order (stack is LIFO)
+                    var i: usize = 0;
+                    while (i < sc.total_count) : (i += 1) {
+                        const str_val = value_stack.pop() orelse return error.Crash;
+                        if (str_val.ptr) |ptr| {
+                            const roc_str: *RocStr = @ptrCast(@alignCast(ptr));
+                            try segment_strings.append(roc_str.*);
+                        } else {
+                            try segment_strings.append(RocStr.empty());
+                        }
+                    }
+
+                    // Reverse to get correct order
+                    std.mem.reverse(RocStr, segment_strings.items);
+
+                    // Calculate total length
+                    var total_len: usize = 0;
+                    for (segment_strings.items) |s| {
+                        total_len += s.asSlice().len;
+                    }
+
+                    // Concatenate
+                    const result_str: RocStr = if (total_len == 0)
+                        RocStr.empty()
+                    else blk: {
+                        const buffer = try self.allocator.alloc(u8, total_len);
+                        defer self.allocator.free(buffer);
+                        var offset: usize = 0;
+                        for (segment_strings.items) |segment_str| {
+                            const slice = segment_str.asSlice();
+                            std.mem.copyForwards(u8, buffer[offset .. offset + slice.len], slice);
+                            offset += slice.len;
+                        }
+                        break :blk RocStr.fromSlice(buffer, roc_ops);
+                    };
+
+                    const result = try self.pushStr("");
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
+                    roc_str_ptr.* = result_str;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Process next segment
+                const next_seg = remaining[0];
+                const next_seg_expr = self.env.store.getExpr(next_seg);
+
+                if (next_seg_expr == .e_str_segment) {
+                    // Literal segment - push directly as string value
+                    const content = self.env.getString(next_seg_expr.e_str_segment.literal);
+                    const seg_str = RocStr.fromSlice(content, roc_ops);
+                    const seg_value = try self.pushStr("");
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(seg_value.ptr.?));
+                    roc_str_ptr.* = seg_str;
+                    try value_stack.push(seg_value);
+
+                    // Schedule continuation for remaining (no conversion needed)
+                    try work_stack.push(.{ .apply_continuation = .{ .str_collect = .{
+                        .collected_count = collected_count + 1,
+                        .total_count = sc.total_count,
+                        .remaining_segments = remaining[1..],
+                        .needs_conversion = false,
+                    } } });
+                } else {
+                    // Expression segment - evaluate it, then convert
+                    const seg_ct_var = can.ModuleEnv.varFrom(next_seg);
+                    const seg_rt_var = try self.translateTypeVar(self.env, seg_ct_var);
+                    // Schedule continuation with needs_conversion = true
+                    try work_stack.push(.{
+                        .apply_continuation = .{
+                            .str_collect = .{
+                                .collected_count = collected_count,
+                                .total_count = sc.total_count,
+                                .remaining_segments = remaining, // Don't advance - we'll do it after conversion
+                                .needs_conversion = true,
+                            },
+                        },
+                    });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = next_seg,
+                        .expected_rt_var = seg_rt_var,
+                    } });
                 }
                 return true;
             },
