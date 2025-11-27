@@ -117,6 +117,7 @@ pub const CommonIdents = extern struct {
     @"try": Ident.Idx,
     out_of_range: Ident.Idx,
     builtin_module: Ident.Idx,
+    str: Ident.Idx,
     list: Ident.Idx,
     box: Ident.Idx,
 
@@ -177,6 +178,7 @@ pub const CommonIdents = extern struct {
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
+            .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Try")),
@@ -236,6 +238,7 @@ pub const CommonIdents = extern struct {
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
+            .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
             .builtin_try = common.findIdent("Try") orelse unreachable,
