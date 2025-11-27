@@ -1776,7 +1776,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     // Render all type problems (errors and warnings) exactly as roc check would
     // The program still runs afterward - we don't block on errors
-    _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
+    // Skip rendering in test mode to avoid polluting test output
+    if (!builtin.is_test) {
+        _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
+    }
 
     app_env_ptr.* = app_env;
 
