@@ -3421,11 +3421,25 @@ pub const Interpreter = struct {
 
                 const result_list = builtins.str.strSplitOn(string.*, delimiter.*, roc_ops);
 
-                const result_rt_var = return_rt_var orelse {
-                    self.triggerCrash("str_split_on requires return type info", false, roc_ops);
-                    return error.Crash;
+                // str_split_on has a fixed return type of List(Str).
+                // Prefer the caller's return_rt_var when it matches that shape, but fall back
+                // to the known layout if type information is missing or incorrect.
+                const result_layout = blk: {
+                    const expected_idx = try self.runtime_layout_store.insertList(layout.Idx.str);
+                    const expected_layout = self.runtime_layout_store.getLayout(expected_idx);
+
+                    if (return_rt_var) |rt_var| {
+                        const candidate = self.getRuntimeLayout(rt_var) catch expected_layout;
+                        if (candidate.tag == .list) {
+                            const elem_layout = self.runtime_layout_store.getLayout(candidate.data.list);
+                            if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
+                                break :blk candidate;
+                            }
+                        }
+                    }
+
+                    break :blk expected_layout;
                 };
-                const result_layout = try self.getRuntimeLayout(result_rt_var);
 
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
