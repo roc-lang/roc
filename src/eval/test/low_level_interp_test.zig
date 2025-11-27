@@ -29,6 +29,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
+    checker: *Check,
 } {
     const gpa = test_allocator;
 
@@ -83,8 +84,11 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
-    defer checker.deinit();
+    // Heap-allocate checker so it outlives this function - evaluator holds a pointer to checker.import_mapping
+    const checker = try gpa.create(Check);
+    errdefer gpa.destroy(checker);
+    checker.* = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    errdefer checker.deinit();
 
     try checker.checkFile();
 
@@ -92,13 +96,14 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, null, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .builtin_module = builtin_module,
+        .checker = checker,
     };
 }
 
@@ -114,6 +119,11 @@ fn cleanupEvalModule(result: anytype) void {
 
     var builtin_module_mut = result.builtin_module;
     builtin_module_mut.deinit();
+
+    // Clean up heap-allocated checker
+    var checker_mut = result.checker;
+    checker_mut.deinit();
+    test_allocator.destroy(result.checker);
 }
 
 /// Helper to evaluate multi-declaration modules and get the integer value of a specific declaration
@@ -1121,7 +1131,6 @@ test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hi\"", value);
 }
-
 // U8 conversion tests
 
 test "e_low_level_lambda - U8.to_i16 safe widening" {
@@ -1740,4 +1749,33 @@ test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+// U8.plus tests
+// These tests verify numeric method calls like a.plus(b) work in the interpreter tests.
+
+test "e_low_level_lambda - U8.plus basic" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = U8.plus(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 8), value);
+}
+
+test "e_low_level_lambda - U8.plus method call syntax" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = a.plus(b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 8), value);
 }
