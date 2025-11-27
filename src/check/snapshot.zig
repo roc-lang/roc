@@ -237,7 +237,17 @@ pub const Store = struct {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
-                else => null,
+                .recursion_var => |rec_var| rec_var.name,
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    // Other structures can appear as backing vars for nominal types.
+                    // E.g., List(a) := [Nil, Cons(a, List(a))] has a tag union as backing.
+                    // These don't have a direct name, so we fall back to contextual naming.
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
+                },
+                // Error types shouldn't create cycles
+                .err => unreachable,
             };
             return try self.contents.append(self.gpa, .{ .recursive = recursive_name });
         }
@@ -724,7 +734,7 @@ pub const Store = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        const display_idx = self.import_mapping.get(alias.ident.ident_idx) orelse alias.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -792,7 +802,7 @@ pub const Store = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        const display_idx = self.import_mapping.get(nominal_type.ident.ident_idx) orelse nominal_type.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
@@ -1059,11 +1069,15 @@ pub const Store = struct {
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
     }
 
-    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive.
+    /// Flex vars and rigid names carry unique identities, but recursive markers don't—they're just
+    /// placeholders indicating "reference back to a recursive type." Which type they refer to is
+    /// determined by position in the tree, not by data in the marker itself. So for deduplication,
+    /// all recursive markers are treated as equivalent.
     const DispatcherIdentity = union(enum) {
         flex_var: Var,
         rigid_name: Ident.Idx,
-        recursive: void, // All recursive types are equivalent for deduplication
+        recursive: void,
     };
 
     /// Get the dispatcher (first argument) identity from a function content
@@ -1103,7 +1117,7 @@ pub const Store = struct {
                 else => false,
             },
             .recursive => switch (b.?) {
-                .recursive => true, // All recursive types are equal
+                .recursive => true, // see DispatcherIdentity doc comment
                 else => false,
             },
         };
@@ -1584,7 +1598,7 @@ pub const SnapshotWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        const display_idx = self.import_mapping.get(alias.ident.ident_idx) orelse alias.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -1652,7 +1666,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        const display_idx = self.import_mapping.get(nominal_type.ident.ident_idx) orelse nominal_type.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
@@ -1919,11 +1933,15 @@ pub const SnapshotWriter = struct {
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
     }
 
-    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive.
+    /// Flex vars and rigid names carry unique identities, but recursive markers don't—they're just
+    /// placeholders indicating "reference back to a recursive type." Which type they refer to is
+    /// determined by position in the tree, not by data in the marker itself. So for deduplication,
+    /// all recursive markers are treated as equivalent.
     const DispatcherIdentity = union(enum) {
         flex_var: Var,
         rigid_name: Ident.Idx,
-        recursive: void, // All recursive types are equivalent for deduplication
+        recursive: void,
     };
 
     /// Get the dispatcher (first argument) identity from a function content
@@ -1963,7 +1981,7 @@ pub const SnapshotWriter = struct {
                 else => false,
             },
             .recursive => switch (b.?) {
-                .recursive => true, // All recursive types are equal
+                .recursive => true, // see DispatcherIdentity doc comment
                 else => false,
             },
         };

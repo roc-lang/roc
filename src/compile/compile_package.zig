@@ -317,6 +317,8 @@ pub const PackageEnv = struct {
                 try self.tryEmitReady();
             } else if (self.remaining_modules == 0) {
                 break;
+            } else {
+                break; // This should not happen - stuck state
             }
         }
     }
@@ -813,11 +815,8 @@ pub const PackageEnv = struct {
         czer.deinit();
 
         // Type check using the SAME module_envs_map
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
-            .list = try env.insertIdent(base.Ident.for_text("List")),
-            .box = try env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -832,7 +831,7 @@ pub const PackageEnv = struct {
             imported_envs,
             module_envs_out,
             &env.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         );
         errdefer checker.deinit();
 
@@ -937,11 +936,8 @@ pub const PackageEnv = struct {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
-            .list = try env.insertIdent(base.Ident.for_text("List")),
-            .box = try env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -968,7 +964,7 @@ pub const PackageEnv = struct {
             imported_envs,
             &module_envs_map,
             &env.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         );
         errdefer checker.deinit();
 
@@ -1091,17 +1087,20 @@ pub const PackageEnv = struct {
     }
 
     // Determine if an import was qualified (e.g. "cli.Stdout") using CIR statements.
-    // Scans only top-level s_import statements; no allocations; exits early on match.
+    // After canonicalization, qualified imports have their full name (e.g., "pf.Stdout")
+    // stored in module_name_tok, and qualifier_tok is null.
+    // So we check if the module name contains a dot to determine if it was qualified.
     fn hadQualifiedImport(env: *ModuleEnv, mod_name_text: []const u8) bool {
         const stmts = env.store.sliceStatements(env.all_statements);
         for (stmts) |stmt_idx| {
             const stmt = env.store.getStatement(stmt_idx);
             switch (stmt) {
                 .s_import => |imp| {
-                    const imported_text = env.getIdent(imp.module_name_tok);
-                    if (!std.mem.eql(u8, imported_text, mod_name_text)) continue;
-                    // If qualifier_tok is set, the import was package-qualified in source
-                    if (imp.qualifier_tok != null) return true;
+                    const module_name = env.getIdent(imp.module_name_tok);
+                    if (!std.mem.eql(u8, module_name, mod_name_text)) continue;
+                    // After canonicalization, qualified imports have their full name
+                    // stored in module_name_tok. Check if it contains a dot.
+                    return std.mem.indexOfScalar(u8, module_name, '.') != null;
                 },
                 else => {},
             }

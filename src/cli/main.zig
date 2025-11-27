@@ -242,8 +242,82 @@ const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
+const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
+
+/// Render type checking problems as diagnostic reports to stderr.
+/// Returns the count of errors (fatal/runtime_error severity).
+/// This is shared between rocCheck and rocRun to ensure consistent error reporting.
+fn renderTypeProblems(
+    gpa: Allocator,
+    checker: *Check,
+    module_env: *ModuleEnv,
+    filename: []const u8,
+) usize {
+    const stderr = stderrWriter();
+
+    var rb = ReportBuilder.init(
+        gpa,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        filename,
+        &.{},
+        &checker.import_mapping,
+    );
+    defer rb.deinit();
+
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    // Render canonicalization diagnostics (unused variables, etc.)
+    // Note: getDiagnostics allocates with module_env.gpa, so we must free with that allocator
+    const diags = module_env.getDiagnostics() catch &.{};
+    defer module_env.gpa.free(diags);
+    for (diags) |d| {
+        var report = module_env.diagnosticToReport(d, module_env.gpa, filename) catch continue;
+        defer report.deinit();
+
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Render type checking problems
+    for (checker.problems.problems.items) |prob| {
+        var report = rb.build(prob) catch continue;
+        defer report.deinit();
+
+        // Render the diagnostic report to stderr
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Print summary if there were any problems
+    if (error_count > 0 or warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            error_count,
+            warning_count,
+            filename,
+        }) catch {};
+    }
+
+    // Flush stderr to ensure all error output is visible
+    stderr_writer.interface.flush() catch {};
+
+    return error_count;
+}
 
 /// Size for shared memory allocator (just virtual address space to reserve)
 ///
@@ -894,14 +968,12 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
         runWithWindowsHandleInheritance(allocs, exe_path, shm_handle) catch |err| {
-            std.log.err("Failed to run with Windows handle inheritance: {}", .{err});
             return err;
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
         runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager) catch |err| {
-            std.log.err("Failed to run with POSIX fd inheritance: {}", .{err});
             return err;
         };
     }
@@ -1494,11 +1566,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check with all imported modules
-    const app_common_idents: Check.CommonIdents = .{
+    const app_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
-        .list = try app_env.insertIdent(base.Ident.for_text("List")),
-        .box = try app_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try app_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1516,7 +1585,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Resolve imports - map each import to its index in app_imported_envs
     app_env.imports.resolveImports(&app_env, app_imported_envs.items);
 
-    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_common_idents);
+    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
     defer app_checker.deinit();
 
     try app_checker.checkFile();
@@ -1535,6 +1604,13 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         }
 
         try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
+    }
+
+    // Render all type problems (errors and warnings) exactly as roc check would
+    // The program still runs afterward - we don't block on errors
+    // Skip rendering in test mode to avoid polluting test output
+    if (!builtin.is_test) {
+        _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
     }
 
     app_env_ptr.* = app_env;
@@ -1673,11 +1749,8 @@ fn compileModuleToSharedMemory(
     var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer check_module_envs_map.deinit();
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try env.insertIdent(base.Ident.for_text(module_name_arg)),
-        .list = try env.insertIdent(base.Ident.for_text("List")),
-        .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1690,7 +1763,7 @@ fn compileModuleToSharedMemory(
     // Resolve imports - map each import to its index in imported_envs
     env.imports.resolveImports(&env, &imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, common_idents);
+    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -2842,11 +2915,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs.deinit();
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try env.insertIdent(base.Ident.for_text("List")),
-        .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
@@ -2901,7 +2971,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     env.imports.resolveImports(&env, imported_envs);
 
     // Type check the module
-    var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_common_idents) catch |err| {
+    var checker = Check.init(allocs.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_builtin_ctx) catch |err| {
         try stderr.print("Failed to initialize type checker: {}\n", .{err});
         return err;
     };
@@ -3204,7 +3274,9 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Interpreter errors (propagate from eval during build)
     Crash,
     DivisionByZero,
+    EarlyReturn,
     IntegerOverflow,
+    InvalidImportIndex,
     InvalidMethodReceiver,
     InvalidNumExt,
     InvalidTagExt,
@@ -3219,6 +3291,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     StringOrderingNotSupported,
     TupleIndexOutOfBounds,
     TypeMismatch,
+    UnresolvedImport,
     ZeroSizedType,
     // Layout errors
     TypeContainedMismatch,

@@ -144,7 +144,15 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
 
     if (self.static_dispatch_constraints.items.len > 0) {
         _ = try self.buf.writer().write(" where [");
-        for (self.static_dispatch_constraints.items, 0..) |item, i| {
+        // Use a while loop with index instead of for loop over slice, because
+        // writeVar may collect additional constraints into this local display list
+        // while printing existing ones. This is NOT unification - we're just reading
+        // existing constraint data from nested types and gathering them for display.
+        // (e.g., `!=` desugars to `is_eq().not()` - when printing the `is_eq` constraint's
+        // return type `f`, we find that `f` has a `not` constraint which we also need to display)
+        var i: usize = 0;
+        while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
+            const item = self.static_dispatch_constraints.items[i];
             if (i > 0) {
                 _ = try self.buf.writer().write(", ");
             }

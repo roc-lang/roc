@@ -58,11 +58,8 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, module_name);
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
@@ -83,7 +80,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -140,11 +137,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, "test");
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
@@ -183,7 +177,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     module_env.imports.resolveImports(module_env, imported_envs.items);
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -368,7 +362,7 @@ test "comptime eval - cross-module constant works" {
         \\value = 42
     ;
 
-    var result_a = try parseCheckAndEvalModule(src_a);
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
     defer cleanupEvalModule(&result_a);
 
     const summary_a = try result_a.evaluator.evalAll();
@@ -442,7 +436,7 @@ test "comptime eval - unexposed constant cannot be accessed" {
         \\secret = 100
     ;
 
-    var result_a = try parseCheckAndEvalModule(src_a);
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
     defer cleanupEvalModule(&result_a);
 
     const summary_a = try result_a.evaluator.evalAll();

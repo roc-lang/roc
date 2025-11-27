@@ -194,7 +194,8 @@ test "roc fmt reformats file in place" {
     // Get absolute path to roc binary
     const cwd_path = try cwd.realpathAlloc(gpa, ".");
     defer gpa.free(cwd_path);
-    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Run roc fmt on the temp file
@@ -254,7 +255,8 @@ test "roc fmt --stdin formats unformatted input" {
     // Get absolute path to roc binary
     const cwd_path = try cwd.realpathAlloc(gpa, ".");
     defer gpa.free(cwd_path);
-    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
@@ -308,7 +310,8 @@ test "roc fmt --stdin does not change well-formatted input" {
     // Get absolute path to roc binary
     const cwd_path = try cwd.realpathAlloc(gpa, ".");
     defer gpa.free(cwd_path);
-    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist

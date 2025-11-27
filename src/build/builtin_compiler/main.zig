@@ -76,6 +76,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
     }
+    if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
+        try low_level_map.put(str_is_eq_ident, .str_is_eq);
+    }
     if (env.common.findIdent("Builtin.Str.concat")) |str_concat_ident| {
         try low_level_map.put(str_concat_ident, .str_concat);
     }
@@ -136,9 +139,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
     }
-    if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
-        try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
-    }
 
     // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
@@ -180,11 +180,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         if (env.common.findIdent(is_eq)) |ident| {
             try low_level_map.put(ident, .num_is_eq);
         }
-    }
-
-    // Numeric inequality operation (Dec only)
-    if (env.common.findIdent("Builtin.Num.Dec.is_ne")) |ident| {
-        try low_level_map.put(ident, .num_is_ne);
     }
 
     // Numeric to_str operations (all numeric types)
@@ -358,11 +353,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create parameter patterns for the lambda
-                    // Binary operations need 2 parameters, unary operations need 1
-                    const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
-                        else => 2, // Most numeric operations are binary
+                    // Get the number of parameters from the type annotation
+                    // The annotation must be a function type for low-level operations
+                    const annotation = env.store.getAnnotation(def.annotation.?);
+                    const type_anno = env.store.getTypeAnno(annotation.anno);
+                    const num_params: u32 = switch (type_anno) {
+                        .@"fn" => |func| func.args.span.len,
+                        else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
                     const patterns_start = env.store.scratchTop("patterns");
@@ -726,17 +723,11 @@ fn compileModule(
 
     // 2. Create common idents (needed for type checking)
     const module_ident = try module_env.insertIdent(base.Ident.for_text(module_name));
-    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
-    const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
-    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
-    var common_idents: Check.CommonIdents = .{
+    var builtin_ctx: Check.BuiltinContext = .{
         .module_name = module_ident,
-        .list = list_ident,
-        .box = box_ident,
-        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,
@@ -907,10 +898,10 @@ fn compileModule(
             return error.TypeDeclarationNotFound;
         };
 
-        // Update common_idents with the found statement indices
-        common_idents.bool_stmt = found_bool_stmt;
-        common_idents.try_stmt = found_try_stmt;
-        common_idents.str_stmt = found_str_stmt;
+        // Update builtin_ctx with the found statement indices
+        builtin_ctx.bool_stmt = found_bool_stmt;
+        builtin_ctx.try_stmt = found_try_stmt;
+        builtin_ctx.str_stmt = found_str_stmt;
     }
 
     // 6. Type check
@@ -933,7 +924,7 @@ fn compileModule(
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        common_idents,
+        builtin_ctx,
     );
     defer checker.deinit();
 
