@@ -637,3 +637,49 @@ test "fx platform string interpolation type mismatch" {
     // The program should still produce output (it runs despite errors)
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
 }
+
+test "fx platform run from different cwd" {
+    // Regression test: Running roc from a different current working directory
+    // than the project root should still work. Previously this failed with
+    // "error.InvalidAppPath" because the path resolution didn't handle
+    // running from a subdirectory correctly.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Get absolute path to roc binary since we'll change cwd
+    const roc_abs_path = try std.fs.cwd().realpathAlloc(allocator, roc_binary_path);
+    defer allocator.free(roc_abs_path);
+
+    // Run roc from the test/fx directory with a relative path to app.roc
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            roc_abs_path,
+            "app.roc",
+        },
+        .cwd = "test/fx",
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify stdout contains expected messages
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
+}
