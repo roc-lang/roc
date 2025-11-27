@@ -414,6 +414,7 @@ pub const Expr = union(enum) {
     pub const LowLevel = enum {
         // String operations
         str_is_empty,
+        str_is_eq,
         str_concat,
         str_contains,
         str_trim,
@@ -455,7 +456,6 @@ pub const Expr = union(enum) {
 
         // Bool operations
         bool_is_eq,
-        bool_is_ne,
 
         // Numeric type checking operations
         num_is_zero, // All numeric types
@@ -464,7 +464,6 @@ pub const Expr = union(enum) {
 
         // Numeric comparison operations
         num_is_eq, // All integer types + Dec (NOT F32/F64 due to float imprecision)
-        num_is_ne, // Dec only (intentionally separate from is_eq for clarity)
         num_is_gt, // All numeric types
         num_is_gte, // All numeric types
         num_is_lt, // All numeric types

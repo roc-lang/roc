@@ -637,12 +637,6 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const czer = try allocator.create(Can);
     czer.* = try Can.init(module_env, parse_ast, &module_envs_map);
 
-    // NOTE: Qualified tags like Bool.True and Bool.False do not currently work in test expressions
-    // because the canonicalizer doesn't support cross-module type references.
-    // See QUALIFIED_TAGS.md for details on what needs to be implemented.
-    //
-    // For now, tests should use unqualified tags (True, False) which work via unqualified_nominal_tags map.
-
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {

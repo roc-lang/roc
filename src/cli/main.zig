@@ -3274,6 +3274,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     Crash,
     DivisionByZero,
     IntegerOverflow,
+    InvalidImportIndex,
     InvalidMethodReceiver,
     InvalidNumExt,
     InvalidTagExt,
@@ -3288,6 +3289,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     StringOrderingNotSupported,
     TupleIndexOutOfBounds,
     TypeMismatch,
+    UnresolvedImport,
     ZeroSizedType,
     // Layout errors
     TypeContainedMismatch,

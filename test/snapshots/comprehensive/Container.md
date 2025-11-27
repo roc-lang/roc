@@ -792,36 +792,33 @@ main = {
 											(p-assign (ident "default"))))))))))))
 	(d-let
 		(p-assign (ident "Container.flat_map"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "f")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-lookup-local
-												(p-assign (ident "f")))
-											(e-lookup-local
-												(p-assign (ident "val"))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Empty"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "f")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "f")))
+										(e-lookup-local
+											(p-assign (ident "val"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Empty")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Container") (local)

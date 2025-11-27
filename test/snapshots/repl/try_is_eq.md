@@ -9,8 +9,8 @@ type=repl
 » Try.Ok(1) == Try.Ok(2)
 ~~~
 # OUTPUT
-True
+Crash: e_closure: failed to resolve capture value
 ---
-False
+Crash: e_closure: failed to resolve capture value
 # PROBLEMS
 NIL

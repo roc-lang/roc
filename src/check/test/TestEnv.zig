@@ -540,6 +540,32 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report.title);
 }
 
+/// Assert that the first type error matches the expected title (allows multiple errors).
+pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    // Assert at least 1 problem
+    try testing.expect(self.checker.problems.problems.items.len >= 1);
+    const problem = self.checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
 fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
     buf.clearRetainingCapacity();
     var unmanaged = buf.moveToUnmanaged();
