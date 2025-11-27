@@ -5156,30 +5156,32 @@ pub const Interpreter = struct {
     ) StructuralEqError!bool {
         _ = lhs_var;
 
-        // First check if this is a simple scalar comparison (numbers, bools represented as scalars)
+        // Check if this is a simple scalar comparison (numbers, bools represented as scalars)
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
             const rhs_scalar = rhs.layout.data.scalar;
-            if (lhs_scalar.tag == rhs_scalar.tag) {
-                switch (lhs_scalar.tag) {
-                    .int, .frac => {
-                        const order = self.compareNumericScalars(lhs, rhs) catch {
-                            return error.NotImplemented;
-                        };
-                        return order == .eq;
-                    },
-                    .str => {
-                        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-                        const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                        const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
-                        return lhs_str.eql(rhs_str.*);
-                    },
-                    else => {},
-                }
+            if (lhs_scalar.tag != rhs_scalar.tag) {
+                // Different scalar types can't be equal
+                return false;
             }
+            return switch (lhs_scalar.tag) {
+                .int, .frac => blk: {
+                    const order = self.compareNumericScalars(lhs, rhs) catch {
+                        return error.NotImplemented;
+                    };
+                    break :blk order == .eq;
+                },
+                .str => blk: {
+                    if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
+                    const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
+                    const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                    break :blk lhs_str.eql(rhs_str.*);
+                },
+                else => error.NotImplemented,
+            };
         }
 
-        // Fall back to structural comparison of the backing type
+        // Structural comparison of the backing type
         // This handles nominal types like Try that wrap tag unions
         const backing_var = self.runtime_types.getNominalBackingVar(nom);
         const backing_resolved = self.runtime_types.resolveVar(backing_var);
