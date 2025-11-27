@@ -69,7 +69,7 @@ const TestsSummaryStep = struct {
         if (effective_passed == 0) {
             std.debug.print("No tests ran (all tests filtered out).\n", .{});
         } else {
-            std.debug.print("✅ All {d} tests passed.\n", .{effective_passed});
+            std.debug.print("All {d} tests passed.\n", .{effective_passed});
         }
     }
 };
