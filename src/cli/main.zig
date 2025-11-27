@@ -2017,19 +2017,28 @@ fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 /// Get native target directory name based on host architecture.
-/// Returns null for platforms that use root-level libhost.a (macOS, Windows).
+/// Used to find prebuilt host libraries in the targets/ subdirectory.
 fn getNativeTargetDir() ?[]const u8 {
-    if (builtin.os.tag == .linux) {
-        // For Linux, prefer musl for static linking
-        return if (builtin.cpu.arch == .aarch64)
-            "arm64musl"
-        else if (builtin.cpu.arch.isX86())
-            "x64musl"
-        else
-            null;
-    }
-    // macOS and Windows use root libhost.a/host.lib
-    return null;
+    return switch (builtin.os.tag) {
+        .linux => switch (builtin.cpu.arch) {
+            .aarch64 => "arm64musl",
+            .x86_64 => "x64musl",
+            .arm => "arm32musl",
+            else => null,
+        },
+        .macos => switch (builtin.cpu.arch) {
+            .aarch64 => "arm64mac",
+            .x86_64 => "x64mac",
+            else => null,
+        },
+        .windows => switch (builtin.cpu.arch) {
+            .aarch64 => "arm64win",
+            .x86_64 => "x64win",
+            else => null,
+        },
+        .wasi => "wasm32",
+        else => null,
+    };
 }
 
 /// Find host library in package directory, checking multiple locations.
