@@ -3577,7 +3577,7 @@ pub const Interpreter = struct {
                     .int => |l| try out.setInt(l + rhs.int),
                     .f32 => |l| out.setF32(l + rhs.f32),
                     .f64 => |l| out.setF64(l + rhs.f64),
-                    .dec => |l| out.setDec(RocDec{ .num = l.num + rhs.dec.num }),
+                    .dec => |l| out.setDec(RocDec.add(l, rhs.dec, roc_ops)),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3595,7 +3595,7 @@ pub const Interpreter = struct {
                     .int => |l| try out.setInt(l - rhs.int),
                     .f32 => |l| out.setF32(l - rhs.f32),
                     .f64 => |l| out.setF64(l - rhs.f64),
-                    .dec => |l| out.setDec(RocDec{ .num = l.num - rhs.dec.num }),
+                    .dec => |l| out.setDec(RocDec.sub(l, rhs.dec, roc_ops)),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3613,7 +3613,7 @@ pub const Interpreter = struct {
                     .int => |l| try out.setInt(l * rhs.int),
                     .f32 => |l| out.setF32(l * rhs.f32),
                     .f64 => |l| out.setF64(l * rhs.f64),
-                    .dec => |l| out.setDec(RocDec{ .num = @divTrunc(l.num * rhs.dec.num, RocDec.one_point_zero_i128) }),
+                    .dec => |l| out.setDec(RocDec.mul(l, rhs.dec, roc_ops)),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3642,8 +3642,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| {
                         if (rhs.dec.num == 0) return error.DivisionByZero;
-                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
-                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                        out.setDec(RocDec.div(l, rhs.dec, roc_ops));
                     },
                 }
                 out.is_initialized = true;
@@ -3672,9 +3671,9 @@ pub const Interpreter = struct {
                         out.setF64(@trunc(l / rhs.f64));
                     },
                     .dec => |l| {
+                        // For Dec, div and div_trunc are the same since it's already integer-like
                         if (rhs.dec.num == 0) return error.DivisionByZero;
-                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
-                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                        out.setDec(RocDec.div(l, rhs.dec, roc_ops));
                     },
                 }
                 out.is_initialized = true;
@@ -3704,7 +3703,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| {
                         if (rhs.dec.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec{ .num = @rem(l.num, rhs.dec.num) });
+                        out.setDec(RocDec.rem(l, rhs.dec, roc_ops));
                     },
                 }
                 out.is_initialized = true;
@@ -4717,22 +4716,22 @@ pub const Interpreter = struct {
         result_layout: Layout,
         lhs: StackValue,
         rhs: StackValue,
+        roc_ops: *RocOps,
     ) !StackValue {
         const lhs_dec = try self.stackValueToDecimal(lhs);
         const rhs_dec = try self.stackValueToDecimal(rhs);
 
         const result_dec: RocDec = switch (op) {
-            .add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
-            .sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
-            .mul => RocDec{ .num = @divTrunc(lhs_dec.num * rhs_dec.num, RocDec.one_point_zero_i128) },
+            .add => RocDec.add(lhs_dec, rhs_dec, roc_ops),
+            .sub => RocDec.sub(lhs_dec, rhs_dec, roc_ops),
+            .mul => RocDec.mul(lhs_dec, rhs_dec, roc_ops),
             .div, .div_trunc => blk: {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
-                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                break :blk RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                break :blk RocDec.div(lhs_dec, rhs_dec, roc_ops);
             },
             .rem => blk: {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                break :blk RocDec.rem(lhs_dec, rhs_dec, roc_ops);
             },
             else => @panic("evalDecBinop: unhandled decimal operation"),
         };
