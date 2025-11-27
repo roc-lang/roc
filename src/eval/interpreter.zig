@@ -7114,6 +7114,214 @@ pub const Interpreter = struct {
     fn initTypeWriter(self: *const Interpreter) std.mem.Allocator.Error!types.TypeWriter {
         return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
+
+    // ============================================================================
+    // Stack-Safe Interpreter Infrastructure
+    // ============================================================================
+    //
+    // The following types and functions implement a stack-safe interpreter that
+    // uses explicit work and value stacks instead of recursive calls. This avoids
+    // stack overflow errors on deeply nested programs.
+
+    /// Represents a unit of work to be executed by the stack-safe interpreter.
+    pub const WorkItem = union(enum) {
+        /// Evaluate an expression and push result to value stack
+        eval_expr: EvalExpr,
+
+        /// Apply a continuation to consume values from the value stack
+        apply_continuation: Continuation,
+
+        pub const EvalExpr = struct {
+            expr_idx: can.CIR.Expr.Idx,
+            expected_rt_var: ?types.Var,
+        };
+    };
+
+    /// Continuations represent "what to do next" after evaluating sub-expressions.
+    /// This is the core of continuation-passing style - each continuation captures
+    /// exactly what's needed to proceed after a sub-expression completes.
+    pub const Continuation = union(enum) {
+        /// Return the top value on the stack as the final result.
+        /// When this continuation is applied, the main loop will exit and
+        /// return the top value from the value stack.
+        return_result: void,
+
+        /// Decrement reference count of a value after use.
+        /// This is used for cleanup when intermediate values are no longer needed.
+        decref_value: DecrefValue,
+
+        /// Restore bindings to a previous length.
+        /// Used when exiting a scope to clean up local bindings.
+        trim_bindings: TrimBindings,
+
+        pub const DecrefValue = struct {
+            value: StackValue,
+        };
+
+        pub const TrimBindings = struct {
+            target_len: usize,
+        };
+    };
+
+    /// Work stack for the stack-safe interpreter.
+    /// Contains pending operations (eval expressions or apply continuations).
+    pub const WorkStack = struct {
+        items: std.ArrayList(WorkItem),
+
+        pub fn init(allocator: std.mem.Allocator) WorkStack {
+            return .{ .items = std.ArrayList(WorkItem).init(allocator) };
+        }
+
+        pub fn deinit(self: *WorkStack) void {
+            self.items.deinit();
+        }
+
+        pub fn push(self: *WorkStack, item: WorkItem) !void {
+            try self.items.append(item);
+        }
+
+        pub fn pop(self: *WorkStack) ?WorkItem {
+            return self.items.popOrNull();
+        }
+
+        /// Push multiple items in reverse order so they execute in forward order.
+        /// For example, if you push [A, B, C], they will be executed as A, B, C.
+        pub fn pushMultipleReverse(self: *WorkStack, items: []const WorkItem) !void {
+            var i = items.len;
+            while (i > 0) {
+                i -= 1;
+                try self.items.append(items[i]);
+            }
+        }
+    };
+
+    /// Value stack for the stack-safe interpreter.
+    /// Contains intermediate results from evaluated expressions.
+    pub const ValueStack = struct {
+        items: std.ArrayList(StackValue),
+
+        pub fn init(allocator: std.mem.Allocator) ValueStack {
+            return .{ .items = std.ArrayList(StackValue).init(allocator) };
+        }
+
+        pub fn deinit(self: *ValueStack) void {
+            self.items.deinit();
+        }
+
+        pub fn push(self: *ValueStack, value: StackValue) !void {
+            try self.items.append(value);
+        }
+
+        pub fn pop(self: *ValueStack) ?StackValue {
+            return self.items.popOrNull();
+        }
+
+        /// Peek at the top value without removing it.
+        pub fn peek(self: *const ValueStack) ?StackValue {
+            if (self.items.items.len == 0) return null;
+            return self.items.items[self.items.items.len - 1];
+        }
+    };
+
+    /// Stack-safe evaluation entry point.
+    /// This function evaluates expressions using explicit work and value stacks
+    /// instead of recursive calls, preventing stack overflow on deeply nested programs.
+    pub fn evalStackSafe(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
+        var work_stack = WorkStack.init(self.allocator);
+        defer work_stack.deinit();
+
+        var value_stack = ValueStack.init(self.allocator);
+        defer value_stack.deinit();
+
+        // Initial work: evaluate the root expression, then return result
+        // Push in reverse order: return_result first (will be executed last),
+        // then eval_expr (will be executed first)
+        try work_stack.push(.{ .apply_continuation = .{ .return_result = {} } });
+        try work_stack.push(.{ .eval_expr = .{
+            .expr_idx = expr_idx,
+            .expected_rt_var = expected_rt_var,
+        } });
+
+        while (work_stack.pop()) |work_item| {
+            switch (work_item) {
+                .eval_expr => |eval| {
+                    try self.scheduleExprEval(&work_stack, &value_stack, eval.expr_idx, eval.expected_rt_var, roc_ops);
+                },
+                .apply_continuation => |cont| {
+                    const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
+                    if (!should_continue) {
+                        // return_result continuation signals completion
+                        return value_stack.pop() orelse return error.Crash;
+                    }
+                },
+            }
+        }
+
+        // Should never reach here - return_result should have exited the loop
+        return error.Crash;
+    }
+
+    /// Schedule evaluation of an expression by examining it and pushing appropriate work items.
+    /// This is the "trampolining" step - instead of recursively calling evalExprMinimal,
+    /// we push work items onto the stack to be processed by the main loop.
+    fn scheduleExprEval(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        roc_ops: *RocOps,
+    ) Error!void {
+        _ = work_stack;
+        _ = value_stack;
+        _ = expected_rt_var;
+        _ = roc_ops;
+
+        const expr = self.env.store.getExpr(expr_idx);
+
+        // For PR 1, we just panic on all expression types.
+        // Subsequent PRs will implement each expression type.
+        switch (expr) {
+            else => {
+                @panic("Stack-safe interpreter: expression type not yet implemented");
+            },
+        }
+    }
+
+    /// Apply a continuation to consume values from the value stack.
+    /// Returns true to continue execution, false to exit the main loop.
+    fn applyContinuation(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        cont: Continuation,
+        roc_ops: *RocOps,
+    ) Error!bool {
+        _ = work_stack;
+        _ = value_stack;
+
+        switch (cont) {
+            .return_result => {
+                // Signal to exit the main loop - the result is on the value stack
+                return false;
+            },
+            .decref_value => |dv| {
+                // Decrement reference count of the value
+                dv.value.decref(&self.runtime_layout_store, roc_ops);
+                return true;
+            },
+            .trim_bindings => |tb| {
+                // Restore bindings to a previous length
+                self.trimBindingList(&self.bindings, tb.target_len, roc_ops);
+                return true;
+            },
+        }
+    }
 };
 
 fn add(a: i32, b: i32) i32 {
