@@ -362,17 +362,17 @@ transform = |_, b| b
 	(defs
 		(patt (type "c -> c"))
 		(patt (type "a -> a"))
-		(patt (type "List(_c) -> Error"))
+		(patt (type "List(_c) -> Str"))
 		(patt (type "{ field: _field2, other: U32 } -> U32"))
-		(patt (type "Error -> Error"))
+		(patt (type "Try(_c, Str) -> Str"))
 		(patt (type "(a -> b), List(a) -> List(b)"))
 		(patt (type "_arg, c -> c")))
 	(expressions
 		(expr (type "c -> c"))
 		(expr (type "a -> a"))
-		(expr (type "List(_c) -> Error"))
+		(expr (type "List(_c) -> Str"))
 		(expr (type "{ field: _field2, other: U32 } -> U32"))
-		(expr (type "Error -> Error"))
+		(expr (type "Try(_c, Str) -> Str"))
 		(expr (type "(a -> b), List(a) -> List(b)"))
 		(expr (type "_arg, c -> c"))))
 ~~~

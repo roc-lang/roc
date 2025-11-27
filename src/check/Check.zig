@@ -4493,12 +4493,15 @@ fn resolveVarFromExternal(
     import_idx: CIR.Import.Idx,
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
-    // Use the resolved module index from the imports store
-    // The import_idx is the index into the imports list, but we need
-    // the resolved module index which maps to imported_modules
-    const resolved_module_idx = self.cir.imports.getResolvedModule(import_idx) orelse return null;
-    if (resolved_module_idx < self.imported_modules.len) {
-        const other_module_cir = self.imported_modules[resolved_module_idx];
+    // First try to use the resolved module index from the imports store
+    // This is the proper way to map import indices to module positions
+    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse blk: {
+        // Fallback: if not resolved, use the import index directly
+        // This maintains backwards compatibility with tests that don't call resolveImports
+        break :blk @intFromEnum(import_idx);
+    };
+    if (module_idx < self.imported_modules.len) {
+        const other_module_cir = self.imported_modules[module_idx];
         const other_module_env = other_module_cir;
 
         // The idx of the expression in the other module

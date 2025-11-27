@@ -1004,6 +1004,23 @@ The value's type, which does not have a method named **plus**, is:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
+**fuzz_crash_027.md:143:2:147:3:**
+```roc
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+```
+
+It has the type:
+    _[Stdoline!(Error)][Err(d), Ok({  })]_
+
+But the type annotation says it should have the type:
+    _Try(d)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **fuzz_crash_027.md:100:9:148:2:**
 ```roc
 main! = |_| { # Yeah Ie

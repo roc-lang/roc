@@ -271,20 +271,20 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Basic -> Error"))
-		(patt (type "Basic -> Error"))
+		(patt (type "Basic -> Str"))
+		(patt (type "Basic -> Str"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
-		(patt (type "(Error, Error)")))
+		(patt (type "(Str, Str)")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
 	(expressions
-		(expr (type "Basic -> Error"))
-		(expr (type "Basic -> Error"))
+		(expr (type "Basic -> Str"))
+		(expr (type "Basic -> Str"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "(Str, Str)"))))
 ~~~

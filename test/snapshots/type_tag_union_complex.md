@@ -243,8 +243,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
-		(patt (type "Response -> Error"))
+		(patt (type "Try(ok, err) -> Str"))
+		(patt (type "Response -> Str"))
 		(patt (type "_arg -> {}")))
 	(type_decls
 		(alias (type "Status")
@@ -258,7 +258,7 @@ NO CHANGE
 		(alias (type "ConnectionState")
 			(ty-header (name "ConnectionState"))))
 	(expressions
-		(expr (type "Error -> Error"))
-		(expr (type "Response -> Error"))
+		(expr (type "Try(ok, err) -> Str"))
+		(expr (type "Response -> Str"))
 		(expr (type "_arg -> {}"))))
 ~~~

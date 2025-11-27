@@ -103,6 +103,26 @@ deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
 
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_complex_nested.md:18:41:18:60:**
+```roc
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                        ^^^^^^^^^^^^^^^^^^^
+
+
+
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_complex_nested.md:4:38:4:58:**
+```roc
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                     ^^^^^^^^^^^^^^^^^^^^
+
+
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -331,7 +351,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> List(_c)"))
+		(patt (type "Try(List(Error), Error) -> List(_c)"))
 		(patt (type "Error -> _ret"))
 		(patt (type "_arg -> List(_c)")))
 	(type_decls
@@ -341,7 +361,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Error -> List(_c)"))
+		(expr (type "Try(List(Error), Error) -> List(_c)"))
 		(expr (type "Error -> _ret"))
 		(expr (type "_arg -> List(_c)"))))
 ~~~

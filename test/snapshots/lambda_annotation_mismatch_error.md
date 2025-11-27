@@ -17,7 +17,20 @@ wrong_type_function = |x| x * 3.14
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
 # PROBLEMS
-NIL
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**lambda_annotation_mismatch_error.md:3:23:3:29:**
+```roc
+string_function = |x| x + 42
+```
+                      ^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    _Str_
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -94,9 +107,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Error"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Error"))
 		(expr (type "I64 -> I64"))))
 ~~~

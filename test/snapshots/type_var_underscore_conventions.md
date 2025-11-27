@@ -295,17 +295,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(elem) -> Error"))
+		(patt (type "List(elem) -> Str"))
 		(patt (type "List($elem) -> Error"))
-		(patt (type "List($bad) -> Error"))
-		(patt (type "List(_elem) -> Error"))
+		(patt (type "List($bad) -> Str"))
+		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))
 		(patt (type "_arg -> Str")))
 	(expressions
-		(expr (type "List(elem) -> Error"))
+		(expr (type "List(elem) -> Str"))
 		(expr (type "List($elem) -> Error"))
-		(expr (type "List($bad) -> Error"))
-		(expr (type "List(_elem) -> Error"))
+		(expr (type "List($bad) -> Str"))
+		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))
 		(expr (type "_arg -> Str"))))
 ~~~

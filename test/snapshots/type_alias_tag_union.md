@@ -200,8 +200,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyTry(Error, I32) -> Error"))
-		(patt (type "Option(Error) -> Error"))
+		(patt (type "MyTry(Str, I32) -> Str"))
+		(patt (type "Option(Str) -> Str"))
 		(patt (type "Option(I32) -> I32"))
 		(patt (type "_arg -> {}")))
 	(type_decls
@@ -215,8 +215,8 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "MyTry(Error, I32) -> Error"))
-		(expr (type "Option(Error) -> Error"))
+		(expr (type "MyTry(Str, I32) -> Str"))
+		(expr (type "Option(Str) -> Str"))
 		(expr (type "Option(I32) -> I32"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -171,7 +171,7 @@ nested = { bar: A, count: 1 }
 (inferred-types
 	(defs
 		(patt (type "List(Foo.Bar)"))
-		(patt (type "Error"))
+		(patt (type "Try(Foo.Bar, Foo.Error)"))
 		(patt (type "{ bar: Foo.Bar, count: U64 }")))
 	(type_decls
 		(nominal (type "Foo")
@@ -182,6 +182,6 @@ nested = { bar: A, count: 1 }
 			(ty-header (name "Foo.Error"))))
 	(expressions
 		(expr (type "List(Foo.Bar)"))
-		(expr (type "Error"))
+		(expr (type "Try(Foo.Bar, Foo.Error)"))
 		(expr (type "{ bar: Foo.Bar, count: U64 }"))))
 ~~~

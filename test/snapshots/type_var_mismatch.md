@@ -25,7 +25,20 @@ main! = |_| {}
 # EXPECTED
 MISSING METHOD - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**type_var_mismatch.md:7:9:7:11:**
+```roc
+	item = 42
+```
+	       ^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _item_
+
+**Hint: ** Did you forget to specify **from_numeral** in the type annotation?
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -135,9 +148,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(item) -> item"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(item) -> item"))
 		(expr (type "_arg -> {}"))))
 ~~~
