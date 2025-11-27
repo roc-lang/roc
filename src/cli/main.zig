@@ -241,8 +241,82 @@ const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
+const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
+
+/// Render type checking problems as diagnostic reports to stderr.
+/// Returns the count of errors (fatal/runtime_error severity).
+/// This is shared between rocCheck and rocRun to ensure consistent error reporting.
+fn renderTypeProblems(
+    gpa: Allocator,
+    checker: *Check,
+    module_env: *ModuleEnv,
+    filename: []const u8,
+) usize {
+    const stderr = stderrWriter();
+
+    var rb = ReportBuilder.init(
+        gpa,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        filename,
+        &.{},
+        &checker.import_mapping,
+    );
+    defer rb.deinit();
+
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    // Render canonicalization diagnostics (unused variables, etc.)
+    // Note: getDiagnostics allocates with module_env.gpa, so we must free with that allocator
+    const diags = module_env.getDiagnostics() catch &.{};
+    defer module_env.gpa.free(diags);
+    for (diags) |d| {
+        var report = module_env.diagnosticToReport(d, module_env.gpa, filename) catch continue;
+        defer report.deinit();
+
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Render type checking problems
+    for (checker.problems.problems.items) |prob| {
+        var report = rb.build(prob) catch continue;
+        defer report.deinit();
+
+        // Render the diagnostic report to stderr
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Print summary if there were any problems
+    if (error_count > 0 or warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            error_count,
+            warning_count,
+            filename,
+        }) catch {};
+    }
+
+    // Flush stderr to ensure all error output is visible
+    stderr_writer.interface.flush() catch {};
+
+    return error_count;
+}
 
 /// Size for shared memory allocator (just virtual address space to reserve)
 ///
@@ -1699,6 +1773,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
         try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
     }
+
+    // Render all type problems (errors and warnings) exactly as roc check would
+    // The program still runs afterward - we don't block on errors
+    _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
 
     app_env_ptr.* = app_env;
 

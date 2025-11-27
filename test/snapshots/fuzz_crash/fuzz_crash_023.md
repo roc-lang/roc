@@ -280,6 +280,7 @@ INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
 UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
+TYPE MISMATCH - fuzz_crash_023.md:175:26:175:27
 UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
 TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
 # PROBLEMS
@@ -1035,6 +1036,20 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     _d_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_023.md:175:26:175:27:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		                       ^
+
+It has the type:
+    _U64_
+
+But I expected it to be:
+    _Str_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
