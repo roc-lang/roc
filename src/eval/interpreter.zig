@@ -7069,6 +7069,30 @@ pub const Interpreter = struct {
         /// String interpolation - collect segment strings.
         str_collect: StrCollect,
 
+        /// Function call - collect arguments after function value is evaluated.
+        call_collect_args: CallCollectArgs,
+
+        /// Function call - invoke the closure after all arguments are collected.
+        call_invoke_closure: CallInvokeClosure,
+
+        /// Function call - cleanup after function body is evaluated.
+        call_cleanup: CallCleanup,
+
+        /// Unary operation - apply method after operand is evaluated.
+        unary_op_apply: UnaryOpApply,
+
+        /// Binary operation - evaluate RHS after LHS is evaluated.
+        binop_eval_rhs: BinopEvalRhs,
+
+        /// Binary operation - apply method after both operands are evaluated.
+        binop_apply: BinopApply,
+
+        /// Dot access - resolve field or method after receiver is evaluated.
+        dot_access_resolve: DotAccessResolve,
+
+        /// Dot access method call - collect arguments after receiver is evaluated.
+        dot_access_collect_args: DotAccessCollectArgs,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -7231,6 +7255,108 @@ pub const Interpreter = struct {
             remaining_segments: []const can.CIR.Expr.Idx,
             /// Whether we need to convert the top value to a string (just evaluated an expr)
             needs_conversion: bool,
+        };
+
+        /// Function call - collect arguments after function value is evaluated
+        pub const CallCollectArgs = struct {
+            /// Number of arguments already collected on the value stack
+            collected_count: usize,
+            /// Remaining argument expression indices
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Runtime type variables for all arguments (for type-consistent evaluation)
+            arg_rt_vars: []const types.Var,
+            /// Return type variable for the call
+            call_ret_rt_var: types.Var,
+            /// Whether type instantiation was performed (need to restore rigid_subst)
+            did_instantiate: bool,
+        };
+
+        /// Function call - invoke the closure after all arguments are collected
+        pub const CallInvokeClosure = struct {
+            /// Number of arguments on value stack (plus function value)
+            arg_count: usize,
+            /// Return type variable for the call
+            call_ret_rt_var: types.Var,
+            /// Whether type instantiation was performed
+            did_instantiate: bool,
+            /// Allocated arg_rt_vars slice to free after call completes
+            arg_rt_vars_to_free: ?[]const types.Var,
+        };
+
+        /// Function call - cleanup after function body is evaluated
+        pub const CallCleanup = struct {
+            /// Environment to restore
+            saved_env: *can.ModuleEnv,
+            /// Bindings length to restore to
+            saved_bindings_len: usize,
+            /// Number of parameter bindings that were added
+            param_count: usize,
+            /// Whether to pop an active closure
+            has_active_closure: bool,
+            /// Whether type instantiation was performed
+            did_instantiate: bool,
+            /// Allocated arg_rt_vars slice to free (null if none)
+            arg_rt_vars_to_free: ?[]const types.Var,
+        };
+
+        /// Unary operation - apply method after operand is evaluated
+        pub const UnaryOpApply = struct {
+            /// Method identifier (negate or not)
+            method_ident: base_pkg.Ident.Idx,
+            /// Runtime type of the operand (for method resolution)
+            operand_rt_var: types.Var,
+        };
+
+        /// Binary operation - evaluate RHS after LHS is evaluated
+        pub const BinopEvalRhs = struct {
+            /// Right operand expression index
+            rhs_expr: can.CIR.Expr.Idx,
+            /// Method identifier (plus, minus, times, etc.)
+            method_ident: base_pkg.Ident.Idx,
+            /// LHS runtime type variable (for method resolution)
+            lhs_rt_var: types.Var,
+            /// RHS runtime type variable
+            rhs_rt_var: types.Var,
+            /// Whether to negate the result (for != operator)
+            negate_result: bool,
+        };
+
+        /// Binary operation - apply method after both operands are evaluated
+        pub const BinopApply = struct {
+            /// Method identifier
+            method_ident: base_pkg.Ident.Idx,
+            /// Receiver type (LHS) for method resolution
+            receiver_rt_var: types.Var,
+            /// RHS runtime type variable (for structural equality)
+            rhs_rt_var: types.Var,
+            /// Whether to negate the result (for != operator)
+            negate_result: bool,
+        };
+
+        /// Dot access - resolve field or method after receiver is evaluated
+        pub const DotAccessResolve = struct {
+            /// Field/method name
+            field_name: base_pkg.Ident.Idx,
+            /// Optional method arguments (null for field access)
+            method_args: ?can.CIR.Expr.Span,
+            /// Receiver runtime type variable
+            receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Dot access method call - collect arguments after receiver is evaluated
+        pub const DotAccessCollectArgs = struct {
+            /// Method name
+            method_name: base_pkg.Ident.Idx,
+            /// Number of arguments already collected on the value stack
+            collected_count: usize,
+            /// Remaining argument expression indices
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Receiver runtime type variable (for method resolution)
+            receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
         };
     };
 
@@ -7477,7 +7603,7 @@ pub const Interpreter = struct {
             },
 
             // ================================================================
-            // Binary operations (short-circuit only for now)
+            // Binary operations
             // ================================================================
 
             .e_binop => |binop| {
@@ -7507,10 +7633,51 @@ pub const Interpreter = struct {
                         } });
                     },
                     else => {
-                        // Fall back to recursive evaluation for other binops (arithmetic, comparison)
-                        // Will be fully implemented via continuations in a later PR
-                        const value = try self.evalExprMinimal(expr_idx, roc_ops, expected_rt_var);
-                        try value_stack.push(value);
+                        // Arithmetic and comparison operations: desugar to method calls
+                        const method_ident: base_pkg.Ident.Idx = switch (binop.op) {
+                            .add => self.root_env.idents.plus,
+                            .sub => self.root_env.idents.minus,
+                            .mul => self.root_env.idents.times,
+                            .div => self.root_env.idents.div_by,
+                            .div_trunc => self.root_env.idents.div_trunc_by,
+                            .rem => self.root_env.idents.rem_by,
+                            .lt => self.root_env.idents.is_lt,
+                            .le => self.root_env.idents.is_lte,
+                            .gt => self.root_env.idents.is_gt,
+                            .ge => self.root_env.idents.is_gte,
+                            .eq, .ne => self.root_env.idents.is_eq,
+                            .@"and", .@"or" => unreachable, // handled above
+                        };
+
+                        // Get LHS and RHS type info
+                        const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                        var lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                        const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                        const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+
+                        // Resolve the lhs type - if flex/rigid, default to Dec
+                        const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+                        if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
+                            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                            lhs_rt_var = dec_var;
+                        }
+
+                        // For != we need to negate the result of is_eq
+                        const negate_result = binop.op == .ne;
+
+                        // Schedule: first evaluate LHS, then evaluate RHS, then apply method
+                        try work_stack.push(.{ .apply_continuation = .{ .binop_eval_rhs = .{
+                            .rhs_expr = binop.rhs,
+                            .method_ident = method_ident,
+                            .lhs_rt_var = lhs_rt_var,
+                            .rhs_rt_var = rhs_rt_var,
+                            .negate_result = negate_result,
+                        } } });
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = binop.lhs,
+                            .expected_rt_var = lhs_rt_var,
+                        } });
                     },
                 }
             },
@@ -7889,6 +8056,227 @@ pub const Interpreter = struct {
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_expr.expr,
                     .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Function calls
+            // ================================================================
+
+            .e_call => |call| {
+                const func_idx = call.func;
+                const arg_indices = self.env.store.sliceExpr(call.args);
+
+                // Check if the function is an anno-only lookup that will crash
+                const func_expr_check = self.env.store.getExpr(func_idx);
+                if (func_expr_check == .e_lookup_local) {
+                    const lookup = func_expr_check.e_lookup_local;
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const def_expr = self.env.store.getExpr(def.expr);
+                            if (def_expr == .e_anno_only) {
+                                self.triggerCrash("This function has only a type annotation - no implementation was provided", false, roc_ops);
+                                return error.Crash;
+                            }
+                        }
+                    }
+                }
+
+                // Check if this is an error expression that shouldn't be called
+                if (func_expr_check == .e_runtime_error or func_expr_check == .e_anno_only or func_expr_check == .e_crash) {
+                    return error.TypeMismatch;
+                }
+
+                // Get function type and potentially instantiate
+                const func_ct_var = can.ModuleEnv.varFrom(func_idx);
+                const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
+
+                // Only instantiate if we have an actual function type (not a flex variable)
+                const func_rt_orig_resolved = self.runtime_types.resolveVar(func_rt_var_orig);
+                const should_instantiate = func_rt_orig_resolved.desc.content == .structure and
+                    (func_rt_orig_resolved.desc.content.structure == .fn_pure or
+                        func_rt_orig_resolved.desc.content.structure == .fn_effectful or
+                        func_rt_orig_resolved.desc.content.structure == .fn_unbound);
+
+                var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                defer subst_map.deinit();
+                const func_rt_var = if (should_instantiate)
+                    try self.instantiateType(func_rt_var_orig, &subst_map)
+                else
+                    func_rt_var_orig;
+
+                // If we instantiated, update rigid_subst (will be restored in cleanup)
+                if (should_instantiate) {
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                    // Clear the layout cache so layouts are recomputed with substitutions
+                    @memset(self.var_to_layout_slot.items, 0);
+                }
+
+                // Compute argument runtime type variables
+                var arg_rt_vars = try self.allocator.alloc(types.Var, arg_indices.len);
+                for (arg_indices, 0..) |arg_idx, i| {
+                    const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                    const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
+
+                    // Apply substitution if this argument is a rigid variable that was instantiated
+                    if (should_instantiate) {
+                        const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_vars[i] = substituted_arg;
+                            } else {
+                                arg_rt_vars[i] = arg_rt_var;
+                            }
+                        } else {
+                            arg_rt_vars[i] = arg_rt_var;
+                        }
+                    } else {
+                        arg_rt_vars[i] = arg_rt_var;
+                    }
+                }
+
+                // Get call expression's return type
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+
+                // Prepare polymorphic call entry for unification
+                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_vars) catch |err| blk: {
+                    if (err == error.TypeMismatch) {
+                        break :blk null;
+                    }
+                    break :blk null;
+                };
+
+                // Unify call return type with function's return type
+                if (poly_entry) |entry| {
+                    _ = try unify.unifyWithConf(
+                        self.env,
+                        self.runtime_types,
+                        &self.problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.unify_scratch.occurs_scratch,
+                        unify.ModuleEnvLookup{
+                            .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                            .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                        },
+                        call_ret_rt_var,
+                        entry.return_var,
+                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                    );
+                }
+
+                // Schedule: first evaluate function, then collect args, then invoke
+                // Push invoke continuation (to be executed after all args collected)
+                try work_stack.push(.{ .apply_continuation = .{ .call_invoke_closure = .{
+                    .arg_count = arg_indices.len,
+                    .call_ret_rt_var = call_ret_rt_var,
+                    .did_instantiate = should_instantiate,
+                    .arg_rt_vars_to_free = arg_rt_vars,
+                } } });
+
+                // Push arg collection continuation (to be executed after function is evaluated)
+                try work_stack.push(.{ .apply_continuation = .{ .call_collect_args = .{
+                    .collected_count = 0,
+                    .remaining_args = arg_indices,
+                    .arg_rt_vars = arg_rt_vars,
+                    .call_ret_rt_var = call_ret_rt_var,
+                    .did_instantiate = should_instantiate,
+                } } });
+
+                // Evaluate the function expression first
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = func_idx,
+                    .expected_rt_var = func_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Unary operations
+            // ================================================================
+
+            .e_unary_minus => |unary_minus| {
+                // Desugar `-a` to `a.negate()`
+                const operand_ct_var = can.ModuleEnv.varFrom(unary_minus.expr);
+                var operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+
+                // Resolve the operand type
+                const operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+
+                // If the type is still a flex/rigid var, default to Dec
+                if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    operand_rt_var = dec_var;
+                }
+
+                // Schedule: first evaluate operand, then apply method
+                try work_stack.push(.{ .apply_continuation = .{ .unary_op_apply = .{
+                    .method_ident = self.root_env.idents.negate,
+                    .operand_rt_var = operand_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = unary_minus.expr,
+                    .expected_rt_var = operand_rt_var,
+                } });
+            },
+
+            .e_unary_not => |unary_not| {
+                // Desugar `!a` to `a.not()`
+                const operand_ct_var = can.ModuleEnv.varFrom(unary_not.expr);
+                var operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+
+                // Resolve the operand type
+                const operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+
+                // If the type is still a flex/rigid var, default to Bool (shouldn't happen for bool, but be safe)
+                if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
+                    operand_rt_var = try self.getCanonicalBoolRuntimeVar();
+                }
+
+                // Schedule: first evaluate operand, then apply method
+                try work_stack.push(.{ .apply_continuation = .{ .unary_op_apply = .{
+                    .method_ident = self.root_env.idents.not,
+                    .operand_rt_var = operand_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = unary_not.expr,
+                    .expected_rt_var = operand_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Dot access (field access and method calls)
+            // ================================================================
+
+            .e_dot_access => |dot_access| {
+                const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
+                var receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
+
+                // If the receiver type is a flex/rigid var, default to Dec
+                // (Unsuffixed numeric literals default to Dec in Roc)
+                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    receiver_rt_var = dec_var;
+                }
+
+                // Schedule: first evaluate receiver, then resolve field/method
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
+                    .field_name = dot_access.field_name,
+                    .method_args = dot_access.args,
+                    .receiver_rt_var = receiver_rt_var,
+                    .expr_idx = expr_idx,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dot_access.receiver,
+                    .expected_rt_var = receiver_rt_var,
                 } });
             },
 
@@ -8888,6 +9276,37 @@ pub const Interpreter = struct {
                         // Clean up before propagating error
                         self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
                         elem_value.decref(&self.runtime_layout_store, roc_ops);
+
+                        // Handle early return specially - drain work stack to call_cleanup
+                        if (err == error.EarlyReturn) {
+                            // Early return value is already set in self.early_return_value
+                            // Drain work stack until we find call_cleanup (function boundary)
+                            while (work_stack.pop()) |pending_item| {
+                                switch (pending_item) {
+                                    .apply_continuation => |pending_cont| {
+                                        switch (pending_cont) {
+                                            .call_cleanup => {
+                                                // Found function boundary - put it back and return
+                                                try work_stack.push(pending_item);
+                                                return;
+                                            },
+                                            .call_invoke_closure => |ci| {
+                                                // Free arg_rt_vars if we're skipping a pending call invocation
+                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                            },
+                                            else => {
+                                                // Skip other continuations in the function body
+                                            },
+                                        }
+                                    },
+                                    .eval_expr => {
+                                        // Skip pending expression evaluations
+                                    },
+                                }
+                            }
+                            // No call_cleanup found - this shouldn't happen in normal code
+                            return error.Crash;
+                        }
                         return err;
                     };
                     body_result.decref(&self.runtime_layout_store, roc_ops);
@@ -8924,6 +9343,27 @@ pub const Interpreter = struct {
                     }
 
                     const body_result = self.evalExprMinimal(while_stmt.body, roc_ops, null) catch |err| {
+                        // Handle early return specially - drain work stack to call_cleanup
+                        if (err == error.EarlyReturn) {
+                            while (work_stack.pop()) |pending_item| {
+                                switch (pending_item) {
+                                    .apply_continuation => |pending_cont| {
+                                        switch (pending_cont) {
+                                            .call_cleanup => {
+                                                try work_stack.push(pending_item);
+                                                return;
+                                            },
+                                            .call_invoke_closure => |ci| {
+                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                            },
+                                            else => {},
+                                        }
+                                    },
+                                    .eval_expr => {},
+                                }
+                            }
+                            return error.Crash;
+                        }
                         return err;
                     };
                     body_result.decref(&self.runtime_layout_store, roc_ops);
@@ -9406,7 +9846,33 @@ pub const Interpreter = struct {
                 // Pop the evaluated value and signal early return
                 const return_value = value_stack.pop() orelse return error.Crash;
                 self.early_return_value = return_value;
-                return error.EarlyReturn;
+
+                // Drain work stack until we find call_cleanup (function boundary)
+                // This skips any remaining work items for the current function body
+                while (work_stack.pop()) |pending_item| {
+                    switch (pending_item) {
+                        .apply_continuation => |pending_cont| {
+                            switch (pending_cont) {
+                                .call_cleanup => {
+                                    // Found function boundary - put it back and continue normal processing
+                                    try work_stack.push(pending_item);
+                                    break;
+                                },
+                                .call_invoke_closure => |ci| {
+                                    // Free arg_rt_vars if we're skipping a pending call invocation
+                                    if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                },
+                                else => {
+                                    // Skip this continuation - it's part of the function body being early-returned from
+                                },
+                            }
+                        },
+                        .eval_expr => {
+                            // Skip pending expression evaluations in the function body
+                        },
+                    }
+                }
+                return true;
             },
             .tag_collect => |tc| {
                 // Tag payload collection: evaluate each argument, then finalize tag
@@ -9849,6 +10315,720 @@ pub const Interpreter = struct {
                         .expected_rt_var = seg_rt_var,
                     } });
                 }
+                return true;
+            },
+            .call_collect_args => |cc| {
+                // Function call: collect arguments one by one
+                if (cc.remaining_args.len > 0) {
+                    // More arguments to evaluate
+                    const arg_idx = cc.collected_count;
+                    const arg_rt_var = if (arg_idx < cc.arg_rt_vars.len) cc.arg_rt_vars[arg_idx] else null;
+
+                    try work_stack.push(.{ .apply_continuation = .{ .call_collect_args = .{
+                        .collected_count = cc.collected_count + 1,
+                        .remaining_args = cc.remaining_args[1..],
+                        .arg_rt_vars = cc.arg_rt_vars,
+                        .call_ret_rt_var = cc.call_ret_rt_var,
+                        .did_instantiate = cc.did_instantiate,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = cc.remaining_args[0],
+                        .expected_rt_var = arg_rt_var,
+                    } });
+                }
+                // If no more args, the call_invoke_closure continuation handles the rest
+                return true;
+            },
+            .call_invoke_closure => |ci| {
+                // All arguments collected - pop them and the function, then invoke
+                // Stack state: [func_val, arg0, arg1, ...] (func at bottom, args on top)
+                const arg_count = ci.arg_count;
+
+                // Pop all arguments (in reverse order)
+                var arg_values = try self.allocator.alloc(StackValue, arg_count);
+                defer self.allocator.free(arg_values);
+                var i: usize = arg_count;
+                while (i > 0) {
+                    i -= 1;
+                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                }
+
+                // Pop function value
+                const func_val = value_stack.pop() orelse return error.Crash;
+
+                // Handle closure invocation
+                if (func_val.layout.tag == .closure) {
+                    const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+
+                    // Switch to the closure's source module
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(header.source_env);
+
+                    // Check if this is an annotation-only function
+                    const body_expr = self.env.store.getExpr(header.body_idx);
+                    if (body_expr == .e_anno_only) {
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
+                        return error.Crash;
+                    }
+
+                    // Check if this is a low-level lambda
+                    const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
+
+                        // Decref args (except for list_concat which handles its own refcounting)
+                        if (low_level.op != .list_concat) {
+                            for (arg_values) |arg| {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
+
+                        // Restore environment and free arg_rt_vars
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    // Check if this is a hosted lambda
+                    if (lambda_expr == .e_hosted_lambda) {
+                        const hosted = lambda_expr.e_hosted_lambda;
+                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+
+                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
+                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
+
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        // Restore environment and free arg_rt_vars
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    // Regular closure - bind parameters and evaluate body
+                    const params = self.env.store.slicePatterns(header.params);
+                    if (params.len != arg_count) {
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        return error.TypeMismatch;
+                    }
+
+                    // Provide closure context for capture lookup
+                    try self.active_closures.append(func_val);
+
+                    // Bind parameters
+                    for (params, 0..) |param, idx| {
+                        try self.bindings.append(.{
+                            .pattern_idx = param,
+                            .value = arg_values[idx],
+                            .expr_idx = @enumFromInt(0),
+                            .source_env = self.env,
+                        });
+                    }
+
+                    // Push cleanup continuation, then evaluate body
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = saved_env,
+                        .saved_bindings_len = saved_bindings_len,
+                        .param_count = params.len,
+                        .has_active_closure = true,
+                        .did_instantiate = ci.did_instantiate,
+                        .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = header.body_idx,
+                        .expected_rt_var = ci.call_ret_rt_var,
+                    } });
+                    return true;
+                }
+
+                // Not a closure - check if it's a direct lambda expression
+                func_val.decref(&self.runtime_layout_store, roc_ops);
+                for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                self.triggerCrash("e_call: func is neither closure nor lambda", false, roc_ops);
+                return error.Crash;
+            },
+            .call_cleanup => |cleanup| {
+                // Function body evaluated - cleanup and return result
+                // Check for early return
+                if (self.early_return_value) |return_val| {
+                    // Body triggered early return - use that value
+                    self.early_return_value = null;
+
+                    // Decref parameter bindings
+                    var k = cleanup.param_count;
+                    while (k > 0) {
+                        k -= 1;
+                        if (self.bindings.pop()) |binding| {
+                            binding.value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    // Pop active closure if needed
+                    if (cleanup.has_active_closure) {
+                        if (self.active_closures.pop()) |closure_val| {
+                            closure_val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    // Restore environment and free arg_rt_vars
+                    self.env = cleanup.saved_env;
+                    self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                    if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                    try value_stack.push(return_val);
+                    return true;
+                }
+
+                // Normal return - result is on value stack
+                const result = value_stack.pop() orelse return error.Crash;
+
+                // Decref parameter bindings
+                var k = cleanup.param_count;
+                while (k > 0) {
+                    k -= 1;
+                    if (self.bindings.pop()) |binding| {
+                        binding.value.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                }
+
+                // Pop active closure if needed
+                if (cleanup.has_active_closure) {
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                }
+
+                // Restore environment and free arg_rt_vars
+                self.env = cleanup.saved_env;
+                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                try value_stack.push(result);
+                return true;
+            },
+            .unary_op_apply => |ua| {
+                // Unary operation: operand is on stack, apply method
+                const operand = value_stack.pop() orelse return error.Crash;
+                defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+                // Resolve the operand type
+                const operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+
+                // Get nominal type info
+                const nominal_info = switch (operand_resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => {
+                            return error.InvalidMethodReceiver;
+                        },
+                    },
+                    else => {
+                        return error.InvalidMethodReceiver;
+                    },
+                };
+
+                // Resolve the method function
+                const method_func = try self.resolveMethodFunction(
+                    nominal_info.origin,
+                    nominal_info.ident,
+                    ua.method_ident,
+                    roc_ops,
+                );
+                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                // Call the method closure
+                if (method_func.layout.tag != .closure) {
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Switch to the closure's source module
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if this is a low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+                    var args = [1]StackValue{operand};
+                    const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Regular closure invocation
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != 1) {
+                    self.env = saved_env;
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context
+                try self.active_closures.append(method_func);
+
+                // Bind parameter
+                try self.bindings.append(.{
+                    .pattern_idx = params[0],
+                    .value = operand,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+
+                // Push cleanup and evaluate body
+                try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                    .saved_env = saved_env,
+                    .saved_bindings_len = saved_bindings_len,
+                    .param_count = 1,
+                    .has_active_closure = true,
+                    .did_instantiate = false,
+                    .arg_rt_vars_to_free = null,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = closure_header.body_idx,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .binop_eval_rhs => |be| {
+                // Binary operation: LHS is on stack, now evaluate RHS
+                // We keep LHS on stack, push continuation to apply method after RHS is evaluated
+                try work_stack.push(.{ .apply_continuation = .{ .binop_apply = .{
+                    .method_ident = be.method_ident,
+                    .receiver_rt_var = be.lhs_rt_var,
+                    .rhs_rt_var = be.rhs_rt_var,
+                    .negate_result = be.negate_result,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = be.rhs_expr,
+                    .expected_rt_var = be.rhs_rt_var,
+                } });
+                return true;
+            },
+            .binop_apply => |ba| {
+                // Binary operation: both operands on stack, apply method
+                // Stack: [lhs, rhs] - RHS on top
+                const rhs = value_stack.pop() orelse return error.Crash;
+                defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                const lhs = value_stack.pop() orelse return error.Crash;
+                defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
+                // Resolve the lhs type
+                const lhs_resolved = self.runtime_types.resolveVar(ba.receiver_rt_var);
+
+                // Get nominal type info, or handle anonymous structural types
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                            // Anonymous structural types have implicit is_eq
+                            if (ba.method_ident == self.root_env.idents.is_eq) {
+                                var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var) catch |err| {
+                                    if (err == error.NotImplemented) {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    }
+                                    return err;
+                                };
+                                // For != operator, negate the result
+                                if (ba.negate_result) result = !result;
+                                const result_val = try self.makeBoolValue(result);
+                                try value_stack.push(result_val);
+                                return true;
+                            }
+                            break :blk null;
+                        },
+                        else => null,
+                    },
+                    else => null,
+                };
+
+                if (nominal_info == null) {
+                    return error.InvalidMethodReceiver;
+                }
+
+                // Resolve the method function
+                const method_func = try self.resolveMethodFunction(
+                    nominal_info.?.origin,
+                    nominal_info.?.ident,
+                    ba.method_ident,
+                    roc_ops,
+                );
+                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                // Call the method closure
+                if (method_func.layout.tag != .closure) {
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Switch to the closure's source module
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if this is a low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+                    var args = [2]StackValue{ lhs, rhs };
+                    var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    self.env = saved_env;
+
+                    // For != operator, negate boolean result
+                    if (ba.negate_result) {
+                        const is_eq_result = boolValueEquals(true, result);
+                        result.decref(&self.runtime_layout_store, roc_ops);
+                        result = try self.makeBoolValue(!is_eq_result);
+                    }
+
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Regular closure invocation
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != 2) {
+                    self.env = saved_env;
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context
+                try self.active_closures.append(method_func);
+
+                // Bind parameters
+                try self.bindings.append(.{
+                    .pattern_idx = params[0],
+                    .value = lhs,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+                try self.bindings.append(.{
+                    .pattern_idx = params[1],
+                    .value = rhs,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+
+                // Push cleanup and evaluate body
+                try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                    .saved_env = saved_env,
+                    .saved_bindings_len = saved_bindings_len,
+                    .param_count = 2,
+                    .has_active_closure = true,
+                    .did_instantiate = false,
+                    .arg_rt_vars_to_free = null,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = closure_header.body_idx,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .dot_access_resolve => |da| {
+                // Dot access: receiver is on stack, resolve field or method
+                const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                if (da.method_args == null) {
+                    // Field access on a record
+                    defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                    if (receiver_value.layout.tag != .record) {
+                        return error.TypeMismatch;
+                    }
+
+                    const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
+                    if (rec_data.fields.count == 0) {
+                        return error.TypeMismatch;
+                    }
+
+                    var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
+                    const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
+                    const field_value = try accessor.getFieldByIndex(field_idx);
+                    const result = try self.pushCopy(field_value, roc_ops);
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Method call - resolve receiver type for dispatch
+                // First check if the type is still a flex/rigid var, default to Dec
+                var effective_receiver_rt_var = da.receiver_rt_var;
+                const receiver_resolved_check = self.runtime_types.resolveVar(da.receiver_rt_var);
+                if (receiver_resolved_check.desc.content == .flex or receiver_resolved_check.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    effective_receiver_rt_var = dec_var;
+                }
+
+                // Don't use resolveBaseVar here - we need to keep the nominal type
+                // for method dispatch (resolveBaseVar unwraps nominal types to their backing)
+                const resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+
+                const method_args = da.method_args.?;
+                const arg_exprs = self.env.store.sliceExpr(method_args);
+
+                // Get nominal type info
+                const nominal_info = switch (resolved_receiver.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => {
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                            return error.InvalidMethodReceiver;
+                        },
+                    },
+                    else => {
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        return error.InvalidMethodReceiver;
+                    },
+                };
+
+                // Resolve the method function
+                const method_func = self.resolveMethodFunction(
+                    nominal_info.origin,
+                    nominal_info.ident,
+                    da.field_name,
+                    roc_ops,
+                ) catch |err| {
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    if (err == error.MethodLookupFailed) {
+                        const layout_env = self.runtime_layout_store.env;
+                        const type_name = import_mapping_mod.getDisplayName(
+                            self.import_mapping,
+                            layout_env.common.getIdentStore(),
+                            nominal_info.ident,
+                        );
+                        const method_name = self.env.getIdent(da.field_name);
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
+                            self.triggerCrash("Method not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        self.triggerCrash(crash_msg, true, roc_ops);
+                        return error.Crash;
+                    }
+                    return err;
+                };
+
+                if (method_func.layout.tag != .closure) {
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                // If no additional args, invoke method directly with receiver
+                if (arg_exprs.len == 0) {
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Check if low-level lambda
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var args = [1]StackValue{receiver_value};
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    const params = self.env.store.slicePatterns(closure_header.params);
+                    if (params.len != 1) {
+                        self.env = saved_env;
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+
+                    try self.active_closures.append(method_func);
+                    try self.bindings.append(.{
+                        .pattern_idx = params[0],
+                        .value = receiver_value,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = saved_env,
+                        .saved_bindings_len = saved_bindings_len,
+                        .param_count = 1,
+                        .has_active_closure = true,
+                        .did_instantiate = false,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = closure_header.body_idx,
+                        .expected_rt_var = null,
+                    } });
+                    return true;
+                }
+
+                // Has additional args - need to collect them first
+                // Push receiver back on stack, then method function, then collect args
+                try value_stack.push(receiver_value);
+                try value_stack.push(method_func);
+
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
+                    .method_name = da.field_name,
+                    .collected_count = 0,
+                    .remaining_args = arg_exprs,
+                    .receiver_rt_var = da.receiver_rt_var,
+                    .expr_idx = da.expr_idx,
+                } } });
+
+                // Start evaluating first arg
+                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = arg_exprs[0],
+                    .expected_rt_var = first_arg_rt_var,
+                } });
+                return true;
+            },
+            .dot_access_collect_args => |dac| {
+                // Dot access method call: collecting arguments
+                // Stack: [receiver, method_func, arg0, arg1, ...]
+                if (dac.remaining_args.len > 1) {
+                    // More arguments to evaluate
+                    try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
+                        .method_name = dac.method_name,
+                        .collected_count = dac.collected_count + 1,
+                        .remaining_args = dac.remaining_args[1..],
+                        .receiver_rt_var = dac.receiver_rt_var,
+                        .expr_idx = dac.expr_idx,
+                    } } });
+
+                    const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
+                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = dac.remaining_args[1],
+                        .expected_rt_var = next_arg_rt_var,
+                    } });
+                    return true;
+                }
+
+                // All arguments collected - invoke method
+                const total_args = dac.collected_count + 1; // +1 for the last arg we just got
+
+                // Pop arguments (last evaluated on top)
+                var arg_values = try self.allocator.alloc(StackValue, total_args);
+                defer self.allocator.free(arg_values);
+                var i: usize = total_args;
+                while (i > 0) {
+                    i -= 1;
+                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                }
+
+                // Pop method function and receiver
+                const method_func = value_stack.pop() orelse return error.Crash;
+                const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+
+                    // Build args array: receiver + explicit args
+                    var all_args = try self.allocator.alloc(StackValue, 1 + total_args);
+                    defer self.allocator.free(all_args);
+                    all_args[0] = receiver_value;
+                    for (arg_values, 0..) |arg, idx| {
+                        all_args[1 + idx] = arg;
+                    }
+
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, null);
+
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Regular closure invocation
+                const params = self.env.store.slicePatterns(closure_header.params);
+                const expected_params = 1 + total_args;
+                if (params.len != expected_params) {
+                    self.env = saved_env;
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                try self.active_closures.append(method_func);
+
+                // Bind receiver first
+                try self.bindings.append(.{
+                    .pattern_idx = params[0],
+                    .value = receiver_value,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+
+                // Bind explicit arguments
+                for (arg_values, 0..) |arg, idx| {
+                    try self.bindings.append(.{
+                        .pattern_idx = params[1 + idx],
+                        .value = arg,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+                }
+
+                try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                    .saved_env = saved_env,
+                    .saved_bindings_len = saved_bindings_len,
+                    .param_count = expected_params,
+                    .has_active_closure = true,
+                    .did_instantiate = false,
+                    .arg_rt_vars_to_free = null,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = closure_header.body_idx,
+                    .expected_rt_var = null,
+                } });
                 return true;
             },
         }
