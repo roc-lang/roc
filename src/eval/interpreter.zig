@@ -4877,6 +4877,53 @@ pub const Interpreter = struct {
             .i128_to_f32 => return self.intToFloat(i128, f32, args, roc_ops),
             .i128_to_f64 => return self.intToFloat(i128, f64, args, roc_ops),
             .i128_to_dec => return self.intToDec(i128, args, roc_ops),
+
+            // F32 conversion operations
+            .f32_to_i8_wrap => return self.floatToIntWrap(f32, i8, args, roc_ops),
+            .f32_to_i8_try => return self.floatToIntTry(f32, i8, args, roc_ops, return_rt_var),
+            .f32_to_i16_wrap => return self.floatToIntWrap(f32, i16, args, roc_ops),
+            .f32_to_i16_try => return self.floatToIntTry(f32, i16, args, roc_ops, return_rt_var),
+            .f32_to_i32_wrap => return self.floatToIntWrap(f32, i32, args, roc_ops),
+            .f32_to_i32_try => return self.floatToIntTry(f32, i32, args, roc_ops, return_rt_var),
+            .f32_to_i64_wrap => return self.floatToIntWrap(f32, i64, args, roc_ops),
+            .f32_to_i64_try => return self.floatToIntTry(f32, i64, args, roc_ops, return_rt_var),
+            .f32_to_i128_wrap => return self.floatToIntWrap(f32, i128, args, roc_ops),
+            .f32_to_i128_try => return self.floatToIntTry(f32, i128, args, roc_ops, return_rt_var),
+            .f32_to_u8_wrap => return self.floatToIntWrap(f32, u8, args, roc_ops),
+            .f32_to_u8_try => return self.floatToIntTry(f32, u8, args, roc_ops, return_rt_var),
+            .f32_to_u16_wrap => return self.floatToIntWrap(f32, u16, args, roc_ops),
+            .f32_to_u16_try => return self.floatToIntTry(f32, u16, args, roc_ops, return_rt_var),
+            .f32_to_u32_wrap => return self.floatToIntWrap(f32, u32, args, roc_ops),
+            .f32_to_u32_try => return self.floatToIntTry(f32, u32, args, roc_ops, return_rt_var),
+            .f32_to_u64_wrap => return self.floatToIntWrap(f32, u64, args, roc_ops),
+            .f32_to_u64_try => return self.floatToIntTry(f32, u64, args, roc_ops, return_rt_var),
+            .f32_to_u128_wrap => return self.floatToIntWrap(f32, u128, args, roc_ops),
+            .f32_to_u128_try => return self.floatToIntTry(f32, u128, args, roc_ops, return_rt_var),
+            .f32_to_f64 => return self.floatWiden(f32, f64, args, roc_ops),
+
+            // F64 conversion operations
+            .f64_to_i8_wrap => return self.floatToIntWrap(f64, i8, args, roc_ops),
+            .f64_to_i8_try => return self.floatToIntTry(f64, i8, args, roc_ops, return_rt_var),
+            .f64_to_i16_wrap => return self.floatToIntWrap(f64, i16, args, roc_ops),
+            .f64_to_i16_try => return self.floatToIntTry(f64, i16, args, roc_ops, return_rt_var),
+            .f64_to_i32_wrap => return self.floatToIntWrap(f64, i32, args, roc_ops),
+            .f64_to_i32_try => return self.floatToIntTry(f64, i32, args, roc_ops, return_rt_var),
+            .f64_to_i64_wrap => return self.floatToIntWrap(f64, i64, args, roc_ops),
+            .f64_to_i64_try => return self.floatToIntTry(f64, i64, args, roc_ops, return_rt_var),
+            .f64_to_i128_wrap => return self.floatToIntWrap(f64, i128, args, roc_ops),
+            .f64_to_i128_try => return self.floatToIntTry(f64, i128, args, roc_ops, return_rt_var),
+            .f64_to_u8_wrap => return self.floatToIntWrap(f64, u8, args, roc_ops),
+            .f64_to_u8_try => return self.floatToIntTry(f64, u8, args, roc_ops, return_rt_var),
+            .f64_to_u16_wrap => return self.floatToIntWrap(f64, u16, args, roc_ops),
+            .f64_to_u16_try => return self.floatToIntTry(f64, u16, args, roc_ops, return_rt_var),
+            .f64_to_u32_wrap => return self.floatToIntWrap(f64, u32, args, roc_ops),
+            .f64_to_u32_try => return self.floatToIntTry(f64, u32, args, roc_ops, return_rt_var),
+            .f64_to_u64_wrap => return self.floatToIntWrap(f64, u64, args, roc_ops),
+            .f64_to_u64_try => return self.floatToIntTry(f64, u64, args, roc_ops, return_rt_var),
+            .f64_to_u128_wrap => return self.floatToIntWrap(f64, u128, args, roc_ops),
+            .f64_to_u128_try => return self.floatToIntTry(f64, u128, args, roc_ops, return_rt_var),
+            .f64_to_f32_wrap => return self.floatNarrowWrap(f64, f32, args, roc_ops),
+            .f64_to_f32_try => return self.floatNarrowTry(f64, f32, args, roc_ops, return_rt_var),
         }
     }
 
@@ -5153,6 +5200,295 @@ pub const Interpreter = struct {
         @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = dec_value;
         out.is_initialized = true;
         return out;
+    }
+
+    /// Helper for wrapping float to integer conversions (truncates toward zero)
+    fn floatToIntWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // For wrapping conversion, we need to handle out-of-range floats
+        // Zig's @intFromFloat will panic on out-of-range, so we need to clamp or wrap
+        const to_value: To = blk: {
+            // Check for NaN - convert to 0
+            if (std.math.isNan(from_value)) {
+                break :blk 0;
+            }
+            // Check for infinity or out of range
+            const min_float: From = @floatFromInt(std.math.minInt(To));
+            const max_float: From = @floatFromInt(std.math.maxInt(To));
+            if (from_value < min_float) {
+                break :blk std.math.minInt(To);
+            }
+            if (from_value > max_float) {
+                break :blk std.math.maxInt(To);
+            }
+            // Truncate toward zero
+            break :blk @intFromFloat(from_value);
+        };
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for try float to integer conversions (returns Try(To, [OutOfRange]))
+    fn floatToIntTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const result_rt_var = return_rt_var orelse unreachable;
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Check if conversion would succeed
+        const min_float: From = @floatFromInt(std.math.minInt(To));
+        const max_float: From = @floatFromInt(std.math.maxInt(To));
+        const in_range = !std.math.isNan(from_value) and from_value >= min_float and from_value <= max_float;
+
+        // Resolve the Try type to get Ok's payload type
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        // Find tag indices for Ok and Err
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        var ok_index: ?usize = null;
+        var err_index: ?usize = null;
+
+        const ok_ident = self.env.idents.ok;
+        const err_ident = self.env.idents.err;
+
+        for (tag_list.items, 0..) |tag_info, i| {
+            if (tag_info.name == ok_ident) {
+                ok_index = i;
+            } else if (tag_info.name == err_ident) {
+                err_index = i;
+            }
+        }
+
+        // Construct the result tag union
+        if (result_layout.tag == .scalar) {
+            var out = try self.pushRaw(result_layout, 0);
+            out.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try out.setInt(@intCast(tag_idx));
+            out.is_initialized = true;
+            return out;
+        } else if (result_layout.tag == .record) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+
+            const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try tmp.setInt(@intCast(tag_idx));
+
+            const payload_field = try acc.getFieldByIndex(payload_field_idx);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                    @memset(bytes, 0);
+                }
+            }
+
+            if (in_range) {
+                const to_value: To = @intFromFloat(from_value);
+                if (payload_field.ptr) |payload_ptr| {
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tuple) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+            const tag_field = try result_acc.getElement(1);
+            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try tmp.setInt(@intCast(tag_idx));
+
+            const payload_field = try result_acc.getElement(0);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                    @memset(bytes, 0);
+                }
+            }
+
+            if (in_range) {
+                const to_value: To = @intFromFloat(from_value);
+                if (payload_field.ptr) |payload_ptr| {
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                }
+            }
+            return dest;
+        } else {
+            unreachable;
+        }
+    }
+
+    /// Helper for float widening conversion (F32 -> F64)
+    fn floatWiden(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for wrapping float narrowing conversion (F64 -> F32)
+    fn floatNarrowWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        // @floatCast handles overflow by producing infinity
+        const to_value: To = @floatCast(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for try float narrowing conversion (F64 -> F32)
+    fn floatNarrowTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const result_rt_var = return_rt_var orelse unreachable;
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Check if conversion would produce infinity from a finite value
+        const to_value: To = @floatCast(from_value);
+        const in_range = !std.math.isInf(to_value) or std.math.isInf(from_value);
+
+        // Resolve the Try type to get Ok's payload type
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        // Find tag indices for Ok and Err
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        var ok_index: ?usize = null;
+        var err_index: ?usize = null;
+
+        const ok_ident = self.env.idents.ok;
+        const err_ident = self.env.idents.err;
+
+        for (tag_list.items, 0..) |tag_info, i| {
+            if (tag_info.name == ok_ident) {
+                ok_index = i;
+            } else if (tag_info.name == err_ident) {
+                err_index = i;
+            }
+        }
+
+        // Construct the result tag union
+        if (result_layout.tag == .scalar) {
+            var out = try self.pushRaw(result_layout, 0);
+            out.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try out.setInt(@intCast(tag_idx));
+            out.is_initialized = true;
+            return out;
+        } else if (result_layout.tag == .record) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+
+            const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try tmp.setInt(@intCast(tag_idx));
+
+            const payload_field = try acc.getFieldByIndex(payload_field_idx);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                    @memset(bytes, 0);
+                }
+            }
+
+            if (in_range) {
+                if (payload_field.ptr) |payload_ptr| {
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tuple) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+            const tag_field = try result_acc.getElement(1);
+            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            try tmp.setInt(@intCast(tag_idx));
+
+            const payload_field = try result_acc.getElement(0);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                    @memset(bytes, 0);
+                }
+            }
+
+            if (in_range) {
+                if (payload_field.ptr) |payload_ptr| {
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                }
+            }
+            return dest;
+        } else {
+            unreachable;
+        }
     }
 
     /// Convert Zig integer type to types.Int.Precision

@@ -692,6 +692,33 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers (all lossy - truncation + range check)
+			to_i8_wrap : F32 -> I8
+			to_i8_try : F32 -> Try(I8, [OutOfRange])
+			to_i16_wrap : F32 -> I16
+			to_i16_try : F32 -> Try(I16, [OutOfRange])
+			to_i32_wrap : F32 -> I32
+			to_i32_try : F32 -> Try(I32, [OutOfRange])
+			to_i64_wrap : F32 -> I64
+			to_i64_try : F32 -> Try(I64, [OutOfRange])
+			to_i128_wrap : F32 -> I128
+			to_i128_try : F32 -> Try(I128, [OutOfRange])
+
+			# Conversions to unsigned integers (all lossy - truncation + range check)
+			to_u8_wrap : F32 -> U8
+			to_u8_try : F32 -> Try(U8, [OutOfRange])
+			to_u16_wrap : F32 -> U16
+			to_u16_try : F32 -> Try(U16, [OutOfRange])
+			to_u32_wrap : F32 -> U32
+			to_u32_try : F32 -> Try(U32, [OutOfRange])
+			to_u64_wrap : F32 -> U64
+			to_u64_try : F32 -> Try(U64, [OutOfRange])
+			to_u128_wrap : F32 -> U128
+			to_u128_try : F32 -> Try(U128, [OutOfRange])
+
+			# Conversion to F64 (safe widening)
+			to_f64 : F32 -> F64
 		}
 
 		F64 :: [].{
@@ -715,6 +742,34 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers (all lossy - truncation + range check)
+			to_i8_wrap : F64 -> I8
+			to_i8_try : F64 -> Try(I8, [OutOfRange])
+			to_i16_wrap : F64 -> I16
+			to_i16_try : F64 -> Try(I16, [OutOfRange])
+			to_i32_wrap : F64 -> I32
+			to_i32_try : F64 -> Try(I32, [OutOfRange])
+			to_i64_wrap : F64 -> I64
+			to_i64_try : F64 -> Try(I64, [OutOfRange])
+			to_i128_wrap : F64 -> I128
+			to_i128_try : F64 -> Try(I128, [OutOfRange])
+
+			# Conversions to unsigned integers (all lossy - truncation + range check)
+			to_u8_wrap : F64 -> U8
+			to_u8_try : F64 -> Try(U8, [OutOfRange])
+			to_u16_wrap : F64 -> U16
+			to_u16_try : F64 -> Try(U16, [OutOfRange])
+			to_u32_wrap : F64 -> U32
+			to_u32_try : F64 -> Try(U32, [OutOfRange])
+			to_u64_wrap : F64 -> U64
+			to_u64_try : F64 -> Try(U64, [OutOfRange])
+			to_u128_wrap : F64 -> U128
+			to_u128_try : F64 -> Try(U128, [OutOfRange])
+
+			# Conversion to F32 (lossy narrowing)
+			to_f32_wrap : F64 -> F32
+			to_f32_try : F64 -> Try(F32, [OutOfRange])
 		}
 	}
 }
