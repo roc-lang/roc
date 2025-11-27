@@ -7154,12 +7154,68 @@ pub const Interpreter = struct {
         /// Used when exiting a scope to clean up local bindings.
         trim_bindings: TrimBindings,
 
+        /// Short-circuit AND: after evaluating LHS, check if false (short-circuit)
+        /// or evaluate RHS.
+        and_short_circuit: AndShortCircuit,
+
+        /// Short-circuit OR: after evaluating LHS, check if true (short-circuit)
+        /// or evaluate RHS.
+        or_short_circuit: OrShortCircuit,
+
+        /// If branch: after evaluating condition, either evaluate body or try next branch.
+        if_branch: IfBranch,
+
+        /// Block continuation: process remaining statements in a block.
+        block_continue: BlockContinue,
+
+        /// Bind a declaration pattern to the evaluated value.
+        bind_decl: BindDecl,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
 
         pub const TrimBindings = struct {
             target_len: usize,
+        };
+
+        pub const AndShortCircuit = struct {
+            rhs_expr: can.CIR.Expr.Idx,
+        };
+
+        pub const OrShortCircuit = struct {
+            rhs_expr: can.CIR.Expr.Idx,
+        };
+
+        pub const IfBranch = struct {
+            /// The body to evaluate if condition is true
+            body: can.CIR.Expr.Idx,
+            /// Remaining branches to try (slice indices into store)
+            remaining_branches: []const can.CIR.IfBranch.Idx,
+            /// The final else expression
+            final_else: can.CIR.Expr.Idx,
+        };
+
+        pub const BlockContinue = struct {
+            /// Remaining statements to process
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// The final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        pub const BindDecl = struct {
+            /// The pattern to bind
+            pattern: can.CIR.Pattern.Idx,
+            /// The expression that was evaluated (for expr_idx in binding)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Remaining statements to process
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// The final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
         };
     };
 
@@ -7277,18 +7333,761 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!void {
-        _ = work_stack;
-        _ = value_stack;
-        _ = expected_rt_var;
-        _ = roc_ops;
-
         const expr = self.env.store.getExpr(expr_idx);
 
-        // For PR 1, we just panic on all expression types.
-        // Subsequent PRs will implement each expression type.
         switch (expr) {
+            // ================================================================
+            // Immediate values - no sub-expressions to evaluate
+            // ================================================================
+
+            .e_num => |num_lit| {
+                const value = try self.evalNum(expr_idx, expected_rt_var, num_lit);
+                try value_stack.push(value);
+            },
+
+            .e_frac_f32 => |lit| {
+                const value = try self.evalFracF32(expr_idx, expected_rt_var, lit);
+                try value_stack.push(value);
+            },
+
+            .e_frac_f64 => |lit| {
+                const value = try self.evalFracF64(expr_idx, expected_rt_var, lit);
+                try value_stack.push(value);
+            },
+
+            .e_dec => |dec_lit| {
+                const value = try self.evalDec(expr_idx, expected_rt_var, dec_lit);
+                try value_stack.push(value);
+            },
+
+            .e_dec_small => |small| {
+                const value = try self.evalDecSmall(expr_idx, expected_rt_var, small);
+                try value_stack.push(value);
+            },
+
+            .e_str_segment => |seg| {
+                const value = try self.evalStrSegment(seg, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_empty_record => {
+                const value = try self.evalEmptyRecord(expr_idx, expected_rt_var);
+                try value_stack.push(value);
+            },
+
+            .e_empty_list => {
+                const value = try self.evalEmptyList(expr_idx, expected_rt_var);
+                try value_stack.push(value);
+            },
+
+            .e_zero_argument_tag => |zero| {
+                const value = try self.evalZeroArgumentTag(expr_idx, expected_rt_var, zero, roc_ops);
+                try value_stack.push(value);
+            },
+
+            // ================================================================
+            // Variable lookups
+            // ================================================================
+
+            .e_lookup_local => |lookup| {
+                const value = try self.evalLookupLocal(lookup, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_lookup_external => |lookup| {
+                // For now, evaluate external lookups using the recursive implementation
+                // This will be properly converted in a later PR
+                const value = try self.evalLookupExternal(lookup, expected_rt_var, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_lookup_required => {
+                // Required lookups reference values from the app that provides values to the
+                // platform's `requires` clause. These are not available during compile-time
+                // evaluation.
+                return error.TypeMismatch;
+            },
+
+            .e_runtime_error => {
+                self.triggerCrash("runtime error", false, roc_ops);
+                return error.Crash;
+            },
+
+            // ================================================================
+            // Binary operations (short-circuit only for now)
+            // ================================================================
+
+            .e_binop => |binop| {
+                switch (binop.op) {
+                    .@"and" => {
+                        // Short-circuit AND: evaluate LHS first, then check
+                        // Push continuation first (will be executed after LHS)
+                        try work_stack.push(.{ .apply_continuation = .{ .and_short_circuit = .{
+                            .rhs_expr = binop.rhs,
+                        } } });
+                        // Push LHS evaluation (will be executed first)
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = binop.lhs,
+                            .expected_rt_var = null,
+                        } });
+                    },
+                    .@"or" => {
+                        // Short-circuit OR: evaluate LHS first, then check
+                        // Push continuation first (will be executed after LHS)
+                        try work_stack.push(.{ .apply_continuation = .{ .or_short_circuit = .{
+                            .rhs_expr = binop.rhs,
+                        } } });
+                        // Push LHS evaluation (will be executed first)
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = binop.lhs,
+                            .expected_rt_var = null,
+                        } });
+                    },
+                    else => {
+                        // Other binary operations (arithmetic, comparison) will be implemented
+                        // in a later PR via method dispatch
+                        @panic("Stack-safe interpreter: non-boolean binop not yet implemented");
+                    },
+                }
+            },
+
+            // ================================================================
+            // Conditionals
+            // ================================================================
+
+            .e_if => |if_expr| {
+                const branches = self.env.store.sliceIfBranches(if_expr.branches);
+                if (branches.len > 0) {
+                    // Get first branch
+                    const first_branch = self.env.store.getIfBranch(branches[0]);
+                    // Push if_branch continuation (to be executed after condition evaluation)
+                    try work_stack.push(.{ .apply_continuation = .{ .if_branch = .{
+                        .body = first_branch.body,
+                        .remaining_branches = branches[1..],
+                        .final_else = if_expr.final_else,
+                    } } });
+                    // Push condition evaluation (to be executed first)
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = first_branch.cond,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // No branches, just evaluate final else
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = if_expr.final_else,
+                        .expected_rt_var = expected_rt_var,
+                    } });
+                }
+            },
+
+            // ================================================================
+            // Blocks
+            // ================================================================
+
+            .e_block => |blk| {
+                const stmts = self.env.store.sliceStatements(blk.stmts);
+                const bindings_start = self.bindings.items.len;
+
+                // First pass: add placeholders for all decl/var lambdas/closures (mutual recursion support)
+                try self.addClosurePlaceholders(stmts, bindings_start);
+
+                if (stmts.len == 0) {
+                    // No statements, just evaluate final expression
+                    // Push trim_bindings to clean up after evaluation
+                    try work_stack.push(.{ .apply_continuation = .{ .trim_bindings = .{
+                        .target_len = bindings_start,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = blk.final_expr,
+                        .expected_rt_var = expected_rt_var,
+                    } });
+                } else {
+                    // Schedule processing of statements
+                    // Push trim_bindings first (executed last)
+                    try work_stack.push(.{ .apply_continuation = .{ .trim_bindings = .{
+                        .target_len = bindings_start,
+                    } } });
+                    // Push block_continue to process statements
+                    try work_stack.push(.{ .apply_continuation = .{ .block_continue = .{
+                        .remaining_stmts = stmts,
+                        .final_expr = blk.final_expr,
+                        .bindings_start = bindings_start,
+                    } } });
+                }
+            },
+
             else => {
                 @panic("Stack-safe interpreter: expression type not yet implemented");
+            },
+        }
+    }
+
+    // ========================================================================
+    // Helper functions for evaluating immediate values (no sub-expressions)
+    // ========================================================================
+
+    /// Evaluate a numeric literal (e_num)
+    fn evalNum(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        num_lit: can.CIR.Expr.Num,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        var value = try self.pushRaw(layout_val, 0);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        if (num_lit.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                        }
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        if (num_lit.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                        }
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
+        return value;
+    }
+
+    /// Evaluate a f32 fractional literal (e_frac_f32)
+    fn evalFracF32(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lit: can.CIR.Expr.FracF32,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
+            typed_ptr.* = lit.value;
+        }
+        return value;
+    }
+
+    /// Evaluate a f64 fractional literal (e_frac_f64)
+    fn evalFracF64(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lit: can.CIR.Expr.FracF64,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
+            typed_ptr.* = lit.value;
+        }
+        return value;
+    }
+
+    /// Evaluate a decimal literal (e_dec)
+    fn evalDec(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        dec_lit: can.CIR.Expr.Dec,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+            typed_ptr.* = dec_lit.value;
+        }
+        return value;
+    }
+
+    /// Evaluate a small decimal literal (e_dec_small)
+    fn evalDecSmall(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        small: can.CIR.Expr.DecSmall,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+            const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
+            const scaled = @as(i128, small.value.numerator) * scale_factor;
+            typed_ptr.* = RocDec{ .num = scaled };
+        }
+        return value;
+    }
+
+    /// Evaluate a string segment literal (e_str_segment)
+    fn evalStrSegment(
+        self: *Interpreter,
+        seg: can.CIR.Expr.StrSegment,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const content = self.env.getString(seg.literal);
+        const value = try self.pushStr(content);
+        const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        roc_str.* = RocStr.fromSlice(content, roc_ops);
+        return value;
+    }
+
+    /// Evaluate an empty record literal (e_empty_record)
+    fn evalEmptyRecord(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const rec_layout = try self.getRuntimeLayout(rt_var);
+        return try self.pushRaw(rec_layout, 0);
+    }
+
+    /// Evaluate an empty list literal (e_empty_list)
+    fn evalEmptyList(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const derived_layout = try self.getRuntimeLayout(rt_var);
+
+        // Ensure we have a proper list layout even if the type variable defaulted to Dec.
+        const list_layout = if (derived_layout.tag == .list or derived_layout.tag == .list_of_zst)
+            derived_layout
+        else blk: {
+            // Default to list of Dec for empty lists when type can't be determined
+            const default_elem_layout = Layout.frac(types.Frac.Precision.dec);
+            const elem_layout_idx = try self.runtime_layout_store.insertLayout(default_elem_layout);
+            break :blk Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } };
+        };
+
+        const dest = try self.pushRaw(list_layout, 0);
+        if (dest.ptr) |ptr| {
+            const header: *RocList = @ptrCast(@alignCast(ptr));
+            header.* = RocList.empty();
+        }
+        return dest;
+    }
+
+    /// Evaluate a zero-argument tag (e_zero_argument_tag)
+    fn evalZeroArgumentTag(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        zero: can.CIR.Expr.ZeroArgumentTag,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        // Use resolveBaseVar to unwrap nominal types (like Bool := [False, True])
+        const resolved = self.resolveBaseVar(rt_var);
+        if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+            self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
+            return error.Crash;
+        }
+        const tu = resolved.desc.content.structure.tag_union;
+        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        // Find tag index by translating the source ident to the runtime store
+        const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+            const name_text = self.env.getIdent(zero.name);
+            const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+            self.triggerCrash(msg, true, roc_ops);
+            return error.Crash;
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+
+        // Handle different layout representations
+        if (layout_val.tag == .scalar) {
+            var out = try self.pushRaw(layout_val, 0);
+            if (layout_val.data.scalar.tag == .int) {
+                out.is_initialized = false;
+                try out.setInt(@intCast(tag_index));
+                out.is_initialized = true;
+                out.rt_var = rt_var;
+                return out;
+            }
+            self.triggerCrash("e_zero_argument_tag: scalar layout is not int", false, roc_ops);
+            return error.Crash;
+        } else if (layout_val.tag == .record) {
+            // Record { tag: Discriminant, payload: ZST }
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                self.triggerCrash("e_zero_argument_tag: tag field not found", false, roc_ops);
+                return error.Crash;
+            };
+            const tag_field = try acc.getFieldByIndex(tag_idx);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            } else {
+                self.triggerCrash("e_zero_argument_tag: record tag field is not scalar int", false, roc_ops);
+                return error.Crash;
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        } else if (layout_val.tag == .tuple) {
+            // Tuple (payload, tag) - tag unions are now represented as tuples
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asTuple(&self.runtime_layout_store);
+            // Element 1 is the tag discriminant
+            const tag_field = try acc.getElement(1);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            } else {
+                self.triggerCrash("e_zero_argument_tag: tuple tag field is not scalar int", false, roc_ops);
+                return error.Crash;
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        }
+        self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
+        return error.Crash;
+    }
+
+    // ========================================================================
+    // Helper functions for variable lookups
+    // ========================================================================
+
+    /// Evaluate a local variable lookup (e_lookup_local)
+    /// Searches bindings in reverse order, checks closure captures, and handles
+    /// lazy evaluation of top-level definitions.
+    fn evalLookupLocal(
+        self: *Interpreter,
+        lookup: can.CIR.Expr.LookupLocal,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        // Search bindings in reverse
+        var i: usize = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            const b = self.bindings.items[i];
+            // Check both pattern_idx AND source module to avoid cross-module collisions.
+            const same_module = (b.source_env == self.env) or
+                (b.source_env.module_name_idx == self.env.module_name_idx);
+            if (b.pattern_idx == lookup.pattern_idx and same_module) {
+                // Check if this binding came from an e_anno_only expression
+                const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
+                if (expr_idx_int != 0) {
+                    const binding_expr = self.env.store.getExpr(b.expr_idx);
+                    if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
+                        self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
+                        return error.Crash;
+                    }
+                }
+                const copy_result = try self.pushCopy(b.value, roc_ops);
+                return copy_result;
+            }
+        }
+
+        // If not found, try active closure captures by variable name
+        if (self.active_closures.items.len > 0) {
+            const pat2 = self.env.store.getPattern(lookup.pattern_idx);
+            if (pat2 == .assign) {
+                const var_ident = pat2.assign.ident;
+                // Search from innermost to outermost closure
+                var closure_idx: usize = self.active_closures.items.len;
+                while (closure_idx > 0) {
+                    closure_idx -= 1;
+                    const cls_val = self.active_closures.items[closure_idx];
+                    if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                        const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
+                        const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
+                        const has_real_captures = (lambda_expr == .e_closure);
+                        if (has_real_captures) {
+                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                            const header_sz = @sizeOf(layout.Closure);
+                            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                            const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                            const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                            if (accessor.findFieldIndex(var_ident)) |fidx| {
+                                const field_val = try accessor.getFieldByIndex(fidx);
+                                return try self.pushCopy(field_val, roc_ops);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
+        // NOTE: This still uses recursive evaluation - will be fully converted in a later PR
+        const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+        for (all_defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (def.pattern == lookup.pattern_idx) {
+                // Evaluate the definition on demand and cache the result in bindings
+                const result = try self.evalExprMinimal(def.expr, roc_ops, null);
+                try self.bindings.append(.{
+                    .pattern_idx = def.pattern,
+                    .value = result,
+                    .expr_idx = def.expr,
+                    .source_env = self.env,
+                });
+                return result;
+            }
+        }
+
+        self.triggerCrash("e_lookup_local: definition not found in current scope", false, roc_ops);
+        return error.Crash;
+    }
+
+    /// Evaluate an external variable lookup (e_lookup_external)
+    /// Handles cross-module references by switching to the imported module's context.
+    /// NOTE: This still uses recursive evaluation - will be fully converted in a later PR
+    fn evalLookupExternal(
+        self: *Interpreter,
+        lookup: can.CIR.Expr.LookupExternal,
+        expected_rt_var: ?types.Var,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const other_env = self.import_envs.get(lookup.module_idx) orelse {
+            self.triggerCrash("e_lookup_external: import_envs missing entry for module", false, roc_ops);
+            return error.Crash;
+        };
+
+        // The target_node_idx is a Def.Idx in the other module
+        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+        const target_def = other_env.store.getDef(target_def_idx);
+
+        // Save both env and bindings state
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(other_env);
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        // Evaluate the definition's expression in the other module's context
+        const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
+
+        return result;
+    }
+
+    // ========================================================================
+    // Helper functions for block evaluation
+    // ========================================================================
+
+    /// Add closure placeholders for mutual recursion support.
+    /// This is the first pass over statements that creates bindings for closures
+    /// before their actual evaluation, enabling mutual recursion.
+    fn addClosurePlaceholders(
+        self: *Interpreter,
+        stmts: []const can.CIR.Statement.Idx,
+        bindings_start: usize,
+    ) Error!void {
+        for (stmts) |stmt_idx| {
+            const stmt = self.env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_decl => |d| {
+                    const patt = self.env.store.getPattern(d.pattern);
+                    if (patt != .assign) continue;
+                    const rhs = self.env.store.getExpr(d.expr);
+                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, d.pattern)) {
+                        try self.addClosurePlaceholder(d.pattern, d.expr);
+                    }
+                },
+                .s_decl_gen => |d| {
+                    const patt = self.env.store.getPattern(d.pattern);
+                    if (patt != .assign) continue;
+                    const rhs = self.env.store.getExpr(d.expr);
+                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, d.pattern)) {
+                        try self.addClosurePlaceholder(d.pattern, d.expr);
+                    }
+                },
+                .s_var => |v| {
+                    const patt = self.env.store.getPattern(v.pattern_idx);
+                    if (patt != .assign) continue;
+                    const rhs = self.env.store.getExpr(v.expr);
+                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, v.pattern_idx)) {
+                        try self.addClosurePlaceholder(v.pattern_idx, v.expr);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Check if a placeholder binding already exists for a pattern.
+    fn placeholderExists(self: *Interpreter, start: usize, pattern_idx: can.CIR.Pattern.Idx) bool {
+        var i: usize = self.bindings.items.len;
+        while (i > start) {
+            i -= 1;
+            if (self.bindings.items[i].pattern_idx == pattern_idx) return true;
+        }
+        return false;
+    }
+
+    /// Add a closure placeholder binding for mutual recursion.
+    fn addClosurePlaceholder(
+        self: *Interpreter,
+        patt_idx: can.CIR.Pattern.Idx,
+        rhs_expr: can.CIR.Expr.Idx,
+    ) Error!void {
+        const patt_ct_var = can.ModuleEnv.varFrom(patt_idx);
+        const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+        const closure_layout = try self.getRuntimeLayout(patt_rt_var);
+        if (closure_layout.tag != .closure) return; // only closures get placeholders
+        const lam_or = self.env.store.getExpr(rhs_expr);
+        var body_idx: can.CIR.Expr.Idx = rhs_expr;
+        var params: can.CIR.Pattern.Span = .{ .span = .{ .start = 0, .len = 0 } };
+        if (lam_or == .e_lambda) {
+            body_idx = lam_or.e_lambda.body;
+            params = lam_or.e_lambda.args;
+        } else if (lam_or == .e_closure) {
+            const lam_expr = self.env.store.getExpr(lam_or.e_closure.lambda_idx);
+            if (lam_expr == .e_lambda) {
+                body_idx = lam_expr.e_lambda.body;
+                params = lam_expr.e_lambda.args;
+            }
+        } else return;
+        const ph = try self.pushRaw(closure_layout, 0);
+        if (ph.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = body_idx,
+                .params = params,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = rhs_expr,
+                .source_env = self.env,
+            };
+        }
+        try self.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr, .source_env = self.env });
+    }
+
+    /// Schedule processing of the next statement in a block.
+    fn scheduleNextStatement(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        stmt: can.CIR.Statement,
+        remaining_stmts: []const can.CIR.Statement.Idx,
+        final_expr: can.CIR.Expr.Idx,
+        bindings_start: usize,
+    ) Error!void {
+        switch (stmt) {
+            .s_decl => |d| {
+                // Schedule: evaluate expression, then bind the pattern
+                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
+                    .pattern = d.pattern,
+                    .expr_idx = d.expr,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                // Push expression evaluation
+                const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = d.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_decl_gen => |d| {
+                // Same as s_decl
+                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
+                    .pattern = d.pattern,
+                    .expr_idx = d.expr,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = d.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_var => |v| {
+                // Same as s_decl but uses pattern_idx
+                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
+                    .pattern = v.pattern_idx,
+                    .expr_idx = v.expr,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = v.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_expr => |sx| {
+                // Evaluate expression, discard result, continue with remaining
+                // Push block_continue for remaining statements
+                try work_stack.push(.{ .apply_continuation = .{ .block_continue = .{
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                // Push decref to clean up the expression result
+                // We'll handle this by pushing a special continuation or just evaluating and discarding
+                // For now, we'll just evaluate and let the block_continue handle cleanup
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = sx.expr,
+                    .expected_rt_var = null,
+                } });
+            },
+            else => {
+                // Other statement types will be implemented in PR 7
+                @panic("Stack-safe interpreter: statement type not yet implemented");
             },
         }
     }
@@ -7302,9 +8101,6 @@ pub const Interpreter = struct {
         cont: Continuation,
         roc_ops: *RocOps,
     ) Error!bool {
-        _ = work_stack;
-        _ = value_stack;
-
         switch (cont) {
             .return_result => {
                 // Signal to exit the main loop - the result is on the value stack
@@ -7318,6 +8114,137 @@ pub const Interpreter = struct {
             .trim_bindings => |tb| {
                 // Restore bindings to a previous length
                 self.trimBindingList(&self.bindings, tb.target_len, roc_ops);
+                return true;
+            },
+            .and_short_circuit => |sc| {
+                // Pop LHS value from stack
+                const lhs = value_stack.pop() orelse return error.Crash;
+                defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
+                if (boolValueEquals(false, lhs)) {
+                    // Short-circuit: LHS is false, so result is false
+                    const result = try self.makeBoolValue(false);
+                    try value_stack.push(result);
+                } else {
+                    // LHS is true, need to evaluate RHS
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = sc.rhs_expr,
+                        .expected_rt_var = null,
+                    } });
+                }
+                return true;
+            },
+            .or_short_circuit => |sc| {
+                // Pop LHS value from stack
+                const lhs = value_stack.pop() orelse return error.Crash;
+                defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
+                if (boolValueEquals(true, lhs)) {
+                    // Short-circuit: LHS is true, so result is true
+                    const result = try self.makeBoolValue(true);
+                    try value_stack.push(result);
+                } else {
+                    // LHS is false, need to evaluate RHS
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = sc.rhs_expr,
+                        .expected_rt_var = null,
+                    } });
+                }
+                return true;
+            },
+            .if_branch => |ib| {
+                // Pop condition value from stack
+                const cond = value_stack.pop() orelse return error.Crash;
+                defer cond.decref(&self.runtime_layout_store, roc_ops);
+
+                if (boolValueEquals(true, cond)) {
+                    // Condition is true, evaluate the body
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ib.body,
+                        .expected_rt_var = null,
+                    } });
+                } else if (ib.remaining_branches.len > 0) {
+                    // Try next branch
+                    const next_branch = self.env.store.getIfBranch(ib.remaining_branches[0]);
+                    // Push continuation for next branch
+                    try work_stack.push(.{ .apply_continuation = .{ .if_branch = .{
+                        .body = next_branch.body,
+                        .remaining_branches = ib.remaining_branches[1..],
+                        .final_else = ib.final_else,
+                    } } });
+                    // Push condition evaluation
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = next_branch.cond,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // No more branches, evaluate final else
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ib.final_else,
+                        .expected_rt_var = null,
+                    } });
+                }
+                return true;
+            },
+            .block_continue => |bc| {
+                // For s_expr statements, we need to pop and discard the value
+                // Check if there's a value to discard (from s_expr)
+                if (value_stack.items.items.len > 0) {
+                    // Pop and discard any value left from s_expr
+                    const val = value_stack.pop().?;
+                    val.decref(&self.runtime_layout_store, roc_ops);
+                }
+
+                if (bc.remaining_stmts.len == 0) {
+                    // No more statements, evaluate final expression
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = bc.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // Process next statement
+                    const next_stmt = self.env.store.getStatement(bc.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bc.remaining_stmts[1..], bc.final_expr, bc.bindings_start);
+                }
+                return true;
+            },
+            .bind_decl => |bd| {
+                // Pop evaluated value from stack
+                const val = value_stack.pop() orelse return error.Crash;
+                defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                // Get the runtime type for pattern matching
+                const expr_ct_var = can.ModuleEnv.varFrom(bd.expr_idx);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Bind the pattern
+                var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                defer {
+                    self.trimBindingList(&temp_binds, 0, roc_ops);
+                    temp_binds.deinit();
+                }
+
+                if (!try self.patternMatchesBind(bd.pattern, val, expr_rt_var, roc_ops, &temp_binds, bd.expr_idx)) {
+                    return error.TypeMismatch;
+                }
+
+                // Add bindings using upsertBinding to handle closure placeholders
+                for (temp_binds.items) |binding| {
+                    try self.upsertBinding(binding, bd.bindings_start, roc_ops);
+                }
+
+                // Continue with remaining statements
+                if (bd.remaining_stmts.len == 0) {
+                    // No more statements, evaluate final expression
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = bd.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // Process next statement
+                    const next_stmt = self.env.store.getStatement(bd.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bd.remaining_stmts[1..], bd.final_expr, bd.bindings_start);
+                }
                 return true;
             },
         }
