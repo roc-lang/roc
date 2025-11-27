@@ -636,6 +636,17 @@ test "e_low_level_lambda - List.concat preserves order" {
     try testing.expectEqualStrings("Ok(10)", first_value);
 }
 
+// test "e_low_level_lambda - List.append on empty" {
+//     const src =
+//         \\x = List.append([9], 11)
+//         \\last = List.get(x, 2)
+//     ;
+//
+//     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+//     defer test_allocator.free(first_value);
+//     try testing.expectEqualStrings("Ok(10)", first_value);
+// }
+
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
     const src =
         \\x = List.concat(["hello", "world"], ["foo", "bar"])
