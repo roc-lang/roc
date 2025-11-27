@@ -337,8 +337,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
-    const all_defs = env.store.sliceDefs(env.all_defs);
-    for (all_defs) |def_idx| {
+    const all_defs_slice = env.store.sliceDefs(env.all_defs);
+    var def_indices = std.ArrayList(CIR.Def.Idx).empty;
+    defer def_indices.deinit(gpa);
+    try def_indices.appendSlice(gpa, all_defs_slice);
+
+    for (def_indices.items) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
 
@@ -371,7 +375,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                         const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
                         try env.store.scratch.?.patterns.append(arg_pattern_idx);
                     }
-                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = num_params } };
+                    const args_span = try env.store.patternSpanFrom(patterns_start);
 
                     // Create an e_runtime_error body that crashes when the function is called
                     const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
@@ -825,32 +829,7 @@ fn compileModule(
         defer new_def_indices.deinit(gpa);
 
         if (new_def_indices.items.len > 0) {
-            // Rebuild all_defs span to include both old and new defs
-            // First, get the old def indices from extra_data
-            const old_span = module_env.all_defs.span;
-            const old_def_count = old_span.len;
-
-            // Allocate new space in extra_data for all defs (old + new)
-            const new_span_start: u32 = @intCast(module_env.store.extra_data.len());
-
-            // Copy old def indices
-            var i: u32 = 0;
-            while (i < old_def_count) : (i += 1) {
-                const idx = @as(collections.SafeList(u32).Idx, @enumFromInt(old_span.start + i));
-                const old_def_idx = module_env.store.extra_data.get(idx).*;
-                _ = try module_env.store.extra_data.append(gpa, old_def_idx);
-            }
-
-            // Append new def indices
-            for (new_def_indices.items) |new_def_idx| {
-                _ = try module_env.store.extra_data.append(gpa, @intFromEnum(new_def_idx));
-            }
-
-            // Update all_defs to point to the new span
-            module_env.all_defs.span.start = new_span_start;
-            module_env.all_defs.span.len = old_def_count + @as(u32, @intCast(new_def_indices.items.len));
-
-            // Rebuild the dependency graph and evaluation order to include new defs
+            // Rebuild the dependency graph and evaluation order to include the updated defs
             const DependencyGraph = @import("can").DependencyGraph;
             var graph = try DependencyGraph.buildDependencyGraph(
                 module_env,
