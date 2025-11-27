@@ -147,7 +147,7 @@ const CheckTypeCheckerPatternsStep = struct {
                 \\    if (std.mem.eql(u8, ident_name, "is_eq")) {{ ... }}
                 \\
                 \\  Example - RIGHT:
-                \\    if (ident_idx == module_env.is_eq_ident) {{ ... }}
+                \\    if (ident_idx == module_env.idents.is_eq) {{ ... }}
                 \\
                 \\VIOLATIONS FOUND:
                 \\

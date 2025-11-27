@@ -617,12 +617,9 @@ pub const BuildEnv = struct {
             });
         }
 
-        // Build common idents for the type checker
-        const common_idents = Check.CommonIdents{
+        // Build builtin context for the type checker
+        const builtin_ctx = Check.BuiltinContext{
             .module_name = app_root_env.module_name_idx,
-            .list = app_root_env.common.findIdent("List") orelse return,
-            .box = app_root_env.common.findIdent("Box") orelse return,
-            .@"try" = app_root_env.common.findIdent("Try") orelse return,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -638,7 +635,7 @@ pub const BuildEnv = struct {
             &.{}, // No imported modules needed for checking exports
             &module_envs_map,
             &app_root_env.store.regions,
-            common_idents,
+            builtin_ctx,
         );
         defer checker.deinit();
 
