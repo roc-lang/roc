@@ -28,9 +28,12 @@ const Node = @import("Node.zig");
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
     env: *const ModuleEnv,
-    /// Optional statement index for nested types (e.g., Builtin.Bool, Builtin.Str)
+    /// Optional statement index for types (e.g., Builtin.Bool, Builtin.Num.U8)
     /// When set, this points directly to the type declaration, avoiding string lookups
     statement_idx: ?CIR.Statement.Idx = null,
+    /// The fully qualified type identifier (e.g., "Builtin.Str" for Str, "Builtin.Num.U8" for U8)
+    /// Used for looking up members like U8.to_i16 -> "Builtin.Num.U8.to_i16"
+    qualified_type_ident: Ident.Idx,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -262,39 +265,52 @@ pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: CIR.BuiltinIndices, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
+    builtin_indices: CIR.BuiltinIndices,
 ) !void {
-    const types_to_add = .{
-        .{ "Bool", builtin_indices.bool_type },
-        .{ "Try", builtin_indices.try_type },
-        .{ "Dict", builtin_indices.dict_type },
-        .{ "Set", builtin_indices.set_type },
-        .{ "Str", builtin_indices.str_type },
-        .{ "List", builtin_indices.list_type },
-        .{ "U8", builtin_indices.u8_type },
-        .{ "I8", builtin_indices.i8_type },
-        .{ "U16", builtin_indices.u16_type },
-        .{ "I16", builtin_indices.i16_type },
-        .{ "U32", builtin_indices.u32_type },
-        .{ "I32", builtin_indices.i32_type },
-        .{ "U64", builtin_indices.u64_type },
-        .{ "I64", builtin_indices.i64_type },
-        .{ "U128", builtin_indices.u128_type },
-        .{ "I128", builtin_indices.i128_type },
-        .{ "Dec", builtin_indices.dec_type },
-        .{ "F32", builtin_indices.f32_type },
-        .{ "F64", builtin_indices.f64_type },
-        .{ "Numeral", builtin_indices.numeral_type },
+    // All auto-imported types with their statement index and fully-qualified ident
+    // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
+    // Nested types under Num: "Builtin.Num.U8", etc.
+    //
+    // Note: builtin_indices.*_ident values are indices into the builtin module's ident store.
+    // We need to get the text and re-insert into the calling module's store since
+    // Ident.Idx values are not transferable between stores.
+    const builtin_types = .{
+        .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
+        .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
+        .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
+        .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
+        .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
+        .{ "U8", builtin_indices.u8_type, builtin_indices.u8_ident },
+        .{ "I8", builtin_indices.i8_type, builtin_indices.i8_ident },
+        .{ "U16", builtin_indices.u16_type, builtin_indices.u16_ident },
+        .{ "I16", builtin_indices.i16_type, builtin_indices.i16_ident },
+        .{ "U32", builtin_indices.u32_type, builtin_indices.u32_ident },
+        .{ "I32", builtin_indices.i32_type, builtin_indices.i32_ident },
+        .{ "U64", builtin_indices.u64_type, builtin_indices.u64_ident },
+        .{ "I64", builtin_indices.i64_type, builtin_indices.i64_ident },
+        .{ "U128", builtin_indices.u128_type, builtin_indices.u128_ident },
+        .{ "I128", builtin_indices.i128_type, builtin_indices.i128_ident },
+        .{ "Dec", builtin_indices.dec_type, builtin_indices.dec_ident },
+        .{ "F32", builtin_indices.f32_type, builtin_indices.f32_ident },
+        .{ "F64", builtin_indices.f64_type, builtin_indices.f64_ident },
+        .{ "Numeral", builtin_indices.numeral_type, builtin_indices.numeral_ident },
     };
 
-    inline for (types_to_add) |type_info| {
+    inline for (builtin_types) |type_info| {
         const type_name = type_info[0];
         const statement_idx = type_info[1];
+        const builtin_qualified_ident = type_info[2];
+
+        // Get the qualified ident text from the builtin module and re-insert into calling module
+        const qualified_text = builtin_module_env.getIdent(builtin_qualified_ident);
+        const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_text));
 
         const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(type_name));
         try module_envs_map.put(type_ident, .{
             .env = builtin_module_env,
             .statement_idx = statement_idx,
+            .qualified_type_ident = qualified_ident,
         });
     }
 }
@@ -2720,15 +2736,16 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Use the already-created all_defs span
     const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
 
-    // Check each definition to see if it corresponds to an exposed item
+    // Check each definition to see if it corresponds to an exposed item.
+    // We check exposed_scope.idents which only contains items from the exposing clause,
+    // not associated items like "Color.as_str" which are registered separately.
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
 
         if (pattern == .assign) {
-            // Check if this definition's identifier is in the exposed items
-            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
-                // Add this definition to the exports scratch space
+            // Check if this identifier was explicitly exposed in the module header
+            if (self.exposed_scope.idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
             }
         }
@@ -3977,18 +3994,21 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
-                                    // For regular module imports (e.g., A), just use the field name directly
-                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
-                                        // Associated items are stored with the full qualified parent type name
-                                        const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
-                                        const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
-                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
-                                        break :blk_name self.env.getIdent(fully_qualified_idx);
+                                    // For auto-imported types with statement_idx (builtin types and platform modules),
+                                    // build the full qualified name using qualified_type_ident.
+                                    // For regular user module imports (statement_idx is null), use field_text directly.
+                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| name_blk: {
+                                        // Build the fully qualified member name using the type's qualified ident
+                                        // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
+                                        // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                        // Note: qualified_type_ident is always stored in the calling module's ident store
+                                        // (self.env), since Ident.Idx values are not transferable between stores.
+                                        const qualified_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
+                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                        break :name_blk self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
 
-                                    // Look up the associated item by its qualified name
+                                    // Look up the associated item by its name
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
@@ -10531,63 +10551,6 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     }
 
     return null;
-}
-
-/// Expose all associated items of a type declaration (recursively for nested types)
-/// This is used for type modules where all associated items are implicitly exposed
-fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type) std.mem.Allocator.Error!void {
-    if (type_decl.associated) |assoc| {
-        for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
-            const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
-            switch (assoc_stmt) {
-                .type_decl => |nested_type_decl| {
-                    // Get the nested type name
-                    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
-                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
-
-                    // Build qualified name (e.g., "Foo.Bar")
-                    const parent_text = self.env.getIdent(parent_name);
-                    const nested_text = self.env.getIdent(nested_ident);
-                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, nested_text);
-
-                    // Don't expose the nested type itself - types are not values
-                    // Only recursively expose its associated items (defs, not types)
-                    try self.exposeAssociatedItems(qualified_idx, nested_type_decl);
-                },
-                .decl => |decl| {
-                    // Get the declaration name
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const pattern_ident_tok = pattern.ident.ident_tok;
-                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            // Build qualified name (e.g., "Foo.stuff")
-                            const parent_text = self.env.getIdent(parent_name);
-                            const decl_text = self.env.getIdent(decl_ident);
-                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
-
-                            // Expose the declaration
-                            try self.env.addExposedById(qualified_idx);
-                        }
-                    }
-                },
-                .type_anno => |type_anno| {
-                    // Get the annotation name (for annotation-only definitions like compiler intrinsics)
-                    if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build qualified name (e.g., "Bool.not")
-                        const parent_text = self.env.getIdent(parent_name);
-                        const anno_text = self.env.getIdent(anno_ident);
-                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
-
-                        // Expose the qualified name
-                        // The unqualified name is added to scope but doesn't need to be in exposed_items
-                        // because lookups use the qualified name
-                        try self.env.addExposedById(qualified_idx);
-                    }
-                },
-                else => {},
-            }
-        }
-    }
 }
 
 /// Check if any type declarations exist in the file

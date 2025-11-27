@@ -1244,8 +1244,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
     defer builtin_modules.deinit();
 
-    // Try to find and compile platform modules
-    // Extract the actual platform path from the app header to support paths like "../platform/main.roc"
+    // If the roc file path has no directory component (e.g., "app.roc"), use current directory
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
@@ -1365,7 +1364,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
                 // Insert the aliased name into the platform env's ident table
                 const aliased_ident = try module_env_ptr.insertIdent(base.Ident.for_text(aliased_name));
 
-                // Add to exposed_items with the same node_idx value
+                // First add to exposed items, then set node index
+                try module_env_ptr.common.exposed_items.addExposedById(shm_allocator, @bitCast(aliased_ident));
                 try module_env_ptr.common.exposed_items.setNodeIndexById(shm_allocator, @bitCast(aliased_ident), entry.value);
             }
         }
@@ -1506,7 +1506,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     for (platform_env_ptrs) |mod_env| {
         const name = try app_env.insertIdent(base.Ident.for_text(mod_env.module_name));
-        try app_module_envs_map.put(name, .{ .env = mod_env });
+        // For user/platform modules, the qualified name is just the module name itself
+        const qualified_ident = try app_env.insertIdent(base.Ident.for_text(mod_env.module_name));
+        try app_module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
     }
 
     // Add platform modules to the module envs map for canonicalization
@@ -1517,9 +1519,16 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // since associated items are stored as "Stdout.roc.Stdout.line!", not just "line!".
     for (exposed_modules.items, 0..) |module_name, i| {
         const platform_env = platform_env_ptrs[i];
+        // For platform modules, the qualified type name is "ModuleName.roc.ModuleName"
+        // This matches how associated items are stored (e.g., "Stdout.roc.Stdout.line!")
+        // Insert into app_env (calling module) since Ident.Idx values are not transferable between stores.
+        const qualified_type_name = try std.fmt.allocPrint(allocs.gpa, "{s}.roc.{s}", .{ module_name, module_name });
+        defer allocs.gpa.free(qualified_type_name);
+        const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_type_name));
         const auto_type = Can.AutoImportedType{
             .env = platform_env,
             .statement_idx = @enumFromInt(0), // Non-null triggers qualified name building
+            .qualified_type_ident = type_qualified_ident,
         };
 
         // Add with qualified name key (for import validation: "pf.Stdout")
@@ -1566,8 +1575,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check with all imported modules
+    // Use the env's module_name_idx so that nominal types' origin_module matches
+    // the env's identity for method resolution at runtime
     const app_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
+        .module_name = app_env.module_name_idx,
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1723,14 +1734,17 @@ fn compileModuleToSharedMemory(
     for (additional_modules) |mod_env| {
         // Add with full module name (e.g., "Stdout.roc")
         const name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
-        try module_envs_map.put(name, .{ .env = mod_env });
+        // For user modules, the qualified name is just the module name itself
+        const qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(mod_env.module_name));
+        try module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
 
         // Also add without .roc suffix (e.g., "Stdout") for import validation
         // The import statement `import Stdout` uses the name without .roc
         if (std.mem.endsWith(u8, mod_env.module_name, ".roc")) {
             const name_without_roc = mod_env.module_name[0 .. mod_env.module_name.len - 4];
             const short_name = try env.insertIdent(base.Ident.for_text(name_without_roc));
-            try module_envs_map.put(short_name, .{ .env = mod_env });
+            const short_qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(name_without_roc));
+            try module_envs_map.put(short_name, .{ .env = mod_env, .qualified_type_ident = short_qualified_ident });
         }
     }
 
