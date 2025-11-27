@@ -33,6 +33,7 @@ const builtin_loading = eval.builtin_loading;
 const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
+const roc_target = @import("target.zig");
 
 comptime {
     if (builtin.is_test) {
@@ -788,237 +789,56 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         // Determine platform type from host library path to configure dependencies
         std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
 
-        // Check if path contains "int" and "platform" directories using cross-platform path handling
-        const contains_int_platform = blk: {
-            var has_int = false;
-            var has_platform = false;
-            var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
-            while (iter.next()) |component| {
-                if (std.mem.eql(u8, component.name, "int")) {
-                    has_int = true;
-                } else if (std.mem.eql(u8, component.name, "platform")) {
-                    has_platform = true;
-                }
-            }
-            break :blk has_int and has_platform;
-        };
+        // Get the directory containing the host library - this is where sibling files
+        // (crt1.o, libc.a, etc.) provided by the platform author should be located.
+        // Works for both local platforms (test/int/platform/targets/x64musl/)
+        // and cached URL platforms (~/.cache/roc/packages/HASH/targets/x64musl/)
+        const host_lib_dir = std.fs.path.dirname(platform_paths.host_lib_path) orelse ".";
 
-        if (contains_int_platform) {
-            std.log.debug("Detected int platform - using musl static linking", .{});
-            // Int platform: use musl static linking with target-specific libraries
+        // Detect if this is a musl platform by parsing the directory name as a RocTarget
+        // This handles exact matches like "x64musl", "arm64musl" from target.zig
+        const host_lib_dirname = std.fs.path.basename(host_lib_dir);
+        const parsed_target = roc_target.RocTarget.fromString(host_lib_dirname);
+        const is_musl_platform = if (parsed_target) |t| t.isStatic() else false;
+
+        if (is_musl_platform) {
+            std.log.debug("Detected musl platform target: {s}", .{host_lib_dirname});
             target_abi = .musl;
-            if (builtin.target.os.tag == .linux) {
-                // Use native target-specific libraries (x64musl for x64 hosts, etc.)
-                const native_target = if (builtin.target.cpu.arch.isX86())
-                    "x64musl"
-                else if (builtin.target.cpu.arch == .aarch64)
-                    "arm64musl"
-                else
-                    "x64musl"; // fallback
 
-                const crt1_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch |err| {
+            if (builtin.target.os.tag == .linux) {
+                // Look for CRT files in the same directory as libhost.a
+                // These are provided by the platform author in their bundle
+                const crt1_path = std.fs.path.join(allocs.arena, &.{ host_lib_dir, "crt1.o" }) catch |err| {
                     std.log.err("Failed to allocate crt1 path", .{});
                     return err;
                 };
-                const libc_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch |err| {
+                const libc_path = std.fs.path.join(allocs.arena, &.{ host_lib_dir, "libc.a" }) catch |err| {
                     std.log.err("Failed to allocate libc path", .{});
                     return err;
                 };
 
-                platform_files_pre.append(crt1_path) catch |err| {
-                    std.log.err("Failed to add musl crt1.o", .{});
-                    return err;
-                };
-                platform_files_post.append(libc_path) catch |err| {
-                    std.log.err("Failed to add musl libc.a", .{});
-                    return err;
-                };
-            }
-        } else {
-            // Check if path contains "str" and "platform" directories using cross-platform path handling
-            const contains_str_platform = blk: {
-                var has_str = false;
-                var has_platform = false;
-                var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
-                while (iter.next()) |component| {
-                    if (std.mem.eql(u8, component.name, "str")) {
-                        has_str = true;
-                    } else if (std.mem.eql(u8, component.name, "platform")) {
-                        has_platform = true;
-                    }
-                }
-                break :blk has_str and has_platform;
-            };
-
-            if (contains_str_platform) {
-                std.log.debug("Detected str platform - using musl static linking like int platform", .{});
-                // Str platform: use musl static linking to match the embedded shim library ABI
-                target_abi = .musl;
-                if (builtin.target.os.tag == .linux) {
-                    // Use the same musl approach as int platform
-                    const native_target = if (builtin.target.cpu.arch.isX86())
-                        "x64musl"
-                    else if (builtin.target.cpu.arch == .aarch64)
-                        "arm64musl"
-                    else
-                        "x64musl"; // fallback
-
-                    const crt1_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch |err| {
-                        std.log.err("Failed to allocate crt1 path", .{});
-                        return err;
-                    };
-                    const libc_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch |err| {
-                        std.log.err("Failed to allocate libc path", .{});
-                        return err;
-                    };
-
+                // Only add files if they exist (platform may not need all of them)
+                if (std.fs.cwd().access(crt1_path, .{})) |_| {
                     platform_files_pre.append(crt1_path) catch |err| {
                         std.log.err("Failed to add musl crt1.o", .{});
                         return err;
                     };
+                } else |_| {
+                    std.log.debug("crt1.o not found in {s}, skipping", .{host_lib_dir});
+                }
+
+                if (std.fs.cwd().access(libc_path, .{})) |_| {
                     platform_files_post.append(libc_path) catch |err| {
                         std.log.err("Failed to add musl libc.a", .{});
                         return err;
                     };
+                } else |_| {
+                    std.log.debug("libc.a not found in {s}, skipping", .{host_lib_dir});
                 }
-            } else if (false) { // Disable the old str platform GNU logic for now
-                std.log.debug("OLD str platform GNU logic (disabled)", .{});
-                if (builtin.target.os.tag == .linux) {
-                    // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths (DISABLED)
-                    //
-                    // According to the platform design (see Platform modules and linking design.md),
-                    // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
-                    // crtn.o) in their platform's targets/ directory. For example:
-                    //   targets/x64glibc/crti.o
-                    //   targets/x64glibc/crtn.o
-                    //   targets/x64musl/crti.o
-                    //   targets/x64musl/crtn.o
-                    //
-                    // The platform module header would then specify these in the targets section:
-                    //   shared_lib: {
-                    //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
-                    //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
-                    //   }
-                    //
-                    // Current implementation: We auto-detect system libc and use system CRT files as a
-                    // convenience during platform development. This allows platform authors to develop
-                    // and test without immediately vendoring architecture-specific CRT files.
-                    //
-                    // This auto-detection will be removed once platforms properly vendor their CRT files
-                    // as specified in the design document.
-
-                    const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs)) |libc_info| {
-                        // Use system CRT files from the detected lib directory
-                        // TODO: Remove this once platforms provide their own CRT files
-                        const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate Scrt1.o path", .{});
-                            return err;
-                        };
-                        const crti_path = std.fmt.allocPrint(allocs.arena, "{s}/crti.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate crti.o path", .{});
-                            return err;
-                        };
-                        const crtn_path = std.fmt.allocPrint(allocs.arena, "{s}/crtn.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate crtn.o path", .{});
-                            return err;
-                        };
-
-                        // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
-                        if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
-                            file.close();
-                            platform_files_pre.append(scrt1_path) catch |err| {
-                                std.log.err("Failed to add system Scrt1.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch |err| {
-                                    std.log.err("Failed to add vendored Scrt1.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
-                            file.close();
-                            platform_files_pre.append(crti_path) catch |err| {
-                                std.log.err("Failed to add system crti.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch |err| {
-                                    std.log.err("Failed to add vendored crti.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
-                            file.close();
-                            platform_files_post.append(crtn_path) catch |err| {
-                                std.log.err("Failed to add system crtn.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch |err| {
-                                    std.log.err("Failed to add vendored crtn.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        const lib_path = std.fmt.allocPrint(allocs.arena, "-L{s}", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate library path", .{});
-                            return err;
-                        };
-                        extra_args.append(lib_path) catch |err| {
-                            std.log.err("Failed to add library path", .{});
-                            return err;
-                        };
-                    } else |_| {
-                        // Fallback to vendored files for x86_64 or error for other architectures
-                        if (builtin.target.cpu.arch == .x86_64) {
-                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch |err| {
-                                std.log.err("Failed to add gnu Scrt1.o", .{});
-                                return err;
-                            };
-                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch |err| {
-                                std.log.err("Failed to add gnu crti.o", .{});
-                                return err;
-                            };
-                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch |err| {
-                                std.log.err("Failed to add gnu crtn.o", .{});
-                                return err;
-                            };
-                            extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch |err| {
-                                std.log.err("Failed to add library path", .{});
-                                return err;
-                            };
-                        } else {
-                            std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
-                            return error.LibcNotAvailable;
-                        }
-                    }
-                    extra_args.append("-lc") catch |err| {
-                        std.log.err("Failed to add libc", .{});
-                        return err;
-                    };
-                }
-            } else {
-                std.log.debug("No platform-specific configuration found, using defaults", .{});
             }
+        } else {
+            // Non-musl platform - use system defaults
+            std.log.debug("No musl platform detected, using defaults", .{});
         }
 
         std.log.debug("Final target_abi: {?}", .{target_abi});
@@ -2120,9 +1940,7 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
             };
         }
     } else if (std.mem.startsWith(u8, platform_spec, "http")) {
-        // This is a URL - for production, would download and resolve
-        // For now, return not supported
-        return error.PlatformNotSupported;
+        return resolveUrlPlatform(allocs, platform_spec);
     }
 
     // Try to interpret as a file path (resolve relative to base_dir)
@@ -2158,6 +1976,159 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
             .platform_source_path = null,
         };
     }
+}
+
+/// Get the roc cache directory for downloaded packages, creating it if needed.
+/// Standard cache locations by platform:
+/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
+/// - Windows: %LOCALAPPDATA%\roc\packages\
+fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
+    // Check XDG_CACHE_HOME first (Linux/macOS)
+    if (std.posix.getenv("XDG_CACHE_HOME")) |xdg_cache| {
+        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
+    }
+
+    // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
+    if (comptime builtin.os.tag == .windows) {
+        if (std.posix.getenv("LOCALAPPDATA")) |local_app_data| {
+            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
+        }
+    }
+
+    // Fall back to ~/.cache/roc/packages (Unix)
+    if (std.posix.getenv("HOME")) |home| {
+        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
+    }
+
+    return error.NoCacheDir;
+}
+
+/// Get native target directory name based on host architecture.
+/// Returns null for platforms that use root-level libhost.a (macOS, Windows).
+fn getNativeTargetDir() ?[]const u8 {
+    if (builtin.os.tag == .linux) {
+        // For Linux, prefer musl for static linking
+        return if (builtin.cpu.arch == .aarch64)
+            "arm64musl"
+        else if (builtin.cpu.arch.isX86())
+            "x64musl"
+        else
+            null;
+    }
+    // macOS and Windows use root libhost.a/host.lib
+    return null;
+}
+
+/// Find host library in package directory, checking multiple locations.
+/// Search order:
+/// 1. {package_dir}/libhost.a (simple platforms)
+/// 2. {package_dir}/targets/{native_target}/libhost.a (multi-target platforms)
+fn findHostLibrary(allocator: std.mem.Allocator, package_dir_path: []const u8) !?[]const u8 {
+    const host_filename = if (comptime builtin.os.tag == .windows) "host.lib" else "libhost.a";
+
+    // 1. Check root directory first (simple platforms)
+    const root_path = try std.fs.path.join(allocator, &.{ package_dir_path, host_filename });
+    if (std.fs.cwd().access(root_path, .{})) |_| {
+        return root_path;
+    } else |_| {}
+
+    // 2. Check targets directory (multi-target platforms)
+    if (getNativeTargetDir()) |target| {
+        const target_path = try std.fs.path.join(allocator, &.{
+            package_dir_path, "targets", target, host_filename,
+        });
+        if (std.fs.cwd().access(target_path, .{})) |_| {
+            return target_path;
+        } else |_| {}
+    }
+
+    return null;
+}
+
+/// Resolve a URL platform specification by downloading and caching the bundle.
+/// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
+fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
+    const download = unbundle.download;
+
+    // 1. Validate URL and extract hash
+    const base58_hash = download.validateUrl(url) catch {
+        std.log.err("Invalid platform URL: {s}", .{url});
+        return error.PlatformNotSupported;
+    };
+
+    // 2. Get cache directory
+    const cache_dir_path = getRocCacheDir(allocs.arena) catch {
+        std.log.err("Could not determine cache directory", .{});
+        return error.PlatformNotSupported;
+    };
+    const package_dir_path = try std.fs.path.join(allocs.arena, &.{ cache_dir_path, base58_hash });
+
+    // 3. Check if already cached
+    var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => blk: {
+            // Not cached - need to download
+            std.log.info("Downloading platform from {s}...", .{url});
+
+            // Create cache directory structure
+            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+                std.log.err("Failed to create cache directory: {}", .{make_err});
+                return error.PlatformNotSupported;
+            };
+
+            // Create package directory
+            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+                error.PathAlreadyExists => {}, // Race condition, another process created it
+                else => {
+                    std.log.err("Failed to create package directory: {}", .{make_err});
+                    return error.PlatformNotSupported;
+                },
+            };
+
+            var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |open_err| {
+                std.log.err("Failed to open package directory: {}", .{open_err});
+                return error.PlatformNotSupported;
+            };
+
+            // Download and extract
+            var gpa_copy = allocs.gpa;
+            download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
+                // Clean up failed download
+                new_package_dir.close();
+                std.fs.cwd().deleteTree(package_dir_path) catch {};
+                std.log.err("Failed to download platform: {}", .{download_err});
+                return error.PlatformNotSupported;
+            };
+
+            std.log.info("Platform cached at {s}", .{package_dir_path});
+            break :blk new_package_dir;
+        },
+        else => {
+            std.log.err("Failed to access package directory: {}", .{err});
+            return error.PlatformNotSupported;
+        },
+    };
+    defer package_dir.close();
+
+    // 4. Find host library (check multiple locations)
+    const host_path = findHostLibrary(allocs.arena, package_dir_path) catch {
+        std.log.err("Failed to search for host library", .{});
+        return error.PlatformNotSupported;
+    } orelse {
+        std.log.err("No host library found in platform bundle", .{});
+        return error.PlatformNotSupported;
+    };
+
+    // 5. Platforms must have a main.roc entry point
+    const platform_source_path = try std.fs.path.join(allocs.arena, &.{ package_dir_path, "main.roc" });
+    std.fs.cwd().access(platform_source_path, .{}) catch {
+        std.log.err("No main.roc found in platform bundle at {s}", .{package_dir_path});
+        return error.PlatformNotSupported;
+    };
+
+    return PlatformPaths{
+        .host_lib_path = host_path,
+        .platform_source_path = platform_source_path,
+    };
 }
 
 /// Extract all entrypoint names from platform header provides record into ArrayList
@@ -3203,6 +3174,12 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Additional errors from std library that might be missing
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
+    // URL package resolution errors
+    FileError,
+    InvalidUrl,
+    NoCacheDir,
+    DownloadFailed,
+    NoPackageSource,
     // Interpreter errors (propagate from eval during build)
     Crash,
     DivisionByZero,
