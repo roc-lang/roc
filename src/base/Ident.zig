@@ -144,6 +144,13 @@ pub const Store = struct {
     fn getOrAssignDebugId(self: *Store, src: std.builtin.SourceLocation) u32 {
         if (enable_store_tracking) {
             if (self.debug_id == 0) {
+                // If this store already has idents (e.g., deserialized), we can't
+                // fully track it because existing idents weren't registered.
+                // Keep debug_id at 0 to skip verification for this store.
+                if (self.interner.entry_count > 0) {
+                    return 0;
+                }
+
                 // Assign a new unique ID
                 self.debug_id = debug_store_id_counter.fetchAdd(1, .monotonic);
 
@@ -227,6 +234,35 @@ pub const Store = struct {
         }
     }
 
+    /// Check if an Idx was created by this store.
+    /// In debug builds with store tracking enabled, this checks the known_idxs set.
+    /// In release builds or when tracking is disabled, this returns true (assumes valid).
+    /// Use this to determine which store to use for lookups when idents may come from
+    /// multiple sources (e.g., during type unification with builtins).
+    pub fn containsIdx(self: *const Store, idx: Idx) bool {
+        if (enable_store_tracking) {
+            if (self.debug_id == 0) {
+                // Store was never registered (e.g., deserialized store).
+                // Can't verify, assume true.
+                return true;
+            }
+
+            debug_store_mutex.lock();
+            defer debug_store_mutex.unlock();
+
+            const info = debug_store_map.get(self.debug_id) orelse {
+                // Store not in map
+                return true;
+            };
+
+            const idx_bits: u32 = @bitCast(idx);
+            return info.known_idxs.contains(idx_bits);
+        } else {
+            // No tracking, can't determine - assume true
+            return true;
+        }
+    }
+
     /// Serialized representation of an Ident.Store
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
@@ -291,6 +327,19 @@ pub const Store = struct {
         self.trackIdx(result, @src());
 
         return result;
+    }
+
+    /// Look up an identifier in the store without inserting.
+    /// Returns the index if found, null if not found.
+    /// Unlike insert, this never modifies the store (no resize, no insertion).
+    /// Useful for deserialized stores that cannot be grown.
+    pub fn lookup(self: *const Store, ident: Ident) ?Idx {
+        const idx = self.interner.lookup(ident.raw_text) orelse return null;
+
+        return Idx{
+            .attributes = ident.attributes,
+            .idx = @as(u29, @intCast(@intFromEnum(idx))),
+        };
     }
 
     /// Generate a new identifier that is unique within this module.
