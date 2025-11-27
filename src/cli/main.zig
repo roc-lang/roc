@@ -1174,17 +1174,30 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     // Try to find and compile platform modules
     // Extract the actual platform path from the app header to support paths like "../platform/main.roc"
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse return error.InvalidAppPath;
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
 
-    // Resolve relative paths (starting with ./ or ../) relative to app directory
-    // Non-relative paths (like package URLs) are not local platform files
+    // Resolve platform path based on type:
+    // - Relative paths (./...) -> join with app directory
+    // - URL paths (http/https) -> resolve to cached package main.roc
+    // - Other paths -> null (not supported)
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, platform_spec })
-    else
+    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
+        // URL platform - resolve to cached package path
+        const platform_paths = resolveUrlPlatform(allocs, platform_spec) catch {
+            break :blk null;
+        };
+        break :blk platform_paths.platform_source_path;
+    } else
         null;
-    defer if (platform_main_path) |p| allocs.gpa.free(p);
+    defer if (platform_main_path) |p| {
+        // Only free if it was allocated by join (not arena-allocated from resolveUrlPlatform)
+        if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../")) {
+            allocs.gpa.free(p);
+        }
+    };
 
     // Get the platform directory from the resolved path
     const platform_dir: ?[]const u8 = if (platform_main_path) |p|
