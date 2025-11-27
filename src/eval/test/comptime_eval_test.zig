@@ -156,7 +156,10 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // Convert import name to Ident.Idx using the MODULE's ident store (not a temporary one!)
     // This is important because the canonicalizer will look up identifiers in this same store
     const import_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
-    try module_envs.put(import_ident, .{ .env = imported_module });
+    // For user modules, the qualified name is just the module name itself
+    // Use module_env (not imported_module) since it's mutable
+    const import_qualified_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
+    try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
     var czer = try Can.init(module_env, &parse_ast, &module_envs);

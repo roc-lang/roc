@@ -597,25 +597,8 @@ pub const BuildEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Add builtin types (Bool, Try, Str)
-        if (app_root_env.common.findIdent("Bool")) |bi| {
-            try module_envs_map.put(bi, .{
-                .env = builtin_module_env,
-                .statement_idx = builtin_indices.bool_type,
-            });
-        }
-        if (app_root_env.common.findIdent("Try")) |ti| {
-            try module_envs_map.put(ti, .{
-                .env = builtin_module_env,
-                .statement_idx = builtin_indices.try_type,
-            });
-        }
-        if (app_root_env.common.findIdent("Str")) |si| {
-            try module_envs_map.put(si, .{
-                .env = builtin_module_env,
-                .statement_idx = builtin_indices.str_type,
-            });
-        }
+        // Use the shared populateModuleEnvs function to set up auto-imported types
+        try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
 
         // Build builtin context for the type checker
         const builtin_ctx = Check.BuiltinContext{

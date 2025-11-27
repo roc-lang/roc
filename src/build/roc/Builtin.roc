@@ -210,6 +210,25 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers (I8 is lossy, others are safe)
+			to_i8_wrap : U8 -> I8
+			to_i8_try : U8 -> Try(I8, [OutOfRange])
+			to_i16 : U8 -> I16
+			to_i32 : U8 -> I32
+			to_i64 : U8 -> I64
+			to_i128 : U8 -> I128
+
+			# Conversions to unsigned integers (all safe widening)
+			to_u16 : U8 -> U16
+			to_u32 : U8 -> U32
+			to_u64 : U8 -> U64
+			to_u128 : U8 -> U128
+
+			# Conversions to floating point (all safe)
+			to_f32 : U8 -> F32
+			to_f64 : U8 -> F64
+			to_dec : U8 -> Dec
 		}
 
 		I8 :: [].{
@@ -233,6 +252,29 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers (all safe widening)
+			to_i16 : I8 -> I16
+			to_i32 : I8 -> I32
+			to_i64 : I8 -> I64
+			to_i128 : I8 -> I128
+
+			# Conversions to unsigned integers (all lossy for negative values)
+			to_u8_wrap : I8 -> U8
+			to_u8_try : I8 -> Try(U8, [OutOfRange])
+			to_u16_wrap : I8 -> U16
+			to_u16_try : I8 -> Try(U16, [OutOfRange])
+			to_u32_wrap : I8 -> U32
+			to_u32_try : I8 -> Try(U32, [OutOfRange])
+			to_u64_wrap : I8 -> U64
+			to_u64_try : I8 -> Try(U64, [OutOfRange])
+			to_u128_wrap : I8 -> U128
+			to_u128_try : I8 -> Try(U128, [OutOfRange])
+
+			# Conversions to floating point (all safe)
+			to_f32 : I8 -> F32
+			to_f64 : I8 -> F64
+			to_dec : I8 -> Dec
 		}
 
 		U16 :: [].{
