@@ -500,68 +500,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // Expose to_str under aliases like "Builtin.Dec.to_str" for user code lookups.
-    // The canonical names are like "Builtin.Num.Dec.to_str" (since numeric types are nested under Num),
-    // but user code calling Dec.to_str will look for "Builtin.Dec.to_str".
-    for (numeric_types) |num_type| {
-        var canonical_buf: [256]u8 = undefined;
-        var alias_buf: [256]u8 = undefined;
-        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.{s}.to_str", .{num_type});
-        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.{s}.to_str", .{num_type});
-
-        if (env.common.findIdent(canonical_name)) |canonical_ident| {
-            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
-                // Insert the alias identifier
-                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                // First add to exposed items, then set node index
-                try env.common.addExposedById(gpa, alias_ident);
-                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
-            }
-        }
-    }
-
-    // Expose U8 conversion operations under aliases like "Builtin.U8.to_i16" for user code lookups.
-    const u8_conversions = [_][]const u8{
-        "to_i8_wrap", "to_i8_try", "to_i16", "to_i32", "to_i64", "to_i128",
-        "to_u16",     "to_u32",    "to_u64", "to_u128", "to_f32", "to_f64", "to_dec",
-    };
-    for (u8_conversions) |conv| {
-        var canonical_buf: [256]u8 = undefined;
-        var alias_buf: [256]u8 = undefined;
-        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.U8.{s}", .{conv});
-        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.U8.{s}", .{conv});
-
-        if (env.common.findIdent(canonical_name)) |canonical_ident| {
-            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
-                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                try env.common.addExposedById(gpa, alias_ident);
-                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
-            }
-        }
-    }
-
-    // Expose I8 conversion operations under aliases like "Builtin.I8.to_i16" for user code lookups.
-    const i8_conversions = [_][]const u8{
-        "to_i16",     "to_i32",     "to_i64",     "to_i128",
-        "to_u8_wrap", "to_u8_try",  "to_u16_wrap", "to_u16_try",
-        "to_u32_wrap", "to_u32_try", "to_u64_wrap", "to_u64_try",
-        "to_u128_wrap", "to_u128_try", "to_f32", "to_f64", "to_dec",
-    };
-    for (i8_conversions) |conv| {
-        var canonical_buf: [256]u8 = undefined;
-        var alias_buf: [256]u8 = undefined;
-        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.I8.{s}", .{conv});
-        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.I8.{s}", .{conv});
-
-        if (env.common.findIdent(canonical_name)) |canonical_ident| {
-            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
-                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                try env.common.addExposedById(gpa, alias_ident);
-                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
-            }
-        }
-    }
-
     // Verify all low-level operations were found in the builtins
     if (low_level_map.count() > 0) {
         std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});

@@ -31,6 +31,9 @@ pub const AutoImportedType = struct {
     /// Optional statement index for nested types (e.g., Builtin.Bool, Builtin.Str)
     /// When set, this points directly to the type declaration, avoiding string lookups
     statement_idx: ?CIR.Statement.Idx = null,
+    /// The fully qualified type identifier (e.g., "Builtin.Num.U8" for U8)
+    /// Used for looking up members like U8.to_i16 -> "Builtin.Num.U8.to_i16"
+    qualified_type_ident: ?Ident.Idx = null,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -264,30 +267,18 @@ pub fn populateModuleEnvs(
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
 ) !void {
-    const types_to_add = .{
+    // Top-level types (Str, Bool, etc.) don't need qualified_type_ident since they can be
+    // looked up using module_name + type_name (e.g., "Builtin" + "Str" -> "Builtin.Str")
+    const top_level_types = .{
         .{ "Bool", builtin_indices.bool_type },
         .{ "Try", builtin_indices.try_type },
         .{ "Dict", builtin_indices.dict_type },
         .{ "Set", builtin_indices.set_type },
         .{ "Str", builtin_indices.str_type },
         .{ "List", builtin_indices.list_type },
-        .{ "U8", builtin_indices.u8_type },
-        .{ "I8", builtin_indices.i8_type },
-        .{ "U16", builtin_indices.u16_type },
-        .{ "I16", builtin_indices.i16_type },
-        .{ "U32", builtin_indices.u32_type },
-        .{ "I32", builtin_indices.i32_type },
-        .{ "U64", builtin_indices.u64_type },
-        .{ "I64", builtin_indices.i64_type },
-        .{ "U128", builtin_indices.u128_type },
-        .{ "I128", builtin_indices.i128_type },
-        .{ "Dec", builtin_indices.dec_type },
-        .{ "F32", builtin_indices.f32_type },
-        .{ "F64", builtin_indices.f64_type },
-        .{ "Numeral", builtin_indices.numeral_type },
     };
 
-    inline for (types_to_add) |type_info| {
+    inline for (top_level_types) |type_info| {
         const type_name = type_info[0];
         const statement_idx = type_info[1];
 
@@ -295,6 +286,40 @@ pub fn populateModuleEnvs(
         try module_envs_map.put(type_ident, .{
             .env = builtin_module_env,
             .statement_idx = statement_idx,
+            .qualified_type_ident = null,
+        });
+    }
+
+    // Numeric types nested under Builtin.Num need the qualified_type_ident
+    // because they can't be looked up using just module_name + type_name
+    // (e.g., U8.to_i16 -> "Builtin.Num.U8.to_i16", not "Builtin.U8.to_i16")
+    const nested_types = .{
+        .{ "U8", builtin_indices.u8_type, builtin_indices.u8_ident },
+        .{ "I8", builtin_indices.i8_type, builtin_indices.i8_ident },
+        .{ "U16", builtin_indices.u16_type, builtin_indices.u16_ident },
+        .{ "I16", builtin_indices.i16_type, builtin_indices.i16_ident },
+        .{ "U32", builtin_indices.u32_type, builtin_indices.u32_ident },
+        .{ "I32", builtin_indices.i32_type, builtin_indices.i32_ident },
+        .{ "U64", builtin_indices.u64_type, builtin_indices.u64_ident },
+        .{ "I64", builtin_indices.i64_type, builtin_indices.i64_ident },
+        .{ "U128", builtin_indices.u128_type, builtin_indices.u128_ident },
+        .{ "I128", builtin_indices.i128_type, builtin_indices.i128_ident },
+        .{ "Dec", builtin_indices.dec_type, builtin_indices.dec_ident },
+        .{ "F32", builtin_indices.f32_type, builtin_indices.f32_ident },
+        .{ "F64", builtin_indices.f64_type, builtin_indices.f64_ident },
+        .{ "Numeral", builtin_indices.numeral_type, builtin_indices.numeral_ident },
+    };
+
+    inline for (nested_types) |type_info| {
+        const type_name = type_info[0];
+        const statement_idx = type_info[1];
+        const qualified_ident = type_info[2];
+
+        const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(type_name));
+        try module_envs_map.put(type_ident, .{
+            .env = builtin_module_env,
+            .statement_idx = statement_idx,
+            .qualified_type_ident = qualified_ident,
         });
     }
 }
@@ -3978,11 +4003,16 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
+                                    // For nested types (e.g., U8 inside Builtin.Num), build the full qualified name
                                     // For regular module imports (e.g., A), just use the field name directly
-                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
-                                        // Associated items are stored with the full qualified parent type name
+                                    const lookup_name: []const u8 = if (auto_imported_type.qualified_type_ident) |qual_type_ident| blk_name: {
+                                        // Auto-imported type with known qualified name (e.g., "Builtin.Num.U8")
+                                        // Build "Builtin.Num.U8.to_i16" by appending the field name
+                                        const qualified_text = module_env.getIdent(qual_type_ident);
+                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                        break :blk_name self.env.getIdent(fully_qualified_idx);
+                                    } else if (auto_imported_type.statement_idx) |_| blk_name: {
+                                        // Fallback for auto-imported types without qualified_type_ident
                                         const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
                                         const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
                                         const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
