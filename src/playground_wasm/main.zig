@@ -1946,20 +1946,9 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
     });
 }
 
-/// Write a string with JSON escaping
+/// Write a string with JSON escaping (without surrounding quotes)
 fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
-    for (str) |char| {
-        switch (char) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            // Control characters U+0000 to U+001F
-            0...8, 11, 12, 14...31 => try writer.print("\\u{x:0>4}", .{char}),
-            else => try writer.writeByte(char),
-        }
-    }
+    try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
 /// Processes a message and returns a pointer to a null-terminated, dynamically allocated JSON response string.
