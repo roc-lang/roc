@@ -16,9 +16,22 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - record_pattern_edge_cases.md:5:51:5:52
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_pattern_edge_cases.md:5:51:5:52:**
+```roc
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+```
+                                                  ^
+
+It has the type:
+    _{ c: Str }_
+
+But I expected it to be:
+    _Str_
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -276,5 +289,5 @@ match ... {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

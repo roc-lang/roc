@@ -342,17 +342,17 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try(a, e), (a -> b) -> Try(b, e)"))
+		(patt (type "Error, (a -> b) -> Error"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
 		(patt (type "List(_a) -> U64"))
-		(patt (type "a -> Try(Try(a, Str), Str)"))
+		(patt (type "a -> Error"))
 		(patt (type "_arg -> Str")))
 	(expressions
-		(expr (type "Try(a, e), (a -> b) -> Try(b, e)"))
+		(expr (type "Error, (a -> b) -> Error"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
 		(expr (type "List(_a) -> U64"))
-		(expr (type "a -> Try(Try(a, Str), Str)"))
+		(expr (type "a -> Error"))
 		(expr (type "_arg -> Str"))))
 ~~~

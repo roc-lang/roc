@@ -74,7 +74,7 @@ processString : Str -> Str
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Str")))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Str -> Str"))))
+		(expr (type "Error -> Error"))))
 ~~~

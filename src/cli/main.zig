@@ -1686,6 +1686,13 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     try app_checker.checkFile();
 
+    // Check for type errors and fail if any are found
+    const type_problem_count = app_checker.problems.len();
+    if (type_problem_count > 0) {
+        std.log.err("Found {d} type error(s) in {s}. Run 'roc check {s}' for details.", .{ type_problem_count, roc_file_path, roc_file_path });
+        return error.TypeCheckFailed;
+    }
+
     // Check that app exports match platform requirements (if platform exists)
     if (platform_main_env) |penv| {
         // Build the platform-to-app ident translation map

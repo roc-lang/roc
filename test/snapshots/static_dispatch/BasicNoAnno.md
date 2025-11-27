@@ -200,20 +200,20 @@ main = (helper1(val), helper2(val))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "BasicNoAnno -> Str"))
+		(patt (type "BasicNoAnno -> Error"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "BasicNoAnno"))
-		(patt (type "(Str, Str)")))
+		(patt (type "(Error, Error)")))
 	(type_decls
 		(nominal (type "BasicNoAnno")
 			(ty-header (name "BasicNoAnno"))))
 	(expressions
-		(expr (type "BasicNoAnno -> Str"))
+		(expr (type "BasicNoAnno -> Error"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "BasicNoAnno"))
-		(expr (type "(Str, Str)"))))
+		(expr (type "(Error, Error)"))))
 ~~~

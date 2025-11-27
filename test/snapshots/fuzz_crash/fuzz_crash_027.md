@@ -230,6 +230,10 @@ INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
+MISSING METHOD - fuzz_crash_027.md:125:6:125:9
+MISSING METHOD - fuzz_crash_027.md:102:15:102:18
+MISSING METHOD - fuzz_crash_027.md:129:12:129:22
++ - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
@@ -956,22 +960,47 @@ This expression produces a value, but it's not being used:
 It has the type:
     _d_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:143:2:147:3:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:125:6:125:9:**
 ```roc
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
+		),	456, # ee
 ```
+		  	^^^
 
-It has the type:
-    _[Stdoline!(Error)][Err(d), Ok({  })]_
+The value's type, which does not have a method named **from_numeral**, is:
 
-But the type annotation says it should have the type:
-    _Try(d)_
+    _Str_
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:102:15:102:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**fuzz_crash_027.md:129:12:129:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    _Str_
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

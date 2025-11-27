@@ -341,7 +341,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Pair(U64)"))
-		(patt (type "Pair(Str)"))
+		(patt (type "Pair(Error)"))
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(U8)"))
 		(patt (type "Error"))
@@ -354,7 +354,7 @@ NO CHANGE
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Pair(U64)"))
-		(expr (type "Pair(Str)"))
+		(expr (type "Pair(Error)"))
 		(expr (type "a, a -> Pair(a)"))
 		(expr (type "Pair(U8)"))
 		(expr (type "Error"))

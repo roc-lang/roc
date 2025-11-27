@@ -120,9 +120,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> U64"))
+		(patt (type "List(Error) -> U64"))
 		(patt (type "_arg -> U64")))
 	(expressions
-		(expr (type "List(Str) -> U64"))
+		(expr (type "List(Error) -> U64"))
 		(expr (type "_arg -> U64"))))
 ~~~

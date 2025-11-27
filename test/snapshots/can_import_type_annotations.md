@@ -643,16 +643,16 @@ combineTrys = |result1, result2|
 (inferred-types
 	(defs
 		(patt (type "Error -> Error"))
-		(patt (type "Str -> Error"))
-		(patt (type "Error -> Try(Error, Error)"))
+		(patt (type "Error -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error"))
-		(patt (type "Error, Str -> Error"))
-		(patt (type "Try(a, err), Try(b, err) -> Try((a, b), err)")))
+		(patt (type "Error, Error -> Error"))
+		(patt (type "Error, Error -> Error")))
 	(expressions
 		(expr (type "Error -> Error"))
-		(expr (type "Str -> Error"))
-		(expr (type "Error -> Try(Error, Error)"))
+		(expr (type "Error -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error"))
-		(expr (type "Error, Str -> Error"))
-		(expr (type "Try(a, err), Try(b, err) -> Try((a, b), err)"))))
+		(expr (type "Error, Error -> Error"))
+		(expr (type "Error, Error -> Error"))))
 ~~~

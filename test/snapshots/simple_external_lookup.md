@@ -31,5 +31,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(a), (a -> b) -> List(b)"))
+(expr (type "Error"))
 ~~~

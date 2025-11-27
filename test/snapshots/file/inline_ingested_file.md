@@ -137,9 +137,9 @@ foo = Json.parse(data)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str"))
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))
+		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

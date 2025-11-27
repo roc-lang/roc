@@ -158,13 +158,13 @@ NO CHANGE
 		(patt (type "Error"))
 		(patt (type "(_a, _b, _c)"))
 		(patt (type "U8, U16 -> U32"))
-		(patt (type "List(Error) -> Try({  }, _a)"))
+		(patt (type "List(Error) -> Error"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "U64"))
 		(expr (type "Error"))
 		(expr (type "(_a, _b, _c)"))
 		(expr (type "U8, U16 -> U32"))
-		(expr (type "List(Error) -> Try({  }, _a)"))
+		(expr (type "List(Error) -> Error"))
 		(expr (type "Error"))))
 ~~~

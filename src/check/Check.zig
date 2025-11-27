@@ -2526,16 +2526,39 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, str_var, env);
         },
         .e_str => |str| {
-            // Iterate over the string segments, capturing if any error'd
+            // Iterate over the string segments, checking each one
             const segment_expr_idx_slice = self.cir.store.sliceExpr(str.span);
             var did_err = false;
             for (segment_expr_idx_slice) |seg_expr_idx| {
-                // Check the segment
-                does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
+                const seg_expr = self.cir.store.getExpr(seg_expr_idx);
 
-                // Check if it errored
-                const seg_var = ModuleEnv.varFrom(seg_expr_idx);
-                did_err = did_err or self.types.resolveVar(seg_var).desc.content == .err;
+                // String literal segments are already Str type
+                switch (seg_expr) {
+                    .e_str_segment => {
+                        does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
+                    },
+                    else => {
+                        // Interpolated expressions must be of type Str
+                        const seg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(seg_expr_idx));
+                        const expected_str_var = try self.freshStr(env, seg_region);
+                        does_fx = try self.checkExpr(seg_expr_idx, env, .{ .expected = .{ .var_ = expected_str_var, .from_annotation = false } }) or does_fx;
+
+                        // Unify the segment's type with Str to produce a type error if it doesn't match
+                        const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+                        const unify_result = try self.unify(seg_var, expected_str_var, env);
+                        if (!unify_result.isOk()) {
+                            // Unification failed - mark as error
+                            try self.unifyWith(seg_var, .err, env);
+                            did_err = true;
+                        }
+                    },
+                }
+
+                // Check if it errored (for non-interpolation segments)
+                if (!did_err) {
+                    const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+                    did_err = self.types.resolveVar(seg_var).desc.content == .err;
+                }
             }
 
             if (did_err) {
@@ -3807,9 +3830,20 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 const resolved = self.types.resolveVar(expr_var).desc.content;
-                if (resolved == .err or (resolved == .structure and resolved.structure == .empty_record)) {
-                    // If this type resolves to an empty record, then we are good!
-                } else {
+                const is_empty_record = blk: {
+                    if (resolved == .err) break :blk true;
+                    if (resolved != .structure) break :blk false;
+                    switch (resolved.structure) {
+                        .empty_record => break :blk true,
+                        .record => |record| {
+                            // A record is effectively empty if it has no fields
+                            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+                            break :blk fields_slice.len == 0;
+                        },
+                        else => break :blk false,
+                    }
+                };
+                if (!is_empty_record) {
                     const snapshot = try self.snapshots.deepCopyVar(self.types, expr_var);
                     _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
                         .var_ = expr_var,
@@ -4456,12 +4490,15 @@ const ExternalType = struct {
 /// unification fails.
 fn resolveVarFromExternal(
     self: *Self,
-    module_idx: CIR.Import.Idx,
+    import_idx: CIR.Import.Idx,
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
-    const module_idx_int = @intFromEnum(module_idx);
-    if (module_idx_int < self.imported_modules.len) {
-        const other_module_cir = self.imported_modules[module_idx_int];
+    // Use the resolved module index from the imports store
+    // The import_idx is the index into the imports list, but we need
+    // the resolved module index which maps to imported_modules
+    const resolved_module_idx = self.cir.imports.getResolvedModule(import_idx) orelse return null;
+    if (resolved_module_idx < self.imported_modules.len) {
+        const other_module_cir = self.imported_modules[resolved_module_idx];
         const other_module_env = other_module_cir;
 
         // The idx of the expression in the other module
@@ -4469,7 +4506,7 @@ fn resolveVarFromExternal(
 
         // Check if we've already copied this import
         const cache_key = ImportCacheKey{
-            .module_idx = module_idx,
+            .module_idx = import_idx,
             .node_idx = target_node_idx,
         };
 

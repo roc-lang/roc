@@ -224,60 +224,6 @@ The value's type, which does not have a method named **to_frac**, is:
 **Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_utf8** method is being called on a value whose type doesn't have that method:
-**Color.md:29:17:29:24:**
-```roc
-    bytes = str.to_utf8()
-```
-                ^^^^^^^
-
-The value's type, which does not have a method named **to_utf8**, is:
-
-    _Str_
-
-**Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:32:5:45:6:**
-```roc
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-```
-
-It has the type:
-    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
-
-But the type annotation says it should have the type:
-    _Try(Color, [InvalidHex(Str)])_
-
-**MISSING METHOD**
-This **is_named_color** method is being called on a value whose type doesn't have that method:
-**Color.md:62:12:62:26:**
-```roc
-    if str.is_named_color()
-```
-           ^^^^^^^^^^^^^^
-
-The value's type, which does not have a method named **is_named_color**, is:
-
-    _Str_
-
-**Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
-
-**MISSING METHOD**
 This **to_str** method is being called on a value whose type doesn't have that method:
 **Color.md:56:26:56:32:**
 ```roc
@@ -1255,9 +1201,9 @@ is_named_color = |str| {
 	(defs
 		(patt (type "U8, U8, U8 -> Color"))
 		(patt (type "U8, U8, U8, U8 -> Color"))
-		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "Color -> Error"))
-		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
+		(patt (type "Error -> Error"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1265,8 +1211,8 @@ is_named_color = |str| {
 	(expressions
 		(expr (type "U8, U8, U8 -> Color"))
 		(expr (type "U8, U8, U8, U8 -> Color"))
-		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "Color -> Error"))
-		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
+		(expr (type "Error -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

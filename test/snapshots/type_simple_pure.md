@@ -85,9 +85,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Str -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -271,6 +271,10 @@ INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
 UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
+TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+MISSING METHOD - syntax_grab_bag.md:146:15:146:18
+MISSING METHOD - syntax_grab_bag.md:176:12:176:22
++ - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -926,6 +930,48 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     _d_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:175:26:175:27:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		                       ^
+
+It has the type:
+    _U64_
+
+But I expected it to be:
+    _Str_
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**syntax_grab_bag.md:146:15:146:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**syntax_grab_bag.md:176:12:176:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    _Str_
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

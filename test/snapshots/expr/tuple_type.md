@@ -16,34 +16,7 @@ type=expr
 MISSING METHOD - tuple_type.md:5:8:5:9
 MISSING METHOD - tuple_type.md:5:11:5:12
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**tuple_type.md:5:8:5:9:**
-```roc
-    f((1, 2))
-```
-       ^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    _Str_
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**tuple_type.md:5:11:5:12:**
-```roc
-    f((1, 2))
-```
-          ^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    _Str_
-
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -106,5 +79,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Str, Str)"))
+(expr (type "(Error, Error)"))
 ~~~

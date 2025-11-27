@@ -81,7 +81,7 @@ foo = |a| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Bool")))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Bool -> Bool"))))
+		(expr (type "Error -> Error"))))
 ~~~

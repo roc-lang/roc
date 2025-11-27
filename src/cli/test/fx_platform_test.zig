@@ -558,3 +558,37 @@ test "fx platform checked directly finds sibling modules" {
         return error.UnexpectedModuleNotFoundErrors;
     }
 }
+
+test "fx platform string interpolation type mismatch" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that tries to interpolate a U8 (non-Str) type in a string.
+    // This should fail with a type error because string interpolation only accepts Str.
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/num_method_call.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Expect the run to fail with exit code 1 (type error)
+    switch (run_result.term) {
+        .Exited => |code| {
+            try testing.expectEqual(@as(u8, 1), code);
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify the error message mentions type error
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "type error") != null);
+}

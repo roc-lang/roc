@@ -150,7 +150,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64 -> Try(Error, [TooBig])")))
+		(patt (type "U64 -> Error")))
 	(expressions
-		(expr (type "U64 -> Try(Error, [TooBig])"))))
+		(expr (type "U64 -> Error"))))
 ~~~

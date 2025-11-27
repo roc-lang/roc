@@ -27,7 +27,7 @@ This argument has the type:
     _{ age: a, namee: Str } where [a.from_numeral : Numeral -> Try(_b, [InvalidNumeral(Str)])]_
 
 But `getName` needs the first argument to be:
-    _{ age: U64, name: Str }_
+    _{ age: U64, name: Error }_
 
 # TOKENS
 ~~~zig
@@ -131,9 +131,9 @@ main! = |_| getName({ namee: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: U64, name: Str } -> Str"))
+		(patt (type "{ age: U64, name: Error } -> Error"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "{ age: U64, name: Str } -> Str"))
+		(expr (type "{ age: U64, name: Error } -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

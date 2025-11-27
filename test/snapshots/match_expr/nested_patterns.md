@@ -130,5 +130,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "U64"))
+(expr (type "Error"))
 ~~~
