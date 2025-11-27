@@ -8,26 +8,23 @@ const testing = std.testing;
 
 const roc_binary_path = "./zig-out/bin/roc";
 
-/// Ensures the roc binary exists, building it if necessary.
-/// This is needed because these tests spawn the roc CLI as a child process.
+/// Ensures the roc binary is up-to-date by always rebuilding it.
+/// This is needed because these tests spawn the roc CLI as a child process,
+/// and a stale binary will cause test failures even if the test code is correct.
 fn ensureRocBinary(allocator: std.mem.Allocator) !void {
-    // Check if binary exists
-    std.fs.cwd().access(roc_binary_path, .{}) catch {
-        // Binary doesn't exist, build it
-        std.debug.print("roc binary not found, building with 'zig build roc'...\n", .{});
-        const build_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ "zig", "build", "roc" },
-        });
-        defer allocator.free(build_result.stdout);
-        defer allocator.free(build_result.stderr);
+    // Always rebuild to ensure the binary is up-to-date with the latest source changes.
+    // This prevents confusing test failures when the binary exists but is stale.
+    const build_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "zig", "build", "roc" },
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
 
-        if (build_result.term != .Exited or build_result.term.Exited != 0) {
-            std.debug.print("Failed to build roc binary:\n{s}\n", .{build_result.stderr});
-            return error.RocBuildFailed;
-        }
-        std.debug.print("roc binary built successfully.\n", .{});
-    };
+    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+        std.debug.print("Failed to build roc binary:\n{s}\n", .{build_result.stderr});
+        return error.RocBuildFailed;
+    }
 }
 
 fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_input: []const u8) !std.process.Child.RunResult {
