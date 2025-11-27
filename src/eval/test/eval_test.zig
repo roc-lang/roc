@@ -728,7 +728,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs_map.deinit();
     const builtin_ident = try original_env.insertIdent(base.Ident.for_text("Builtin"));
-    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env });
+    const builtin_qualified_ident = try builtin_module.env.common.insertIdent(builtin_module.env.gpa, base.Ident.for_text("Builtin"));
+    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env, .qualified_type_ident = builtin_qualified_ident });
 
     // Create canonicalizer with module_envs_map for qualified name resolution
     var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);

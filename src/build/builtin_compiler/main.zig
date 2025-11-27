@@ -360,6 +360,100 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // U8 conversion operations
+    if (env.common.findIdent("Builtin.Num.U8.to_i8_wrap")) |ident| {
+        try low_level_map.put(ident, .u8_to_i8_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i8_try")) |ident| {
+        try low_level_map.put(ident, .u8_to_i8_try);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i16")) |ident| {
+        try low_level_map.put(ident, .u8_to_i16);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i32")) |ident| {
+        try low_level_map.put(ident, .u8_to_i32);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i64")) |ident| {
+        try low_level_map.put(ident, .u8_to_i64);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_i128")) |ident| {
+        try low_level_map.put(ident, .u8_to_i128);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u16")) |ident| {
+        try low_level_map.put(ident, .u8_to_u16);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u32")) |ident| {
+        try low_level_map.put(ident, .u8_to_u32);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u64")) |ident| {
+        try low_level_map.put(ident, .u8_to_u64);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_u128")) |ident| {
+        try low_level_map.put(ident, .u8_to_u128);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_f32")) |ident| {
+        try low_level_map.put(ident, .u8_to_f32);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_f64")) |ident| {
+        try low_level_map.put(ident, .u8_to_f64);
+    }
+    if (env.common.findIdent("Builtin.Num.U8.to_dec")) |ident| {
+        try low_level_map.put(ident, .u8_to_dec);
+    }
+
+    // I8 conversion operations
+    if (env.common.findIdent("Builtin.Num.I8.to_i16")) |ident| {
+        try low_level_map.put(ident, .i8_to_i16);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_i32")) |ident| {
+        try low_level_map.put(ident, .i8_to_i32);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_i64")) |ident| {
+        try low_level_map.put(ident, .i8_to_i64);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_i128")) |ident| {
+        try low_level_map.put(ident, .i8_to_i128);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u8_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u8_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u8_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u8_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u16_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u16_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u16_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u16_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u32_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u32_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u32_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u32_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u64_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u64_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u64_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u64_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u128_wrap")) |ident| {
+        try low_level_map.put(ident, .i8_to_u128_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_u128_try")) |ident| {
+        try low_level_map.put(ident, .i8_to_u128_try);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_f32")) |ident| {
+        try low_level_map.put(ident, .i8_to_f32);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_f64")) |ident| {
+        try low_level_map.put(ident, .i8_to_f64);
+    }
+    if (env.common.findIdent("Builtin.Num.I8.to_dec")) |ident| {
+        try low_level_map.put(ident, .i8_to_dec);
+    }
+
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     const all_defs_slice = env.store.sliceDefs(env.all_defs);
     var def_indices = std.ArrayList(CIR.Def.Idx).empty;
@@ -430,26 +524,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
                 }
-            }
-        }
-    }
-
-    // Expose to_str under aliases like "Builtin.Dec.to_str" for user code lookups.
-    // The canonical names are like "Builtin.Num.Dec.to_str" (since numeric types are nested under Num),
-    // but user code calling Dec.to_str will look for "Builtin.Dec.to_str".
-    for (numeric_types) |num_type| {
-        var canonical_buf: [256]u8 = undefined;
-        var alias_buf: [256]u8 = undefined;
-        const canonical_name = try std.fmt.bufPrint(&canonical_buf, "Builtin.Num.{s}.to_str", .{num_type});
-        const alias_name = try std.fmt.bufPrint(&alias_buf, "Builtin.{s}.to_str", .{num_type});
-
-        if (env.common.findIdent(canonical_name)) |canonical_ident| {
-            if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
-                // Insert the alias identifier
-                const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                // First add to exposed items, then set node index
-                try env.common.addExposedById(gpa, alias_ident);
-                try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
             }
         }
     }
@@ -561,16 +635,16 @@ pub fn main() !void {
     const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
     // Look up idents for each type
-    // Top-level types use simple names: "Bool", "Try", "List", etc.
-    // Numeric types nested under Num use fully-qualified names: "Builtin.Num.U8", etc.
-    // This allows method lookup to work correctly (getMethodIdent builds the full path)
-    const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
-    const try_ident = builtin_env.common.findIdent("Try") orelse unreachable;
-    const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
-    const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
-    const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
-    const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
-    const box_ident = builtin_env.common.findIdent("Box") orelse unreachable;
+    // All types use fully-qualified names for consistent member lookup
+    // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
+    // Nested types under Num: "Builtin.Num.U8", etc.
+    const bool_ident = builtin_env.common.findIdent("Builtin.Bool") orelse unreachable;
+    const try_ident = builtin_env.common.findIdent("Builtin.Try") orelse unreachable;
+    const dict_ident = builtin_env.common.findIdent("Builtin.Dict") orelse unreachable;
+    const set_ident = builtin_env.common.findIdent("Builtin.Set") orelse unreachable;
+    const str_ident = builtin_env.common.findIdent("Builtin.Str") orelse unreachable;
+    const list_ident = builtin_env.common.findIdent("Builtin.List") orelse unreachable;
+    const box_ident = builtin_env.common.findIdent("Builtin.Box") orelse unreachable;
     const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
     const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
     const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
