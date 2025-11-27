@@ -3279,6 +3279,202 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_count_utf8_bytes => {
+                // Str.count_utf8_bytes : Str -> U64
+                std.debug.assert(args.len == 1);
+
+                const string_arg = args[0];
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const byte_count = builtins.str.countUtf8Bytes(string.*);
+
+                const result_layout = layout.Layout.int(.u64);
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+                try out.setInt(@intCast(byte_count));
+                out.is_initialized = true;
+                return out;
+            },
+            .str_with_capacity => {
+                // Str.with_capacity : U64 -> Str
+                std.debug.assert(args.len == 1);
+
+                const capacity_arg = args[0];
+                const capacity_value = try self.extractNumericValue(capacity_arg);
+                const capacity: u64 = @intCast(capacity_value.int);
+
+                const result_str = builtins.str.withCapacityC(capacity, roc_ops);
+
+                const result_layout = layout.Layout.str();
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_reserve => {
+                // Str.reserve : Str, U64 -> Str
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const spare_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const spare_value = try self.extractNumericValue(spare_arg);
+                const spare: u64 = @intCast(spare_value.int);
+
+                const result_str = builtins.str.reserveC(string.*, spare, roc_ops);
+
+                const result_layout = string_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_release_excess_capacity => {
+                // Str.release_excess_capacity : Str -> Str
+                std.debug.assert(args.len == 1);
+
+                const string_arg = args[0];
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const result_str = builtins.str.strReleaseExcessCapacity(roc_ops, string.*);
+
+                const result_layout = string_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_to_utf8 => {
+                // Str.to_utf8 : Str -> List(U8)
+                std.debug.assert(args.len == 1);
+
+                const string_arg = args[0];
+                std.debug.assert(string_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
+
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_from_utf8_lossy => {
+                // Str.from_utf8_lossy : List(U8) -> Str
+                std.debug.assert(args.len == 1);
+
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const result_str = builtins.str.fromUtf8Lossy(roc_list.*, roc_ops);
+
+                const result_layout = layout.Layout.str();
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_split_on => {
+                // Str.split_on : Str, Str -> List(Str)
+                std.debug.assert(args.len == 2);
+
+                const string_arg = args[0];
+                const delimiter_arg = args[1];
+
+                std.debug.assert(string_arg.ptr != null);
+                std.debug.assert(delimiter_arg.ptr != null);
+
+                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const delimiter: *const RocStr = @ptrCast(@alignCast(delimiter_arg.ptr.?));
+
+                const result_list = builtins.str.strSplitOn(string.*, delimiter.*, roc_ops);
+
+                // str_split_on has a fixed return type of List(Str).
+                // Prefer the caller's return_rt_var when it matches that shape, but fall back
+                // to the known layout if type information is missing or incorrect.
+                const result_layout = blk: {
+                    const expected_idx = try self.runtime_layout_store.insertList(layout.Idx.str);
+                    const expected_layout = self.runtime_layout_store.getLayout(expected_idx);
+
+                    if (return_rt_var) |rt_var| {
+                        const candidate = self.getRuntimeLayout(rt_var) catch expected_layout;
+                        if (candidate.tag == .list) {
+                            const elem_layout = self.runtime_layout_store.getLayout(candidate.data.list);
+                            if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
+                                break :blk candidate;
+                            }
+                        }
+                    }
+
+                    break :blk expected_layout;
+                };
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .str_join_with => {
+                // Str.join_with : List(Str), Str -> Str
+                std.debug.assert(args.len == 2);
+
+                const list_arg = args[0];
+                const separator_arg = args[1];
+
+                std.debug.assert(list_arg.ptr != null);
+                std.debug.assert(separator_arg.ptr != null);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const separator: *const RocStr = @ptrCast(@alignCast(separator_arg.ptr.?));
+
+                const result_str = builtins.str.strJoinWithC(roc_list.*, separator.*, roc_ops);
+
+                const result_layout = layout.Layout.str();
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_str;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

@@ -15,6 +15,14 @@ Builtin :: [].{
 		with_prefix : Str, Str -> Str
 		drop_prefix : Str, Str -> Str
 		drop_suffix : Str, Str -> Str
+		count_utf8_bytes : Str -> U64
+		with_capacity : U64 -> Str
+		reserve : Str, U64 -> Str
+		release_excess_capacity : Str -> Str
+		to_utf8 : Str -> List(U8)
+		from_utf8_lossy : List(U8) -> Str
+		split_on : Str, Str -> List(Str)
+		join_with : List(Str), Str -> Str
 
 		is_eq : Str, Str -> Bool
 	}
