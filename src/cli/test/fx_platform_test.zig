@@ -119,6 +119,60 @@ test "fx platform effectful functions" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
 }
 
+test "fx platform with dotdot starting path" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run the app from a subdirectory that uses ../ at the START of its platform path
+    // This tests that relative paths starting with .. are handled correctly
+    // Bug: paths starting with ../ fail with TypeMismatch, while ./path/../ works
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/subdir/app.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify stdout contains expected messages
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 1 to stdout") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 3 to stdout") != null);
+
+    // Verify stderr contains expected messages
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Error from stderr!") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 2 to stderr") != null);
+
+    // Verify stderr messages are NOT in stdout
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Error from stderr!") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 2 to stderr") == null);
+
+    // Verify stdout messages are NOT in stderr
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Hello from stdout!") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 1 to stdout") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
+}
+
 test "fx platform stdin to stdout" {
     const allocator = testing.allocator;
 
@@ -541,4 +595,45 @@ test "fx platform opaque type with method" {
 
     // Verify the output contains the expected string
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "My favourite color is Red") != null);
+}
+
+test "fx platform string interpolation type mismatch" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run an app that tries to interpolate a U8 (non-Str) type in a string.
+    // This should fail with a type error because string interpolation only accepts Str.
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/num_method_call.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The program should run (exit 0) even with type errors - errors are just warnings
+    switch (run_result.term) {
+        .Exited => |code| {
+            try testing.expectEqual(@as(u8, 0), code);
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify the error output contains proper diagnostic info
+    // Should show TYPE MISMATCH error with the type information
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
+
+    // The program should still produce output (it runs despite errors)
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
 }

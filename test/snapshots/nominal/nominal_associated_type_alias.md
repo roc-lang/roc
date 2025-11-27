@@ -102,7 +102,7 @@ useMyBar = Foo.Bar.X
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_associated_type_alias.Foo.Bar")
+		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_associated_type_alias.Foo.Bar")))
 		(alias (type "MyBar")
 			(ty-header (name "MyBar"))))

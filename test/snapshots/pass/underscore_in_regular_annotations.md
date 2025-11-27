@@ -298,32 +298,29 @@ transform = |_, b| b
 				(ty-lookup (name "U32") (builtin)))))
 	(d-let
 		(p-assign (ident "handle_result"))
-		(e-closure
-			(captures
-				(capture (ident "msg")))
-			(e-lambda
-				(args
-					(p-assign (ident "result")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-string
-										(e-literal (string "success")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-lookup-local
-										(p-assign (ident "msg"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "result")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "result"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-string
+									(e-literal (string "success")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-lookup-local
+									(p-assign (ident "msg")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

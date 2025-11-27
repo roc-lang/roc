@@ -25,6 +25,9 @@ bytes: collections.SafeList(u8) = .{},
 hash_table: collections.SafeList(Idx) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
+/// Debug-only flag to catch invalid inserts into deserialized interners.
+/// Deserialized interners should never have inserts - if they do, it's a bug.
+supports_inserts: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) true else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -65,7 +68,13 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
+/// NOTE: Do NOT call deinit on deserialized interners - their memory is owned by the deserialization buffer.
 pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
+    if (std.debug.runtime_safety) {
+        if (!self.supports_inserts) {
+            @panic("deinit called on deserialized interner - memory is owned by deserialization buffer");
+        }
+    }
     self.bytes.deinit(gpa);
     self.hash_table.deinit(gpa);
 }
@@ -131,36 +140,60 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
-    if (self.entry_count * 5 >= self.hash_table.len() * 4) {
-        try self.resizeHashTable(gpa);
-    }
-
-    // Find the string or the slot where it should be inserted
+    // First check if string exists
     const result = self.findStringOrSlot(string);
 
     if (result.idx) |existing_idx| {
         // String already exists
         return existing_idx;
-    } else {
-        // String doesn't exist, add it to bytes
-        const new_offset: Idx = @enumFromInt(self.bytes.len());
-
-        _ = try self.bytes.appendSlice(gpa, string);
-        _ = try self.bytes.append(gpa, 0);
-
-        // Add to hash table
-        self.hash_table.items.items[@intCast(result.slot)] = new_offset;
-        self.entry_count += 1;
-
-        return new_offset;
     }
+
+    // Debug assertion: deserialized interners should never need new inserts.
+    // If this fires, it's a bug - all idents should already exist in the interner.
+    if (std.debug.runtime_safety) {
+        if (!self.supports_inserts) {
+            @panic("insert called on deserialized interner - this is a bug, ident should already exist");
+        }
+    }
+
+    // Check if resize needed.
+    if (self.entry_count * 5 >= self.hash_table.len() * 4) {
+        try self.resizeHashTable(gpa);
+        // After resize, need to find the slot again
+        const new_result = self.findStringOrSlot(string);
+        return self.insertAt(gpa, string, new_result.slot);
+    }
+
+    // No resize needed, insert at the found slot
+    return self.insertAt(gpa, string, result.slot);
+}
+
+/// Insert a string at a specific slot (internal helper).
+fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8, slot: u64) std.mem.Allocator.Error!Idx {
+    const new_offset: Idx = @enumFromInt(self.bytes.len());
+
+    _ = try self.bytes.appendSlice(gpa, string);
+    _ = try self.bytes.append(gpa, 0);
+
+    // Add to hash table
+    self.hash_table.items.items[@intCast(slot)] = new_offset;
+    self.entry_count += 1;
+
+    return new_offset;
 }
 
 /// Check if a string is already interned in this interner, used for generating unique names.
 pub fn contains(self: *const SmallStringInterner, string: []const u8) bool {
     const result = self.findStringOrSlot(string);
     return result.idx != null;
+}
+
+/// Look up a string in this interner and return its index if found.
+/// Unlike insert, this never modifies the interner (no resize, no insertion).
+/// Useful for deserialized interners that cannot be grown.
+pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
+    const result = self.findStringOrSlot(string);
+    return result.idx;
 }
 
 /// Get a reference to the text for an interned string.
@@ -209,6 +242,8 @@ pub const Serialized = extern struct {
     bytes: collections.SafeList(u8).Serialized,
     hash_table: collections.SafeList(Idx).Serialized,
     entry_count: u32,
+    /// Padding to maintain struct alignment
+    _padding: u32 = 0,
 
     /// Serialize a SmallStringInterner into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -223,6 +258,7 @@ pub const Serialized = extern struct {
         try self.hash_table.serialize(&interner.hash_table, allocator, writer);
         // Copy simple values directly
         self.entry_count = interner.entry_count;
+        self._padding = 0;
     }
 
     /// Deserialize this Serialized struct into a SmallStringInterner
@@ -234,6 +270,8 @@ pub const Serialized = extern struct {
             .bytes = self.bytes.deserialize(offset).*,
             .hash_table = self.hash_table.deserialize(offset).*,
             .entry_count = self.entry_count,
+            // Debug-only: mark as not supporting inserts - deserialized interners should never need new idents
+            .supports_inserts = if (std.debug.runtime_safety) false else {},
         };
 
         return interner;

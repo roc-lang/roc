@@ -144,7 +144,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 37;
+pub const MODULEENV_EXPR_NODE_COUNT = 38;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -292,6 +292,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         } },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
+            .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
         } },
         .statement_import => {
             const extra_start = node.data_2;
@@ -670,6 +671,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_anno_only => {
             return CIR.Expr{ .e_anno_only = .{} };
+        },
+        .expr_return => {
+            return CIR.Expr{ .e_return = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
         },
         .expr_hosted_lambda => {
             // Retrieve hosted lambda data from node and extra_data
@@ -1224,9 +1230,15 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 
     std.debug.assert(node.tag == .type_header);
 
+    // Unpack args from packed format (start in upper 16 bits, len in lower 16 bits)
+    const packed_args = node.data_3;
+    const args_start: u32 = packed_args >> 16;
+    const args_len: u32 = packed_args & 0xFFFF;
+
     return CIR.TypeHeader{
         .name = @bitCast(node.data_1),
-        .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
+        .relative_name = @bitCast(node.data_2),
+        .args = .{ .span = .{ .start = args_start, .len = args_len } },
     };
 }
 
@@ -1386,6 +1398,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_return => |s| {
             node.tag = .statement_return;
             node.data_1 = @intFromEnum(s.expr);
+            // Store lambda as data_2, using 0 for null and idx+1 for valid indices
+            node.data_2 = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0;
         },
         .s_import => |s| {
             node.tag = .statement_import;
@@ -1622,6 +1636,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
+        },
+        .e_return => |ret| {
+            node.tag = .expr_return;
+            node.data_1 = @intFromEnum(ret.expr);
         },
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;
@@ -2212,10 +2230,15 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
+    // Pack args.start and args.len into one u32 (16 bits each) to free up data_3 for relative_name
+    std.debug.assert(typeHeader.args.span.start <= std.math.maxInt(u16));
+    std.debug.assert(typeHeader.args.span.len <= std.math.maxInt(u16));
+    const packed_args: u32 = (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
+
     const node = Node{
         .data_1 = @bitCast(typeHeader.name),
-        .data_2 = typeHeader.args.span.start,
-        .data_3 = typeHeader.args.span.len,
+        .data_2 = @bitCast(typeHeader.relative_name),
+        .data_3 = packed_args,
         .tag = .type_header,
     };
 

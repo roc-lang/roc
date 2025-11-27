@@ -101,12 +101,12 @@ useBar = Something
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "nominal_associated_vs_module.Foo.Bar")))
+		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_associated_vs_module.Foo.Bar")
+		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_associated_vs_module.Foo.Bar"))))
 	(expressions
-		(expr (type "nominal_associated_vs_module.Foo.Bar"))))
+		(expr (type "Foo.Bar"))))
 ~~~

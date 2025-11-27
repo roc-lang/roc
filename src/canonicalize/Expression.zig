@@ -379,6 +379,20 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// Early return expression that exits the enclosing function with a value.
+    /// This is used when `return` appears as the final expression in a block.
+    /// Unlike a normal expression, evaluating this causes the function to return
+    /// immediately with the contained value.
+    ///
+    /// ```roc
+    /// if condition {
+    ///     return value  # Early return from enclosing function
+    /// }
+    /// ```
+    e_return: struct {
+        expr: Expr.Idx,
+    },
+
     /// A hosted function that will be provided by the platform at runtime.
     /// This represents a lambda/function whose implementation is provided by the host application
     /// via the RocOps.hosted_fns array.
@@ -414,6 +428,7 @@ pub const Expr = union(enum) {
     pub const LowLevel = enum {
         // String operations
         str_is_empty,
+        str_is_eq,
         str_concat,
         str_contains,
         str_trim,
@@ -455,7 +470,6 @@ pub const Expr = union(enum) {
 
         // Bool operations
         bool_is_eq,
-        bool_is_ne,
 
         // Numeric type checking operations
         num_is_zero, // All numeric types
@@ -464,7 +478,6 @@ pub const Expr = union(enum) {
 
         // Numeric comparison operations
         num_is_eq, // All integer types + Dec (NOT F32/F64 due to float imprecision)
-        num_is_ne, // Dec only (intentionally separate from is_eq for clarity)
         num_is_gt, // All numeric types
         num_is_gte, // All numeric types
         num_is_lt, // All numeric types
@@ -1212,6 +1225,18 @@ pub const Expr = union(enum) {
 
                 // Add body expression
                 try ir.store.getExpr(expect_expr.body).pushToSExprTree(ir, tree, expect_expr.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_return => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add inner expression
+                try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
 
                 try tree.endNode(begin, attrs);
             },

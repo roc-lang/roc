@@ -878,153 +878,144 @@ is_named_color = |str| {
 				(ty-lookup (name "Color") (local)))))
 	(d-let
 		(p-assign (ident "hex"))
-		(e-closure
-			(captures
-				(capture (ident "a"))
-				(capture (ident "b"))
-				(capture (ident "c"))
-				(capture (ident "d"))
-				(capture (ident "e"))
-				(capture (ident "f"))
-				(capture (ident "is_valid")))
-			(e-lambda
-				(args
-					(p-assign (ident "str")))
-				(e-block
-					(s-let
-						(p-assign (ident "bytes"))
-						(e-dot-access (field "to_utf8")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "str"))))
-							(args)))
-					(s-let
-						(p-assign (ident "is_char_in_hex_range"))
-						(e-lambda
-							(args
-								(p-assign (ident "b")))
+		(e-lambda
+			(args
+				(p-assign (ident "str")))
+			(e-block
+				(s-let
+					(p-assign (ident "bytes"))
+					(e-dot-access (field "to_utf8")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "str"))))
+						(args)))
+				(s-let
+					(p-assign (ident "is_char_in_hex_range"))
+					(e-lambda
+						(args
+							(p-assign (ident "b")))
+						(e-binop (op "or")
+							(e-binop (op "and")
+								(e-binop (op "ge")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-num (value "48")))
+								(e-binop (op "le")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-num (value "57"))))
 							(e-binop (op "or")
 								(e-binop (op "and")
 									(e-binop (op "ge")
 										(e-lookup-local
 											(p-assign (ident "b")))
-										(e-num (value "48")))
+										(e-num (value "97")))
 									(e-binop (op "le")
 										(e-lookup-local
 											(p-assign (ident "b")))
-										(e-num (value "57"))))
-								(e-binop (op "or")
-									(e-binop (op "and")
-										(e-binop (op "ge")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "97")))
-										(e-binop (op "le")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "102"))))
-									(e-binop (op "and")
-										(e-binop (op "ge")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "65")))
-										(e-binop (op "le")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "70"))))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "bytes"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-list
-												(patterns
-													(p-num (value "35"))
-													(p-assign (ident "a"))
-													(p-assign (ident "b"))
-													(p-assign (ident "c"))
-													(p-assign (ident "d"))
-													(p-assign (ident "e"))
-													(p-assign (ident "f"))))))
-									(value
-										(e-block
-											(s-let
-												(p-assign (ident "is_valid"))
+										(e-num (value "102"))))
+								(e-binop (op "and")
+									(e-binop (op "ge")
+										(e-lookup-local
+											(p-assign (ident "b")))
+										(e-num (value "65")))
+									(e-binop (op "le")
+										(e-lookup-local
+											(p-assign (ident "b")))
+										(e-num (value "70"))))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "bytes"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list
+											(patterns
+												(p-num (value "35"))
+												(p-assign (ident "a"))
+												(p-assign (ident "b"))
+												(p-assign (ident "c"))
+												(p-assign (ident "d"))
+												(p-assign (ident "e"))
+												(p-assign (ident "f"))))))
+								(value
+									(e-block
+										(s-let
+											(p-assign (ident "is_valid"))
+											(e-binop (op "and")
+												(e-dot-access (field "is_char_in_hex_range")
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "a"))))
+													(args))
 												(e-binop (op "and")
 													(e-dot-access (field "is_char_in_hex_range")
 														(receiver
 															(e-lookup-local
-																(p-assign (ident "a"))))
+																(p-assign (ident "b"))))
 														(args))
 													(e-binop (op "and")
 														(e-dot-access (field "is_char_in_hex_range")
 															(receiver
 																(e-lookup-local
-																	(p-assign (ident "b"))))
+																	(p-assign (ident "c"))))
 															(args))
 														(e-binop (op "and")
 															(e-dot-access (field "is_char_in_hex_range")
 																(receiver
 																	(e-lookup-local
-																		(p-assign (ident "c"))))
+																		(p-assign (ident "d"))))
 																(args))
 															(e-binop (op "and")
 																(e-dot-access (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local
-																			(p-assign (ident "d"))))
+																			(p-assign (ident "e"))))
 																	(args))
-																(e-binop (op "and")
-																	(e-dot-access (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local
-																				(p-assign (ident "e"))))
-																		(args))
-																	(e-dot-access (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local
-																				(p-assign (ident "f"))))
-																		(args))))))))
-											(e-if
-												(if-branches
-													(if-branch
-														(e-lookup-local
-															(p-assign (ident "is_valid")))
-														(e-tag (name "Ok")
-															(args
-																(e-nominal (nominal "Color")
-																	(e-tag (name "Hex")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "str"))))))))))
-												(if-else
-													(e-tag (name "Err")
-														(args
-															(e-tag (name "InvalidHex")
-																(args
-																	(e-string
-																		(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																(e-dot-access (field "is_char_in_hex_range")
+																	(receiver
 																		(e-lookup-local
-																			(p-assign (ident "str")))
-																		(e-literal (string ""))))))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-underscore)))
-									(value
-										(e-tag (name "Err")
-											(args
-												(e-tag (name "InvalidHex")
+																			(p-assign (ident "f"))))
+																	(args))))))))
+										(e-if
+											(if-branches
+												(if-branch
+													(e-lookup-local
+														(p-assign (ident "is_valid")))
+													(e-tag (name "Ok")
+														(args
+															(e-nominal (nominal "Color")
+																(e-tag (name "Hex")
+																	(args
+																		(e-lookup-local
+																			(p-assign (ident "str"))))))))))
+											(if-else
+												(e-tag (name "Err")
 													(args
-														(e-string
-															(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
-															(e-lookup-local
-																(p-assign (ident "str")))
-															(e-literal (string "")))))))))))))))
+														(e-tag (name "InvalidHex")
+															(args
+																(e-string
+																	(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																	(e-lookup-local
+																		(p-assign (ident "str")))
+																	(e-literal (string ""))))))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-underscore)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-tag (name "InvalidHex")
+												(args
+													(e-string
+														(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
+														(e-lookup-local
+															(p-assign (ident "str")))
+														(e-literal (string ""))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

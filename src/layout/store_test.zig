@@ -74,7 +74,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
     const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -109,7 +109,7 @@ test "addTypeVar - zero-sized types (ZST)" {
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -149,7 +149,7 @@ test "addTypeVar - record with only zero-sized fields" {
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
     const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -207,7 +207,7 @@ test "deeply nested containers with inner ZST" {
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -259,7 +259,7 @@ test "nested ZST detection - List of record with ZST field" {
     _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -288,7 +288,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
     const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -322,7 +322,7 @@ test "nested ZST detection - deeply nested" {
     _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.builtin_module_ident = builtin_module_idx;
+    lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
     lt.type_scope = TypeScope.init(lt.gpa);

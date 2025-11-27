@@ -69,7 +69,7 @@ const TestsSummaryStep = struct {
         if (effective_passed == 0) {
             std.debug.print("No tests ran (all tests filtered out).\n", .{});
         } else {
-            std.debug.print("✅ All {d} tests passed.\n", .{effective_passed});
+            std.debug.print("All {d} tests passed.\n", .{effective_passed});
         }
     }
 };
@@ -147,7 +147,7 @@ const CheckTypeCheckerPatternsStep = struct {
                 \\    if (std.mem.eql(u8, ident_name, "is_eq")) {{ ... }}
                 \\
                 \\  Example - RIGHT:
-                \\    if (ident_idx == module_env.is_eq_ident) {{ ... }}
+                \\    if (ident_idx == module_env.idents.is_eq) {{ ... }}
                 \\
                 \\VIOLATIONS FOUND:
                 \\
