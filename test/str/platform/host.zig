@@ -156,5 +156,6 @@ fn platform_main() !void {
         try stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
         try stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
+        return error.TestFailed;
     }
 }

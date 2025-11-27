@@ -4,9 +4,10 @@
 //! can be properly invoked from Roc applications.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
-const roc_binary_path = "./zig-out/bin/roc";
+const roc_binary_path = if (builtin.os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
 /// Ensures the roc binary is up-to-date by always rebuilding it.
 /// This is needed because these tests spawn the roc CLI as a child process,

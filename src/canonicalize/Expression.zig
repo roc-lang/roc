@@ -443,6 +443,14 @@ pub const Expr = union(enum) {
         str_with_prefix,
         str_drop_prefix,
         str_drop_suffix,
+        str_count_utf8_bytes,
+        str_with_capacity,
+        str_reserve,
+        str_release_excess_capacity,
+        str_to_utf8,
+        str_from_utf8_lossy,
+        str_split_on,
+        str_join_with,
 
         // Numeric to_str operations
         u8_to_str,
