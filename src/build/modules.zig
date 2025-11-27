@@ -321,7 +321,7 @@ pub const ModuleType = enum {
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
-            .bundle => &.{ .base, .collections, .base58 },
+            .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
             .lsp => &.{},
@@ -389,10 +389,10 @@ pub const RocModules = struct {
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
+        // Note: unbundle uses Zig's stdlib zstd for WASM compatibility
         if (zstd) |z| {
             self.bundle.linkLibrary(z.artifact("zstd"));
         }
-        // Note: unbundle module uses Zig's std zstandard, so doesn't need C library
 
         // Setup module dependencies using our generic helper
         self.setupModuleDependencies();
@@ -559,8 +559,7 @@ pub const RocModules = struct {
                     .target = target,
                     .optimize = optimize,
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
-                    // Bundle module needs libc for zstd
-                    // Unbundle module doesn't need libc (uses Zig's std zstandard)
+                    // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
                     .link_libc = (module_type == .ipc or module_type == .bundle),
                 }),
                 .filters = filter_injection.filters,
@@ -576,7 +575,7 @@ pub const RocModules = struct {
             // Add only the necessary dependencies for each module test
             self.addModuleDependencies(test_step, module_type);
 
-            // Link zstd for bundle module
+            // Link zstd for bundle module (unbundle uses stdlib zstd)
             if (module_type == .bundle) {
                 if (zstd) |z| {
                     test_step.linkLibrary(z.artifact("zstd"));
