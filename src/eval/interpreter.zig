@@ -461,7 +461,7 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
-            const result_value = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
+            const result_value = self.evalStackSafe(header.body_idx, roc_ops, null) catch |err| {
                 if (err == error.EarlyReturn) {
                     const return_val = self.early_return_value orelse return error.Crash;
                     self.early_return_value = null;
@@ -515,6 +515,8 @@ pub const Interpreter = struct {
         return true;
     }
 
+    // DEPRECATED: Dead code - all evaluation now goes through evalStackSafe().
+    // This function and helpers dispatchBinaryOpMethod/dispatchUnaryOpMethod should be removed.
     fn evalExprMinimal(
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
@@ -6264,7 +6266,7 @@ pub const Interpreter = struct {
         const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
 
         // Evaluate the method's expression
-        const method_value = try self.evalExprMinimal(target_def.expr, roc_ops, rt_def_var);
+        const method_value = try self.evalStackSafe(target_def.expr, roc_ops, rt_def_var);
 
         return method_value;
     }
@@ -7093,6 +7095,27 @@ pub const Interpreter = struct {
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
 
+        /// For loop - iterate over list elements after list is evaluated.
+        for_loop_iterate: ForLoopIterate,
+
+        /// For loop - process body result and continue to next iteration.
+        for_loop_body_done: ForLoopBodyDone,
+
+        /// While loop - check condition and decide whether to continue.
+        while_loop_check: WhileLoopCheck,
+
+        /// While loop - process body result and continue to next iteration.
+        while_loop_body_done: WhileLoopBodyDone,
+
+        /// Expect statement - check condition after evaluation.
+        expect_check_stmt: ExpectCheckStmt,
+
+        /// Reassign statement - update binding after expression evaluation.
+        reassign_value: ReassignValue,
+
+        /// Dbg statement - print value after evaluation.
+        dbg_print_stmt: DbgPrintStmt,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -7358,6 +7381,124 @@ pub const Interpreter = struct {
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
         };
+
+        /// For loop - iterate over list elements
+        pub const ForLoopIterate = struct {
+            /// The list value being iterated (stored to access elements)
+            list_value: StackValue,
+            /// Current iteration index
+            current_index: usize,
+            /// Total number of elements in the list
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
+            /// Pattern to bind each element to
+            pattern: can.CIR.Pattern.Idx,
+            /// Pattern runtime type variable
+            patt_rt_var: types.Var,
+            /// Body expression to evaluate for each element
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the for loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// For loop - cleanup after body evaluation
+        pub const ForLoopBodyDone = struct {
+            /// The list value being iterated
+            list_value: StackValue,
+            /// Current iteration index (just completed)
+            current_index: usize,
+            /// Total number of elements in the list
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
+            /// Pattern to bind each element to
+            pattern: can.CIR.Pattern.Idx,
+            /// Pattern runtime type variable
+            patt_rt_var: types.Var,
+            /// Body expression to evaluate for each element
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the for loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+            /// Bindings length at iteration start (for per-iteration cleanup)
+            loop_bindings_start: usize,
+        };
+
+        /// While loop - check condition
+        pub const WhileLoopCheck = struct {
+            /// Condition expression
+            cond: can.CIR.Expr.Idx,
+            /// Body expression
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the while loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// While loop - cleanup after body evaluation
+        pub const WhileLoopBodyDone = struct {
+            /// Condition expression
+            cond: can.CIR.Expr.Idx,
+            /// Body expression
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the while loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Expect statement - check condition
+        pub const ExpectCheckStmt = struct {
+            /// The expression being checked (for error reporting)
+            body_expr: can.CIR.Expr.Idx,
+            /// Remaining statements after expect
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Reassign statement - update binding
+        pub const ReassignValue = struct {
+            /// The pattern to reassign
+            pattern_idx: can.CIR.Pattern.Idx,
+            /// Remaining statements after reassign
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Dbg statement - print value
+        pub const DbgPrintStmt = struct {
+            /// Runtime type for rendering
+            rt_var: types.Var,
+            /// Remaining statements after dbg
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
     };
 
     /// Work stack for the stack-safe interpreter.
@@ -7433,7 +7574,7 @@ pub const Interpreter = struct {
         defer work_stack.deinit();
 
         // On error, clean up any pending allocations in continuations
-        errdefer self.cleanupPendingWorkStack(&work_stack);
+        errdefer self.cleanupPendingWorkStack(&work_stack, roc_ops);
 
         var value_stack = try ValueStack.init(self.allocator);
         defer value_stack.deinit();
@@ -7468,7 +7609,7 @@ pub const Interpreter = struct {
 
     /// Clean up any pending allocations in the work stack when an error occurs.
     /// This prevents memory leaks when evaluation fails partway through.
-    fn cleanupPendingWorkStack(self: *Interpreter, work_stack: *WorkStack) void {
+    fn cleanupPendingWorkStack(self: *Interpreter, work_stack: *WorkStack, roc_ops: *RocOps) void {
         while (work_stack.pop()) |work_item| {
             switch (work_item) {
                 .apply_continuation => |cont| {
@@ -7478,6 +7619,14 @@ pub const Interpreter = struct {
                         },
                         .call_cleanup => |cc| {
                             if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        },
+                        .for_loop_iterate => |fl| {
+                            // Decref the list value
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .for_loop_body_done => |fl| {
+                            // Decref the list value
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
                         else => {},
                     }
@@ -7938,6 +8087,11 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
 
+            .e_ellipsis => {
+                self.triggerCrash("This expression uses `...` as a placeholder. Implementation is required.", false, roc_ops);
+                return error.Crash;
+            },
+
             .e_return => |ret| {
                 // Schedule the early return continuation after evaluating the inner expression
                 const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
@@ -8304,13 +8458,9 @@ pub const Interpreter = struct {
                 } });
             },
 
-            else => {
-                // Fall back to recursive evaluation for not-yet-implemented expression types.
-                // This allows the stack-safe interpreter to work while we incrementally
-                // add support for more expression types.
-                const value = try self.evalExprMinimal(expr_idx, roc_ops, expected_rt_var);
-                try value_stack.push(value);
-            },
+            // All expression types are now handled by the stack-safe interpreter.
+            // If we reach here, there's a new expression type that hasn't been added.
+            // else => unreachable,
         }
     }
 
@@ -8933,13 +9083,12 @@ pub const Interpreter = struct {
         }
 
         // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
-        // NOTE: This still uses recursive evaluation - will be fully converted in a later PR
         const all_defs = self.env.store.sliceDefs(self.env.all_defs);
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == lookup.pattern_idx) {
                 // Evaluate the definition on demand and cache the result in bindings
-                const result = try self.evalExprMinimal(def.expr, roc_ops, null);
+                const result = try self.evalStackSafe(def.expr, roc_ops, null);
                 try self.bindings.append(.{
                     .pattern_idx = def.pattern,
                     .value = result,
@@ -8956,7 +9105,6 @@ pub const Interpreter = struct {
 
     /// Evaluate an external variable lookup (e_lookup_external)
     /// Handles cross-module references by switching to the imported module's context.
-    /// NOTE: This still uses recursive evaluation - will be fully converted in a later PR
     fn evalLookupExternal(
         self: *Interpreter,
         lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_external),
@@ -8982,7 +9130,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the definition's expression in the other module's context
-        const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
+        const result = try self.evalStackSafe(target_def.expr, roc_ops, expected_rt_var);
 
         return result;
     }
@@ -9161,248 +9309,126 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .s_expect => |expect_stmt| {
-                // Fall back to recursive for now
+                // Stack-safe: evaluate condition, then check
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
-                const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
-                const is_true = boolValueEquals(true, cond_val);
-                if (!is_true) {
-                    self.handleExpectFailure(expect_stmt.body, roc_ops);
-                    return error.Crash;
-                }
-                // Continue with remaining statements
-                if (remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
-                }
+
+                // Push expect_check_stmt continuation
+                try work_stack.push(.{ .apply_continuation = .{ .expect_check_stmt = .{
+                    .body_expr = expect_stmt.body,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate condition
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = expect_stmt.body,
+                    .expected_rt_var = bool_rt_var,
+                } });
             },
             .s_reassign => |r| {
-                // Schedule: evaluate expression, then reassign
-                // For now use recursive fallback for the expression
-                const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
-                // Search through all bindings and reassign
-                var j: usize = self.bindings.items.len;
-                while (j > 0) {
-                    j -= 1;
-                    if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
-                        self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
-                        self.bindings.items[j].value = new_val;
-                        break;
-                    }
-                }
-                // Continue with remaining statements
-                if (remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
-                }
+                // Stack-safe: evaluate expression, then reassign
+
+                // Push reassign_value continuation
+                try work_stack.push(.{ .apply_continuation = .{ .reassign_value = .{
+                    .pattern_idx = r.pattern_idx,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the new value
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = r.expr,
+                    .expected_rt_var = null,
+                } });
             },
             .s_dbg => |dbg_stmt| {
-                // Fall back to recursive for now
+                // Stack-safe: evaluate expression, then print
                 const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-                const value = try self.evalExprMinimal(dbg_stmt.expr, roc_ops, inner_rt_var);
-                defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, inner_rt_var);
-                defer self.allocator.free(rendered);
-                roc_ops.dbg(rendered);
-                // Continue with remaining statements
-                if (remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
-                }
+
+                // Push dbg_print_stmt continuation
+                try work_stack.push(.{ .apply_continuation = .{ .dbg_print_stmt = .{
+                    .rt_var = inner_rt_var,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dbg_stmt.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
             },
             .s_return => |ret| {
-                // Early return: evaluate expression, store value, signal return
+                // Early return: evaluate expression, then use early_return continuation
                 const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                const return_value = try self.evalExprMinimal(ret.expr, roc_ops, expr_rt_var);
-                // Store the return value for the caller to consume
-                self.early_return_value = return_value;
-                return error.EarlyReturn;
+
+                // Push early_return continuation
+                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{} } });
+
+                // Evaluate the return expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ret.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
             },
             .s_for => |for_stmt| {
-                // Fall back to recursive evaluation for for loops (complex control flow)
-                // Evaluate the list expression
+                // Stack-safe for loop: first evaluate the list, then set up iteration
                 const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                const list_value = try self.evalExprMinimal(for_stmt.expr, roc_ops, expr_rt_var);
-                defer list_value.decref(&self.runtime_layout_store, roc_ops);
-
-                // Get the list layout
-                if (list_value.layout.tag != .list) {
-                    return error.TypeMismatch;
-                }
-                const elem_layout_idx = list_value.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
-
-                // Get the RocList header
-                const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
-                const list_len = list_header.len();
 
                 // Get the element type for binding
                 const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
                 const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
 
-                // Iterate over each element
-                var i: usize = 0;
-                while (i < list_len) : (i += 1) {
-                    // Get pointer to element
-                    const elem_ptr = if (list_header.bytes) |buffer|
-                        buffer + i * elem_size
-                    else
-                        return error.TypeMismatch;
+                // Push for_loop_iterate continuation (will be executed after list is evaluated)
+                // We'll fill in list_value, list_len, etc. in the continuation handler
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .for_loop_iterate = .{
+                            .list_value = undefined, // Will be set when list is evaluated
+                            .current_index = 0,
+                            .list_len = 0, // Will be set when list is evaluated
+                            .elem_size = 0, // Will be set when list is evaluated
+                            .elem_layout = undefined, // Will be set when list is evaluated
+                            .pattern = for_stmt.patt,
+                            .patt_rt_var = patt_rt_var,
+                            .body = for_stmt.body,
+                            .remaining_stmts = remaining_stmts,
+                            .final_expr = final_expr,
+                            .bindings_start = bindings_start,
+                        },
+                    },
+                });
 
-                    // Create a StackValue from the element
-                    var elem_value = StackValue{
-                        .ptr = elem_ptr,
-                        .layout = elem_layout,
-                        .is_initialized = true,
-                    };
-
-                    // Increment refcount since we're creating a new reference
-                    elem_value.incref();
-
-                    // Bind the pattern to the element value
-                    var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                    defer {
-                        self.trimBindingList(&temp_binds, 0, roc_ops);
-                        temp_binds.deinit();
-                    }
-
-                    if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds, @enumFromInt(0))) {
-                        elem_value.decref(&self.runtime_layout_store, roc_ops);
-                        return error.TypeMismatch;
-                    }
-
-                    // Add bindings to the environment
-                    const loop_bindings_start = self.bindings.items.len;
-                    for (temp_binds.items) |binding| {
-                        try self.bindings.append(binding);
-                    }
-
-                    // Evaluate the body using recursive interpreter
-                    const body_result = self.evalExprMinimal(for_stmt.body, roc_ops, null) catch |err| {
-                        // Clean up before propagating error
-                        self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
-                        elem_value.decref(&self.runtime_layout_store, roc_ops);
-
-                        // Handle early return specially - drain work stack to call_cleanup
-                        if (err == error.EarlyReturn) {
-                            // Early return value is already set in self.early_return_value
-                            // Drain work stack until we find call_cleanup (function boundary)
-                            while (work_stack.pop()) |pending_item| {
-                                switch (pending_item) {
-                                    .apply_continuation => |pending_cont| {
-                                        switch (pending_cont) {
-                                            .call_cleanup => {
-                                                // Found function boundary - put it back and return
-                                                try work_stack.push(pending_item);
-                                                return;
-                                            },
-                                            .call_invoke_closure => |ci| {
-                                                // Free arg_rt_vars if we're skipping a pending call invocation
-                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                                            },
-                                            else => {
-                                                // Skip other continuations in the function body
-                                            },
-                                        }
-                                    },
-                                    .eval_expr => {
-                                        // Skip pending expression evaluations
-                                    },
-                                }
-                            }
-                            // No call_cleanup found - this shouldn't happen in normal code
-                            return error.Crash;
-                        }
-                        return err;
-                    };
-                    body_result.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Clean up bindings for this iteration
-                    self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
-
-                    // Decrement the element reference (it was incremented above)
-                    elem_value.decref(&self.runtime_layout_store, roc_ops);
-                }
-
-                // Continue with remaining statements
-                if (remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
-                }
+                // Evaluate the list expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = for_stmt.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
             },
             .s_while => |while_stmt| {
-                // Fall back to recursive evaluation for while loops
-                while (true) {
-                    const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
-                    const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
-                    const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
+                // Stack-safe while loop: first evaluate condition, then decide
+                // Push while_loop_check continuation
+                try work_stack.push(.{ .apply_continuation = .{ .while_loop_check = .{
+                    .cond = while_stmt.cond,
+                    .body = while_stmt.body,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
 
-                    const cond_is_true = boolValueEquals(true, cond_value);
-
-                    if (!cond_is_true) {
-                        break;
-                    }
-
-                    const body_result = self.evalExprMinimal(while_stmt.body, roc_ops, null) catch |err| {
-                        // Handle early return specially - drain work stack to call_cleanup
-                        if (err == error.EarlyReturn) {
-                            while (work_stack.pop()) |pending_item| {
-                                switch (pending_item) {
-                                    .apply_continuation => |pending_cont| {
-                                        switch (pending_cont) {
-                                            .call_cleanup => {
-                                                try work_stack.push(pending_item);
-                                                return;
-                                            },
-                                            .call_invoke_closure => |ci| {
-                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                                            },
-                                            else => {},
-                                        }
-                                    },
-                                    .eval_expr => {},
-                                }
-                            }
-                            return error.Crash;
-                        }
-                        return err;
-                    };
-                    body_result.decref(&self.runtime_layout_store, roc_ops);
-                }
-
-                // Continue with remaining statements
-                if (remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, roc_ops);
-                }
+                // Evaluate the condition
+                const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
+                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = while_stmt.cond,
+                    .expected_rt_var = cond_rt_var,
+                } });
             },
             else => {
                 // Other statement types
@@ -9885,6 +9911,15 @@ pub const Interpreter = struct {
                                 .call_invoke_closure => |ci| {
                                     // Free arg_rt_vars if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                },
+                                .for_loop_iterate => |fl| {
+                                    // Decref the list value when skipping a for loop
+                                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .for_loop_body_done => |fl| {
+                                    // Decref the list value and clean up bindings
+                                    self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
+                                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
                                 else => {
                                     // Skip this continuation - it's part of the function body being early-returned from
@@ -11053,6 +11088,285 @@ pub const Interpreter = struct {
                     .expr_idx = closure_header.body_idx,
                     .expected_rt_var = null,
                 } });
+                return true;
+            },
+            .for_loop_iterate => |fl_in| {
+                // For loop iteration: list has been evaluated, start iterating
+                const list_value = value_stack.pop() orelse return error.Crash;
+
+                // Get the list layout
+                if (list_value.layout.tag != .list) {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+                const elem_layout_idx = list_value.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                // Get the RocList header
+                const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                const list_len = list_header.len();
+
+                // Create the proper for_loop_iterate with list info filled in
+                var fl = fl_in;
+                fl.list_value = list_value;
+                fl.list_len = list_len;
+                fl.elem_size = elem_size;
+                fl.elem_layout = elem_layout;
+
+                // If list is empty, skip to remaining statements
+                if (list_len == 0) {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    if (fl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = fl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, roc_ops);
+                    }
+                    return true;
+                }
+
+                // Process first element
+                const elem_ptr = if (list_header.bytes) |buffer|
+                    buffer
+                else {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                };
+
+                var elem_value = StackValue{
+                    .ptr = elem_ptr,
+                    .layout = elem_layout,
+                    .is_initialized = true,
+                };
+                elem_value.incref();
+
+                // Bind the pattern
+                const loop_bindings_start = self.bindings.items.len;
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                // Push body_done continuation
+                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                    .list_value = fl.list_value,
+                    .current_index = 0,
+                    .list_len = fl.list_len,
+                    .elem_size = fl.elem_size,
+                    .elem_layout = fl.elem_layout,
+                    .pattern = fl.pattern,
+                    .patt_rt_var = fl.patt_rt_var,
+                    .body = fl.body,
+                    .remaining_stmts = fl.remaining_stmts,
+                    .final_expr = fl.final_expr,
+                    .bindings_start = fl.bindings_start,
+                    .loop_bindings_start = loop_bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = fl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .for_loop_body_done => |fl| {
+                // For loop body completed, clean up and continue to next iteration
+                const body_result = value_stack.pop() orelse return error.Crash;
+                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Clean up bindings for this iteration
+                self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
+
+                // Move to next element
+                const next_index = fl.current_index + 1;
+                if (next_index >= fl.list_len) {
+                    // Loop complete, decref list and continue with remaining statements
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    if (fl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = fl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, roc_ops);
+                    }
+                    return true;
+                }
+
+                // Get next element
+                const list_header: *const RocList = @ptrCast(@alignCast(fl.list_value.ptr.?));
+                const elem_ptr = if (list_header.bytes) |buffer|
+                    buffer + next_index * fl.elem_size
+                else {
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                };
+
+                var elem_value = StackValue{
+                    .ptr = elem_ptr,
+                    .layout = fl.elem_layout,
+                    .is_initialized = true,
+                };
+                elem_value.incref();
+
+                // Bind the pattern
+                const new_loop_bindings_start = self.bindings.items.len;
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                // Push body_done continuation for next iteration
+                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                    .list_value = fl.list_value,
+                    .current_index = next_index,
+                    .list_len = fl.list_len,
+                    .elem_size = fl.elem_size,
+                    .elem_layout = fl.elem_layout,
+                    .pattern = fl.pattern,
+                    .patt_rt_var = fl.patt_rt_var,
+                    .body = fl.body,
+                    .remaining_stmts = fl.remaining_stmts,
+                    .final_expr = fl.final_expr,
+                    .bindings_start = fl.bindings_start,
+                    .loop_bindings_start = new_loop_bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = fl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .while_loop_check => |wl| {
+                // While loop: condition has been evaluated
+                const cond_value = value_stack.pop() orelse return error.Crash;
+                const cond_is_true = boolValueEquals(true, cond_value);
+
+                if (!cond_is_true) {
+                    // Loop complete, continue with remaining statements
+                    if (wl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = wl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(wl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, wl.remaining_stmts[1..], wl.final_expr, wl.bindings_start, roc_ops);
+                    }
+                    return true;
+                }
+
+                // Push body_done continuation
+                try work_stack.push(.{ .apply_continuation = .{ .while_loop_body_done = .{
+                    .cond = wl.cond,
+                    .body = wl.body,
+                    .remaining_stmts = wl.remaining_stmts,
+                    .final_expr = wl.final_expr,
+                    .bindings_start = wl.bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = wl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .while_loop_body_done => |wl| {
+                // While loop body completed, check condition again
+                const body_result = value_stack.pop() orelse return error.Crash;
+                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Push check continuation for next iteration
+                try work_stack.push(.{ .apply_continuation = .{ .while_loop_check = .{
+                    .cond = wl.cond,
+                    .body = wl.body,
+                    .remaining_stmts = wl.remaining_stmts,
+                    .final_expr = wl.final_expr,
+                    .bindings_start = wl.bindings_start,
+                } } });
+
+                // Evaluate condition
+                const cond_ct_var = can.ModuleEnv.varFrom(wl.cond);
+                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = wl.cond,
+                    .expected_rt_var = cond_rt_var,
+                } });
+                return true;
+            },
+            .expect_check_stmt => |ec| {
+                // Expect statement: check condition result
+                const cond_val = value_stack.pop() orelse return error.Crash;
+                const is_true = boolValueEquals(true, cond_val);
+                if (!is_true) {
+                    self.handleExpectFailure(ec.body_expr, roc_ops);
+                    return error.Crash;
+                }
+                // Continue with remaining statements
+                if (ec.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ec.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(ec.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, ec.remaining_stmts[1..], ec.final_expr, ec.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .reassign_value => |rv| {
+                // Reassign statement: update binding
+                const new_val = value_stack.pop() orelse return error.Crash;
+                // Search through all bindings and reassign
+                var j: usize = self.bindings.items.len;
+                while (j > 0) {
+                    j -= 1;
+                    if (self.bindings.items[j].pattern_idx == rv.pattern_idx) {
+                        self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
+                        self.bindings.items[j].value = new_val;
+                        break;
+                    }
+                }
+                // Continue with remaining statements
+                if (rv.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = rv.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(rv.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, rv.remaining_stmts[1..], rv.final_expr, rv.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .dbg_print_stmt => |dp| {
+                // Dbg statement: print value
+                const value = value_stack.pop() orelse return error.Crash;
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, dp.rt_var);
+                defer self.allocator.free(rendered);
+                roc_ops.dbg(rendered);
+                // Continue with remaining statements
+                if (dp.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = dp.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, roc_ops);
+                }
                 return true;
             },
         }

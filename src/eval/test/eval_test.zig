@@ -897,3 +897,48 @@ test "nested tuple equality" {
     try runExpectBool("(1, (2, 3)) == (1, (2, 3))", true, .no_trace);
     try runExpectBool("(1, (2, 3)) == (1, (2, 9))", false, .no_trace);
 }
+
+// Stack safety test: deeply nested expressions should not stack overflow
+// The stack-safe interpreter uses a work stack instead of recursive calls
+// Note: These tests use modest nesting depths to avoid OOM in the type checker
+// and parser - the interpreter itself can handle much deeper nesting
+
+test "stack safety - nested if expressions" {
+    // Test nested if expressions with moderate depth
+    // This exercises the stack-safe if_branch continuation
+    try runExpectInt("if True if True if True if True if True 42 else 0 else 0 else 0 else 0 else 0", 42, .no_trace);
+    try runExpectInt("if False 0 else if False 0 else if False 0 else if False 0 else 42", 42, .no_trace);
+}
+
+test "stack safety - nested function calls" {
+    // Test nested function calls - exercises call_collect_args, call_invoke_closure, call_cleanup continuations
+    // Using immediately invoked lambdas (similar to passing tests at line 651)
+    try runExpectInt("(|x| x)(42)", 42, .no_trace);
+    try runExpectInt("(|x| (|y| y)(x))(42)", 42, .no_trace);
+    try runExpectInt("(|x| (|y| (|z| z)(y))(x))(42)", 42, .no_trace);
+}
+
+test "stack safety - nested binary operations" {
+    // Test nested binary operations - exercises binop_eval_rhs, binop_apply continuations
+    try runExpectInt("1 + (2 + (3 + (4 + (5 + 0))))", 15, .no_trace);
+    try runExpectInt("(((1 + 2) + 3) + 4) + 5", 15, .no_trace);
+}
+
+test "stack safety - nested records" {
+    // Test nested records - exercises record_collect continuation
+    try runExpectInt("{ a: { b: { c: 42 } } }.a.b.c", 42, .no_trace);
+}
+
+test "stack safety - for loop iteration" {
+    // Test for loop - exercises for_loop_iterate, for_loop_body_done
+    // Note: uses block syntax and var declaration (matching interpreter_style_test.zig)
+    try runExpectInt(
+        \\{
+        \\    var total = 0
+        \\    for n in [1, 2, 3] {
+        \\        total = total + n
+        \\    }
+        \\    total
+        \\}
+    , 6, .no_trace);
+}
