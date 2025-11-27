@@ -76,14 +76,12 @@ const ConstraintWithDispatcher = struct {
     constraint: types_mod.StaticDispatchConstraint,
 };
 
-/// Initialize a TypeWriter with immutable types and idents references.
-pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
-    // Build import mapping using shared module
-    // Note: We need mutable access to insert display names into the ident store
-    const mutable_idents = @constCast(idents);
-    var import_mapping = try import_mapping_mod.createImportMapping(gpa, mutable_idents);
-    errdefer import_mapping.deinit();
-
+pub fn initFromParts(
+    gpa: std.mem.Allocator,
+    types_store: *const TypesStore,
+    idents: *const Ident.Store,
+    import_mapping: ?import_mapping_mod.ImportMapping,
+) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
         .idents = idents,
@@ -96,7 +94,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
-        .import_mapping = import_mapping,
+        .import_mapping = import_mapping orelse import_mapping_mod.ImportMapping.init(gpa),
     };
 }
 
@@ -146,7 +144,15 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
 
     if (self.static_dispatch_constraints.items.len > 0) {
         _ = try self.buf.writer().write(" where [");
-        for (self.static_dispatch_constraints.items, 0..) |item, i| {
+        // Use a while loop with index instead of for loop over slice, because
+        // writeVar may collect additional constraints into this local display list
+        // while printing existing ones. This is NOT unification - we're just reading
+        // existing constraint data from nested types and gathering them for display.
+        // (e.g., `!=` desugars to `is_eq().not()` - when printing the `is_eq` constraint's
+        // return type `f`, we find that `f` has a `not` constraint which we also need to display)
+        var i: usize = 0;
+        while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
+            const item = self.static_dispatch_constraints.items[i];
             if (i > 0) {
                 _ = try self.buf.writer().write(", ");
             }

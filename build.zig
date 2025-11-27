@@ -69,7 +69,210 @@ const TestsSummaryStep = struct {
         if (effective_passed == 0) {
             std.debug.print("No tests ran (all tests filtered out).\n", .{});
         } else {
-            std.debug.print("✅ All {d} tests passed.\n", .{effective_passed});
+            std.debug.print("All {d} tests passed.\n", .{effective_passed});
+        }
+    }
+};
+
+/// Build step that checks for forbidden patterns in the type checker code.
+///
+/// During type checking, we NEVER do string or byte comparisons because:
+/// 1. They take linear time, which can cause performance issues
+/// 2. They are brittle to changes that type-checking should not be sensitive to
+///
+/// Instead, we always compare indices - either into node stores or to interned string indices.
+/// This step enforces that rule by failing the build if `std.mem.` is found in src/check/ or src/layout/.
+const CheckTypeCheckerPatternsStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckTypeCheckerPatternsStep {
+        const self = b.allocator.create(CheckTypeCheckerPatternsStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-type-checker-patterns",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Recursively scan src/check/, src/layout/, and src/eval/ for .zig files
+        const dirs_to_scan = [_][]const u8{ "src/check", "src/layout", "src/eval" };
+        for (dirs_to_scan) |dir_path| {
+            var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+                return step.fail("Failed to open {s} directory: {}", .{ dir_path, err });
+            };
+            defer dir.close();
+
+            try scanDirectory(allocator, dir, dir_path, &violations);
+        }
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("FORBIDDEN PATTERN DETECTED\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\Code in src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  We NEVER do string or byte comparisons because:
+                \\
+                \\  1. PERFORMANCE: String comparisons take O(n) time where n is the string
+                \\     length. These code paths can involve many comparisons, so this adds up.
+                \\
+                \\  2. BRITTLENESS: String comparisons make the code sensitive to changes it
+                \\     shouldn't care about (e.g., how identifiers are rendered, whitespace,
+                \\     formatting). This leads to subtle bugs.
+                \\
+                \\WHAT TO DO INSTEAD:
+                \\  Always compare indices rather than strings:
+                \\
+                \\  - For identifiers: Compare Ident.Idx values (interned string indices)
+                \\  - For types: Compare type variable indices or node store indices
+                \\  - For expressions: Compare Expr.Idx values from the node store
+                \\
+                \\  Example - WRONG:
+                \\    if (std.mem.eql(u8, ident_name, "is_eq")) {{ ... }}
+                \\
+                \\  Example - RIGHT:
+                \\    if (ident_idx == module_env.idents.is_eq) {{ ... }}
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} forbidden patterns (raw string comparison or manipulation) in src/check/, src/layout/, or src/eval/. " ++
+                    "See above for details on why this is forbidden and what to do instead.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+    };
+
+    fn scanDirectory(
+        allocator: std.mem.Allocator,
+        dir: std.fs.Dir,
+        path_prefix: []const u8,
+        violations: *std.ArrayList(Violation),
+    ) !void {
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+
+            // Skip test files - they may legitimately need string comparison for assertions
+            if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
+            if (std.mem.indexOf(u8, entry.path, "test/") != null) continue;
+            if (std.mem.startsWith(u8, entry.path, "test")) continue;
+            if (std.mem.endsWith(u8, entry.path, "test_runner.zig")) continue;
+
+            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            const file = dir.openFile(entry.path, .{}) catch continue;
+            defer file.close();
+
+            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            defer allocator.free(content);
+
+            var line_number: usize = 1;
+            var line_start: usize = 0;
+
+            for (content, 0..) |char, i| {
+                if (char == '\n') {
+                    const line = content[line_start..i];
+
+                    const trimmed = std.mem.trim(u8, line, " \t");
+                    // Skip comments
+                    if (std.mem.startsWith(u8, trimmed, "//")) {
+                        line_number += 1;
+                        line_start = i + 1;
+                        continue;
+                    }
+
+                    // Check for std.mem. usage (but allow safe patterns)
+                    if (std.mem.indexOf(u8, line, "std.mem.")) |idx| {
+                        const after_match = line[idx + 8 ..];
+
+                        // Allow these safe patterns that don't involve string/byte comparison:
+                        // - std.mem.Allocator: a type, not a comparison
+                        // - std.mem.Alignment: a type, not a comparison
+                        // - std.mem.sort: sorting by custom comparator, not string comparison
+                        // - std.mem.asBytes: type punning, not string comparison
+                        // - std.mem.reverse: reversing arrays, not string comparison
+                        // - std.mem.alignForward: memory alignment arithmetic, not string comparison
+                        // - std.mem.order: sort ordering (used by sort comparators), not string comparison
+                        // - std.mem.copyForwards: byte copying, not string comparison
+                        const is_allowed =
+                            std.mem.startsWith(u8, after_match, "Allocator") or
+                            std.mem.startsWith(u8, after_match, "Alignment") or
+                            std.mem.startsWith(u8, after_match, "sort") or
+                            std.mem.startsWith(u8, after_match, "asBytes") or
+                            std.mem.startsWith(u8, after_match, "reverse") or
+                            std.mem.startsWith(u8, after_match, "alignForward") or
+                            std.mem.startsWith(u8, after_match, "order") or
+                            std.mem.startsWith(u8, after_match, "copyForwards");
+
+                        if (!is_allowed) {
+                            try violations.append(allocator, .{
+                                .file_path = full_path,
+                                .line_number = line_number,
+                                .line_content = try allocator.dupe(u8, trimmed),
+                            });
+                        }
+                    }
+
+                    // Check for findByString usage - should use Ident.Idx comparison instead
+                    if (std.mem.indexOf(u8, line, "findByString") != null) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+
+                    // Check for findIdent usage - should use pre-stored Ident.Idx instead
+                    if (std.mem.indexOf(u8, line, "findIdent") != null) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+
+                    line_number += 1;
+                    line_start = i + 1;
+                }
+            }
         }
     }
 };
@@ -534,6 +737,28 @@ pub fn build(b: *std.Build) void {
         "Force rebuild of all builtin modules (*.roc -> *.bin)",
     );
 
+    // Clean zig-out/ to ensure a fresh rebuild of builtins
+    // Note: We don't delete .zig-cache because it contains build options needed during compilation.
+    const clean_out_step = b.addRemoveDirTree(b.path("zig-out"));
+
+    // Also clear the roc cache to avoid stale cached modules with old struct layouts
+    // The cache location follows the same logic as src/compile/cache_config.zig:
+    // - XDG_CACHE_HOME/roc if XDG_CACHE_HOME is set
+    // - ~/Library/Caches/roc on macOS
+    // - ~/.cache/roc on Linux
+    const clear_roc_cache_step = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\if [ -n "$XDG_CACHE_HOME" ]; then
+        \\  rm -rf "$XDG_CACHE_HOME/roc"
+        \\elif [ "$(uname)" = "Darwin" ]; then
+        \\  rm -rf "$HOME/Library/Caches/roc"
+        \\else
+        \\  rm -rf "$HOME/.cache/roc"
+        \\fi
+        \\echo "Cleared roc cache"
+        ,
+    });
+
     // Discover .roc files again for the rebuild command
     const roc_files_force = discoverBuiltinRocFiles(b) catch |err| {
         std.debug.print("Failed to discover .roc files for rebuild: {}\n", .{err});
@@ -541,6 +766,8 @@ pub fn build(b: *std.Build) void {
     };
 
     const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
+    run_builtin_compiler_force.step.dependOn(&clean_out_step.step);
+    run_builtin_compiler_force.step.dependOn(&clear_roc_cache_step.step);
     rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
@@ -791,6 +1018,10 @@ pub fn build(b: *std.Build) void {
         }
         tests_summary.addRun(&run_watch_test.step);
     }
+
+    // Add check for forbidden patterns in type checker code
+    const check_patterns = CheckTypeCheckerPatternsStep.create(b);
+    test_step.dependOn(&check_patterns.step);
 
     test_step.dependOn(&tests_summary.step);
 

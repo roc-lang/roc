@@ -128,6 +128,18 @@ pub const Expr = union(enum) {
         target_node_idx: u16,
         region: Region,
     },
+    /// Lookup of a required identifier from the platform's `requires` clause.
+    /// This represents a value that the app provides to the platform.
+    /// ```roc
+    /// platform "..."
+    ///     requires {} { main! : () => {} }
+    /// ...
+    /// main_for_host! = main!  # "main!" here is a required lookup
+    /// ```
+    e_lookup_required: struct {
+        /// Index into env.requires_types for this required identifier
+        requires_idx: ModuleEnv.RequiredType.SafeList.Idx,
+    },
     /// A sequence of zero or more elements of the same type
     /// ```roc
     /// ["one", "two", "three"]
@@ -303,6 +315,7 @@ pub const Expr = union(enum) {
     e_dot_access: struct {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
+        field_name_region: base.Region, // Region of just the field/method name for error reporting
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
     },
     /// Runtime error expression that crashes when executed.
@@ -366,6 +379,20 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// Early return expression that exits the enclosing function with a value.
+    /// This is used when `return` appears as the final expression in a block.
+    /// Unlike a normal expression, evaluating this causes the function to return
+    /// immediately with the contained value.
+    ///
+    /// ```roc
+    /// if condition {
+    ///     return value  # Early return from enclosing function
+    /// }
+    /// ```
+    e_return: struct {
+        expr: Expr.Idx,
+    },
+
     /// A hosted function that will be provided by the platform at runtime.
     /// This represents a lambda/function whose implementation is provided by the host application
     /// via the RocOps.hosted_fns array.
@@ -401,6 +428,7 @@ pub const Expr = union(enum) {
     pub const LowLevel = enum {
         // String operations
         str_is_empty,
+        str_is_eq,
         str_concat,
         str_contains,
         str_trim,
@@ -450,7 +478,6 @@ pub const Expr = union(enum) {
 
         // Bool operations
         bool_is_eq,
-        bool_is_ne,
 
         // Numeric type checking operations
         num_is_zero, // All numeric types
@@ -459,7 +486,6 @@ pub const Expr = union(enum) {
 
         // Numeric comparison operations
         num_is_eq, // All integer types + Dec (NOT F32/F64 due to float imprecision)
-        num_is_ne, // Dec only (intentionally separate from is_eq for clarity)
         num_is_gt, // All numeric types
         num_is_gte, // All numeric types
         num_is_lt, // All numeric types
@@ -785,6 +811,23 @@ pub const Expr = union(enum) {
                     try tree.endNode(field_begin, field_attrs);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_required => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-required");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const requires_items = ir.requires_types.items.items;
+                const idx = e.requires_idx.toU32();
+                if (idx < requires_items.len) {
+                    const required_type = requires_items[idx];
+                    const ident_name = ir.getIdent(required_type.ident);
+                    try tree.pushStringPair("required-ident", ident_name);
                 }
 
                 try tree.endNode(begin, attrs);
@@ -1190,6 +1233,18 @@ pub const Expr = union(enum) {
 
                 // Add body expression
                 try ir.store.getExpr(expect_expr.body).pushToSExprTree(ir, tree, expect_expr.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_return => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add inner expression
+                try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
 
                 try tree.endNode(begin, attrs);
             },

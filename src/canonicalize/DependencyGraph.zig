@@ -255,6 +255,9 @@ fn collectExprDependencies(
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
 
+        // Required lookups reference app-provided values - skip for dependency analysis
+        .e_lookup_required => {},
+
         .e_nominal_external => |nominal| {
             try collectExprDependencies(cir, nominal.backing_expr, dependencies, allocator);
         },
@@ -268,6 +271,10 @@ fn collectExprDependencies(
 
         .e_expect => |expect| {
             try collectExprDependencies(cir, expect.body, dependencies, allocator);
+        },
+
+        .e_return => |ret| {
+            try collectExprDependencies(cir, ret.expr, dependencies, allocator);
         },
 
         .e_runtime_error => {},

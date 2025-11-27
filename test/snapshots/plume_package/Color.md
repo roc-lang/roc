@@ -95,10 +95,12 @@ MISSING METHOD - Color.md:37:21:37:45
 MISSING METHOD - Color.md:38:21:38:45
 MISSING METHOD - Color.md:39:21:39:45
 MISSING METHOD - Color.md:40:21:40:45
+MISSING METHOD - Color.md:22:17:22:24
+MISSING METHOD - Color.md:29:17:29:24
 TYPE MISMATCH - Color.md:32:5:45:6
-MISSING METHOD - Color.md:62:8:62:28
-MISSING METHOD - Color.md:56:8:56:34
-MISSING METHOD - Color.md:57:8:57:40
+MISSING METHOD - Color.md:62:12:62:26
+MISSING METHOD - Color.md:56:26:56:32
+MISSING METHOD - Color.md:57:32:57:38
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -215,13 +217,16 @@ It's referenced here:
 
 
 **MISSING METHOD**
-This **to_frac** method is being called on the type **Num.U8**, which has no method with that name:
-**Color.md:22:15:22:26:**
+This **to_frac** method is being called on a value whose type doesn't have that method:
+**Color.md:22:17:22:24:**
 ```roc
     rounded = a.to_frac() / 255.0
 ```
-              ^^^^^^^^^^^
+                ^^^^^^^
 
+The value's type, which does not have a method named **to_frac**, is:
+
+    _U8_
 
 **Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
@@ -288,6 +293,7 @@ This **is_char_in_hex_range** method is being called on the type **Num.U8**, whi
 ```
                     ^^^^^^^^^^^^^^^^^^^^^^^^
 
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -318,35 +324,44 @@ But the type annotation says it should have the type:
     _Try(Color, [InvalidHex(Str)])_
 
 **MISSING METHOD**
-This **is_named_color** method is being called on the type **Str**, which has no method with that name:
-**Color.md:62:8:62:28:**
+This **is_named_color** method is being called on a value whose type doesn't have that method:
+**Color.md:62:12:62:26:**
 ```roc
     if str.is_named_color()
 ```
-       ^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^
 
+The value's type, which does not have a method named **is_named_color**, is:
+
+    _Str_
 
 **Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_str** method is being called on the type **Color**, which has no method with that name:
-**Color.md:56:8:56:34:**
+This **to_str** method is being called on a value whose type doesn't have that method:
+**Color.md:56:26:56:32:**
 ```roc
 expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 ```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         ^^^^^^
 
+The value's type, which does not have a method named **to_str**, is:
+
+    _Color_
 
 **Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_str** method is being called on the type **Color**, which has no method with that name:
-**Color.md:57:8:57:40:**
+This **to_str** method is being called on a value whose type doesn't have that method:
+**Color.md:57:32:57:38:**
 ```roc
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 ```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                               ^^^^^^
 
+The value's type, which does not have a method named **to_str**, is:
+
+    _Color_
 
 **Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
@@ -923,153 +938,144 @@ is_named_color = |str| {
 				(ty-lookup (name "Color") (local)))))
 	(d-let
 		(p-assign (ident "hex"))
-		(e-closure
-			(captures
-				(capture (ident "a"))
-				(capture (ident "b"))
-				(capture (ident "c"))
-				(capture (ident "d"))
-				(capture (ident "e"))
-				(capture (ident "f"))
-				(capture (ident "is_valid")))
-			(e-lambda
-				(args
-					(p-assign (ident "str")))
-				(e-block
-					(s-let
-						(p-assign (ident "bytes"))
-						(e-dot-access (field "to_utf8")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "str"))))
-							(args)))
-					(s-let
-						(p-assign (ident "is_char_in_hex_range"))
-						(e-lambda
-							(args
-								(p-assign (ident "b")))
+		(e-lambda
+			(args
+				(p-assign (ident "str")))
+			(e-block
+				(s-let
+					(p-assign (ident "bytes"))
+					(e-dot-access (field "to_utf8")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "str"))))
+						(args)))
+				(s-let
+					(p-assign (ident "is_char_in_hex_range"))
+					(e-lambda
+						(args
+							(p-assign (ident "b")))
+						(e-binop (op "or")
+							(e-binop (op "and")
+								(e-binop (op "ge")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-num (value "48")))
+								(e-binop (op "le")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-num (value "57"))))
 							(e-binop (op "or")
 								(e-binop (op "and")
 									(e-binop (op "ge")
 										(e-lookup-local
 											(p-assign (ident "b")))
-										(e-num (value "48")))
+										(e-num (value "97")))
 									(e-binop (op "le")
 										(e-lookup-local
 											(p-assign (ident "b")))
-										(e-num (value "57"))))
-								(e-binop (op "or")
-									(e-binop (op "and")
-										(e-binop (op "ge")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "97")))
-										(e-binop (op "le")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "102"))))
-									(e-binop (op "and")
-										(e-binop (op "ge")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "65")))
-										(e-binop (op "le")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "70"))))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "bytes"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-list
-												(patterns
-													(p-num (value "35"))
-													(p-assign (ident "a"))
-													(p-assign (ident "b"))
-													(p-assign (ident "c"))
-													(p-assign (ident "d"))
-													(p-assign (ident "e"))
-													(p-assign (ident "f"))))))
-									(value
-										(e-block
-											(s-let
-												(p-assign (ident "is_valid"))
+										(e-num (value "102"))))
+								(e-binop (op "and")
+									(e-binop (op "ge")
+										(e-lookup-local
+											(p-assign (ident "b")))
+										(e-num (value "65")))
+									(e-binop (op "le")
+										(e-lookup-local
+											(p-assign (ident "b")))
+										(e-num (value "70"))))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "bytes"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list
+											(patterns
+												(p-num (value "35"))
+												(p-assign (ident "a"))
+												(p-assign (ident "b"))
+												(p-assign (ident "c"))
+												(p-assign (ident "d"))
+												(p-assign (ident "e"))
+												(p-assign (ident "f"))))))
+								(value
+									(e-block
+										(s-let
+											(p-assign (ident "is_valid"))
+											(e-binop (op "and")
+												(e-dot-access (field "is_char_in_hex_range")
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "a"))))
+													(args))
 												(e-binop (op "and")
 													(e-dot-access (field "is_char_in_hex_range")
 														(receiver
 															(e-lookup-local
-																(p-assign (ident "a"))))
+																(p-assign (ident "b"))))
 														(args))
 													(e-binop (op "and")
 														(e-dot-access (field "is_char_in_hex_range")
 															(receiver
 																(e-lookup-local
-																	(p-assign (ident "b"))))
+																	(p-assign (ident "c"))))
 															(args))
 														(e-binop (op "and")
 															(e-dot-access (field "is_char_in_hex_range")
 																(receiver
 																	(e-lookup-local
-																		(p-assign (ident "c"))))
+																		(p-assign (ident "d"))))
 																(args))
 															(e-binop (op "and")
 																(e-dot-access (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local
-																			(p-assign (ident "d"))))
+																			(p-assign (ident "e"))))
 																	(args))
-																(e-binop (op "and")
-																	(e-dot-access (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local
-																				(p-assign (ident "e"))))
-																		(args))
-																	(e-dot-access (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local
-																				(p-assign (ident "f"))))
-																		(args))))))))
-											(e-if
-												(if-branches
-													(if-branch
-														(e-lookup-local
-															(p-assign (ident "is_valid")))
-														(e-tag (name "Ok")
-															(args
-																(e-nominal (nominal "Color")
-																	(e-tag (name "Hex")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "str"))))))))))
-												(if-else
-													(e-tag (name "Err")
-														(args
-															(e-tag (name "InvalidHex")
-																(args
-																	(e-string
-																		(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																(e-dot-access (field "is_char_in_hex_range")
+																	(receiver
 																		(e-lookup-local
-																			(p-assign (ident "str")))
-																		(e-literal (string ""))))))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-underscore)))
-									(value
-										(e-tag (name "Err")
-											(args
-												(e-tag (name "InvalidHex")
+																			(p-assign (ident "f"))))
+																	(args))))))))
+										(e-if
+											(if-branches
+												(if-branch
+													(e-lookup-local
+														(p-assign (ident "is_valid")))
+													(e-tag (name "Ok")
+														(args
+															(e-nominal (nominal "Color")
+																(e-tag (name "Hex")
+																	(args
+																		(e-lookup-local
+																			(p-assign (ident "str"))))))))))
+											(if-else
+												(e-tag (name "Err")
 													(args
-														(e-string
-															(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
-															(e-lookup-local
-																(p-assign (ident "str")))
-															(e-literal (string "")))))))))))))))
+														(e-tag (name "InvalidHex")
+															(args
+																(e-string
+																	(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																	(e-lookup-local
+																		(p-assign (ident "str")))
+																	(e-literal (string ""))))))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-underscore)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-tag (name "InvalidHex")
+												(args
+													(e-string
+														(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
+														(e-lookup-local
+															(p-assign (ident "str")))
+														(e-literal (string ""))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

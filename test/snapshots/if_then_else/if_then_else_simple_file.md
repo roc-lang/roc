@@ -39,13 +39,16 @@ Note: You can wrap branches in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 **MISSING METHOD**
-This **from_numeral** method is being called on the type **Bool**, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **if_then_else_simple_file.md:1:10:1:11:**
 ```roc
 foo = if 1 A
 ```
          ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Bool_
 
 **Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

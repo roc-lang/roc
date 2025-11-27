@@ -86,26 +86,9 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
-        .minus_ident = common.findIdent("minus") orelse unreachable,
-        .times_ident = common.findIdent("times") orelse unreachable,
-        .div_by_ident = common.findIdent("div_by") orelse unreachable,
-        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
-        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
-        .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
-        .not_ident = common.findIdent("not") orelse unreachable,
-        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
-        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
-        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
-        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
-        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
     };
 
     return LoadedModule{
@@ -225,15 +208,13 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const try_stmt_in_result_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = other_test_env.builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Build imported_envs array
@@ -254,6 +235,9 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         }
     }
 
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
     // Type Check - Pass all imported modules
     var checker = try Check.init(
         gpa,
@@ -262,7 +246,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        module_common_idents,
+        module_builtin_ctx,
     );
     errdefer checker.deinit();
 
@@ -344,15 +328,13 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const try_stmt_in_result_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Build imported_envs array
@@ -363,6 +345,9 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Add builtin module unconditionally (needed for auto-imported types)
     try imported_envs.append(gpa, builtin_module.env);
 
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
         gpa,
@@ -371,7 +356,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        module_common_idents,
+        module_builtin_ctx,
     );
     errdefer checker.deinit();
 
@@ -535,6 +520,32 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert 1 problem
     try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that the first type error matches the expected title (allows multiple errors).
+pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    // Assert at least 1 problem
+    try testing.expect(self.checker.problems.problems.items.len >= 1);
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem

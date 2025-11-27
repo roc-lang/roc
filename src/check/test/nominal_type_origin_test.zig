@@ -51,7 +51,7 @@ test "nominal type origin - displays origin in snapshot writer" {
             &import_mapping,
         );
         defer writer.deinit();
-        writer.current_module_name = "CurrentModule";
+        writer.current_module_idx = current_module_ident;
 
         try writer.writeNominalType(nominal_type, nominal_type_backing_idx);
 
@@ -77,7 +77,7 @@ test "nominal type origin - displays origin in snapshot writer" {
             &import_mapping,
         );
         defer writer.deinit();
-        writer.current_module_name = "CurrentModule";
+        writer.current_module_idx = current_module_ident;
 
         try writer.writeNominalType(same_module_nominal, nominal_type_backing_idx);
 

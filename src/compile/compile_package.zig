@@ -317,6 +317,8 @@ pub const PackageEnv = struct {
                 try self.tryEmitReady();
             } else if (self.remaining_modules == 0) {
                 break;
+            } else {
+                break; // This should not happen - stuck state
             }
         }
     }
@@ -602,12 +604,15 @@ pub const PackageEnv = struct {
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
 
         // Use shared canonicalization function to ensure consistency with snapshot tool
-        try canonicalizeModule(
+        // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
+        // reported prematurely for modules that exist but haven't been loaded yet.
+        try canonicalizeModuleWithSiblings(
             self.gpa,
             env,
             &parse_ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
+            self.root_dir,
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -810,15 +815,13 @@ pub const PackageEnv = struct {
         czer.deinit();
 
         // Type check using the SAME module_envs_map
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
-            .list = try env.insertIdent(base.Ident.for_text("List")),
-            .box = try env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
         };
 
         var checker = try Check.init(
@@ -828,7 +831,7 @@ pub const PackageEnv = struct {
             imported_envs,
             module_envs_out,
             &env.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         );
         errdefer checker.deinit();
 
@@ -864,6 +867,64 @@ pub const PackageEnv = struct {
         czer.deinit();
     }
 
+    /// Canonicalization function that also discovers sibling .roc files in the same directory.
+    /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
+    fn canonicalizeModuleWithSiblings(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        parse_ast: *AST,
+        builtin_module_env: *const ModuleEnv,
+        builtin_indices: can.CIR.BuiltinIndices,
+        root_dir: []const u8,
+    ) !void {
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        defer module_envs_map.deinit();
+
+        // Populate module_envs with Bool, Try, Dict, Set using shared function
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            builtin_module_env,
+            builtin_indices,
+        );
+
+        // Discover sibling .roc files in the same directory and add them to module_envs
+        // This prevents MODULE NOT FOUND errors for modules that exist but haven't been loaded yet
+        var dir = std.fs.cwd().openDir(root_dir, .{ .iterate = true }) catch {
+            // If we can't open the directory, just proceed without sibling discovery
+            var czer = try Can.init(env, parse_ast, &module_envs_map);
+            try czer.canonicalizeFile();
+            czer.deinit();
+            return;
+        };
+        defer dir.close();
+
+        var dir_iter = dir.iterate();
+        while (dir_iter.next() catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".roc")) continue;
+
+            // Skip "main.roc" and the current module
+            if (std.mem.eql(u8, entry.name, "main.roc")) continue;
+
+            // Extract module name without .roc extension
+            const module_name = entry.name[0 .. entry.name.len - 4];
+
+            // Add to module_envs with a null env (just to pass the "contains" check)
+            // We use builtin_module_env as a placeholder - the actual env will be loaded later
+            const module_ident = try env.insertIdent(base.Ident.for_text(module_name));
+            // Only add if not already present
+            if (!module_envs_map.contains(module_ident)) {
+                try module_envs_map.put(module_ident, .{ .env = builtin_module_env });
+            }
+        }
+
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        try czer.canonicalizeFile();
+        czer.deinit();
+    }
+
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
     pub fn typeCheckModule(
@@ -875,15 +936,13 @@ pub const PackageEnv = struct {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
-            .list = try env.insertIdent(base.Ident.for_text("List")),
-            .box = try env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
             .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
         };
 
         // Create module_envs map for auto-importing builtin types
@@ -905,7 +964,7 @@ pub const PackageEnv = struct {
             imported_envs,
             &module_envs_map,
             &env.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         );
         errdefer checker.deinit();
 
@@ -913,7 +972,8 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping);
+        defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();
@@ -925,15 +985,19 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
 
-        // Build other_modules array according to env.imports order
+        // Build the array of all available modules for this module's imports
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
+
+        // Always include Builtin first
+        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+
+        // Add external and local modules
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
 
-            // Skip "Builtin" - it's provided separately via builtin_types_for_eval to the evaluator
-            // and via module_envs_map to the type checker
+            // Skip Builtin - already added above
             if (std.mem.eql(u8, import_name, "Builtin")) {
                 continue;
             }
@@ -944,11 +1008,9 @@ pub const PackageEnv = struct {
             if (is_ext) {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
-                        // External env is already a pointer, use it directly
                         try imported_envs.append(self.gpa, ext_env_ptr);
-                    } else {
-                        // External env not ready; skip (tryUnblock should have prevented this)
                     }
+                    // External env not ready; skip (tryUnblock should have prevented this)
                 }
             } else {
                 const child_id = self.module_names.get(import_name).?;
@@ -959,6 +1021,10 @@ pub const PackageEnv = struct {
                 try imported_envs.append(self.gpa, child_env_ptr);
             }
         }
+
+        // Resolve all imports using the shared function
+        // This matches import names to module names in imported_envs
+        env.imports.resolveImports(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items);
@@ -1021,17 +1087,20 @@ pub const PackageEnv = struct {
     }
 
     // Determine if an import was qualified (e.g. "cli.Stdout") using CIR statements.
-    // Scans only top-level s_import statements; no allocations; exits early on match.
+    // After canonicalization, qualified imports have their full name (e.g., "pf.Stdout")
+    // stored in module_name_tok, and qualifier_tok is null.
+    // So we check if the module name contains a dot to determine if it was qualified.
     fn hadQualifiedImport(env: *ModuleEnv, mod_name_text: []const u8) bool {
         const stmts = env.store.sliceStatements(env.all_statements);
         for (stmts) |stmt_idx| {
             const stmt = env.store.getStatement(stmt_idx);
             switch (stmt) {
                 .s_import => |imp| {
-                    const imported_text = env.getIdent(imp.module_name_tok);
-                    if (!std.mem.eql(u8, imported_text, mod_name_text)) continue;
-                    // If qualifier_tok is set, the import was package-qualified in source
-                    if (imp.qualifier_tok != null) return true;
+                    const module_name = env.getIdent(imp.module_name_tok);
+                    if (!std.mem.eql(u8, module_name, mod_name_text)) continue;
+                    // After canonicalization, qualified imports have their full name
+                    // stored in module_name_tok. Check if it contains a dot.
+                    return std.mem.indexOfScalar(u8, module_name, '.') != null;
                 },
                 else => {},
             }

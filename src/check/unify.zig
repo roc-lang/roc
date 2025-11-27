@@ -1123,7 +1123,7 @@ const Unifier = struct {
         self: *Self,
         nominal_type: NominalType,
     ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.from_int_digits_ident) orelse return false;
+        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.idents.from_int_digits) orelse return false;
         const resolved = self.types_store.resolveVar(method_var);
 
         const func = switch (resolved.desc.content) {
@@ -1170,7 +1170,7 @@ const Unifier = struct {
         self: *Self,
         nominal_type: NominalType,
     ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.from_dec_digits_ident) orelse return false;
+        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.idents.from_dec_digits) orelse return false;
         const resolved = self.types_store.resolveVar(method_var);
 
         const func = switch (resolved.desc.content) {
@@ -1198,8 +1198,8 @@ const Unifier = struct {
         const args_slice = self.types_store.sliceVars(func.args);
         if (args_slice.len != 1) return false;
 
-        const before_ident = self.module_env.common.findIdent("before_dot") orelse return false;
-        const after_ident = self.module_env.common.findIdent("after_dot") orelse return false;
+        const before_ident = self.module_env.idents.before_dot;
+        const after_ident = self.module_env.idents.after_dot;
 
         const record_desc = self.types_store.resolveVar(args_slice[0]);
         const record = switch (record_desc.desc.content) {
@@ -1247,22 +1247,29 @@ const Unifier = struct {
         nominal_type: NominalType,
         method_ident: Ident.Idx,
     ) Error!?Var {
-        const origin_env = if (nominal_type.origin_module == self.module_env.module_name_idx)
+        const is_this_module = nominal_type.origin_module == self.module_env.module_name_idx;
+        const origin_env = if (is_this_module)
             self.module_env
         else
             self.module_lookup.get(nominal_type.origin_module) orelse return null;
 
-        const method_name = self.module_env.common.getIdent(method_ident);
-        const type_name = self.module_env.common.getIdent(nominal_type.ident.ident_idx);
+        // For cross-module lookups, use getMethodIdent to build the qualified method name
+        const lookup_ident = if (is_this_module)
+            method_ident
+        else blk: {
+            // Get the type name and method name for the qualified lookup
+            const type_name = self.module_env.getIdent(nominal_type.ident.ident_idx);
+            const method_name = self.module_env.getIdent(method_ident);
+            break :blk origin_env.getMethodIdent(type_name, method_name) orelse return null;
+        };
 
-        const method_ident_in_origin = try self.findMethodIdent(origin_env, type_name, method_name) orelse return null;
-
+        // Look up method by the ident
         const method_def_idx: CIR.Def.Idx = blk: {
-            if (origin_env.getExposedNodeIndexById(method_ident_in_origin)) |node_idx| {
+            if (origin_env.getExposedNodeIndexById(lookup_ident)) |node_idx| {
                 break :blk @enumFromInt(@as(u32, node_idx));
             }
 
-            if (Self.findDefIdxByIdent(origin_env, method_ident_in_origin)) |def_idx| {
+            if (Self.findDefIdxByIdent(origin_env, lookup_ident)) |def_idx| {
                 break :blk def_idx;
             }
 
@@ -1290,42 +1297,6 @@ const Unifier = struct {
         return copied_var;
     }
 
-    fn buildQualifiedMethodName(
-        self: *Self,
-        module_name: []const u8,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) std.mem.Allocator.Error![]u8 {
-        if (std.mem.eql(u8, type_name, module_name)) {
-            return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ type_name, method_name });
-        } else {
-            return try std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ module_name, type_name, method_name });
-        }
-    }
-
-    fn findMethodIdent(
-        self: *Self,
-        origin_env: *const ModuleEnv,
-        type_name: []const u8,
-        method_name: []const u8,
-    ) error{AllocatorError}!?Ident.Idx {
-        const ident_store = origin_env.getIdentStoreConst();
-
-        const primary = self.buildQualifiedMethodName(origin_env.module_name, type_name, method_name) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(primary);
-        if (ident_store.findByString(primary)) |ident| return ident;
-
-        const module_type = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}.{s}", .{ origin_env.module_name, type_name, method_name }) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(module_type);
-        if (ident_store.findByString(module_type)) |ident| return ident;
-
-        const module_method = std.fmt.allocPrint(self.scratch.gpa, "{s}.{s}", .{ origin_env.module_name, method_name }) catch return error.AllocatorError;
-        defer self.scratch.gpa.free(module_method);
-        if (ident_store.findByString(module_method)) |ident| return ident;
-
-        return ident_store.findByString(method_name);
-    }
-
     fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
         const defs = origin_env.store.sliceDefs(origin_env.all_defs);
         for (defs) |def_idx| {
@@ -1351,11 +1322,11 @@ const Unifier = struct {
         // Create nominal List(U8) - List is from Builtin module
         // If List ident is not found, something is wrong with the environment
         // This should never happen in a properly initialized compiler!
-        const list_ident = self.module_env.common.findIdent("List") orelse unreachable;
+        const list_ident = self.module_env.idents.list;
 
-        // Use the cached builtin_module_ident which represents the "Builtin" module.
-        const origin_module = if (self.module_lookup.get(self.module_env.builtin_module_ident)) |_|
-            self.module_env.builtin_module_ident
+        // Use the cached builtin_module ident which represents the "Builtin" module.
+        const origin_module = if (self.module_lookup.get(self.module_env.idents.builtin_module)) |_|
+            self.module_env.idents.builtin_module
         else
             // Builtin module not loaded (probably compiling Builtin itself), use current module
             self.module_env.module_name_idx;
@@ -1370,7 +1341,7 @@ const Unifier = struct {
         }) catch return error.AllocatorError;
 
         // Create the [ProvidedByCompiler] tag
-        const provided_tag_ident = self.module_env.common.findIdent("ProvidedByCompiler") orelse unreachable;
+        const provided_tag_ident = self.module_env.idents.provided_by_compiler;
         const provided_tag = self.types_store.mkTag(provided_tag_ident, &.{}) catch return error.AllocatorError;
 
         const tag_union = TagUnion{
@@ -1416,24 +1387,20 @@ const Unifier = struct {
 
     fn isBuiltinTryNominal(self: *Self, nominal: NominalType) bool {
         // Check if this is the Try type from the Builtin module
-        if (nominal.origin_module == self.module_env.builtin_module_ident and
-            nominal.ident.ident_idx == self.module_env.try_ident)
+        if (nominal.origin_module == self.module_env.idents.builtin_module and
+            nominal.ident.ident_idx == self.module_env.idents.@"try")
         {
             return true;
         }
 
         // Also check for fully qualified Builtin.Try
-        if (self.module_env.common.findIdent("Builtin.Try")) |builtin_try_ident| {
-            return nominal.ident.ident_idx == builtin_try_ident;
-        }
-
-        return false;
+        return nominal.ident.ident_idx == self.module_env.idents.builtin_try;
     }
 
     fn createOutOfRangeTagUnion(self: *Self) Error!Var {
         const start_slots = self.types_store.len();
         const tag = Tag{
-            .name = self.module_env.out_of_range_ident,
+            .name = self.module_env.idents.out_of_range,
             .args = Var.SafeList.Range.empty(),
         };
         const tags_range = self.types_store.appendTags(&[_]Tag{tag}) catch return error.AllocatorError;

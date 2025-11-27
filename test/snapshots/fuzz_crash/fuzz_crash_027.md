@@ -230,7 +230,12 @@ INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
+MISSING METHOD - fuzz_crash_027.md:125:6:125:9
+MISSING METHOD - fuzz_crash_027.md:102:15:102:18
+MISSING METHOD - fuzz_crash_027.md:129:12:129:22
++ - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
+TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -865,7 +870,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num.U64_
+    _U64_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -926,7 +931,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+    _d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -953,7 +958,49 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    __d_
+    _d_
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:125:6:125:9:**
+```roc
+		),	456, # ee
+```
+		  	^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:102:15:102:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**fuzz_crash_027.md:129:12:129:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    _Str_
+
+**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -967,10 +1014,71 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Error)][Err(_d), Ok({  })]_
+    _[Stdoline!(Error)][Err(d), Ok({  })]_
 
 But the type annotation says it should have the type:
-    _Try(_d)_
+    _Try(d)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:100:9:148:2:**
+```roc
+main! = |_| { # Yeah Ie
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comd
+		tag
+
+	# Jusnt!
+
+	...
+	match_time(
+		..., #
+	)
+	some_func(
+		dbg # bug
+			42, # Aft expr
+	)
+	crash "Unreachtement
+	tag_with = Ok(number)
+	ited = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # Afin list
+e[, # afarg
+		),	456, # ee
+	]
+	for n in list {
+	line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	m_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # Thisnt
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+} # Commenl decl
+```
+
+It has the type:
+    _List(Error) => Error_
+
+But the type annotation says it should have the type:
+    _List(Error) -> Error_
 
 # TOKENS
 ~~~zig
@@ -2255,7 +2363,7 @@ expect {
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
-		(patt (type "List(Error) -> Error"))
+		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2292,7 +2400,7 @@ expect {
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
-		(expr (type "List(Error) -> Error"))
+		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

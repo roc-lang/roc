@@ -15,6 +15,7 @@ const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
 const collections = @import("collections");
+const reporting = @import("reporting");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -192,22 +193,23 @@ pub const Repl = struct {
         self.builtin_module.deinit();
     }
 
-    /// Process a line of input and return the result
-    pub fn step(self: *Repl, line: []const u8) ![]const u8 {
+    /// Process a line of input and return structured result data.
+    /// This is the preferred API for programmatic use (e.g., playground, tests).
+    pub fn stepStructured(self: *Repl, line: []const u8) !StepResult {
         const trimmed = std.mem.trim(u8, line, " \t\n\r");
 
         // Handle special commands
         if (trimmed.len == 0) {
-            return try self.allocator.dupe(u8, "");
+            return .empty;
         }
 
         if (std.mem.eql(u8, trimmed, ":help")) {
-            return try self.allocator.dupe(u8,
+            return .{ .help = try self.allocator.dupe(u8,
                 \\Enter an expression to evaluate, or a definition (like x = 1) to use later.
                 \\
                 \\  - :q quits
                 \\  - :help shows this text again
-            );
+            ) };
         }
 
         if (std.mem.eql(u8, trimmed, ":exit") or
@@ -218,15 +220,33 @@ pub const Repl = struct {
             std.mem.eql(u8, trimmed, "exit()") or
             std.mem.eql(u8, trimmed, "quit()"))
         {
-            return try self.allocator.dupe(u8, "Goodbye!");
+            return .quit;
         }
 
         // Process the input
-        return try self.processInput(trimmed);
+        return try self.processInputStructured(trimmed);
     }
 
-    /// Process regular input (not special commands)
-    fn processInput(self: *Repl, input: []const u8) ![]const u8 {
+    /// Process a line of input and return the result as a string.
+    /// This is a convenience wrapper for CLI REPL use.
+    /// For programmatic use, prefer stepStructured() which returns typed data.
+    pub fn step(self: *Repl, line: []const u8) ![]const u8 {
+        const result = try self.stepStructured(line);
+        return switch (result) {
+            .expression => |s| s,
+            .definition => |s| s,
+            .help => |s| s,
+            .parse_error => |s| s,
+            .canonicalize_error => |s| s,
+            .type_error => |s| s,
+            .eval_error => |s| s,
+            .quit => try self.allocator.dupe(u8, "Goodbye!"),
+            .empty => try self.allocator.dupe(u8, ""),
+        };
+    }
+
+    /// Process regular input (not special commands) - returns structured result
+    fn processInputStructured(self: *Repl, input: []const u8) !StepResult {
         // Try to parse as a statement first
         const parse_result = try self.tryParseStatement(input);
 
@@ -236,28 +256,44 @@ pub const Repl = struct {
                 try self.addOrReplaceDefinition(info.source, info.var_name);
 
                 // Return descriptive output for assignments
-                return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
+                return .{ .definition = try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name}) };
             },
             .import => {
                 // Imports are not supported in this implementation
-                return try self.allocator.dupe(u8, "Imports not yet supported");
+                return .{ .parse_error = try self.allocator.dupe(u8, "Imports not yet supported") };
             },
             .expression => {
                 // Evaluate expression with all past definitions
                 const full_source = try self.buildFullSource(input);
                 defer self.allocator.free(full_source);
 
-                return try self.evaluateSource(full_source);
+                return try self.evaluateSourceStructured(full_source);
             },
             .type_decl => {
                 // Type declarations can't be evaluated
-                return try self.allocator.dupe(u8, "");
+                return .empty;
             },
             .parse_error => |msg| {
                 defer self.allocator.free(msg);
-                return try std.fmt.allocPrint(self.allocator, "Parse error: {s}", .{msg});
+                return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {s}", .{msg}) };
             },
         }
+    }
+
+    /// Process regular input (not special commands) - returns string (legacy API)
+    fn processInput(self: *Repl, input: []const u8) ![]const u8 {
+        const result = try self.processInputStructured(input);
+        return switch (result) {
+            .expression => |s| s,
+            .definition => |s| s,
+            .help => |s| s,
+            .parse_error => |s| s,
+            .canonicalize_error => |s| s,
+            .type_error => |s| s,
+            .eval_error => |s| s,
+            .quit => try self.allocator.dupe(u8, "Goodbye!"),
+            .empty => try self.allocator.dupe(u8, ""),
+        };
     }
 
     const ParseResult = union(enum) {
@@ -269,6 +305,64 @@ pub const Repl = struct {
         expression,
         type_decl,
         parse_error: []const u8, // Must be allocator.dupe'd
+    };
+
+    /// The result of a REPL step - structured data that callers can use directly
+    /// without parsing human-readable strings.
+    pub const StepResult = union(enum) {
+        /// Successfully evaluated an expression, contains the rendered value
+        expression: []const u8,
+        /// Successfully defined a variable
+        definition: []const u8,
+        /// Help text requested
+        help: []const u8,
+        /// User requested quit
+        quit,
+        /// Empty input
+        empty,
+        /// Parse error with rendered message
+        parse_error: []const u8,
+        /// Canonicalization error with rendered message
+        canonicalize_error: []const u8,
+        /// Type checking error with rendered message
+        type_error: []const u8,
+        /// Evaluation/runtime error with rendered message
+        eval_error: []const u8,
+
+        pub fn deinit(self: StepResult, allocator: Allocator) void {
+            switch (self) {
+                .expression => |s| allocator.free(s),
+                .definition => |s| allocator.free(s),
+                .help => |s| allocator.free(s),
+                .parse_error => |s| allocator.free(s),
+                .canonicalize_error => |s| allocator.free(s),
+                .type_error => |s| allocator.free(s),
+                .eval_error => |s| allocator.free(s),
+                .quit, .empty => {},
+            }
+        }
+
+        /// Returns true if this result represents an error
+        pub fn isError(self: StepResult) bool {
+            return switch (self) {
+                .parse_error, .canonicalize_error, .type_error, .eval_error => true,
+                else => false,
+            };
+        }
+
+        /// Get the message/output for display, if any
+        pub fn getMessage(self: StepResult) ?[]const u8 {
+            return switch (self) {
+                .expression => |s| s,
+                .definition => |s| s,
+                .help => |s| s,
+                .parse_error => |s| s,
+                .canonicalize_error => |s| s,
+                .type_error => |s| s,
+                .eval_error => |s| s,
+                .quit, .empty => null,
+            };
+        }
     };
 
     /// Try to parse input as a statement
@@ -360,10 +454,26 @@ pub const Repl = struct {
         return try buffer.toOwnedSlice(self.allocator);
     }
 
-    /// Evaluate source code
-    fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
+    /// Evaluate source code - returns structured result
+    fn evaluateSourceStructured(self: *Repl, source: []const u8) !StepResult {
         const module_env = try self.allocateModuleEnv(source);
-        return try self.evaluatePureExpression(module_env);
+        return try self.evaluatePureExpressionStructured(module_env);
+    }
+
+    /// Evaluate source code - returns string (legacy API)
+    fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
+        const result = try self.evaluateSourceStructured(source);
+        return switch (result) {
+            .expression => |s| s,
+            .definition => |s| s,
+            .help => |s| s,
+            .parse_error => |s| s,
+            .canonicalize_error => |s| s,
+            .type_error => |s| s,
+            .eval_error => |s| s,
+            .quit => try self.allocator.dupe(u8, "Goodbye!"),
+            .empty => try self.allocator.dupe(u8, ""),
+        };
     }
 
     /// Evaluate a program (which may contain definitions)
@@ -385,6 +495,53 @@ pub const Repl = struct {
             };
         defer parse_ast.deinit(self.allocator);
 
+        // Check for parse errors and render them
+        if (parse_ast.hasErrors()) {
+            // Render the first error as the error message
+            if (parse_ast.tokenize_diagnostics.items.len > 0) {
+                var report = try parse_ast.tokenizeDiagnosticToReport(
+                    parse_ast.tokenize_diagnostics.items[0],
+                    self.allocator,
+                    null,
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return try output.toOwnedSlice();
+            } else if (parse_ast.parse_diagnostics.items.len > 0) {
+                var report = try parse_ast.parseDiagnosticToReport(
+                    &module_env.common,
+                    parse_ast.parse_diagnostics.items[0],
+                    self.allocator,
+                    "repl",
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                // Trim trailing newlines from the output and return a properly allocated copy
+                const full_result = try output.toOwnedSlice();
+                defer self.allocator.free(full_result);
+                const trimmed = std.mem.trimRight(u8, full_result, "\n");
+                return try self.allocator.dupe(u8, trimmed);
+            }
+        }
+
         // Empty scratch space
         parse_ast.store.emptyScratch();
 
@@ -398,15 +555,13 @@ pub const Repl = struct {
         const try_stmt_in_try_module = self.builtin_indices.try_type;
         const str_stmt_in_builtin_module = self.builtin_indices.str_type;
 
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
-            .list = try module_env.insertIdent(base.Ident.for_text("List")),
-            .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = bool_stmt_in_bool_module,
             .try_stmt = try_stmt_in_try_module,
             .str_stmt = str_stmt_in_builtin_module,
             .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
         };
 
         // Create canonicalizer with nested types available for qualified name resolution
@@ -433,12 +588,36 @@ pub const Repl = struct {
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
 
         const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+            // Check for diagnostics and render them as error messages
+            const diagnostics = try module_env.getDiagnostics();
+            if (diagnostics.len > 0) {
+                // Render the first diagnostic as the error message
+                const diagnostic = diagnostics[0];
+                var report = try module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return try output.toOwnedSlice();
+            }
             return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
         };
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check - Pass Builtin as imported module
         const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+
+        // Resolve imports - map each import to its index in imported_modules
+        // This uses the same resolution logic as compile_package.zig
+        module_env.imports.resolveImports(module_env, &imported_modules);
+
         var checker = Check.init(
             self.allocator,
             &module_env.types,
@@ -446,7 +625,7 @@ pub const Repl = struct {
             &imported_modules,
             &module_envs_map,
             &cir.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         ) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
@@ -459,7 +638,7 @@ pub const Repl = struct {
 
         // Create interpreter instance with BuiltinTypes containing real Builtin module
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinitAndFreeOtherEnvs();
@@ -485,8 +664,15 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
+        // Use the runtime type from the result value if available (set by e.g. makeBoolValue),
+        // otherwise fall back to translating the compile-time type from the expression.
+        // This is important when the compile-time type is a generic constraint (e.g. from == or !=)
+        // but the runtime type is concrete (e.g. Bool).
         const output = blk: {
+            if (result.rt_var) |rt_var| {
+                break :blk try interpreter.renderValueRocWithType(result, rt_var);
+            }
+            const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
             const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
                 break :blk try interpreter.renderValueRoc(result);
             };
@@ -499,5 +685,189 @@ pub const Repl = struct {
             return try self.allocator.dupe(u8, "<record>");
         }
         return output;
+    }
+
+    /// Evaluate a program (which may contain definitions) - returns structured result
+    fn evaluatePureExpressionStructured(self: *Repl, module_env: *ModuleEnv) !StepResult {
+        // Determine if we have definitions (which means we built a block expression)
+        const has_definitions = self.definitions.count() > 0;
+
+        // Parse appropriately based on whether we have definitions
+        var parse_ast = if (has_definitions)
+            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+                return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
+            }
+        else
+            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+                return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
+            };
+        defer parse_ast.deinit(self.allocator);
+
+        // Check for parse errors and render them
+        if (parse_ast.hasErrors()) {
+            if (parse_ast.tokenize_diagnostics.items.len > 0) {
+                var report = try parse_ast.tokenizeDiagnosticToReport(
+                    parse_ast.tokenize_diagnostics.items[0],
+                    self.allocator,
+                    null,
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return .{ .parse_error = try output.toOwnedSlice() };
+            } else if (parse_ast.parse_diagnostics.items.len > 0) {
+                var report = try parse_ast.parseDiagnosticToReport(
+                    &module_env.common,
+                    parse_ast.parse_diagnostics.items[0],
+                    self.allocator,
+                    "repl",
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                const full_result = try output.toOwnedSlice();
+                defer self.allocator.free(full_result);
+                const trimmed = std.mem.trimRight(u8, full_result, "\n");
+                return .{ .parse_error = try self.allocator.dupe(u8, trimmed) };
+            }
+        }
+
+        // Empty scratch space
+        parse_ast.store.emptyScratch();
+
+        // Create CIR
+        const cir = module_env;
+        try cir.initCIRFields(self.allocator, "repl");
+
+        // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
+        defer module_envs_map.deinit();
+
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            module_env,
+            self.builtin_module.env,
+            self.builtin_indices,
+        );
+
+        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
+            return .{ .canonicalize_error = try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err}) };
+        };
+        defer czer.deinit();
+
+        const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+
+        const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+            const diagnostics = try module_env.getDiagnostics();
+            if (diagnostics.len > 0) {
+                const diagnostic = diagnostics[0];
+                var report = try module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return .{ .canonicalize_error = try output.toOwnedSlice() };
+            }
+            return .{ .canonicalize_error = try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null") };
+        };
+        const final_expr_idx = canonical_expr.get_idx();
+
+        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+
+        // Resolve imports - map each import to its index in imported_modules
+        module_env.imports.resolveImports(module_env, &imported_modules);
+
+        const builtin_ctx: Check.BuiltinContext = .{
+            .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
+            .bool_stmt = self.builtin_indices.bool_type,
+            .try_stmt = self.builtin_indices.try_type,
+            .str_stmt = self.builtin_indices.str_type,
+            .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
+        };
+
+        var checker = Check.init(
+            self.allocator,
+            &module_env.types,
+            cir,
+            &imported_modules,
+            &module_envs_map,
+            &cir.store.regions,
+            builtin_ctx,
+        ) catch |err| {
+            return .{ .type_error = try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err}) };
+        };
+        defer checker.deinit();
+
+        _ = checker.checkExprRepl(final_expr_idx) catch |err| {
+            return .{ .type_error = try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err}) };
+        };
+
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
+        };
+        defer interpreter.deinitAndFreeOtherEnvs();
+
+        if (self.crash_ctx) |ctx| {
+            ctx.reset();
+        }
+
+        const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+            error.Crash => {
+                if (self.crash_ctx) |ctx| {
+                    if (ctx.crashMessage()) |msg| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg}) };
+                    }
+                }
+                return .{ .eval_error = try self.allocator.dupe(u8, "Evaluation error: error.Crash") };
+            },
+            else => return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}) },
+        };
+
+        if (self.debug_store_snapshots) {
+            try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
+        }
+
+        const output = blk: {
+            if (result.rt_var) |rt_var| {
+                break :blk try interpreter.renderValueRocWithType(result, rt_var);
+            }
+            const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
+            const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
+                break :blk try interpreter.renderValueRoc(result);
+            };
+            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var);
+        };
+
+        result.decref(&interpreter.runtime_layout_store, self.roc_ops);
+        if (result.layout.tag == .record) {
+            self.allocator.free(output);
+            return .{ .expression = try self.allocator.dupe(u8, "<record>") };
+        }
+        return .{ .expression = output };
     }
 };

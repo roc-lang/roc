@@ -25,13 +25,16 @@ if bool {
 
 
 **MISSING METHOD**
-This `from_numeral` method is being called on the type _[A]_others_, which has no method with that name:
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **if_then_else_simple_block_formatting.md:3:8:3:9:**
 ```roc
 } else 2
 ```
        ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _[A]_others_
 
 
 # TOKENS

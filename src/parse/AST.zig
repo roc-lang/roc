@@ -264,6 +264,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .return_outside_function => "RETURN OUTSIDE FUNCTION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
         .where_expected_open_bracket => "WHERE CLAUSE ERROR",
@@ -420,6 +421,16 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addText("Tip: ");
                 try report.document.addReflowingTextWithBackticks(tip);
             }
+        },
+        .return_outside_function => {
+            try report.document.addText("The ");
+            try report.document.addAnnotated("return", .error_highlight);
+            try report.document.addText(" keyword can only be used inside a function body.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Use `return` to exit early from a function and provide a value. For example:");
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock("foo = |x| { if x < 0 { return Err(NegativeInput) }; Ok(x) }");
         },
         .import_must_be_top_level => {
             try report.document.addReflowingText("Import statements must appear at the top level of a module.");
@@ -690,6 +701,7 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
+        return_outside_function,
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,

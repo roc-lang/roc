@@ -1131,15 +1131,13 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
-        .list = try can_ir.insertIdent(base.Ident.for_text("List")),
-        .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try can_ir.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,
         .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
     };
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
@@ -1274,7 +1272,7 @@ fn processSnapshotContent(
             builtin_modules.items,
             &module_envs,
             &can_ir.store.regions,
-            common_idents,
+            builtin_ctx,
         );
         _ = try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
@@ -1322,7 +1320,7 @@ fn processSnapshotContent(
                 builtin_modules.items,
                 &module_envs,
                 &can_ir.store.regions,
-                common_idents,
+                builtin_ctx,
             );
             try checker.checkFile();
             module_envs_for_snippet = module_envs; // Keep alive
@@ -3160,9 +3158,17 @@ fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
 }
 
 fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("snapshotRocExpectFailed not implemented yet");
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(snapshot_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate snapshot expect failure message", .{});
+    };
+    snapshot_env.crash.recordCrash(formatted) catch |err| {
+        snapshot_env.allocator.free(formatted);
+        std.debug.panic("failed to store snapshot expect failure: {}", .{err});
+    };
 }
 
 fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {

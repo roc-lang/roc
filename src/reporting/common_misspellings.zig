@@ -22,6 +22,7 @@ pub const CommonMisspellings = struct {
         .{ "case", "`case` is not a keyword in Roc. Use `match` for pattern matching." },
         .{ "switch", "`switch` is not a keyword in Roc. Use `match` for pattern matching." },
         .{ "when", "`when` is not a keyword in Roc. Use `match` for pattern matching." },
+        .{ "debug", "`debug` is not a keyword in Roc. Use `dbg` for debug printing." },
         .{ "then", "`then` is not a keyword in Roc. You can put the first branch of an `if` immediately after the condition, e.g. `if (condition) then_branch else else_branch`" },
         .{ "elif", "Roc uses `else if` for chaining conditions, not `elif`." },
         .{ "elseif", "Roc uses `else if` (two words) for chaining conditions." },
@@ -107,7 +108,7 @@ test "identifier misspellings lookup" {
     const tip = CommonMisspellings.getIdentifierTip("case");
     try std.testing.expect(tip != null);
     try std.testing.expectEqualStrings(
-        "`case` is not a keyword in Roc. Use `when` for pattern matching.",
+        "`case` is not a keyword in Roc. Use `match` for pattern matching.",
         tip.?,
     );
 }

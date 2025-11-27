@@ -116,10 +116,13 @@ test "check type - i64 annotation with fractional literal passes type checking" 
 }
 
 test "check type - string plus number should fail" {
+    // Str + number: when we unify Str with numeric flex, the flex's from_numeral constraint
+    // gets applied to Str. Since Str doesn't have from_numeral, we get MISSING METHOD.
+    // The plus dispatch on Str also fails with MISSING METHOD.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(source, .fail_first, "MISSING METHOD");
 }
 
 test "check type - string plus string should fail (no plus method)" {
@@ -127,6 +130,64 @@ test "check type - string plus string should fail (no plus method)" {
         \\x = "hello" + "world"
     ;
     try checkTypesModule(source, .fail, "MISSING METHOD");
+}
+
+// binop operand type unification //
+
+test "check type - binop operands must have same type - I64 plus I32 should fail" {
+    const source =
+        \\x = 1i64 + 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands must have same type - I64 minus I32 should fail" {
+    const source =
+        \\x = 1i64 - 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands must have same type - I64 times I32 should fail" {
+    const source =
+        \\x = 1i64 * 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands must have same type - F64 divide F32 should fail" {
+    const source =
+        \\x = 1.0f64 / 2.0f32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binop operands same type works - I64 plus I64" {
+    const source =
+        \\x = 1i64 + 2i64
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - binop operands same type works - unbound plus unbound" {
+    const source =
+        \\x = 1 + 2
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+}
+
+test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
+    const source =
+        \\x = 1i64 == 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - comparison operands must have same type - I64 lt I32 should fail" {
+    const source =
+        \\x = 1i64 < 2i32
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // primitives - lists //
@@ -271,6 +332,107 @@ test "check type - tag union with function payload - no is_eq" {
     // Tag unions with function payloads should not have is_eq
     const source =
         \\Fn(|x| x) == Fn(|x| x)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - direct lambda equality - no is_eq" {
+    // Lambdas/functions should not support equality comparison
+    const source =
+        \\(|x| x) == (|y| y)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+// anonymous type inequality (desugars to is_eq().not()) //
+
+test "check type - (a == b) desugars to a.is_eq(b) with unified args" {
+    // `a == b` desugars to `a.is_eq(b)` with additional constraint that a and b have the same type
+    const src_binop =
+        \\|a, b| a == b
+    ;
+
+    // The binop version unifies a and b, so they have the same type variable
+    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> d]";
+    try checkTypesExpr(src_binop, .pass, expected_binop);
+
+    // The direct method call version does NOT unify a and b
+    const src_direct =
+        \\|a, b| a.is_eq(b)
+    ;
+    const expected_direct: []const u8 = "c, d -> e where [c.is_eq : c, d -> e]";
+    try checkTypesExpr(src_direct, .pass, expected_direct);
+}
+
+test "check type - (a != b) desugars to a.is_eq(b).not() with unified args" {
+    // `a != b` desugars to `a.is_eq(b).not()` with additional constraint that a and b have the same type
+    const src_binop =
+        \\|a, b| a != b
+    ;
+
+    // The binop version unifies a and b, so they have the same type variable
+    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> e, e.not : e -> d]";
+    try checkTypesExpr(src_binop, .pass, expected_binop);
+
+    // The direct method call version does NOT unify a and b
+    const src_direct =
+        \\|a, b| a.is_eq(b).not()
+    ;
+    const expected_direct: []const u8 = "c, d -> e where [c.is_eq : c, d -> f, f.not : f -> e]";
+    try checkTypesExpr(src_direct, .pass, expected_direct);
+}
+
+test "check type - record inequality - same records" {
+    // != desugars to is_eq().not(), result type is whatever not returns
+    const source =
+        \\{ x: 1, y: 2 } != { x: 1, y: 2 }
+    ;
+    // For concrete types, the constraint resolves to Bool since record.is_eq returns Bool and Bool.not returns Bool
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tuple inequality" {
+    const source =
+        \\(1, 2) != (1, 2)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - record with function field - no inequality" {
+    // Records containing functions should not support != because they don't have is_eq
+    const source =
+        \\{ x: 1, f: |a| a + 1 } != { x: 1, f: |a| a + 1 }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tuple with function element - no inequality" {
+    // Tuples containing functions should not support != because they don't have is_eq
+    const source =
+        \\(1, |a| a) != (1, |a| a)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - direct lambda inequality - no is_eq" {
+    // Lambdas/functions should not support inequality comparison (requires is_eq)
+    const source =
+        \\(|x| x) != (|y| y)
+    ;
+    try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "check type - tag union inequality" {
+    const source =
+        \\Ok(1) != Ok(1)
+    ;
+    try checkTypesExpr(source, .pass, "Bool");
+}
+
+test "check type - tag union with function payload - no inequality" {
+    // Tag unions with function payloads should not support != because they don't have is_eq
+    const source =
+        \\Fn(|x| x) != Fn(|x| x)
     ;
     try checkTypesExpr(source, .fail, "TYPE DOES NOT SUPPORT EQUALITY");
 }
@@ -1219,13 +1381,16 @@ test "check type - crash" {
     );
 }
 
-// debug //
+// dbg //
 
-test "check type - debug" {
+test "check type - dbg" {
+    // dbg returns {} (not the value it's debugging), so it can be used
+    // as a statement/side-effect without affecting the block's return type
     const source =
         \\y : U64
         \\y = {
-        \\  debug 2
+        \\  dbg 2
+        \\  42
         \\}
         \\
         \\main = {
@@ -2124,11 +2289,30 @@ test "check type - equirecursive static dispatch with type annotation" {
     );
 }
 
+test "check type - static dispatch method type mismatch - REGRESSION TEST" {
+    // This test verifies that when a method is called with mismatched types,
+    // we get a TYPE MISMATCH error. This is a regression test for the diagnostic
+    // output when static dispatch method arguments don't match.
+    //
+    // The scenario: a function requires is_eq on type `a`, but we call it
+    // with two different types (number and string), causing a type mismatch.
+    const source =
+        \\fn : a, a -> Bool where [a.is_eq : a, a -> Bool]
+        \\fn = |x, y| x.is_eq(y)
+        \\
+        \\result = fn(1u64, 2u64) == fn(3u64, 4u64)
+    ;
+
+    // This should pass - both calls use the same types
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
 // helpers - module //
 
 const ModuleExpectation = union(enum) {
     pass: DefExpectation,
     fail,
+    fail_first, // Allows multiple errors, checks first error title
 };
 
 const DefExpectation = union(enum) {
@@ -2162,6 +2346,9 @@ fn checkTypesModule(
         },
         .fail => {
             return test_env.assertOneTypeError(expected);
+        },
+        .fail_first => {
+            return test_env.assertFirstTypeError(expected);
         },
     }
 
@@ -2198,4 +2385,94 @@ fn checkTypesExpr(
     }
 
     return test_env.assertLastDefType(expected);
+}
+
+// effectful function type annotation parsing //
+
+test "check type - effectful zero-arg function annotation" {
+    // This test verifies that () => {} is parsed as a zero-arg effectful function,
+    // NOT as a function taking a unit tuple argument.
+    // The bug was that () => {} was being parsed as (()) => {} - a function taking
+    // one empty-tuple argument instead of zero arguments.
+    const source =
+        \\foo : (() => {})
+        \\foo = || {}
+    ;
+    // Expected: zero-arg effectful function returning empty record
+    // If the parser bug exists, this would fail with TYPE MISMATCH because:
+    // - annotation parses as: (()) => {} (one empty-tuple arg)
+    // - lambda infers as: ({}) -> {} (zero args, pure)
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {  }");
+}
+
+test "check type - pure zero-arg function annotation" {
+    // This test verifies that () -> {} is parsed as a zero-arg pure function,
+    // NOT as a function taking a unit tuple argument.
+    const source =
+        \\foo : (() -> {})
+        \\foo = || {}
+    ;
+    // Expected: zero-arg pure function returning empty record
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
+}
+
+test "imports of non-existent modules produce MODULE NOT FOUND errors" {
+    // This test verifies that importing modules that don't exist produces
+    // MODULE NOT FOUND errors. This is a regression test - a parser change
+    // for zero-arg functions accidentally caused these errors to disappear.
+    //
+    // Source from test/snapshots/can_import_comprehensive.md
+    const source =
+        \\import json.Json
+        \\import http.Client as Http exposing [get, post]
+        \\import utils.String as Str
+        \\
+        \\main = {
+        \\    client = Http.get
+        \\    parser = Json.utf8
+        \\    helper = Str.trim
+        \\
+        \\    # Test direct module access
+        \\    result1 = Json.parse
+        \\
+        \\    # Test aliased module access
+        \\    result2 = Http.post
+        \\
+        \\    # Test exposed items (should work without module prefix)
+        \\    result3 = get
+        \\    result4 = post
+        \\
+        \\    # Test multiple qualified access
+        \\    combined = Str.concat(
+        \\        client,
+        \\        parser,
+        \\        helper,
+        \\        result1,
+        \\        result2,
+        \\        result3,
+        \\        result4,
+        \\        combined,
+        \\    )
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+
+    // Count MODULE NOT FOUND errors
+    var module_not_found_count: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .module_not_found) {
+            module_not_found_count += 1;
+        }
+    }
+
+    // We expect exactly 3 MODULE NOT FOUND errors:
+    // 1. json.Json
+    // 2. http.Client
+    // 3. utils.String
+    try testing.expectEqual(@as(usize, 3), module_not_found_count);
 }

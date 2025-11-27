@@ -6,6 +6,7 @@ const eval = @import("eval");
 const base = @import("base");
 const check = @import("check");
 const parse = @import("parse");
+const types = @import("types");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const ModuleEnv = can_mod.ModuleEnv;
@@ -89,26 +90,9 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
-        .minus_ident = common.findIdent("minus") orelse unreachable,
-        .times_ident = common.findIdent("times") orelse unreachable,
-        .div_by_ident = common.findIdent("div_by") orelse unreachable,
-        .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
-        .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
-        .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
-        .not_ident = common.findIdent("not") orelse unreachable,
-        .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
-        .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
-        .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
-        .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
-        .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-        .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
+        .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
     };
 
     return LoadedModule{
@@ -331,15 +315,13 @@ test "Repl - minimal interpreter integration" {
     const try_stmt_in_builtin_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
-        .list = try cir.insertIdent(base.Ident.for_text("List")),
-        .box = try cir.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try cir.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Step 4: Canonicalize
@@ -353,14 +335,18 @@ test "Repl - minimal interpreter integration" {
 
     // Step 5: Type check - Pass Builtin as imported module
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
-    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
+
+    // Resolve imports - map each import to its index in imported_envs
+    cir.imports.resolveImports(cir, &imported_envs);
+
+    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &[_]*const ModuleEnv{});
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &imported_envs, &checker.import_mapping);
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

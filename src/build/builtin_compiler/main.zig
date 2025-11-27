@@ -12,6 +12,7 @@ const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const types = @import("types");
+const reporting = @import("reporting");
 
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
@@ -23,50 +24,27 @@ const Var = types.Var;
 
 const max_builtin_bytes = 1024 * 1024;
 
-/// Indices of builtin type declarations within the Builtin module.
-/// These are determined at build time via string lookup and serialized to builtin_indices.bin.
-const BuiltinIndices = struct {
-    /// Statement index of nested Bool type declaration within Builtin module
-    bool_type: CIR.Statement.Idx,
-    /// Statement index of nested Try type declaration within Builtin module
-    try_type: CIR.Statement.Idx,
-    /// Statement index of nested Dict type declaration within Builtin module
-    dict_type: CIR.Statement.Idx,
-    /// Statement index of nested Set type declaration within Builtin module
-    set_type: CIR.Statement.Idx,
-    /// Statement index of nested Str type declaration within Builtin module
-    str_type: CIR.Statement.Idx,
-    /// Statement index of nested List type declaration within Builtin module
-    list_type: CIR.Statement.Idx,
-    /// Statement index of nested U8 type declaration within Builtin module
-    u8_type: CIR.Statement.Idx,
-    /// Statement index of nested I8 type declaration within Builtin module
-    i8_type: CIR.Statement.Idx,
-    /// Statement index of nested U16 type declaration within Builtin module
-    u16_type: CIR.Statement.Idx,
-    /// Statement index of nested I16 type declaration within Builtin module
-    i16_type: CIR.Statement.Idx,
-    /// Statement index of nested U32 type declaration within Builtin module
-    u32_type: CIR.Statement.Idx,
-    /// Statement index of nested I32 type declaration within Builtin module
-    i32_type: CIR.Statement.Idx,
-    /// Statement index of nested U64 type declaration within Builtin module
-    u64_type: CIR.Statement.Idx,
-    /// Statement index of nested I64 type declaration within Builtin module
-    i64_type: CIR.Statement.Idx,
-    /// Statement index of nested U128 type declaration within Builtin module
-    u128_type: CIR.Statement.Idx,
-    /// Statement index of nested I128 type declaration within Builtin module
-    i128_type: CIR.Statement.Idx,
-    /// Statement index of nested Dec type declaration within Builtin module
-    dec_type: CIR.Statement.Idx,
-    /// Statement index of nested F32 type declaration within Builtin module
-    f32_type: CIR.Statement.Idx,
-    /// Statement index of nested F64 type declaration within Builtin module
-    f64_type: CIR.Statement.Idx,
-    /// Statement index of nested Numeral type declaration within Builtin module
-    numeral_type: CIR.Statement.Idx,
-};
+// Stderr writer for diagnostic reporting
+var stderr_buffer: [4096]u8 = undefined;
+var stderr_writer: std.fs.File.Writer = undefined;
+var stderr_initialized = false;
+
+fn stderrWriter() *std.Io.Writer {
+    if (!stderr_initialized) {
+        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        stderr_initialized = true;
+    }
+    return &stderr_writer.interface;
+}
+
+fn flushStderr() void {
+    if (stderr_initialized) {
+        stderr_writer.interface.flush() catch {};
+    }
+}
+
+// Use the canonical BuiltinIndices from CIR
+const BuiltinIndices = CIR.BuiltinIndices;
 
 /// Replace specific e_anno_only expressions with e_low_level_lambda operations.
 /// This transforms standalone annotations into low-level builtin lambda operations
@@ -97,6 +75,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // We need to find the actual ident that was created during canonicalization
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
+    }
+    if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
+        try low_level_map.put(str_is_eq_ident, .str_is_eq);
     }
     if (env.common.findIdent("Builtin.Str.concat")) |str_concat_ident| {
         try low_level_map.put(str_concat_ident, .str_concat);
@@ -182,9 +163,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
     }
-    if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
-        try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
-    }
 
     // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
@@ -226,11 +204,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         if (env.common.findIdent(is_eq)) |ident| {
             try low_level_map.put(ident, .num_is_eq);
         }
-    }
-
-    // Numeric inequality operation (Dec only)
-    if (env.common.findIdent("Builtin.Num.Dec.is_ne")) |ident| {
-        try low_level_map.put(ident, .num_is_ne);
     }
 
     // Numeric to_str operations (all numeric types)
@@ -404,11 +377,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create parameter patterns for the lambda
-                    // Binary operations need 2 parameters, unary operations need 1
-                    const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
-                        else => 2, // Most numeric operations are binary
+                    // Get the number of parameters from the type annotation
+                    // The annotation must be a function type for low-level operations
+                    const annotation = env.store.getAnnotation(def.annotation.?);
+                    const type_anno = env.store.getTypeAnno(annotation.anno);
+                    const num_params: u32 = switch (type_anno) {
+                        .@"fn" => |func| func.args.span.len,
+                        else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
                     const patterns_start = env.store.scratchTop("patterns");
@@ -542,6 +517,7 @@ pub fn main() !void {
         gpa,
         "Builtin",
         builtin_roc_source,
+        builtin_src_path,
         &.{}, // No module dependencies
         null, // bool_stmt not available yet (will be found within Builtin)
         null, // try_stmt not available yet (will be found within Builtin)
@@ -561,6 +537,7 @@ pub fn main() !void {
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
     const list_type_idx = try findTypeDeclaration(builtin_env, "List");
+    const box_type_idx = try findTypeDeclaration(builtin_env, "Box");
 
     // Find numeric types nested inside Num (e.g., Builtin.Num.U8)
     const u8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U8");
@@ -578,31 +555,36 @@ pub fn main() !void {
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
     const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
-    // Expose the nested types so they can be found by getExposedNodeIndexById
-    // For builtin types, the statement index IS the node index
+    // Look up idents for each type
+    // Top-level types use simple names: "Bool", "Try", "List", etc.
+    // Numeric types nested under Num use fully-qualified names: "Builtin.Num.U8", etc.
+    // This allows method lookup to work correctly (getMethodIdent builds the full path)
     const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
     const try_ident = builtin_env.common.findIdent("Try") orelse unreachable;
     const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
     const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
     const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
     const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
+    const box_ident = builtin_env.common.findIdent("Box") orelse unreachable;
+    const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
+    const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
+    const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
+    const i16_ident = builtin_env.common.findIdent("Builtin.Num.I16") orelse unreachable;
+    const u32_ident = builtin_env.common.findIdent("Builtin.Num.U32") orelse unreachable;
+    const i32_ident = builtin_env.common.findIdent("Builtin.Num.I32") orelse unreachable;
+    const u64_ident = builtin_env.common.findIdent("Builtin.Num.U64") orelse unreachable;
+    const i64_ident = builtin_env.common.findIdent("Builtin.Num.I64") orelse unreachable;
+    const u128_ident = builtin_env.common.findIdent("Builtin.Num.U128") orelse unreachable;
+    const i128_ident = builtin_env.common.findIdent("Builtin.Num.I128") orelse unreachable;
+    const dec_ident = builtin_env.common.findIdent("Builtin.Num.Dec") orelse unreachable;
+    const f32_ident = builtin_env.common.findIdent("Builtin.Num.F32") orelse unreachable;
+    const f64_ident = builtin_env.common.findIdent("Builtin.Num.F64") orelse unreachable;
+    const numeral_ident = builtin_env.common.findIdent("Builtin.Num.Numeral") orelse unreachable;
+    // Tag idents for Try type (Ok and Err)
+    const ok_ident = builtin_env.common.findIdent("Ok") orelse unreachable;
+    const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
 
-    // Expose numeric types with their simple names (not Num.U8, just U8)
-    const u8_ident = builtin_env.common.findIdent("U8") orelse unreachable;
-    const i8_ident = builtin_env.common.findIdent("I8") orelse unreachable;
-    const u16_ident = builtin_env.common.findIdent("U16") orelse unreachable;
-    const i16_ident = builtin_env.common.findIdent("I16") orelse unreachable;
-    const u32_ident = builtin_env.common.findIdent("U32") orelse unreachable;
-    const i32_ident = builtin_env.common.findIdent("I32") orelse unreachable;
-    const u64_ident = builtin_env.common.findIdent("U64") orelse unreachable;
-    const i64_ident = builtin_env.common.findIdent("I64") orelse unreachable;
-    const u128_ident = builtin_env.common.findIdent("U128") orelse unreachable;
-    const i128_ident = builtin_env.common.findIdent("I128") orelse unreachable;
-    const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
-    const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
-    const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
-    const numeral_ident = builtin_env.common.findIdent("Numeral") orelse unreachable;
-
+    // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
@@ -633,12 +615,14 @@ pub fn main() !void {
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
+        // Statement indices
         .bool_type = bool_type_idx,
         .try_type = try_type_idx,
         .dict_type = dict_type_idx,
         .set_type = set_type_idx,
         .str_type = str_type_idx,
         .list_type = list_type_idx,
+        .box_type = box_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
         .u16_type = u16_type_idx,
@@ -653,8 +637,82 @@ pub fn main() !void {
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
+        .bool_ident = bool_ident,
+        .try_ident = try_ident,
+        .dict_ident = dict_ident,
+        .set_ident = set_ident,
+        .str_ident = str_ident,
+        .list_ident = list_ident,
+        .box_ident = box_ident,
+        .u8_ident = u8_ident,
+        .i8_ident = i8_ident,
+        .u16_ident = u16_ident,
+        .i16_ident = i16_ident,
+        .u32_ident = u32_ident,
+        .i32_ident = i32_ident,
+        .u64_ident = u64_ident,
+        .i64_ident = i64_ident,
+        .u128_ident = u128_ident,
+        .i128_ident = i128_ident,
+        .dec_ident = dec_ident,
+        .f32_ident = f32_ident,
+        .f64_ident = f64_ident,
+        .numeral_ident = numeral_ident,
+        .ok_ident = ok_ident,
+        .err_ident = err_ident,
     };
+
+    // Validate that BuiltinIndices contains all type declarations under Builtin
+    // This ensures BuiltinIndices stays in sync with the actual Builtin module content
+    try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
+
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
+}
+
+/// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
+/// Iterates through all statements and ensures every s_nominal_decl is present in BuiltinIndices,
+/// with the exception of "Num" which is a container type, not an auto-imported type.
+fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinIndices) !void {
+    // Collect all statement indices from BuiltinIndices using reflection
+    // Only check Statement.Idx fields (skip Ident.Idx fields)
+    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(std.heap.page_allocator);
+    defer indexed_stmts.deinit();
+
+    const fields = @typeInfo(BuiltinIndices).@"struct".fields;
+    inline for (fields) |field| {
+        if (field.type == CIR.Statement.Idx) {
+            const stmt_idx = @field(indices, field.name);
+            try indexed_stmts.put(stmt_idx, {});
+        }
+    }
+
+    // Check all nominal type declarations in the Builtin module
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |decl| {
+                const header = env.store.getTypeHeader(decl.header);
+                const ident_text = env.getIdentText(header.name);
+
+                // Skip container types that are not auto-imported types
+                if (std.mem.eql(u8, ident_text, "Builtin") or std.mem.eql(u8, ident_text, "Builtin.Num")) {
+                    continue;
+                }
+
+                // Every other nominal type should be in BuiltinIndices
+                if (!indexed_stmts.contains(stmt_idx)) {
+                    std.debug.print("ERROR: Type '{s}' (stmt_idx={d}) is not in BuiltinIndices!\n", .{
+                        ident_text,
+                        @intFromEnum(stmt_idx),
+                    });
+                    std.debug.print("Add this type to BuiltinIndices in CIR.zig and builtin_compiler/main.zig\n", .{});
+                    return error.BuiltinIndicesIncomplete;
+                }
+            },
+            else => continue,
+        }
+    }
 }
 
 const ModuleDep = struct {
@@ -666,6 +724,7 @@ fn compileModule(
     gpa: Allocator,
     module_name: []const u8,
     source: []const u8,
+    source_path: []const u8,
     deps: []const ModuleDep,
     bool_stmt_opt: ?CIR.Statement.Idx,
     try_stmt_opt: ?CIR.Statement.Idx,
@@ -688,21 +747,16 @@ fn compileModule(
 
     // 2. Create common idents (needed for type checking)
     const module_ident = try module_env.insertIdent(base.Ident.for_text(module_name));
-    const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
-    const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
-    const try_ident = try module_env.insertIdent(base.Ident.for_text("Try"));
-    var common_idents: Check.CommonIdents = .{
+    var builtin_ctx: Check.BuiltinContext = .{
         .module_name = module_ident,
-        .list = list_ident,
-        .box = box_ident,
-        .@"try" = try_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,
         .builtin_module = null,
+        .builtin_indices = null,
     };
 
     // 3. Parse
@@ -717,22 +771,35 @@ fn compileModule(
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
-        const total_errors = parse_ast.tokenize_diagnostics.items.len + parse_ast.parse_diagnostics.items.len;
+        const stderr = stderrWriter();
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Parse failed for {s}\n", .{module_name});
-        std.debug.print("=" ** 80 ++ "\n\n", .{});
-
+        // Render tokenize diagnostics
         for (parse_ast.tokenize_diagnostics.items) |diag| {
-            std.debug.print("  Tokenize error: {any}\n", .{diag});
-        }
-        for (parse_ast.parse_diagnostics.items) |diag| {
-            std.debug.print("  Parse error: {any}\n", .{diag});
+            var report = parse_ast.tokenizeDiagnosticToReport(diag, gpa, source_path) catch |err| {
+                std.debug.print("Error creating tokenize diagnostic report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering tokenize diagnostic: {}\n", .{err});
+            };
         }
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("Builtin compiler exiting with error code due to {d} parse error(s)\n", .{total_errors});
-        std.debug.print("=" ** 80 ++ "\n", .{});
+        // Render parse diagnostics
+        for (parse_ast.parse_diagnostics.items) |diag| {
+            var report = parse_ast.parseDiagnosticToReport(&module_env.common, diag, gpa, source_path) catch |err| {
+                std.debug.print("Error creating parse diagnostic report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering parse diagnostic: {}\n", .{err});
+            };
+        }
+
+        flushStderr();
         return error.ParseError;
     }
 
@@ -755,34 +822,22 @@ fn compileModule(
     const can_diagnostics = try module_env.getDiagnostics();
     defer gpa.free(can_diagnostics);
     if (can_diagnostics.len > 0) {
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Canonicalization failed for {s}\n", .{module_name});
-        std.debug.print("=" ** 80 ++ "\n\n", .{});
+        const stderr = stderrWriter();
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
 
         for (can_diagnostics) |diag| {
-            switch (diag) {
-                .undeclared_type => |d| {
-                    const type_name = module_env.getIdentText(d.name);
-                    std.debug.print("  - Undeclared type: {s}\n", .{type_name});
-                },
-                .ident_not_in_scope => |d| {
-                    const ident_name = module_env.getIdentText(d.ident);
-                    std.debug.print("  - Ident not in scope: {s}\n", .{ident_name});
-                },
-                .nested_value_not_found => |d| {
-                    const parent = module_env.getIdentText(d.parent_name);
-                    const nested = module_env.getIdentText(d.nested_name);
-                    std.debug.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested });
-                },
-                else => {
-                    std.debug.print("  - Diagnostic: {any}\n", .{diag});
-                },
-            }
+            var report = module_env.diagnosticToReport(diag, gpa, source_path) catch |err| {
+                std.debug.print("Error creating canonicalization diagnostic report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering canonicalization diagnostic: {}\n", .{err});
+            };
         }
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("Builtin compiler exiting with error code due to {d} diagnostic(s)\n", .{can_diagnostics.len});
-        std.debug.print("=" ** 80 ++ "\n", .{});
+        flushStderr();
         return error.CanonicalizeError;
     }
 
@@ -867,10 +922,10 @@ fn compileModule(
             return error.TypeDeclarationNotFound;
         };
 
-        // Update common_idents with the found statement indices
-        common_idents.bool_stmt = found_bool_stmt;
-        common_idents.try_stmt = found_try_stmt;
-        common_idents.str_stmt = found_str_stmt;
+        // Update builtin_ctx with the found statement indices
+        builtin_ctx.bool_stmt = found_bool_stmt;
+        builtin_ctx.try_stmt = found_try_stmt;
+        builtin_ctx.str_stmt = found_str_stmt;
     }
 
     // 6. Type check
@@ -893,7 +948,7 @@ fn compileModule(
         imported_envs.items,
         &module_envs,
         &module_env.store.regions,
-        common_idents,
+        builtin_ctx,
     );
     defer checker.deinit();
 
@@ -901,20 +956,36 @@ fn compileModule(
 
     // Check for type errors
     if (checker.problems.problems.items.len > 0) {
-        const total_errors = checker.problems.problems.items.len;
+        const stderr = stderrWriter();
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("ERROR: Type checking failed for {s}\n", .{module_name});
-        std.debug.print("=" ** 80 ++ "\n\n", .{});
+        const problem = check.problem;
+        var report_builder = problem.ReportBuilder.init(
+            gpa,
+            module_env,
+            module_env,
+            &checker.snapshots,
+            source_path,
+            imported_envs.items,
+            &checker.import_mapping,
+        );
+        defer report_builder.deinit();
 
-        for (checker.problems.problems.items) |prob| {
-            std.debug.print("  - Problem: {any}\n", .{prob});
+        for (0..checker.problems.len()) |i| {
+            const problem_idx: problem.Problem.Idx = @enumFromInt(i);
+            const prob = checker.problems.get(problem_idx);
+            var report = report_builder.build(prob) catch |err| {
+                std.debug.print("Error creating type problem report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, palette, config) catch |err| {
+                std.debug.print("Error rendering type problem: {}\n", .{err});
+            };
         }
 
-        std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-        std.debug.print("Builtin compiler exiting with error code due to {d} type error(s)\n", .{total_errors});
-        std.debug.print("=" ** 80 ++ "\n", .{});
-
+        flushStderr();
         return error.TypeCheckError;
     }
 
@@ -945,6 +1016,13 @@ fn serializeModuleEnv(
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
+}
+
+/// Get the ident index from a type declaration statement
+fn getTypeIdent(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) base.Ident.Idx {
+    const stmt = env.store.getStatement(stmt_idx);
+    const header = env.store.getTypeHeader(stmt.s_nominal_decl.header);
+    return header.name;
 }
 
 /// Find a type declaration by name in a compiled module

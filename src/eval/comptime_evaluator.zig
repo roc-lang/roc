@@ -9,6 +9,7 @@ const builtins = @import("builtins");
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
+const import_mapping_mod = types_mod.import_mapping;
 const Interpreter = @import("interpreter.zig").Interpreter;
 const eval_mod = @import("mod.zig");
 
@@ -104,8 +105,10 @@ fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
-    const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
-    evaluator.expect.recordCrash(msg_slice) catch {
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    // Record the raw source bytes - the diagnostics machinery will handle formatting
+    // via buildComptimeExpectFailedReport which shows the source region with ANSI colors
+    evaluator.expect.recordCrash(source_bytes) catch {
         // If we can't record the expect failure, halt evaluation
         // This is the only case where expect should halt
         evaluator.halted = true;
@@ -179,8 +182,9 @@ pub const ComptimeEvaluator = struct {
         problems: *ProblemStore,
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping);
 
         return ComptimeEvaluator{
             .allocator = allocator,
@@ -267,6 +271,10 @@ pub const ComptimeEvaluator = struct {
             // Nothing to evaluate at the declaration site for these;
             // by design, they cause crashes when lookups happen on them
             .e_anno_only => return EvalResult{ .success = null },
+            // Required lookups reference values from the app's `main` that provides
+            // values to the platform's `requires` clause. These values are not available
+            // during compile-time evaluation of the platform - they will be linked at runtime.
+            .e_lookup_required => return EvalResult{ .success = null },
             else => false,
         };
 
@@ -722,7 +730,7 @@ pub const ComptimeEvaluator = struct {
             // Step 2: Look up the from_numeral method for this nominal type
             // Get the module where the type is defined
             const origin_module_ident = nominal_type.origin_module;
-            const is_builtin = origin_module_ident == self.env.builtin_module_ident;
+            const is_builtin = origin_module_ident == self.env.idents.builtin_module;
 
             const origin_env: *const ModuleEnv = if (is_builtin) blk: {
                 break :blk self.interpreter.builtin_module_env orelse {
@@ -741,29 +749,21 @@ pub const ComptimeEvaluator = struct {
                 };
             };
 
-            // Build the qualified method name: ModuleName.TypeName.from_numeral
-            const type_name_bytes = self.env.getIdent(nominal_type.ident.ident_idx);
-            const method_name_bytes = self.env.getIdent(literal.constraint.fn_name);
-
-            // Extract just the type name (e.g., "I64" from "Num.I64") for error messages
-            const short_type_name = if (std.mem.lastIndexOf(u8, type_name_bytes, ".")) |dot_idx|
-                type_name_bytes[dot_idx + 1 ..]
-            else
-                type_name_bytes;
-
-            // Build qualified name: Builtin.Num.TypeName.from_numeral
-            // Note: type_name_bytes may be "Num.I64" or just "I64" depending on context
-            // We need to use the full type_name_bytes to preserve module nesting
-            var qualified_name_buf: [256]u8 = undefined;
-            const qualified_name = try std.fmt.bufPrint(
-                &qualified_name_buf,
-                "{s}.{s}.{s}",
-                .{ origin_env.module_name, type_name_bytes, method_name_bytes },
-            );
-
-            // Look up the identifier in the origin module
-            const ident_in_origin = origin_env.getIdentStoreConst().findByString(qualified_name) orelse {
+            // Look up the method using ident indices directly
+            // The getMethodIdentByIdents function handles qualified name construction internally
+            // Pass self.env as the source since that's where the idents are from
+            const ident_in_origin = origin_env.getMethodIdentByIdents(
+                self.env,
+                nominal_type.ident.ident_idx,
+                literal.constraint.fn_name,
+            ) orelse {
                 // Method not found - the type doesn't have a from_numeral method
+                // Use import mapping to get the user-facing display name
+                const short_type_name = import_mapping_mod.getDisplayName(
+                    self.interpreter.import_mapping,
+                    self.env.common.getIdentStore(),
+                    nominal_type.ident.ident_idx,
+                );
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Type {s} does not have a from_numeral method",
@@ -783,6 +783,12 @@ pub const ComptimeEvaluator = struct {
             // Get the definition index
             const node_idx_in_origin = origin_env.getExposedNodeIndexById(ident_in_origin) orelse {
                 // Definition not exposed - this is also an error
+                // Use import mapping to get the user-facing display name
+                const short_type_name = import_mapping_mod.getDisplayName(
+                    self.interpreter.import_mapping,
+                    self.env.common.getIdentStore(),
+                    nominal_type.ident.ident_idx,
+                );
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Type {s} does not have an accessible from_numeral method",
@@ -826,7 +832,7 @@ pub const ComptimeEvaluator = struct {
 
             // Validation passed - rewrite the expression for builtin types
             if (is_builtin) {
-                try self.rewriteNumericLiteralExpr(literal.expr_idx, short_type_name, num_lit_info);
+                try self.rewriteNumericLiteralExpr(literal.expr_idx, nominal_type.ident.ident_idx, num_lit_info);
             }
             // For user-defined types, keep the original expression
         }
@@ -837,12 +843,20 @@ pub const ComptimeEvaluator = struct {
     fn rewriteNumericLiteralExpr(
         self: *ComptimeEvaluator,
         expr_idx: CIR.Expr.Idx,
-        type_name: []const u8,
+        type_ident: base.Ident.Idx,
         num_lit_info: types_mod.NumeralInfo,
     ) !void {
+        const builtin_indices = self.interpreter.builtins.indices;
+
+        // Use direct ident comparison to determine NumKind
+        const num_kind = builtin_indices.numKindFromIdent(type_ident) orelse {
+            // Unknown type - nothing to rewrite
+            return;
+        };
+
         const current_expr = self.env.store.getExpr(expr_idx);
 
-        // Extract the f64 value from the current expression
+        // Extract the f64 value from the current expression (needed for float types)
         const f64_value: f64 = switch (current_expr) {
             .e_dec => |dec| blk: {
                 // Dec is stored as i128 scaled by 10^18
@@ -866,52 +880,49 @@ pub const ComptimeEvaluator = struct {
             },
         };
 
-        // Determine the target expression type based on type_name
-        if (std.mem.eql(u8, type_name, "F32")) {
-            // Rewrite to e_frac_f32
-            const f32_value: f32 = @floatCast(f64_value);
-            const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-            self.env.store.nodes.set(node_idx, .{
-                .tag = .expr_frac_f32,
-                .data_1 = @bitCast(f32_value),
-                .data_2 = 1, // has_suffix = true to mark as explicitly typed
-                .data_3 = 0,
-            });
-        } else if (std.mem.eql(u8, type_name, "F64")) {
-            // Rewrite to e_frac_f64
-            const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-            const f64_bits: u64 = @bitCast(f64_value);
-            const low: u32 = @truncate(f64_bits);
-            const high: u32 = @truncate(f64_bits >> 32);
-            self.env.store.nodes.set(node_idx, .{
-                .tag = .expr_frac_f64,
-                .data_1 = low,
-                .data_2 = high,
-                .data_3 = 1, // has_suffix = true to mark as explicitly typed
-            });
-        } else if (!num_lit_info.is_fractional) {
-            // Integer type - rewrite to e_num
-            const num_kind: CIR.NumKind = blk: {
-                if (std.mem.eql(u8, type_name, "I8")) break :blk .i8;
-                if (std.mem.eql(u8, type_name, "U8")) break :blk .u8;
-                if (std.mem.eql(u8, type_name, "I16")) break :blk .i16;
-                if (std.mem.eql(u8, type_name, "U16")) break :blk .u16;
-                if (std.mem.eql(u8, type_name, "I32")) break :blk .i32;
-                if (std.mem.eql(u8, type_name, "U32")) break :blk .u32;
-                if (std.mem.eql(u8, type_name, "I64")) break :blk .i64;
-                if (std.mem.eql(u8, type_name, "U64")) break :blk .u64;
-                if (std.mem.eql(u8, type_name, "I128")) break :blk .i128;
-                if (std.mem.eql(u8, type_name, "U128")) break :blk .u128;
-                break :blk .int_unbound; // Fallback
-            };
-
-            const int_value = CIR.IntValue{
-                .bytes = num_lit_info.bytes,
-                .kind = if (num_lit_info.is_u128) .u128 else .i128,
-            };
-            try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+        // Determine the target expression type based on num_kind
+        switch (num_kind) {
+            .f32 => {
+                // Rewrite to e_frac_f32
+                const f32_value: f32 = @floatCast(f64_value);
+                const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                self.env.store.nodes.set(node_idx, .{
+                    .tag = .expr_frac_f32,
+                    .data_1 = @bitCast(f32_value),
+                    .data_2 = 1, // has_suffix = true to mark as explicitly typed
+                    .data_3 = 0,
+                });
+            },
+            .f64 => {
+                // Rewrite to e_frac_f64
+                const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const f64_bits: u64 = @bitCast(f64_value);
+                const low: u32 = @truncate(f64_bits);
+                const high: u32 = @truncate(f64_bits >> 32);
+                self.env.store.nodes.set(node_idx, .{
+                    .tag = .expr_frac_f64,
+                    .data_1 = low,
+                    .data_2 = high,
+                    .data_3 = 1, // has_suffix = true to mark as explicitly typed
+                });
+            },
+            .dec => {
+                // For Dec type, keep the original e_dec/e_dec_small expression
+            },
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
+                // Integer type - rewrite to e_num
+                if (!num_lit_info.is_fractional) {
+                    const int_value = CIR.IntValue{
+                        .bytes = num_lit_info.bytes,
+                        .kind = if (num_lit_info.is_u128) .u128 else .i128,
+                    };
+                    try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+                }
+            },
+            .num_unbound, .int_unbound => {
+                // Nothing to rewrite for unbound types
+            },
         }
-        // For Dec type, keep the original e_dec/e_dec_small expression
     }
 
     /// Invoke a user-defined from_numeral function and check the result.
@@ -1221,24 +1232,16 @@ pub const ComptimeEvaluator = struct {
         digits_after_pt: eval_mod.StackValue,
         roc_ops: *RocOps,
     ) !eval_mod.StackValue {
-        // Use self.env (user's env) for layout store operations since that's what the layout store was initialized with
-        // Insert field names if they don't exist (they should already exist from builtins)
-        const is_negative_ident = self.env.common.findIdent("is_negative") orelse
-            try self.env.common.insertIdent(self.allocator, base.Ident.for_text("is_negative"));
-        const digits_before_pt_ident = self.env.common.findIdent("digits_before_pt") orelse
-            try self.env.common.insertIdent(self.allocator, base.Ident.for_text("digits_before_pt"));
-        const digits_after_pt_ident = self.env.common.findIdent("digits_after_pt") orelse
-            try self.env.common.insertIdent(self.allocator, base.Ident.for_text("digits_after_pt"));
-
+        // Use precomputed idents from self.env for field names
         const field_layouts = [_]layout_mod.Layout{
             is_negative.layout,
             digits_before_pt.layout,
             digits_after_pt.layout,
         };
         const field_names = [_]base.Ident.Idx{
-            is_negative_ident,
-            digits_before_pt_ident,
-            digits_after_pt_ident,
+            self.env.idents.is_negative,
+            self.env.idents.digits_before_pt,
+            self.env.idents.digits_after_pt,
         };
 
         const record_layout_idx = try self.interpreter.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
@@ -1248,13 +1251,13 @@ pub const ComptimeEvaluator = struct {
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents
-        const is_neg_idx = accessor.findFieldIndex(self.env, "is_negative") orelse return error.OutOfMemory;
+        const is_neg_idx = accessor.findFieldIndex(self.env.idents.is_negative) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
 
-        const before_pt_idx = accessor.findFieldIndex(self.env, "digits_before_pt") orelse return error.OutOfMemory;
+        const before_pt_idx = accessor.findFieldIndex(self.env.idents.digits_before_pt) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
 
-        const after_pt_idx = accessor.findFieldIndex(self.env, "digits_after_pt") orelse return error.OutOfMemory;
+        const after_pt_idx = accessor.findFieldIndex(self.env.idents.digits_after_pt) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
 
         return dest;
@@ -1316,7 +1319,7 @@ pub const ComptimeEvaluator = struct {
             var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
             // Use layout store's env for field lookups since records use that env's idents
             const layout_env = self.interpreter.runtime_layout_store.env;
-            const tag_idx = accessor.findFieldIndex(layout_env, "tag") orelse return true;
+            const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
             const tag_field = accessor.getFieldByIndex(tag_idx) catch return true;
 
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
@@ -1389,7 +1392,7 @@ pub const ComptimeEvaluator = struct {
         // Get the payload field from the Try record
         // Use layout store's env for field lookups
         const layout_env = self.interpreter.runtime_layout_store.env;
-        const payload_idx = try_accessor.findFieldIndex(layout_env, "payload") orelse {
+        const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
@@ -1407,7 +1410,7 @@ pub const ComptimeEvaluator = struct {
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
-            if (err_accessor.findFieldIndex(layout_env, "payload")) |err_payload_idx| {
+            if (err_accessor.findFieldIndex(layout_env.idents.payload)) |err_payload_idx| {
                 const err_payload = err_accessor.getFieldByIndex(err_payload_idx) catch {
                     return try std.fmt.allocPrint(self.allocator, "Internal error: could not access InvalidNumeral payload", .{});
                 };

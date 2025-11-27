@@ -28,7 +28,8 @@ pub const SnapshotContent = union(enum) {
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
     recursion_var: SnapshotRecursionVar,
-    recursive,
+    /// A recursive type reference. Stores the name of the type variable if available.
+    recursive: ?Ident.Idx,
     err,
 };
 
@@ -134,6 +135,9 @@ pub const SnapshotTag = struct {
 pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,
+    /// The type variable that has this constraint (the dispatcher).
+    /// This is the type that the method is called on.
+    dispatcher: SnapshotContentIdx,
 };
 
 const Var = types.Var;
@@ -228,8 +232,24 @@ pub const Store = struct {
         }
 
         // If we've seen this variable, then return it as a recursive type
+        // Try to extract the name from the content for better error messages
         if (has_seen_var) {
-            return try self.contents.append(self.gpa, .recursive);
+            const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
+                .flex => |flex| flex.name,
+                .rigid => |rigid| rigid.name,
+                .recursion_var => |rec_var| rec_var.name,
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    // Other structures can appear as backing vars for nominal types.
+                    // E.g., List(a) := [Nil, Cons(a, List(a))] has a tag union as backing.
+                    // These don't have a direct name, so we fall back to contextual naming.
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
+                },
+                // Error types shouldn't create cycles
+                .err => unreachable,
+            };
+            return try self.contents.append(self.gpa, .{ .recursive = recursive_name });
         }
 
         // If not, add it to the seen list
@@ -277,6 +297,8 @@ pub const Store = struct {
         return SnapshotStaticDispatchConstraint{
             .fn_name = constraint.fn_name,
             .fn_content = try self.deepCopyVar(store, constraint.fn_var),
+            // Dispatcher will be set when collecting constraints during write
+            .dispatcher = @enumFromInt(0),
         };
     }
 
@@ -631,36 +653,11 @@ pub const Store = struct {
                     _ = try self.buf.writer().write(", ");
                 }
 
-                const fn_resolved = self.snapshots.getContent(constraint.fn_content);
-
-                if (fn_resolved != .structure) {
-                    _ = try self.buf.writer().write("dispach_fn_error");
-                    continue;
-                }
-
-                // TODO: Find a better way to do this
-                const dispatcher = blk: {
-                    std.debug.assert(fn_resolved == .structure);
-
-                    const fn_args = switch (fn_resolved.structure) {
-                        .fn_effectful => |func| func.args,
-                        .fn_pure => |func| func.args,
-                        .fn_unbound => |func| func.args,
-                        else => {
-                            std.debug.assert(false);
-                            continue;
-                        },
-                    };
-                    std.debug.assert(fn_args.len() > 0);
-
-                    break :blk self.snapshots.sliceVars(fn_args)[0];
-                };
-
-                try self.writeWithContext(idx, .General, dispatcher);
+                try self.writeWithContext(constraint.dispatcher, .General, idx);
                 _ = try self.buf.writer().write(".");
                 _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
                 _ = try self.buf.writer().write(" : ");
-                try self.writeWithContext(idx, .General, constraint.fn_content);
+                try self.writeWithContext(constraint.fn_content, .General, idx);
             }
             _ = try self.buf.writer().write("]");
         }
@@ -680,18 +677,21 @@ pub const Store = struct {
                 if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
-                    _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
+                    // If this flex var has constraints, use .General context so it gets a general name
+                    // that will match when the constraint is written in the where clause
+                    const var_context = if (flex.constraints.len() > 0) .General else context;
+                    _ = try self.writeFlexVarName(flex.var_, content_idx, var_context, root_idx);
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
 
                 // Useful in debugging to see if a var is rigid or not
@@ -717,8 +717,14 @@ pub const Store = struct {
                 const structure_content = self.snapshots.getContent(rec_var.structure);
                 try self.writeContent(structure_content, context, rec_var.structure, root_idx);
             },
-            .recursive => {
-                _ = try self.buf.writer().write("RecursiveType");
+            .recursive => |maybe_name| {
+                if (maybe_name) |name_idx| {
+                    _ = try self.buf.writer().write(self.idents.getText(name_idx));
+                } else {
+                    // Fallback if no name was captured - generate a contextual name
+                    _ = try self.buf.writer().write("_");
+                    try self.generateContextualName(context);
+                }
             },
             .err => {
                 _ = try self.buf.writer().write("Error");
@@ -728,7 +734,7 @@ pub const Store = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        const display_idx = self.import_mapping.get(alias.ident.ident_idx) orelse alias.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -796,7 +802,7 @@ pub const Store = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        const display_idx = self.import_mapping.get(nominal_type.ident.ident_idx) orelse nominal_type.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
@@ -814,11 +820,9 @@ pub const Store = struct {
         }
 
         // Add origin information if it's from a different module
-        if (self.current_module_name) |current_module| {
-            const origin_module_name = self.idents.getText(nominal_type.origin_module);
-
-            // Only show origin if it's different from the current module
-            if (!std.mem.eql(u8, origin_module_name, current_module)) {
+        if (self.current_module_idx) |current_idx| {
+            if (nominal_type.origin_module != current_idx) {
+                const origin_module_name = self.idents.getText(nominal_type.origin_module);
                 _ = try self.buf.writer().write(" (from ");
                 _ = try self.buf.writer().write(origin_module_name);
                 _ = try self.buf.writer().write(")");
@@ -877,7 +881,7 @@ pub const Store = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, flex.idx);
                 }
             },
             .rigid => |rigid| {
@@ -888,7 +892,7 @@ pub const Store = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, record.ext);
                 }
             },
             .unbound, .invalid => {},
@@ -1011,7 +1015,7 @@ pub const Store = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1024,7 +1028,7 @@ pub const Store = struct {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             else => {
@@ -1048,13 +1052,75 @@ pub const Store = struct {
     }
 
     /// Append a constraint to the list, if it doesn't already exist
-    fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
+    /// Deduplicates based on method name and dispatcher
+    fn appendStaticDispatchConstraint(self: *Self, constraint_base: SnapshotStaticDispatchConstraint, dispatcher: SnapshotContentIdx) std.mem.Allocator.Error!void {
+        // Create the full constraint with the dispatcher
+        const constraint_to_add = SnapshotStaticDispatchConstraint{
+            .fn_name = constraint_base.fn_name,
+            .fn_content = constraint_base.fn_content,
+            .dispatcher = dispatcher,
+        };
+
         for (self.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_content == constraint_to_add.fn_content) {
-                return;
+            if (constraint.fn_name == constraint_to_add.fn_name and constraint.dispatcher == constraint_to_add.dispatcher) {
+                return; // Duplicate constraint
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
+    }
+
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive.
+    /// Flex vars and rigid names carry unique identities, but recursive markers don't—they're just
+    /// placeholders indicating "reference back to a recursive type." Which type they refer to is
+    /// determined by position in the tree, not by data in the marker itself. So for deduplication,
+    /// all recursive markers are treated as equivalent.
+    const DispatcherIdentity = union(enum) {
+        flex_var: Var,
+        rigid_name: Ident.Idx,
+        recursive: void,
+    };
+
+    /// Get the dispatcher (first argument) identity from a function content
+    fn getDispatcherIdentity(self: *Self, fn_content: SnapshotContentIdx) ?DispatcherIdentity {
+        const content = self.snapshots.getContent(fn_content);
+        if (content != .structure) return null;
+
+        const fn_args = switch (content.structure) {
+            .fn_effectful => |func| func.args,
+            .fn_pure => |func| func.args,
+            .fn_unbound => |func| func.args,
+            else => return null,
+        };
+
+        if (fn_args.len() == 0) return null;
+
+        const first_arg_idx = self.snapshots.sliceVars(fn_args)[0];
+        const first_arg_content = self.snapshots.getContent(first_arg_idx);
+
+        return switch (first_arg_content) {
+            .flex => |flex| DispatcherIdentity{ .flex_var = flex.var_ },
+            .rigid => |rigid| DispatcherIdentity{ .rigid_name = rigid.name },
+            .recursive => DispatcherIdentity{ .recursive = {} },
+            else => null,
+        };
+    }
+
+    fn dispatcherIdentitiesEqual(a: ?DispatcherIdentity, b: ?DispatcherIdentity) bool {
+        if (a == null or b == null) return false;
+        return switch (a.?) {
+            .flex_var => |a_var| switch (b.?) {
+                .flex_var => |b_var| a_var == b_var,
+                else => false,
+            },
+            .rigid_name => |a_name| switch (b.?) {
+                .rigid_name => |b_name| a_name == b_name,
+                else => false,
+            },
+            .recursive => switch (b.?) {
+                .recursive => true, // see DispatcherIdentity doc comment
+                else => false,
+            },
+        };
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type
@@ -1070,10 +1136,22 @@ pub const Store = struct {
             // Check if this variable appears multiple times
             const occurrences = try self.countOccurrences(flex_var, root_idx);
 
-            if (occurrences == 1) {
+            // Treat vars that will appear in the where clause as multi-occurrence
+            // to ensure they get general names without context-specific prefixes
+            const treat_as_multi = occurrences > 1 or context == .General;
+
+            if (!treat_as_multi) {
                 // If it appears once, then generate the contextual name
+                const buf_start = self.buf.items.len;
                 _ = try self.buf.writer().write("_");
                 try self.generateContextualName(context);
+                const buf_end = self.buf.items.len;
+
+                // Store the name in the map so it can be reused if this var is written again
+                const flex_start = self.flex_var_names.items.len;
+                try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
+                const flex_end = self.flex_var_names.items.len;
+                try self.flex_var_names_map.put(flex_var, .{ .start = flex_start, .end = flex_end });
             } else {
                 // If it appears more than once, then we have to track the name we
                 // assign it so it appears consistently across the type str
@@ -1234,7 +1312,7 @@ pub const SnapshotWriter = struct {
     snapshots: *const Store,
     idents: *const Ident.Store,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
-    current_module_name: ?[]const u8,
+    current_module_idx: ?Ident.Idx,
     can_ir: ?*const ModuleEnv,
     other_modules: ?[]const *const ModuleEnv,
     next_name_index: u32,
@@ -1253,7 +1331,7 @@ pub const SnapshotWriter = struct {
             .snapshots = snapshots,
             .idents = idents,
             .import_mapping = import_mapping,
-            .current_module_name = null,
+            .current_module_idx = null,
             .can_ir = null,
             .other_modules = null,
             .next_name_index = 0,
@@ -1270,7 +1348,7 @@ pub const SnapshotWriter = struct {
         gpa: std.mem.Allocator,
         snapshots: *const Store,
         idents: *const Ident.Store,
-        current_module_name: []const u8,
+        current_module_idx: Ident.Idx,
         can_ir: *const ModuleEnv,
         other_modules: []const *const ModuleEnv,
     ) Self {
@@ -1278,7 +1356,7 @@ pub const SnapshotWriter = struct {
             .buf = std.array_list.Managed(u8).init(gpa),
             .snapshots = snapshots,
             .idents = idents,
-            .current_module_name = current_module_name,
+            .current_module_idx = current_module_idx,
             .can_ir = can_ir,
             .other_modules = other_modules,
             .next_name_index = 0,
@@ -1439,36 +1517,11 @@ pub const SnapshotWriter = struct {
                     _ = try self.buf.writer().write(", ");
                 }
 
-                const fn_resolved = self.snapshots.getContent(constraint.fn_content);
-
-                if (fn_resolved != .structure) {
-                    _ = try self.buf.writer().write("dispach_fn_error");
-                    continue;
-                }
-
-                // TODO: Find a better way to do this
-                const dispatcher = blk: {
-                    std.debug.assert(fn_resolved == .structure);
-
-                    const fn_args = switch (fn_resolved.structure) {
-                        .fn_effectful => |func| func.args,
-                        .fn_pure => |func| func.args,
-                        .fn_unbound => |func| func.args,
-                        else => {
-                            std.debug.assert(false);
-                            continue;
-                        },
-                    };
-                    std.debug.assert(fn_args.len() > 0);
-
-                    break :blk self.snapshots.sliceVars(fn_args)[0];
-                };
-
-                try self.writeWithContext(idx, .General, dispatcher);
+                try self.writeWithContext(constraint.dispatcher, .General, idx);
                 _ = try self.buf.writer().write(".");
                 _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
                 _ = try self.buf.writer().write(" : ");
-                try self.writeWithContext(idx, .General, constraint.fn_content);
+                try self.writeWithContext(constraint.fn_content, .General, idx);
             }
             _ = try self.buf.writer().write("]");
         }
@@ -1488,18 +1541,21 @@ pub const SnapshotWriter = struct {
                 if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
-                    _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
+                    // If this flex var has constraints, use .General context so it gets a general name
+                    // that will match when the constraint is written in the where clause
+                    const var_context = if (flex.constraints.len() > 0) .General else context;
+                    _ = try self.writeFlexVarName(flex.var_, content_idx, var_context, root_idx);
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, content_idx);
                 }
 
                 // Useful in debugging to see if a var is rigid or not
@@ -1525,8 +1581,14 @@ pub const SnapshotWriter = struct {
                 const structure_content = self.snapshots.getContent(rec_var.structure);
                 try self.writeContent(structure_content, context, rec_var.structure, root_idx);
             },
-            .recursive => {
-                _ = try self.buf.writer().write("RecursiveType");
+            .recursive => |maybe_name| {
+                if (maybe_name) |name_idx| {
+                    _ = try self.buf.writer().write(self.idents.getText(name_idx));
+                } else {
+                    // Fallback if no name was captured - generate a contextual name
+                    _ = try self.buf.writer().write("_");
+                    try self.generateContextualName(context);
+                }
             },
             .err => {
                 _ = try self.buf.writer().write("Error");
@@ -1536,7 +1598,7 @@ pub const SnapshotWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        const display_idx = self.import_mapping.get(alias.ident.ident_idx) orelse alias.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -1604,7 +1666,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        const display_idx = self.import_mapping.get(nominal_type.ident.ident_idx) orelse nominal_type.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
@@ -1622,11 +1684,9 @@ pub const SnapshotWriter = struct {
         }
 
         // Add origin information if it's from a different module
-        if (self.current_module_name) |current_module| {
-            const origin_module_name = self.idents.getText(nominal_type.origin_module);
-
-            // Only show origin if it's different from the current module
-            if (!std.mem.eql(u8, origin_module_name, current_module)) {
+        if (self.current_module_idx) |current_idx| {
+            if (nominal_type.origin_module != current_idx) {
+                const origin_module_name = self.idents.getText(nominal_type.origin_module);
                 _ = try self.buf.writer().write(" (from ");
                 _ = try self.buf.writer().write(origin_module_name);
                 _ = try self.buf.writer().write(")");
@@ -1685,7 +1745,7 @@ pub const SnapshotWriter = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, flex.idx);
                 }
             },
             .rigid => |rigid| {
@@ -1696,7 +1756,7 @@ pub const SnapshotWriter = struct {
                 // Since don't recurse above, we must capture the static dispatch
                 // constraints directly
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, record.ext);
                 }
             },
             .unbound, .invalid => {},
@@ -1819,7 +1879,7 @@ pub const SnapshotWriter = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1832,7 +1892,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(constraint, tag_union.ext);
                 }
             },
             else => {
@@ -1856,13 +1916,75 @@ pub const SnapshotWriter = struct {
     }
 
     /// Append a constraint to the list, if it doesn't already exist
-    fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
+    /// Deduplicates based on method name and dispatcher
+    fn appendStaticDispatchConstraint(self: *Self, constraint_base: SnapshotStaticDispatchConstraint, dispatcher: SnapshotContentIdx) std.mem.Allocator.Error!void {
+        // Create the full constraint with the dispatcher
+        const constraint_to_add = SnapshotStaticDispatchConstraint{
+            .fn_name = constraint_base.fn_name,
+            .fn_content = constraint_base.fn_content,
+            .dispatcher = dispatcher,
+        };
+
         for (self.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_content == constraint_to_add.fn_content) {
-                return;
+            if (constraint.fn_name == constraint_to_add.fn_name and constraint.dispatcher == constraint_to_add.dispatcher) {
+                return; // Duplicate constraint
             }
         }
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
+    }
+
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive.
+    /// Flex vars and rigid names carry unique identities, but recursive markers don't—they're just
+    /// placeholders indicating "reference back to a recursive type." Which type they refer to is
+    /// determined by position in the tree, not by data in the marker itself. So for deduplication,
+    /// all recursive markers are treated as equivalent.
+    const DispatcherIdentity = union(enum) {
+        flex_var: Var,
+        rigid_name: Ident.Idx,
+        recursive: void,
+    };
+
+    /// Get the dispatcher (first argument) identity from a function content
+    fn getDispatcherIdentity(self: *Self, fn_content: SnapshotContentIdx) ?DispatcherIdentity {
+        const content = self.snapshots.getContent(fn_content);
+        if (content != .structure) return null;
+
+        const fn_args = switch (content.structure) {
+            .fn_effectful => |func| func.args,
+            .fn_pure => |func| func.args,
+            .fn_unbound => |func| func.args,
+            else => return null,
+        };
+
+        if (fn_args.len() == 0) return null;
+
+        const first_arg_idx = self.snapshots.sliceVars(fn_args)[0];
+        const first_arg_content = self.snapshots.getContent(first_arg_idx);
+
+        return switch (first_arg_content) {
+            .flex => |flex| DispatcherIdentity{ .flex_var = flex.var_ },
+            .rigid => |rigid| DispatcherIdentity{ .rigid_name = rigid.name },
+            .recursive => DispatcherIdentity{ .recursive = {} },
+            else => null,
+        };
+    }
+
+    fn dispatcherIdentitiesEqual(a: ?DispatcherIdentity, b: ?DispatcherIdentity) bool {
+        if (a == null or b == null) return false;
+        return switch (a.?) {
+            .flex_var => |a_var| switch (b.?) {
+                .flex_var => |b_var| a_var == b_var,
+                else => false,
+            },
+            .rigid_name => |a_name| switch (b.?) {
+                .rigid_name => |b_name| a_name == b_name,
+                else => false,
+            },
+            .recursive => switch (b.?) {
+                .recursive => true, // see DispatcherIdentity doc comment
+                else => false,
+            },
+        };
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type
@@ -1878,10 +2000,22 @@ pub const SnapshotWriter = struct {
             // Check if this variable appears multiple times
             const occurrences = try self.countOccurrences(flex_var, root_idx);
 
-            if (occurrences == 1) {
+            // Treat vars that will appear in the where clause as multi-occurrence
+            // to ensure they get general names without context-specific prefixes
+            const treat_as_multi = occurrences > 1 or context == .General;
+
+            if (!treat_as_multi) {
                 // If it appears once, then generate the contextual name
+                const buf_start = self.buf.items.len;
                 _ = try self.buf.writer().write("_");
                 try self.generateContextualName(context);
+                const buf_end = self.buf.items.len;
+
+                // Store the name in the map so it can be reused if this var is written again
+                const flex_start = self.flex_var_names.items.len;
+                try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
+                const flex_end = self.flex_var_names.items.len;
+                try self.flex_var_names_map.put(flex_var, .{ .start = flex_start, .end = flex_end });
             } else {
                 // If it appears more than once, then we have to track the name we
                 // assign it so it appears consistently across the type str

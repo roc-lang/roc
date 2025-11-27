@@ -1111,7 +1111,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
-        .KwDbg, .KwDebug => {
+        .KwDbg => {
             const start = self.pos;
             self.advance();
             const expr = try self.parseExpr();
@@ -2145,7 +2145,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .branches = branches,
             } });
         },
-        .KwDbg, .KwDebug => {
+        .KwDbg => {
             self.advance();
             const e = try self.parseExpr();
             expr = try self.store.addExpr(.{ .dbg = .{
@@ -2180,6 +2180,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .expr = operand,
                 .region = .{ .start = start, .end = self.pos },
             } });
+        },
+        .KwReturn => {
+            // Return keyword found in expression context (outside a function/block)
+            return try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
         },
         else => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
@@ -2660,6 +2664,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 self.advance(); // Advance past Comma
             }
             if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+                // Arrow inside parens: (a, b -> c)
                 // use the scratch for the args for the func, advance, get the ret and set this to be a fn
                 // since it's a function, as long as we find the CloseRound we can just return here.
                 const args = try self.store.typeAnnoSpanFrom(scratch_top);
@@ -2681,6 +2686,22 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     .anno = function,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+            } else if (self.peek() == .CloseRound and (self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and self.store.scratchTypeAnnoTop() == scratch_top) {
+                // Empty parens followed by arrow: () => {} or () -> {}
+                // This handles zero-arg functions where the arrow comes after empty parens.
+                // We only enter this branch when the tuple is empty (scratch_top unchanged).
+                self.advance(); // Advance past CloseRound
+                const args = try self.store.typeAnnoSpanFrom(scratch_top);
+                const effectful = self.peek() == .OpFatArrow;
+                self.advance(); // Advance past arrow
+                const ret = try self.parseTypeAnno(.looking_for_args);
+                const function = try self.store.addTypeAnno(.{ .@"fn" = .{
+                    .args = args,
+                    .ret = ret,
+                    .effectful = effectful,
+                    .region = .{ .start = after_round, .end = self.pos },
+                } });
+                anno = function;
             } else {
                 if (self.peek() != .CloseRound) {
                     self.store.clearScratchTypeAnnosFrom(scratch_top);
