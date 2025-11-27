@@ -2057,15 +2057,17 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
     if (std.mem.endsWith(u8, resolved_path, ".roc")) {
         // This is a platform source file - look for host library near it
         const platform_dir = std.fs.path.dirname(resolved_path) orelse ".";
-        const host_filename = if (comptime builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
-        const host_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, host_filename });
 
-        std.fs.cwd().access(host_path, .{}) catch {
+        // Use findHostLibrary to check targets directory first for proper musl detection,
+        // then fall back to root-level libhost.a
+        const host_path = findHostLibrary(allocs.arena, platform_dir) catch {
+            return error.PlatformNotSupported;
+        } orelse {
             return error.PlatformNotSupported;
         };
 
         return PlatformPaths{
-            .host_lib_path = try allocs.arena.dupe(u8, host_path),
+            .host_lib_path = host_path,
             .platform_source_path = try allocs.arena.dupe(u8, resolved_path),
         };
     } else {
@@ -2138,19 +2140,15 @@ fn getNativeTargetDirs() []const []const u8 {
 
 /// Find host library in package directory, checking multiple locations.
 /// Search order:
-/// 1. {package_dir}/libhost.a (simple platforms)
-/// 2. {package_dir}/targets/{target}/libhost.a for each target in preference order
+/// 1. {package_dir}/targets/{target}/libhost.a for each target in preference order
 ///    (e.g., on Linux x64: tries x64musl first, then x64glibc as fallback)
+///    This is checked first because target-specific libraries include CRT/libc dependencies
+///    that are needed for proper linking and musl detection.
+/// 2. {package_dir}/libhost.a (simple platforms without target-specific builds)
 fn findHostLibrary(allocator: std.mem.Allocator, package_dir_path: []const u8) !?[]const u8 {
     const host_filename = if (comptime builtin.os.tag == .windows) "host.lib" else "libhost.a";
 
-    // 1. Check root directory first (simple platforms)
-    const root_path = try std.fs.path.join(allocator, &.{ package_dir_path, host_filename });
-    if (std.fs.cwd().access(root_path, .{})) |_| {
-        return root_path;
-    } else |_| {}
-
-    // 2. Check targets directory with fallback support
+    // 1. Check targets directory first (preferred for proper linking)
     for (getNativeTargetDirs()) |target| {
         const target_path = try std.fs.path.join(allocator, &.{
             package_dir_path, "targets", target, host_filename,
@@ -2159,6 +2157,12 @@ fn findHostLibrary(allocator: std.mem.Allocator, package_dir_path: []const u8) !
             return target_path;
         } else |_| {}
     }
+
+    // 2. Fall back to root directory (simple platforms)
+    const root_path = try std.fs.path.join(allocator, &.{ package_dir_path, host_filename });
+    if (std.fs.cwd().access(root_path, .{})) |_| {
+        return root_path;
+    } else |_| {}
 
     return null;
 }
