@@ -1053,6 +1053,77 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         try low_level_map.put(ident, .f64_to_f32_try);
     }
 
+    // Dec conversion functions
+    if (env.common.findIdent("Builtin.Num.Dec.to_i8_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_i8_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i8_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_i8_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i16_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_i16_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i16_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_i16_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i32_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_i32_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i32_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_i32_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i64_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_i64_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i64_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_i64_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_i128_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_i128_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_u8_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u8_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_u8_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u16_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_u16_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u16_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_u16_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u32_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_u32_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u32_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_u32_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u64_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_u64_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u64_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_u64_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u128_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_u128_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_u128_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_u128_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_f32_wrap")) |ident| {
+        try low_level_map.put(ident, .dec_to_f32_wrap);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_f32_try")) |ident| {
+        try low_level_map.put(ident, .dec_to_f32_try);
+    }
+    if (env.common.findIdent("Builtin.Num.Dec.to_f64")) |ident| {
+        try low_level_map.put(ident, .dec_to_f64);
+    }
+
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     // NOTE: We copy def indices to a separate list first, because operations inside the loop
     // may reallocate extra_data, which would invalidate any slice taken from it.

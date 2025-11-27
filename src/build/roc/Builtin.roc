@@ -669,6 +669,35 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
+
+			# Conversions to signed integers (all lossy - truncates fractional part)
+			to_i8_wrap : Dec -> I8
+			to_i8_try : Dec -> Try(I8, [OutOfRange])
+			to_i16_wrap : Dec -> I16
+			to_i16_try : Dec -> Try(I16, [OutOfRange])
+			to_i32_wrap : Dec -> I32
+			to_i32_try : Dec -> Try(I32, [OutOfRange])
+			to_i64_wrap : Dec -> I64
+			to_i64_try : Dec -> Try(I64, [OutOfRange])
+			to_i128_wrap : Dec -> I128
+			to_i128_try : Dec -> Try(I128, [OutOfRange])
+
+			# Conversions to unsigned integers (all lossy - truncates fractional part)
+			to_u8_wrap : Dec -> U8
+			to_u8_try : Dec -> Try(U8, [OutOfRange])
+			to_u16_wrap : Dec -> U16
+			to_u16_try : Dec -> Try(U16, [OutOfRange])
+			to_u32_wrap : Dec -> U32
+			to_u32_try : Dec -> Try(U32, [OutOfRange])
+			to_u64_wrap : Dec -> U64
+			to_u64_try : Dec -> Try(U64, [OutOfRange])
+			to_u128_wrap : Dec -> U128
+			to_u128_try : Dec -> Try(U128, [OutOfRange])
+
+			# Conversions to floating point (lossy - Dec has more precision)
+			to_f32_wrap : Dec -> F32
+			to_f32_try : Dec -> Try(F32, [OutOfRange])
+			to_f64 : Dec -> F64
 		}
 
 		F32 :: [].{
