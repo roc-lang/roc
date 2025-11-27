@@ -2111,35 +2111,36 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
-/// Get native target directory name based on host architecture.
-/// Used to find prebuilt host libraries in the targets/ subdirectory.
-fn getNativeTargetDir() ?[]const u8 {
+/// Get list of target directory names to try, in preference order.
+/// For Linux, tries musl first (produces static executables), then glibc as fallback.
+fn getNativeTargetDirs() []const []const u8 {
     return switch (builtin.os.tag) {
         .linux => switch (builtin.cpu.arch) {
-            .aarch64 => "arm64musl",
-            .x86_64 => "x64musl",
-            .arm => "arm32musl",
-            else => null,
+            .aarch64 => &.{ "arm64musl", "arm64glibc" },
+            .x86_64 => &.{ "x64musl", "x64glibc" },
+            .arm => &.{"arm32musl"},
+            else => &.{},
         },
         .macos => switch (builtin.cpu.arch) {
-            .aarch64 => "arm64mac",
-            .x86_64 => "x64mac",
-            else => null,
+            .aarch64 => &.{"arm64mac"},
+            .x86_64 => &.{"x64mac"},
+            else => &.{},
         },
         .windows => switch (builtin.cpu.arch) {
-            .aarch64 => "arm64win",
-            .x86_64 => "x64win",
-            else => null,
+            .aarch64 => &.{"arm64win"},
+            .x86_64 => &.{"x64win"},
+            else => &.{},
         },
-        .wasi => "wasm32",
-        else => null,
+        .wasi => &.{"wasm32"},
+        else => &.{},
     };
 }
 
 /// Find host library in package directory, checking multiple locations.
 /// Search order:
 /// 1. {package_dir}/libhost.a (simple platforms)
-/// 2. {package_dir}/targets/{native_target}/libhost.a (multi-target platforms)
+/// 2. {package_dir}/targets/{target}/libhost.a for each target in preference order
+///    (e.g., on Linux x64: tries x64musl first, then x64glibc as fallback)
 fn findHostLibrary(allocator: std.mem.Allocator, package_dir_path: []const u8) !?[]const u8 {
     const host_filename = if (comptime builtin.os.tag == .windows) "host.lib" else "libhost.a";
 
@@ -2149,8 +2150,8 @@ fn findHostLibrary(allocator: std.mem.Allocator, package_dir_path: []const u8) !
         return root_path;
     } else |_| {}
 
-    // 2. Check targets directory (multi-target platforms)
-    if (getNativeTargetDir()) |target| {
+    // 2. Check targets directory with fallback support
+    for (getNativeTargetDirs()) |target| {
         const target_path = try std.fs.path.join(allocator, &.{
             package_dir_path, "targets", target, host_filename,
         });
