@@ -2162,8 +2162,7 @@ fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
 }
 
 fn writeUnbundleSuccessResponse(response: []u8, buffer_writer: *unbundle.BufferExtractWriter) u8 {
-    var stream = std.io.fixedBufferStream(response);
-    var writer = stream.writer();
+    var writer = std.Io.Writer.fixed(response);
 
     writer.writeAll("{\"success\":true,\"files\":[") catch return 1;
 
@@ -2175,13 +2174,11 @@ fn writeUnbundleSuccessResponse(response: []u8, buffer_writer: *unbundle.BufferE
         }
         first_file = false;
 
-        writer.writeAll("{\"path\":\"") catch return 1;
-        // Escape the path for JSON
-        writeJsonEscaped(writer, entry.key_ptr.*) catch return 1;
-        writer.writeAll("\",\"content\":\"") catch return 1;
-        // Escape the content for JSON (base64 encode binary content)
-        writeJsonEscaped(writer, entry.value_ptr.items) catch return 1;
-        writer.writeAll("\"}") catch return 1;
+        writer.writeAll("{\"path\":") catch return 1;
+        std.json.Stringify.encodeJsonString(entry.key_ptr.*, .{}, &writer) catch return 1;
+        writer.writeAll(",\"content\":") catch return 1;
+        std.json.Stringify.encodeJsonString(entry.value_ptr.items, .{}, &writer) catch return 1;
+        writer.writeAll("}") catch return 1;
     }
 
     writer.writeAll("],\"directories\":[") catch return 1;
@@ -2193,31 +2190,9 @@ fn writeUnbundleSuccessResponse(response: []u8, buffer_writer: *unbundle.BufferE
         }
         first_dir = false;
 
-        writer.writeAll("\"") catch return 1;
-        writeJsonEscaped(writer, dir) catch return 1;
-        writer.writeAll("\"") catch return 1;
+        std.json.Stringify.encodeJsonString(dir, .{}, &writer) catch return 1;
     }
 
     writer.writeAll("]}") catch return 1;
     return 0; // Success
-}
-
-fn writeJsonEscaped(writer: anytype, str: []const u8) !void {
-    for (str) |c| {
-        switch (c) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            else => {
-                if (c < 0x20) {
-                    // Control character - escape as \u00XX
-                    try writer.print("\\u{x:0>4}", .{c});
-                } else {
-                    try writer.writeByte(c);
-                }
-            },
-        }
-    }
 }
