@@ -1190,8 +1190,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
             break :blk null;
         };
         break :blk platform_paths.platform_source_path;
-    } else
-        null;
+    } else null;
     defer if (platform_main_path) |p| {
         // Only free if it was allocated by join (not arena-allocated from resolveUrlPlatform)
         if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../")) {
