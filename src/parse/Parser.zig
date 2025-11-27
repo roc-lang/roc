@@ -2181,6 +2181,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .region = .{ .start = start, .end = self.pos },
             } });
         },
+        .KwReturn => {
+            // Return keyword found in expression context (outside a function/block)
+            return try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
+        },
         else => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
         },

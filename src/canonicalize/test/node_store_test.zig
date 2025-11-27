@@ -134,6 +134,7 @@ test "NodeStore round trip - Statements" {
     try statements.append(gpa, CIR.Statement{
         .s_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
+            .lambda = rand_idx(CIR.Expr.Idx),
         },
     });
 
@@ -395,6 +396,11 @@ test "NodeStore round trip - Expressions" {
             .index = rand.random().int(u32),
             .args = CIR.Pattern.Span{ .span = rand_span() },
             .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_return = .{
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 

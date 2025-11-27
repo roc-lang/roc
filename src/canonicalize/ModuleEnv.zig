@@ -112,12 +112,12 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
-    is_ne: Ident.Idx,
 
     // Type/module names
     @"try": Ident.Idx,
     out_of_range: Ident.Idx,
     builtin_module: Ident.Idx,
+    str: Ident.Idx,
     list: Ident.Idx,
     box: Ident.Idx,
 
@@ -153,6 +153,8 @@ pub const CommonIdents = extern struct {
     ok: Ident.Idx,
     err: Ident.Idx,
     from_numeral: Ident.Idx,
+    true_tag: Ident.Idx,
+    false_tag: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -173,14 +175,14 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
-            .is_ne = try common.insertIdent(gpa, Ident.for_text("is_ne")),
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
+            .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
-            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
-            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
+            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Try")),
+            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
@@ -208,6 +210,8 @@ pub const CommonIdents = extern struct {
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
+            .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
+            .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
         };
     }
 
@@ -231,14 +235,14 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
-            .is_ne = common.findIdent("is_ne") orelse unreachable,
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
+            .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
-            .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
-            .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
+            .builtin_try = common.findIdent("Try") orelse unreachable,
+            .builtin_numeral = common.findIdent("Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
@@ -266,6 +270,8 @@ pub const CommonIdents = extern struct {
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
+            .true_tag = common.findIdent("True") orelse unreachable,
+            .false_tag = common.findIdent("False") orelse unreachable,
         };
     }
 };
@@ -1896,7 +1902,12 @@ pub const Serialized = extern struct {
         // Verify that Serialized is at least as large as the runtime struct.
         // This is required because we're reusing the same memory location.
         // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
-        comptime std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
+        // In Debug builds, Self may be larger due to debug-only store tracking fields, so skip this check.
+        comptime {
+            if (builtin.mode != .Debug) {
+                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
+            }
+        }
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
@@ -1921,7 +1932,6 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
-            // Well-known identifiers - read directly from serialized data (no string lookup needed)
             .idents = self.idents,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),

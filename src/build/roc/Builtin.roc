@@ -15,12 +15,34 @@ Builtin :: [].{
 		with_prefix : Str, Str -> Str
 		drop_prefix : Str, Str -> Str
 		drop_suffix : Str, Str -> Str
+
+		is_eq : Str, Str -> Bool
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
 		len : List(_item) -> U64
 		is_empty : List(_item) -> Bool
 		concat : List(item), List(item) -> List(item)
+
+		is_eq : List(item), List(item) -> Bool
+		    where [item.is_eq : item, item -> Bool]
+		is_eq = |self, other| {
+		    if self.len() != other.len() {
+				return False
+			}
+
+			var $index = 0
+
+			while $index < self.len() {
+			    if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
+					return False
+				}
+
+				$index = $index + 1
+			}
+
+			True
+		}
 
 		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| List.get(list, 0)
@@ -49,6 +71,20 @@ Builtin :: [].{
 			$state
 		}
 
+		fold_rev : List(item), state, (item, state -> state) -> state
+		fold_rev = |list, init, step| {
+			var $state = init
+			var $index = list.len()
+
+			while $index > 0 {
+				$index = $index - 1
+			    item = list_get_unsafe(list, $index)
+				$state = step(item, $state)
+			}
+
+			$state
+		}
+
 		append : List(a), a -> List(a)
 		append = |list, elt| {
 			new_tail : List(a)
@@ -70,7 +106,7 @@ Builtin :: [].{
 			} else {
 				Try.Ok(list_get_unsafe(list, len - 1))
 			}
-	}
+		}
 
 		any : List(a), (a -> Bool) -> Bool
 		# any = |list, predicate| {
@@ -94,7 +130,6 @@ Builtin :: [].{
 		contains = |list, elt| {
 			List.any(list, |x| x == elt)
 		}
-		
 	}
 
 	Bool := [False, True].{
@@ -105,7 +140,6 @@ Builtin :: [].{
 		}
 
 		is_eq : Bool, Bool -> Bool
-		is_ne : Bool, Bool -> Bool
 
 		#encoder : Bool -> Encoder(fmt, [])
 		#	where [fmt implements EncoderFormatting]
@@ -417,7 +451,6 @@ Builtin :: [].{
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool
 			is_eq : Dec, Dec -> Bool
-			is_ne : Dec, Dec -> Bool
 			is_gt : Dec, Dec -> Bool
 			is_gte : Dec, Dec -> Bool
 			is_lt : Dec, Dec -> Bool

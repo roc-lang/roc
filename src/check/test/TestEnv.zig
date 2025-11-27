@@ -235,6 +235,9 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         }
     }
 
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
     // Type Check - Pass all imported modules
     var checker = try Check.init(
         gpa,
@@ -341,6 +344,9 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Add builtin module unconditionally (needed for auto-imported types)
     try imported_envs.append(gpa, builtin_module.env);
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
@@ -514,6 +520,32 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert 1 problem
     try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that the first type error matches the expected title (allows multiple errors).
+pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    // Assert at least 1 problem
+    try testing.expect(self.checker.problems.problems.items.len >= 1);
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem

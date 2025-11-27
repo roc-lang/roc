@@ -278,6 +278,9 @@ fn createInterpreter(env_ptr: *ModuleEnv, builtin_modules: *const eval.BuiltinMo
         return error.OutOfMemory;
     };
 
+    // Resolve imports - map each import name to its index in imported_envs
+    env_ptr.imports.resolveImports(env_ptr, imported_envs);
+
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;

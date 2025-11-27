@@ -271,6 +271,7 @@ INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
 UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
+TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -926,6 +927,20 @@ This expression produces a value, but it's not being used:
 
 It has the type:
     _d_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:175:26:175:27:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		                       ^
+
+It has the type:
+    _U64_
+
+But I expected it to be:
+    _Str_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1972,8 +1987,7 @@ expect {
 		(e-closure
 			(captures
 				(capture (ident "x"))
-				(capture (ident "x"))
-				(capture (ident "dude")))
+				(capture (ident "x")))
 			(e-lambda
 				(args
 					(p-assign (ident "a"))

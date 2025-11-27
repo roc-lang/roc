@@ -241,8 +241,82 @@ const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
+const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
+
+/// Render type checking problems as diagnostic reports to stderr.
+/// Returns the count of errors (fatal/runtime_error severity).
+/// This is shared between rocCheck and rocRun to ensure consistent error reporting.
+fn renderTypeProblems(
+    gpa: Allocator,
+    checker: *Check,
+    module_env: *ModuleEnv,
+    filename: []const u8,
+) usize {
+    const stderr = stderrWriter();
+
+    var rb = ReportBuilder.init(
+        gpa,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        filename,
+        &.{},
+        &checker.import_mapping,
+    );
+    defer rb.deinit();
+
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    // Render canonicalization diagnostics (unused variables, etc.)
+    // Note: getDiagnostics allocates with module_env.gpa, so we must free with that allocator
+    const diags = module_env.getDiagnostics() catch &.{};
+    defer module_env.gpa.free(diags);
+    for (diags) |d| {
+        var report = module_env.diagnosticToReport(d, module_env.gpa, filename) catch continue;
+        defer report.deinit();
+
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Render type checking problems
+    for (checker.problems.problems.items) |prob| {
+        var report = rb.build(prob) catch continue;
+        defer report.deinit();
+
+        // Render the diagnostic report to stderr
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Print summary if there were any problems
+    if (error_count > 0 or warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            error_count,
+            warning_count,
+            filename,
+        }) catch {};
+    }
+
+    // Flush stderr to ensure all error output is visible
+    stderr_writer.interface.flush() catch {};
+
+    return error_count;
+}
 
 /// Size for shared memory allocator (just virtual address space to reserve)
 ///
@@ -1074,14 +1148,12 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
         runWithWindowsHandleInheritance(allocs, exe_path, shm_handle) catch |err| {
-            std.log.err("Failed to run with Windows handle inheritance: {}", .{err});
             return err;
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
         runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager) catch |err| {
-            std.log.err("Failed to run with POSIX fd inheritance: {}", .{err});
             return err;
         };
     }
@@ -1354,7 +1426,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     // Try to find and compile platform modules
     // Extract the actual platform path from the app header to support paths like "../platform/main.roc"
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse return error.InvalidAppPath;
+    // If the roc file path has no directory component (e.g., "app.roc"), use current directory
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
 
@@ -1461,7 +1534,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
                 // Insert the aliased name into the platform env's ident table
                 const aliased_ident = try module_env_ptr.insertIdent(base.Ident.for_text(aliased_name));
 
-                // Add to exposed_items with the same node_idx value
+                // First add to exposed items, then set node index
+                try module_env_ptr.common.exposed_items.addExposedById(shm_allocator, @bitCast(aliased_ident));
                 try module_env_ptr.common.exposed_items.setNodeIndexById(shm_allocator, @bitCast(aliased_ident), entry.value);
             }
         }
@@ -1662,8 +1736,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check with all imported modules
+    // Use the env's module_name_idx so that nominal types' origin_module matches
+    // the env's identity for method resolution at runtime
     const app_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try app_env.insertIdent(base.Ident.for_text("app")),
+        .module_name = app_env.module_name_idx,
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .try_stmt = builtin_modules.builtin_indices.try_type,
         .str_stmt = builtin_modules.builtin_indices.str_type,
@@ -1700,6 +1776,13 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         }
 
         try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
+    }
+
+    // Render all type problems (errors and warnings) exactly as roc check would
+    // The program still runs afterward - we don't block on errors
+    // Skip rendering in test mode to avoid polluting test output
+    if (!builtin.is_test) {
+        _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
     }
 
     app_env_ptr.* = app_env;
@@ -3197,7 +3280,9 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     // Interpreter errors (propagate from eval during build)
     Crash,
     DivisionByZero,
+    EarlyReturn,
     IntegerOverflow,
+    InvalidImportIndex,
     InvalidMethodReceiver,
     InvalidNumExt,
     InvalidTagExt,
@@ -3212,6 +3297,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     StringOrderingNotSupported,
     TupleIndexOutOfBounds,
     TypeMismatch,
+    UnresolvedImport,
     ZeroSizedType,
     // Layout errors
     TypeContainedMismatch,

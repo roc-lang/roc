@@ -750,46 +750,42 @@ combineTrys = |jsonTry, httpStatus|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "handleRequest"))
-		(e-closure
-			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
-			(e-lambda
-				(args
-					(p-assign (ident "req")))
-				(e-block
-					(s-let
-						(p-assign (ident "result"))
-						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-dot-access (field "body")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "req")))))))
-					(e-match
-						(match
-							(cond
+		(e-lambda
+			(args
+				(p-assign (ident "req")))
+			(e-block
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-dot-access (field "body")
+							(receiver
 								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-runtime-error (tag "ident_not_in_scope"))
-											(e-lookup-local
-												(p-assign (ident "value"))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-runtime-error (tag "ident_not_in_scope"))
-											(e-lookup-local
-												(p-assign (ident "error"))))))))))))
+									(p-assign (ident "req")))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local
+											(p-assign (ident "value"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local
+											(p-assign (ident "error")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -840,39 +836,35 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-lookup (name "Client") (external-module "http.Client")))))
 	(d-let
 		(p-assign (ident "handleResponse"))
-		(e-closure
-			(captures
-				(capture (ident "status"))
-				(capture (ident "error")))
-			(e-lambda
-				(args
-					(p-assign (ident "response")))
-				(e-match
-					(match
-						(cond
-							(e-dot-access (field "status")
-								(receiver
+		(e-lambda
+			(args
+				(p-assign (ident "response")))
+			(e-match
+				(match
+					(cond
+						(e-dot-access (field "status")
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "response"))))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local
-										(p-assign (ident "response"))))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "status"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-runtime-error (tag "qualified_ident_does_not_exist"))
-										(e-lookup-local
-											(p-assign (ident "error")))))))))))
+										(p-assign (ident "status"))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-call
+									(e-runtime-error (tag "qualified_ident_does_not_exist"))
+									(e-lookup-local
+										(p-assign (ident "error"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

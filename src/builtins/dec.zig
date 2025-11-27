@@ -663,6 +663,20 @@ pub const RocDec = extern struct {
     pub fn atan(self: RocDec) RocDec {
         return fromF64(math.atan(self.toF64())).?;
     }
+
+    pub fn rem(
+        self: RocDec,
+        other: RocDec,
+        roc_ops: *RocOps,
+    ) RocDec {
+        // (n % 0) is an error
+        if (other.num == 0) {
+            roc_ops.crash("Decimal remainder by 0!");
+        }
+
+        // For Dec, remainder is straightforward since both operands have the same scaling factor
+        return RocDec{ .num = @rem(self.num, other.num) };
+    }
 };
 
 // A number has `k` trailing zeros if `10^k` divides into it cleanly

@@ -273,6 +273,10 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, expect.body, dependencies, allocator);
         },
 
+        .e_return => |ret| {
+            try collectExprDependencies(cir, ret.expr, dependencies, allocator);
+        },
+
         .e_runtime_error => {},
     }
 }

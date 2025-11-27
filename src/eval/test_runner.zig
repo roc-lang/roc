@@ -335,7 +335,6 @@ pub const TestRunner = struct {
                 const explanation = switch (err) {
                     error.TypeMismatch => "The test expression has incompatible types and cannot be evaluated.",
                     error.DivisionByZero => "The test expression attempts to divide by zero.",
-                    error.NotImplemented => "The test uses a feature that is not yet implemented in the interpreter.",
                     error.ZeroSizedType => "The test expression results in a zero-sized type.",
                     else => "This usually indicates a bug in the test itself.",
                 };

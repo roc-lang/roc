@@ -76,6 +76,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
     }
+    if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
+        try low_level_map.put(str_is_eq_ident, .str_is_eq);
+    }
     if (env.common.findIdent("Builtin.Str.concat")) |str_concat_ident| {
         try low_level_map.put(str_concat_ident, .str_concat);
     }
@@ -136,9 +139,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
     }
-    if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
-        try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
-    }
 
     // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
@@ -180,11 +180,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         if (env.common.findIdent(is_eq)) |ident| {
             try low_level_map.put(ident, .num_is_eq);
         }
-    }
-
-    // Numeric inequality operation (Dec only)
-    if (env.common.findIdent("Builtin.Num.Dec.is_ne")) |ident| {
-        try low_level_map.put(ident, .num_is_ne);
     }
 
     // Numeric to_str operations (all numeric types)
@@ -342,8 +337,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
-    const all_defs = env.store.sliceDefs(env.all_defs);
-    for (all_defs) |def_idx| {
+    const all_defs_slice = env.store.sliceDefs(env.all_defs);
+    var def_indices = std.ArrayList(CIR.Def.Idx).empty;
+    defer def_indices.deinit(gpa);
+    try def_indices.appendSlice(gpa, all_defs_slice);
+
+    for (def_indices.items) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
 
@@ -358,11 +357,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Create parameter patterns for the lambda
-                    // Binary operations need 2 parameters, unary operations need 1
-                    const num_params: u32 = switch (low_level_op) {
-                        .num_negate, .num_is_zero, .num_is_negative, .num_is_positive, .num_from_numeral, .num_from_int_digits, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => 1,
-                        else => 2, // Most numeric operations are binary
+                    // Get the number of parameters from the type annotation
+                    // The annotation must be a function type for low-level operations
+                    const annotation = env.store.getAnnotation(def.annotation.?);
+                    const type_anno = env.store.getTypeAnno(annotation.anno);
+                    const num_params: u32 = switch (type_anno) {
+                        .@"fn" => |func| func.args.span.len,
+                        else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
                     const patterns_start = env.store.scratchTop("patterns");
@@ -374,7 +375,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                         const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
                         try env.store.scratch.?.patterns.append(arg_pattern_idx);
                     }
-                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = num_params } };
+                    const args_span = try env.store.patternSpanFrom(patterns_start);
 
                     // Create an e_runtime_error body that crashes when the function is called
                     const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
@@ -422,7 +423,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             if (env.getExposedNodeIndexById(canonical_ident)) |node_idx| {
                 // Insert the alias identifier
                 const alias_ident = try env.common.insertIdent(gpa, base.Ident.for_text(alias_name));
-                // Expose the same node under the alias
+                // First add to exposed items, then set node index
+                try env.common.addExposedById(gpa, alias_ident);
                 try env.common.setNodeIndexById(gpa, alias_ident, node_idx);
             }
         }
@@ -564,6 +566,7 @@ pub fn main() !void {
     const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
+    // Note: These types are already in exposed_items from canonicalization, we just set their node indices
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
@@ -828,32 +831,7 @@ fn compileModule(
         defer new_def_indices.deinit(gpa);
 
         if (new_def_indices.items.len > 0) {
-            // Rebuild all_defs span to include both old and new defs
-            // First, get the old def indices from extra_data
-            const old_span = module_env.all_defs.span;
-            const old_def_count = old_span.len;
-
-            // Allocate new space in extra_data for all defs (old + new)
-            const new_span_start: u32 = @intCast(module_env.store.extra_data.len());
-
-            // Copy old def indices
-            var i: u32 = 0;
-            while (i < old_def_count) : (i += 1) {
-                const idx = @as(collections.SafeList(u32).Idx, @enumFromInt(old_span.start + i));
-                const old_def_idx = module_env.store.extra_data.get(idx).*;
-                _ = try module_env.store.extra_data.append(gpa, old_def_idx);
-            }
-
-            // Append new def indices
-            for (new_def_indices.items) |new_def_idx| {
-                _ = try module_env.store.extra_data.append(gpa, @intFromEnum(new_def_idx));
-            }
-
-            // Update all_defs to point to the new span
-            module_env.all_defs.span.start = new_span_start;
-            module_env.all_defs.span.len = old_def_count + @as(u32, @intCast(new_def_indices.items.len));
-
-            // Rebuild the dependency graph and evaluation order to include new defs
+            // Rebuild the dependency graph and evaluation order to include the updated defs
             const DependencyGraph = @import("can").DependencyGraph;
             var graph = try DependencyGraph.buildDependencyGraph(
                 module_env,

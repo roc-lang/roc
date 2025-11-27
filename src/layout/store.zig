@@ -65,6 +65,8 @@ pub const Store = struct {
     // Identifier for "Builtin.Str" to recognize the string type without string comparisons
     // (null when compiling Builtin module itself or when Builtin.Str isn't available)
     builtin_str_ident: ?Ident.Idx,
+    // Identifier for unqualified "Str" in the Builtin module (if it exists in this env)
+    builtin_str_plain_ident: ?Ident.Idx,
 
     // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
     list_ident: ?Ident.Idx,
@@ -170,6 +172,7 @@ pub const Store = struct {
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
+            .builtin_str_plain_ident = env.idents.str,
             .list_ident = env.idents.list,
             .box_ident = env.idents.box,
             .u8_ident = env.idents.u8_type,
@@ -938,12 +941,21 @@ pub const Store = struct {
                     .nominal_type => |nominal_type| {
                         // Special-case Builtin.Str: it has a tag union backing type, but
                         // should have RocStr layout (3 pointers).
-                        // Check if this nominal type's identifier matches "Builtin.Str"
-                        if (self.builtin_str_ident) |builtin_str| {
-                            if (nominal_type.ident.ident_idx == builtin_str) {
-                                // This is Builtin.Str - use string layout
-                                break :flat_type Layout.str();
+                        // Check if this nominal type's identifier matches Builtin.Str
+                        const is_builtin_str = blk: {
+                            if (self.builtin_str_ident) |builtin_str| {
+                                if (nominal_type.ident.ident_idx == builtin_str) break :blk true;
                             }
+                            if (nominal_type.origin_module == self.env.idents.builtin_module) {
+                                if (self.builtin_str_plain_ident) |plain_str| {
+                                    if (nominal_type.ident.ident_idx == plain_str) break :blk true;
+                                }
+                            }
+                            break :blk false;
+                        };
+                        if (is_builtin_str) {
+                            // This is Builtin.Str - use string layout
+                            break :flat_type Layout.str();
                         }
 
                         // Special handling for Builtin.Box
@@ -1160,10 +1172,8 @@ pub const Store = struct {
 
                             if (is_bool) {
                                 // Bool layout: use predefined bool layout
-                                const layout = Layout.boolType();
-                                const bool_layout_idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, bool_layout_idx);
-                                return bool_layout_idx;
+                                // Break to fall through to pending container processing
+                                break :flat_type Layout.boolType();
                             }
                         }
 
@@ -1171,10 +1181,8 @@ pub const Store = struct {
                         // First, determine discriminant size based on number of tags
                         if (num_tags == 0) {
                             // Empty tag union - represents a zero-sized type
-                            const zst_layout = Layout.zst();
-                            const zst_layout_idx = try self.insertLayout(zst_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, zst_layout_idx);
-                            return zst_layout_idx;
+                            // Break to fall through to pending container processing
+                            break :flat_type Layout.zst();
                         }
 
                         const discriminant_layout = if (num_tags <= 256)
@@ -1196,9 +1204,8 @@ pub const Store = struct {
 
                         if (!has_payload) {
                             // Simple tag union with no payloads - just use discriminant
-                            const tag_layout_idx = try self.insertLayout(discriminant_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, tag_layout_idx);
-                            return tag_layout_idx;
+                            // Break to fall through to pending container processing
+                            break :flat_type discriminant_layout;
                         }
 
                         // Complex tag union with payloads

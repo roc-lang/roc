@@ -734,7 +734,7 @@ pub const Store = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        const display_idx = self.import_mapping.get(alias.ident.ident_idx) orelse alias.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -802,7 +802,7 @@ pub const Store = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        const display_idx = self.import_mapping.get(nominal_type.ident.ident_idx) orelse nominal_type.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
@@ -1598,7 +1598,7 @@ pub const SnapshotWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        const display_idx = self.import_mapping.get(alias.ident.ident_idx) orelse alias.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -1666,7 +1666,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        const display_idx = self.import_mapping.get(nominal_type.ident.ident_idx) orelse nominal_type.ident.ident_idx;
         _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
