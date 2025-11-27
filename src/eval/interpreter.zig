@@ -352,8 +352,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
-    // Now uses the stack-safe implementation instead of recursive evaluation
+    /// Evaluates a Roc expression and returns the result.
     pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
         return try self.evalStackSafe(expr_idx, roc_ops, null);
     }
@@ -5671,8 +5670,7 @@ pub const Interpreter = struct {
     }
 
     /// Schedule evaluation of an expression by examining it and pushing appropriate work items.
-    /// This is the "trampolining" step - instead of recursing, we push work items onto the
-    /// stack to be processed by the main loop, making the interpreter stack-safe.
+    /// Instead of recursing, this pushes work items onto the stack to be processed by the main loop.
     fn scheduleExprEval(
         self: *Interpreter,
         work_stack: *WorkStack,
@@ -5791,8 +5789,6 @@ pub const Interpreter = struct {
             },
 
             .e_lookup_external => |lookup| {
-                // For now, evaluate external lookups using the recursive implementation
-                // This will be properly converted in a later PR
                 const value = try self.evalLookupExternal(lookup, expected_rt_var, roc_ops);
                 try value_stack.push(value);
             },
@@ -6492,7 +6488,6 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // All expression types are now handled by the stack-safe interpreter.
             // If we reach here, there's a new expression type that hasn't been added.
             // else => unreachable,
         }
@@ -7343,7 +7338,7 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .s_expect => |expect_stmt| {
-                // Stack-safe: evaluate condition, then check
+                // Evaluate condition, then check
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
 
                 // Push expect_check_stmt continuation
@@ -7361,7 +7356,7 @@ pub const Interpreter = struct {
                 } });
             },
             .s_reassign => |r| {
-                // Stack-safe: evaluate expression, then reassign
+                // Evaluate expression, then reassign
 
                 // Push reassign_value continuation
                 try work_stack.push(.{ .apply_continuation = .{ .reassign_value = .{
@@ -7378,7 +7373,7 @@ pub const Interpreter = struct {
                 } });
             },
             .s_dbg => |dbg_stmt| {
-                // Stack-safe: evaluate expression, then print
+                // Evaluate expression, then print
                 const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
 
@@ -7411,7 +7406,7 @@ pub const Interpreter = struct {
                 } });
             },
             .s_for => |for_stmt| {
-                // Stack-safe for loop: first evaluate the list, then set up iteration
+                // For loop: first evaluate the list, then set up iteration
                 const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
 
@@ -7446,7 +7441,7 @@ pub const Interpreter = struct {
                 } });
             },
             .s_while => |while_stmt| {
-                // Stack-safe while loop: first evaluate condition, then decide
+                // While loop: first evaluate condition, then decide
                 // Push while_loop_check continuation
                 try work_stack.push(.{ .apply_continuation = .{ .while_loop_check = .{
                     .cond = while_stmt.cond,
@@ -7465,8 +7460,7 @@ pub const Interpreter = struct {
                 } });
             },
             else => {
-                // Other statement types
-                @panic("Stack-safe interpreter: statement type not yet implemented");
+                @panic("statement type not yet implemented");
             },
         }
     }
