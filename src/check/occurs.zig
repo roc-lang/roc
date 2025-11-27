@@ -93,7 +93,7 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
     };
 
     // Reset the marks for all visited nodes
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         types_store.setDescMark(visited_desc_idx, Mark.none);
     }
 
@@ -324,14 +324,14 @@ pub const Scratch = struct {
     }
 
     pub fn reset(self: *Self) void {
-        self.seen.items.clearRetainingCapacity();
-        self.err_chain.items.clearRetainingCapacity();
-        self.err_chain_nominal_vars.items.clearRetainingCapacity();
-        self.visited.items.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        self.err_chain.clearRetainingCapacity();
+        self.err_chain_nominal_vars.clearRetainingCapacity();
+        self.visited.clearRetainingCapacity();
     }
 
     fn hasSeenVar(self: *const Self, var_: Var) bool {
-        for (self.seen.items.items) |seen_var| {
+        for (self.seen.items()) |seen_var| {
             if (seen_var == var_) return true;
         }
         return false;
@@ -342,7 +342,7 @@ pub const Scratch = struct {
     }
 
     fn popSeen(self: *Self) void {
-        _ = self.seen.items.pop();
+        _ = self.seen.pop();
     }
 
     fn appendVisited(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!void {
@@ -358,11 +358,11 @@ pub const Scratch = struct {
     }
 
     fn errChainSlice(self: *const Scratch) []const Var {
-        return self.err_chain.items.items;
+        return self.err_chain.items();
     }
 
     fn errChainNominalVarsSlice(self: *const Scratch) []const Var {
-        return self.err_chain_nominal_vars.items.items;
+        return self.err_chain_nominal_vars.items();
     }
 };
 
@@ -529,7 +529,7 @@ test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
     try std.testing.expectEqual(1, err_chain.len);
     try std.testing.expectEqual(linked_list, err_chain[0]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 }
@@ -574,7 +574,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     try std.testing.expectEqual(err_chain[0], boxed_linked_list);
     try std.testing.expectEqual(err_chain[1], linked_list);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 }
@@ -617,7 +617,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     try std.testing.expectEqual(1, err_chain_nominal1.len);
     try std.testing.expectEqual(nominal_type, err_chain_nominal1[0]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 
@@ -635,7 +635,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     try std.testing.expectEqual(1, err_chain_nominal2.len);
     try std.testing.expectEqual(nominal_type, err_chain_nominal2[0]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 }
@@ -691,7 +691,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal1[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal1[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 
@@ -711,7 +711,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal2[0]);
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal2[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 
@@ -731,7 +731,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal3[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal3[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+    for (scratch.visited.items()[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
     }
 }

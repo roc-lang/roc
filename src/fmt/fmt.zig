@@ -253,8 +253,8 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
-        const column = region.start.offset - line_offsets.items.items[line];
+        const line = binarySearch(line_offsets.items(), region.start.offset) orelse unreachable;
+        const column = region.start.offset - line_offsets.items()[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
         try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });

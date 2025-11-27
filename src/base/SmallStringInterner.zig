@@ -56,9 +56,9 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     // Initialize hash table with all zeros (Idx.unused)
     self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
-    try self.hash_table.items.ensureTotalCapacityPrecise(gpa, hash_table_capacity);
-    self.hash_table.items.items.len = hash_table_capacity;
-    @memset(self.hash_table.items.items, .unused);
+    try self.hash_table.ensureTotalCapacityPrecise(gpa, hash_table_capacity);
+    self.hash_table.setLen(@intCast(hash_table_capacity));
+    @memset(self.hash_table.rawCapacitySlice(), .unused);
 
     return self;
 }
@@ -77,8 +77,11 @@ pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) st
     const table_size = self.hash_table.len();
     var slot: usize = @intCast(hash % table_size);
 
+    const hash_table_slice = self.hash_table.items();
+    const bytes_slice = self.bytes.items();
+
     while (true) {
-        const idx_at_slot = self.hash_table.items.items[slot];
+        const idx_at_slot = hash_table_slice[slot];
 
         if (idx_at_slot == .unused) {
             // Empty slot - string not found
@@ -92,9 +95,9 @@ pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) st
         // If the stored string would have had to go past the end of bytes,
         // they must not be equal. Also if there isn't a null terminator
         // right where we expect, they must not be equal.
-        if (stored_end < self.bytes.len() and self.bytes.items.items[stored_end] == 0) {
+        if (stored_end < self.bytes.len() and bytes_slice[stored_end] == 0) {
             // With that out of the way, we can safely compare the string contents.
-            if (std.mem.eql(u8, string, self.bytes.items.items[stored_idx..stored_end])) {
+            if (std.mem.eql(u8, string, bytes_slice[stored_idx..stored_end])) {
                 // Found the string!
                 return .{ .idx = idx_at_slot, .slot = slot };
             }
@@ -112,17 +115,17 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
     // Create new hash table initialized to zeros
     self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, new_size);
-    try self.hash_table.items.ensureTotalCapacityPrecise(gpa, new_size);
-    self.hash_table.items.items.len = new_size;
-    @memset(self.hash_table.items.items, .unused);
+    try self.hash_table.ensureTotalCapacityPrecise(gpa, new_size);
+    self.hash_table.setLen(@intCast(new_size));
+    @memset(self.hash_table.rawCapacitySlice(), .unused);
 
     // Rehash all existing entries
-    for (old_table.items.items) |idx| {
+    for (old_table.items()) |idx| {
         if (idx != .unused) {
             // Get the string for this index
             const string = self.getText(idx);
             const result = self.findStringOrSlot(string);
-            self.hash_table.items.items[@intCast(result.slot)] = idx;
+            self.hash_table.items()[@intCast(result.slot)] = idx;
         }
     }
 
@@ -150,7 +153,7 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
         _ = try self.bytes.append(gpa, 0);
 
         // Add to hash table
-        self.hash_table.items.items[@intCast(result.slot)] = new_offset;
+        self.hash_table.items()[@intCast(result.slot)] = new_offset;
         self.entry_count += 1;
 
         return new_offset;
@@ -165,7 +168,7 @@ pub fn contains(self: *const SmallStringInterner, string: []const u8) bool {
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
-    const bytes_slice = self.bytes.items.items;
+    const bytes_slice = self.bytes.items();
     const start = @intFromEnum(idx);
 
     return std.mem.sliceTo(bytes_slice[start..], 0);

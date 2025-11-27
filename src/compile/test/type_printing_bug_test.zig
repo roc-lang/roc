@@ -74,8 +74,8 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
             const ident_idx = pattern.assign.ident;
             const ident_text = env.getIdent(ident_idx);
             if (std.mem.eql(u8, ident_text, "map_result")) {
-                // Get the type variable from the first definition - it's the first in the defs list
-                map_result_var = @enumFromInt(0); // First variable
+                // Get the type variable for this definition
+                map_result_var = ModuleEnv.varFrom(def_idx);
                 break;
             }
         }

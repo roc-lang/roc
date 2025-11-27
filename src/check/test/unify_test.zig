@@ -1023,8 +1023,9 @@ test "partitionTags - same tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const tag_x = try env.mkTag("X", &[_]Var{@enumFromInt(0)});
-    const tag_y = try env.mkTag("Y", &[_]Var{@enumFromInt(1)});
+    // Var indices are 1-based (0 is sentinel)
+    const tag_x = try env.mkTag("X", &[_]Var{@enumFromInt(1)});
+    const tag_y = try env.mkTag("Y", &[_]Var{@enumFromInt(2)});
 
     const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
@@ -1046,9 +1047,10 @@ test "partitionTags - disjoint fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkTag("A1", &[_]Var{@enumFromInt(0)});
-    const a2 = try env.mkTag("A2", &[_]Var{@enumFromInt(1)});
-    const b1 = try env.mkTag("B1", &[_]Var{@enumFromInt(2)});
+    // Var indices are 1-based (0 is sentinel)
+    const a1 = try env.mkTag("A1", &[_]Var{@enumFromInt(1)});
+    const a2 = try env.mkTag("A2", &[_]Var{@enumFromInt(2)});
+    const b1 = try env.mkTag("B1", &[_]Var{@enumFromInt(3)});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
@@ -1072,9 +1074,10 @@ test "partitionTags - overlapping tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkTag("A", &[_]Var{@enumFromInt(0)});
-    const both = try env.mkTag("Both", &[_]Var{@enumFromInt(1)});
-    const b1 = try env.mkTag("B", &[_]Var{@enumFromInt(2)});
+    // Var indices are 1-based (0 is sentinel)
+    const a1 = try env.mkTag("A", &[_]Var{@enumFromInt(1)});
+    const both = try env.mkTag("Both", &[_]Var{@enumFromInt(2)});
+    const b1 = try env.mkTag("B", &[_]Var{@enumFromInt(3)});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
@@ -1101,9 +1104,10 @@ test "partitionTags - reordering is normalized" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = try env.mkTag("F1", &[_]Var{@enumFromInt(0)});
-    const f2 = try env.mkTag("F2", &[_]Var{@enumFromInt(1)});
-    const f3 = try env.mkTag("F3", &[_]Var{@enumFromInt(2)});
+    // Var indices are 1-based (0 is sentinel)
+    const f1 = try env.mkTag("F1", &[_]Var{@enumFromInt(1)});
+    const f2 = try env.mkTag("F2", &[_]Var{@enumFromInt(2)});
+    const f3 = try env.mkTag("F3", &[_]Var{@enumFromInt(3)});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
@@ -1269,7 +1273,7 @@ test "unify - closed tag union extends open" {
     // check that fresh vars are correct
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
-    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items()[0]);
 }
 
 // unification - recursion //
@@ -1483,7 +1487,8 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    // SafeList uses 1-based indexing, so first element is at index 1
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(1)).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(structure_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1518,7 +1523,8 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    // SafeList uses 1-based indexing, so first element is at index 1
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(1)).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(flex_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1571,7 +1577,8 @@ test "unify - flex vs nominal type captures constraint" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    // SafeList uses 1-based indexing, so first element is at index 1
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(1)).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(nominal_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,

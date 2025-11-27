@@ -117,7 +117,7 @@ pub const Store = struct {
     /// Ensure that slots & descriptor arrays have at least the provided capacity
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
-        try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+        try self.slots.backing.ensureTotalCapacity(self.gpa, capacity);
     }
 
     /// Deinit the unification table
@@ -192,14 +192,14 @@ pub const Store = struct {
 
     /// Set a type variable to the provided content
     pub fn setVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
-        std.debug.assert(@intFromEnum(target_var) < self.len());
+        std.debug.assert(@intFromEnum(target_var) <= self.len());
         const resolved = self.resolveVar(target_var);
         self.descs.set(resolved.desc_idx, desc);
     }
 
     /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
-        std.debug.assert(@intFromEnum(target_var) < self.len());
+        std.debug.assert(@intFromEnum(target_var) <= self.len());
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
@@ -208,8 +208,8 @@ pub const Store = struct {
 
     /// Set a type variable to redirect to the provided redirect
     pub fn setVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
-        std.debug.assert(@intFromEnum(target_var) < self.len());
-        std.debug.assert(@intFromEnum(redirect_to) < self.len());
+        std.debug.assert(@intFromEnum(target_var) <= self.len());
+        std.debug.assert(@intFromEnum(redirect_to) <= self.len());
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
     }
@@ -278,6 +278,17 @@ pub const Store = struct {
         };
     }
 
+    /// Make alias data type from a pre-built range (backing_var already included at start)
+    /// Does not insert content into the types store
+    pub fn mkAliasFromRange(_: *Self, ident: TypeIdent, vars_range: VarSafeList.Range) Content {
+        return Content{
+            .alias = Alias{
+                .ident = ident,
+                .vars = .{ .nonempty = vars_range },
+            },
+        };
+    }
+
     /// Make nominal data type
     /// Does not insert content into the types store
     pub fn mkNominal(
@@ -303,14 +314,57 @@ pub const Store = struct {
         } };
     }
 
+    /// Make nominal data type from a pre-built range (backing_var already included at start)
+    /// Does not insert content into the types store
+    pub fn mkNominalFromRange(
+        _: *Self,
+        ident: TypeIdent,
+        vars_range: VarSafeList.Range,
+        origin_module: base.Ident.Idx,
+    ) Content {
+        return Content{ .structure = FlatType{
+            .nominal_type = NominalType{
+                .ident = ident,
+                .vars = .{ .nonempty = vars_range },
+                .origin_module = origin_module,
+            },
+        } };
+    }
+
     // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
     pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
+        // Check if any arguments need instantiation BEFORE appending,
+        // because appendVars may reallocate and invalidate the args slice
         var needs_inst = false;
         for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        // NOW it's safe to append (which may reallocate)
+        const args_range = try self.appendVars(args);
+
+        return Content{ .structure = .{ .fn_unbound = .{
+            .args = args_range,
+            .ret = ret,
+            .needs_instantiation = needs_inst,
+        } } };
+    }
+
+    // Make a function data type with unbound effectfulness from a pre-existing args range
+    // Use this when args are already stored in types.vars to avoid reallocation issues
+    pub fn mkFuncUnboundFromRange(self: *const Self, args_range: VarSafeList.Range, ret: Var) Content {
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (self.sliceVars(args_range)) |arg| {
             if (self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
@@ -332,11 +386,33 @@ pub const Store = struct {
     // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
+        // Check if any arguments need instantiation BEFORE appending,
+        // because appendVars may reallocate and invalidate the args slice
         var needs_inst = false;
         for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        // NOW it's safe to append (which may reallocate)
+        const args_range = try self.appendVars(args);
+
+        return Content{ .structure = .{ .fn_pure = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+    }
+
+    // Make a pure function data type from a pre-existing args range
+    // Use this when args are already stored in types.vars to avoid reallocation issues
+    pub fn mkFuncPureFromRange(self: *const Self, args_range: VarSafeList.Range, ret: Var) Content {
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (self.sliceVars(args_range)) |arg| {
             if (self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
@@ -354,11 +430,33 @@ pub const Store = struct {
     // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
+        // Check if any arguments need instantiation BEFORE appending,
+        // because appendVars may reallocate and invalidate the args slice
         var needs_inst = false;
         for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        // NOW it's safe to append (which may reallocate)
+        const args_range = try self.appendVars(args);
+
+        return Content{ .structure = .{ .fn_effectful = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+    }
+
+    // Make an effectful function data type from a pre-existing args range
+    // Use this when args are already stored in types.vars to avoid reallocation issues
+    pub fn mkFuncEffectfulFromRange(self: *const Self, args_range: VarSafeList.Range, ret: Var) Content {
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (self.sliceVars(args_range)) |arg| {
             if (self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
@@ -1386,7 +1484,7 @@ test "SlotStore.Serialized roundtrip" {
 
     // Add some slots
     _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(100) });
-    _ = try slot_store.insert(gpa, .{ .redirect = @enumFromInt(0) });
+    _ = try slot_store.insert(gpa, .{ .redirect = @enumFromInt(1) });
     _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(200) });
 
     // Create temp file
@@ -1422,9 +1520,9 @@ test "SlotStore.Serialized roundtrip" {
 
     // Verify
     try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
-    try std.testing.expectEqual(Slot{ .root = @enumFromInt(100) }, deserialized.get(@enumFromInt(0)));
-    try std.testing.expectEqual(Slot{ .redirect = @enumFromInt(0) }, deserialized.get(@enumFromInt(1)));
-    try std.testing.expectEqual(Slot{ .root = @enumFromInt(200) }, deserialized.get(@enumFromInt(2)));
+    try std.testing.expectEqual(Slot{ .root = @enumFromInt(100) }, deserialized.get(@enumFromInt(1)));
+    try std.testing.expectEqual(Slot{ .redirect = @enumFromInt(1) }, deserialized.get(@enumFromInt(2)));
+    try std.testing.expectEqual(Slot{ .root = @enumFromInt(200) }, deserialized.get(@enumFromInt(3)));
 }
 
 test "DescStore.Serialized roundtrip" {

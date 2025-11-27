@@ -67,8 +67,9 @@ pub const Store = struct {
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
-        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.items[idx_u32 - 4 .. idx_u32]).*;
-        return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
+        const buffer_slice = self.buffer.items();
+        const str_len = std.mem.bytesAsValue(u32, buffer_slice[idx_u32 - 4 .. idx_u32]).*;
+        return buffer_slice[idx_u32 .. idx_u32 + str_len];
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store

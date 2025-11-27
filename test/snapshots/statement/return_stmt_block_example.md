@@ -16,11 +16,11 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
+INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:25:3:25
 # PROBLEMS
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
-**return_stmt_block_example.md:3:11:**
+**return_stmt_block_example.md:3:25:**
 ```roc
     str = if (num > 10) {
         return Err(TooBig)
@@ -28,7 +28,6 @@ This `if` has an `else` branch with a different type from it's `then` branch:
         "SMALL"
     }
 ```
-        ^^^^^^^
 
 The `else` branch has the type:
     _Str_

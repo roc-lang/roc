@@ -31,6 +31,7 @@ pub const Tag = types.Tag;
 pub const TagUnion = types.TagUnion;
 pub const Tuple = types.Tuple;
 pub const Var = types.Var;
+pub const MaybeVar = types.MaybeVar;
 pub const TypeIdent = types.TypeIdent;
 pub const Descriptor = types.Descriptor;
 pub const TwoRecordFields = types.TwoRecordFields;

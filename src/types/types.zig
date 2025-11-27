@@ -31,7 +31,8 @@ test {
     try std.testing.expectEqual(72, @sizeOf(StaticDispatchConstraint)); // Includes recursion_info + num_literal fields
 }
 
-/// A type variable
+/// A type variable. Values are 1-based; 0 is reserved as a sentinel meaning "none".
+/// Use `MaybeVar` when you need to represent an optional/missing variable.
 pub const Var = enum(u32) {
     _,
 
@@ -41,6 +42,25 @@ pub const Var = enum(u32) {
     /// Debug representation of a type variable, panics on allocation failure
     pub fn allocPrint(self: Var, gpa: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         return try std.fmt.allocPrint(gpa, "#{d}", .{@intFromEnum(self)});
+    }
+};
+
+/// A type variable that may be absent (none). Value 0 represents "none".
+/// Use this when a Var is optional, rather than using Var 0 directly.
+pub const MaybeVar = enum(u32) {
+    none = 0,
+    _,
+
+    /// Convert to an optional Var. Returns null if this is none (0).
+    pub fn get(self: MaybeVar) ?Var {
+        const int_value = @intFromEnum(self);
+        if (int_value == 0) return null;
+        return @enumFromInt(int_value);
+    }
+
+    /// Create a MaybeVar from a Var.
+    pub fn from(var_: Var) MaybeVar {
+        return @enumFromInt(@intFromEnum(var_));
     }
 };
 

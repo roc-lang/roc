@@ -585,7 +585,7 @@ pub const BuildEnv = struct {
         const platform_root_env = platform_sched.getRootEnv() orelse return;
 
         // If the platform has no requires_types, nothing to check
-        if (platform_root_env.requires_types.items.items.len == 0) {
+        if (platform_root_env.requires_types.items().len == 0) {
             return;
         }
 
@@ -644,7 +644,7 @@ pub const BuildEnv = struct {
         var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
         defer platform_to_app_idents.deinit();
 
-        for (platform_root_env.requires_types.items.items) |required_type| {
+        for (platform_root_env.requires_types.items()) |required_type| {
             const platform_ident_text = platform_root_env.getIdent(required_type.ident);
             if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
                 try platform_to_app_idents.put(required_type.ident, app_ident);
