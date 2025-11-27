@@ -105,11 +105,10 @@ foo = |num| {
 										(p-assign (ident "num")))
 									(e-num (value "10")))
 								(e-block
-									(s-return
+									(e-return
 										(e-tag (name "Err")
 											(args
-												(e-tag (name "TooBig")))))
-									(e-empty_record))))
+												(e-tag (name "TooBig"))))))))
 						(if-else
 							(e-block
 								(e-string

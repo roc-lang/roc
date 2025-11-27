@@ -121,6 +121,9 @@ str_var: Var,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// The expected return type of the enclosing function, if any.
+/// Used to correctly type-check `return` expressions inside loops etc.
+enclosing_func_return_type: ?Var,
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -207,6 +210,7 @@ pub fn init(
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
+        .enclosing_func_return_type = null,
     };
 }
 
@@ -3205,13 +3209,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                 // Check the the body of the expr
                 // If we have an expected function, use that as the expr's expected type
+                // Also track the return type so `return` expressions can use it
+                const saved_return_type = self.enclosing_func_return_type;
                 if (mb_expected_func) |expected_func| {
+                    self.enclosing_func_return_type = expected_func.ret;
                     does_fx = try self.checkExpr(lambda.body, env, .{
                         .expected = .{ .var_ = expected_func.ret, .from_annotation = is_expected_from_anno },
                     }) or does_fx;
                 } else {
+                    // When no expected type, the body's type becomes the return type.
+                    // We need a fresh var so early returns can unify with it.
+                    const body_var = ModuleEnv.varFrom(lambda.body);
+                    self.enclosing_func_return_type = body_var;
                     does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
                 }
+                self.enclosing_func_return_type = saved_return_type;
                 const body_var = ModuleEnv.varFrom(lambda.body);
 
                 // Unify all early returns with the body's return type.
@@ -3591,6 +3603,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .expected => |expected_type| {
                     // Redirect expr_var to the annotation var so that lookups get the correct type
                     try self.types.setVarRedirect(expr_var, expected_type.var_);
+                },
+            }
+        },
+        .e_return => |ret| {
+            // Early return expression - check the inner expression against enclosing function's return type
+            // If we're inside a function, use its return type. Otherwise fall back to expected.
+            const return_expected: Expected = if (self.enclosing_func_return_type) |ret_var|
+                .{ .expected = .{ .var_ = ret_var, .from_annotation = false } }
+            else
+                expected;
+            does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
+            // e_return "never returns" - it exits the function, so it can unify with any expected type.
+            // This allows it to be used in if branches alongside other expressions.
+            switch (expected) {
+                .expected => |exp| {
+                    _ = try self.unify(expr_var, exp.var_, env);
+                },
+                .no_expectation => {
+                    // No expected type, leave expr_var as a flex var
                 },
             }
         },

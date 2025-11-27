@@ -144,7 +144,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 37;
+pub const MODULEENV_EXPR_NODE_COUNT = 38;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -671,6 +671,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_anno_only => {
             return CIR.Expr{ .e_anno_only = .{} };
+        },
+        .expr_return => {
+            return CIR.Expr{ .e_return = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
         },
         .expr_hosted_lambda => {
             // Retrieve hosted lambda data from node and extra_data
@@ -1631,6 +1636,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
+        },
+        .e_return => |ret| {
+            node.tag = .expr_return;
+            node.data_1 = @intFromEnum(ret.expr);
         },
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;

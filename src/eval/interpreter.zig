@@ -98,6 +98,7 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
+        EarlyReturn,
         IntegerOverflow,
         InvalidMethodReceiver,
         InvalidNumExt,
@@ -229,6 +230,8 @@ pub const Interpreter = struct {
     num_literal_target_type: ?types.Var,
     /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
+    /// Value being returned early from a function (set by s_return, consumed at function boundaries)
+    early_return_value: ?StackValue,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
@@ -340,6 +343,7 @@ pub const Interpreter = struct {
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
             .last_error_message = null,
+            .early_return_value = null,
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
@@ -455,7 +459,19 @@ pub const Interpreter = struct {
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
-            const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
+            // Evaluate body, handling early returns at function boundary
+            const result_value = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
+                if (err == error.EarlyReturn) {
+                    const return_val = self.early_return_value orelse return error.Crash;
+                    self.early_return_value = null;
+                    defer return_val.decref(&self.runtime_layout_store, roc_ops);
+                    if (try self.shouldCopyResult(return_val, ret_ptr, roc_ops)) {
+                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+                    }
+                    return;
+                }
+                return err;
+            };
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             // Only copy result if the result type is compatible with ret_ptr
@@ -688,7 +704,11 @@ pub const Interpreter = struct {
                             }
                         },
                         .s_expr => |sx| {
-                            _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
+                            // Evaluate the expression - propagate early returns
+                            const expr_result = self.evalExprMinimal(sx.expr, roc_ops, null) catch |err| {
+                                return err; // Propagate EarlyReturn or other errors
+                            };
+                            expr_result.decref(&self.runtime_layout_store, roc_ops);
                         },
                         .s_dbg => |dbg_stmt| {
                             const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
@@ -759,8 +779,13 @@ pub const Interpreter = struct {
                                     try self.bindings.append(binding);
                                 }
 
-                                // Evaluate the body
-                                const body_result = try self.evalExprMinimal(for_stmt.body, roc_ops, null);
+                                // Evaluate the body - handle early returns
+                                const body_result = self.evalExprMinimal(for_stmt.body, roc_ops, null) catch |err| {
+                                    // Clean up before propagating error
+                                    self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
+                                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                                    return err; // Propagate EarlyReturn or other errors
+                                };
                                 body_result.decref(&self.runtime_layout_store, roc_ops);
 
                                 // Clean up bindings for this iteration
@@ -786,15 +811,26 @@ pub const Interpreter = struct {
                                     break;
                                 }
 
-                                // 4. EVALUATE BODY
-                                const body_result = try self.evalExprMinimal(while_stmt.body, roc_ops, null);
-                                defer body_result.decref(&self.runtime_layout_store, roc_ops);
+                                // 4. EVALUATE BODY - propagate early returns
+                                const body_result = self.evalExprMinimal(while_stmt.body, roc_ops, null) catch |err| {
+                                    return err; // Propagate EarlyReturn or other errors
+                                };
+                                body_result.decref(&self.runtime_layout_store, roc_ops);
 
                                 // Body result is {} (empty record), so nothing to do with it
                                 // Loop continues to next iteration
                             }
 
                             // While loop completes and returns {} (implicitly)
+                        },
+                        .s_return => |ret| {
+                            // Early return: evaluate expression, store value, signal return
+                            const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            const return_value = try self.evalExprMinimal(ret.expr, roc_ops, expr_rt_var);
+                            // Store the return value for the caller to consume
+                            self.early_return_value = return_value;
+                            return error.EarlyReturn;
                         },
                         else => {
                             self.triggerCrash("e_block: unhandled statement type", false, roc_ops);
@@ -1853,6 +1889,17 @@ pub const Interpreter = struct {
                 self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                 return error.Crash;
             },
+            .e_return => |ret| {
+                // Early return expression - evaluate inner expr, store value, signal return
+                // Get the expected type from the INNER expression's type variable,
+                // since e_return's type may have been unified with {} or another type
+                const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                const return_value = try self.evalExprMinimal(ret.expr, roc_ops, inner_rt_var);
+                // Store the return value for the caller to consume at function boundary
+                self.early_return_value = return_value;
+                return error.EarlyReturn;
+            },
             .e_low_level_lambda => |lam| {
                 // Build a closure for a low-level builtin function
                 // Use provided expected_rt_var if available (for cross-module instantiated functions),
@@ -2276,7 +2323,16 @@ pub const Interpreter = struct {
                             }
                         }
                     }
-                    return try self.evalExprMinimal(header.body_idx, roc_ops, call_ret_rt_var);
+                    // Evaluate body, handling early returns at function boundary
+                    return self.evalExprMinimal(header.body_idx, roc_ops, call_ret_rt_var) catch |err| {
+                        if (err == error.EarlyReturn) {
+                            // Consume early return value as function result
+                            const return_val = self.early_return_value orelse return error.Crash;
+                            self.early_return_value = null;
+                            return return_val;
+                        }
+                        return err;
+                    };
                 }
 
                 // Fallback: direct lambda expression (legacy minimal path)
@@ -2298,7 +2354,16 @@ pub const Interpreter = struct {
                             }
                         }
                     }
-                    return try self.evalExprMinimal(lambda.body, roc_ops, call_ret_rt_var);
+                    // Evaluate body, handling early returns at function boundary
+                    return self.evalExprMinimal(lambda.body, roc_ops, call_ret_rt_var) catch |err| {
+                        if (err == error.EarlyReturn) {
+                            // Consume early return value as function result
+                            const return_val = self.early_return_value orelse return error.Crash;
+                            self.early_return_value = null;
+                            return return_val;
+                        }
+                        return err;
+                    };
                 }
 
                 self.triggerCrash("e_call: func is neither closure nor lambda", false, roc_ops);
@@ -2542,7 +2607,15 @@ pub const Interpreter = struct {
                     }
                 }
 
-                return try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+                // Evaluate body, handling early returns at function boundary
+                return self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
+                    if (err == error.EarlyReturn) {
+                        const return_val = self.early_return_value orelse return error.Crash;
+                        self.early_return_value = null;
+                        return return_val;
+                    }
+                    return err;
+                };
             },
             .e_lookup_local => |lookup| {
                 // Search bindings in reverse
@@ -6121,8 +6194,21 @@ pub const Interpreter = struct {
             });
         }
 
-        // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        // Evaluate the method body, handling early returns at function boundary
+        const result = self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
+            // Clean up bindings before returning
+            var k = params.len;
+            while (k > 0) {
+                k -= 1;
+                _ = self.bindings.pop();
+            }
+            if (err == error.EarlyReturn) {
+                const return_val = self.early_return_value orelse return error.Crash;
+                self.early_return_value = null;
+                return return_val;
+            }
+            return err;
+        };
 
         // Clean up bindings
         var k = params.len;
@@ -6230,8 +6316,21 @@ pub const Interpreter = struct {
             });
         }
 
-        // Evaluate the method body
-        const result = try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
+        // Evaluate the method body, handling early returns at function boundary
+        const result = self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
+            // Clean up bindings before returning
+            var k = params.len;
+            while (k > 0) {
+                k -= 1;
+                _ = self.bindings.pop();
+            }
+            if (err == error.EarlyReturn) {
+                const return_val = self.early_return_value orelse return error.Crash;
+                self.early_return_value = null;
+                return return_val;
+            }
+            return err;
+        };
 
         // Clean up bindings
         var k = params.len;
