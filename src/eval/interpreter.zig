@@ -854,18 +854,16 @@ pub const Interpreter = struct {
             },
             .e_unary_minus => |unary_minus| {
                 // Desugar `-a` to `a.negate()`
-                // Use root_env.idents because method idents must be consistent across all modules
                 return try self.dispatchUnaryOpMethod(self.root_env.idents.negate, unary_minus.expr, roc_ops);
             },
             .e_unary_not => |unary_not| {
                 // Desugar `!a` to `a.not()`
-                // Use root_env.idents because method idents must be consistent across all modules
                 return try self.dispatchUnaryOpMethod(self.root_env.idents.not, unary_not.expr, roc_ops);
             },
             .e_binop => |binop| {
-                // Use root_env.idents for all method dispatches because method idents must be
-                // consistent across all modules. Different modules may have different ident
-                // indices for the same strings, so we always use the root module's indices.
+                // Use root_env.idents for operator method names (is_lt, plus, etc.) because
+                // resolveMethodFunction will look up the string using the same environment.
+                // The ident index and its source environment must match.
                 switch (binop.op) {
                     .add => {
                         // Desugar `a + b` to `a.plus(b)`
