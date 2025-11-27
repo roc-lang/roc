@@ -559,7 +559,6 @@ combineTrys = |result1, result2|
 		(p-assign (ident "combineTrys"))
 		(e-closure
 			(captures
-				(capture (ident "value1"))
 				(capture (ident "value2"))
 				(capture (ident "err"))
 				(capture (ident "err")))

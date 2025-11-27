@@ -193,6 +193,7 @@ UNUSED VALUE - fuzz_crash_020.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 UNUSED VALUE - fuzz_crash_020.md:1:1:1:1
 UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
+MISSING METHOD - fuzz_crash_020.md:77:11:77:14
 UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
 UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
 UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
@@ -944,6 +945,20 @@ This expression produces a value, but it's not being used:
 It has the type:
     _Str_
 
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_020.md:77:11:77:14:**
+```roc
+	var er = 123
+```
+	         ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _Str_
+
+**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **fuzz_crash_020.md:98:4:104:3:**
@@ -991,7 +1006,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^
 
 It has the type:
-    _Bool_
+    _f_
 
 # TOKENS
 ~~~zig
@@ -1998,7 +2013,7 @@ expect {
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue][ProvidedByCompiler] -> Error"))
 		(patt (type "Error"))
-		(patt (type "_arg -> [Stdo!(Error)]_others"))
+		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2035,7 +2050,7 @@ expect {
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue][ProvidedByCompiler] -> Error"))
 		(expr (type "Error"))
-		(expr (type "_arg -> [Stdo!(Error)]_others"))
+		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

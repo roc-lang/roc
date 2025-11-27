@@ -741,7 +741,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             };
             const input = input_value.string;
 
-            const result = repl_ptr.step(input) catch |err| {
+            const structured_result = repl_ptr.stepStructured(input) catch |err| {
                 // Handle hard errors (like OOM) that aren't caught by the REPL
                 // Create a static error message to avoid allocation issues
                 const error_msg = @errorName(err);
@@ -754,14 +754,15 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 try writeReplStepResultJson(response_buffer, step_result);
                 return;
             };
-            defer allocator.free(result);
+            defer structured_result.deinit(allocator);
 
             if (crash_ctx.state == .crashed) {
                 const crash_details = crash_ctx.crashMessage();
                 crash_ctx.reset();
 
+                const output = structured_result.getMessage() orelse "";
                 const step_result = ReplStepResult{
-                    .output = result,
+                    .output = output,
                     .try_type = .@"error",
                     .error_stage = .evaluation,
                     .error_details = crash_details,
@@ -770,8 +771,8 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 return;
             }
 
-            // Parse the result to determine type and extract error information
-            const step_result = parseReplResult(result);
+            // Convert StepResult to ReplStepResult
+            const step_result = convertStepResult(structured_result);
             try writeReplStepResultJson(response_buffer, step_result);
         },
         .CLEAR_REPL => {
@@ -989,56 +990,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .diagnostics = serialized_ptr.diagnostics,
                 .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
                 .evaluation_order = null,
-                .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-                .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-                .try_ident = common.findIdent("Try") orelse unreachable,
-                .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-                .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-                .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
-                .minus_ident = common.findIdent("minus") orelse unreachable,
-                .times_ident = common.findIdent("times") orelse unreachable,
-                .div_by_ident = common.findIdent("div_by") orelse unreachable,
-                .rem_by_ident = common.findIdent("rem_by") orelse unreachable,
-                .div_trunc_by_ident = common.findIdent("div_trunc_by") orelse unreachable,
-                .negate_ident = common.findIdent(base.Ident.NEGATE_METHOD_NAME) orelse unreachable,
-                .not_ident = common.findIdent("not") orelse unreachable,
-                .is_lt_ident = common.findIdent("is_lt") orelse unreachable,
-                .is_lte_ident = common.findIdent("is_lte") orelse unreachable,
-                .is_gt_ident = common.findIdent("is_gt") orelse unreachable,
-                .is_gte_ident = common.findIdent("is_gte") orelse unreachable,
-                .is_eq_ident = common.findIdent("is_eq") orelse unreachable,
-                .is_ne_ident = common.findIdent("is_ne") orelse unreachable,
-                // Fully-qualified type identifiers for type checking and layout generation
-                .builtin_try_ident = common.findIdent("Builtin.Try") orelse unreachable,
-                .builtin_numeral_ident = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
-                .builtin_str_ident = common.findIdent("Builtin.Str") orelse unreachable,
-                .list_type_ident = common.findIdent("List") orelse unreachable,
-                .box_type_ident = common.findIdent("Box") orelse unreachable,
-                .u8_type_ident = common.findIdent("Builtin.Num.U8") orelse unreachable,
-                .i8_type_ident = common.findIdent("Builtin.Num.I8") orelse unreachable,
-                .u16_type_ident = common.findIdent("Builtin.Num.U16") orelse unreachable,
-                .i16_type_ident = common.findIdent("Builtin.Num.I16") orelse unreachable,
-                .u32_type_ident = common.findIdent("Builtin.Num.U32") orelse unreachable,
-                .i32_type_ident = common.findIdent("Builtin.Num.I32") orelse unreachable,
-                .u64_type_ident = common.findIdent("Builtin.Num.U64") orelse unreachable,
-                .i64_type_ident = common.findIdent("Builtin.Num.I64") orelse unreachable,
-                .u128_type_ident = common.findIdent("Builtin.Num.U128") orelse unreachable,
-                .i128_type_ident = common.findIdent("Builtin.Num.I128") orelse unreachable,
-                .f32_type_ident = common.findIdent("Builtin.Num.F32") orelse unreachable,
-                .f64_type_ident = common.findIdent("Builtin.Num.F64") orelse unreachable,
-                .dec_type_ident = common.findIdent("Builtin.Num.Dec") orelse unreachable,
-                .before_dot_ident = common.findIdent("before_dot") orelse unreachable,
-                .after_dot_ident = common.findIdent("after_dot") orelse unreachable,
-                .provided_by_compiler_ident = common.findIdent("ProvidedByCompiler") orelse unreachable,
-                .tag_ident = common.findIdent("tag") orelse unreachable,
-                .payload_ident = common.findIdent("payload") orelse unreachable,
-                .is_negative_ident = common.findIdent("is_negative") orelse unreachable,
-                .digits_before_pt_ident = common.findIdent("digits_before_pt") orelse unreachable,
-                .digits_after_pt_ident = common.findIdent("digits_after_pt") orelse unreachable,
-                .box_method_ident = common.findIdent("box") orelse unreachable,
-                .unbox_method_ident = common.findIdent("unbox") orelse unreachable,
-                .ok_ident = common.findIdent("Ok") orelse unreachable,
-                .err_ident = common.findIdent("Err") orelse unreachable,
+                .idents = ModuleEnv.CommonIdents.find(&common),
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
             };
@@ -1086,11 +1038,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const module_common_idents: Check.CommonIdents = .{
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try module_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -1157,7 +1106,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_common_idents);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {
@@ -1387,64 +1336,54 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Parse REPL result string to determine type and extract error information
-fn parseReplResult(result: []const u8) ReplStepResult {
-    // Check for known error patterns
-    if (std.mem.startsWith(u8, result, "Parse error:")) {
-        return ReplStepResult{
-            .output = result,
+/// Convert REPL StepResult to playground's ReplStepResult
+fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
+    return switch (result) {
+        .expression => |output| ReplStepResult{
+            .output = output,
+            .try_type = .expression,
+        },
+        .definition => |output| ReplStepResult{
+            .output = output,
+            .try_type = .definition,
+        },
+        .help => |output| ReplStepResult{
+            .output = output,
+            .try_type = .expression, // Treat help as expression output
+        },
+        .quit => ReplStepResult{
+            .output = "Goodbye!",
+            .try_type = .expression,
+        },
+        .empty => ReplStepResult{
+            .output = "",
+            .try_type = .expression,
+        },
+        .parse_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .parse,
-            .error_details = if (result.len > 13) result[13..] else null,
-        };
-    } else if (std.mem.indexOf(u8, result, "Canonicalize") != null) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .canonicalize_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .canonicalize,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Type check") != null) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .type_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .typecheck,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Layout") != null) {
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .layout,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.startsWith(u8, result, "Evaluation error:")) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .eval_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .evaluation,
-            .error_details = if (result.len > 17) result[17..] else null,
-        };
-    } else if (std.mem.indexOf(u8, result, "Interpreter") != null) {
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .interpreter,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.startsWith(u8, result, "assigned")) {
-        // Definition success
-        return ReplStepResult{
-            .output = result,
-            .try_type = .definition,
-        };
-    } else {
-        // Expression result
-        return ReplStepResult{
-            .output = result,
-            .try_type = .expression,
-        };
-    }
+            .error_details = extractErrorDetails(output),
+        },
+    };
 }
 
 /// Extract error details from an error message (part after ": ")

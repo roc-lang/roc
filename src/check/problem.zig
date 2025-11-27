@@ -322,7 +322,7 @@ pub const ReportBuilder = struct {
     /// Check if any static dispatch constraint involves the is_eq method
     fn hasEqualityConstraint(self: *Self) bool {
         for (self.snapshot_writer.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == self.can_ir.is_eq_ident) {
+            if (constraint.fn_name == self.can_ir.idents.is_eq) {
                 return true;
             }
         }
