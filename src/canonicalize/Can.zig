@@ -10534,63 +10534,6 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     return null;
 }
 
-/// Expose all associated items of a type declaration (recursively for nested types)
-/// This is used for type modules where all associated items are implicitly exposed
-fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type) std.mem.Allocator.Error!void {
-    if (type_decl.associated) |assoc| {
-        for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
-            const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
-            switch (assoc_stmt) {
-                .type_decl => |nested_type_decl| {
-                    // Get the nested type name
-                    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
-                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
-
-                    // Build qualified name (e.g., "Foo.Bar")
-                    const parent_text = self.env.getIdent(parent_name);
-                    const nested_text = self.env.getIdent(nested_ident);
-                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, nested_text);
-
-                    // Don't expose the nested type itself - types are not values
-                    // Only recursively expose its associated items (defs, not types)
-                    try self.exposeAssociatedItems(qualified_idx, nested_type_decl);
-                },
-                .decl => |decl| {
-                    // Get the declaration name
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const pattern_ident_tok = pattern.ident.ident_tok;
-                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            // Build qualified name (e.g., "Foo.stuff")
-                            const parent_text = self.env.getIdent(parent_name);
-                            const decl_text = self.env.getIdent(decl_ident);
-                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
-
-                            // Expose the declaration
-                            try self.env.addExposedById(qualified_idx);
-                        }
-                    }
-                },
-                .type_anno => |type_anno| {
-                    // Get the annotation name (for annotation-only definitions like compiler intrinsics)
-                    if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                        // Build qualified name (e.g., "Bool.not")
-                        const parent_text = self.env.getIdent(parent_name);
-                        const anno_text = self.env.getIdent(anno_ident);
-                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
-
-                        // Expose the qualified name
-                        // The unqualified name is added to scope but doesn't need to be in exposed_items
-                        // because lookups use the qualified name
-                        try self.env.addExposedById(qualified_idx);
-                    }
-                },
-                else => {},
-            }
-        }
-    }
-}
-
 /// Check if any type declarations exist in the file
 fn hasAnyTypeDeclarations(self: *Self) bool {
     const file = self.parse_ir.store.getFile();
