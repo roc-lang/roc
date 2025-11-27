@@ -270,6 +270,24 @@ fn renderTypeProblems(
     var error_count: usize = 0;
     var warning_count: usize = 0;
 
+    // Render canonicalization diagnostics (unused variables, etc.)
+    // Note: getDiagnostics allocates with module_env.gpa, so we must free with that allocator
+    const diags = module_env.getDiagnostics() catch &.{};
+    defer module_env.gpa.free(diags);
+    for (diags) |d| {
+        var report = module_env.diagnosticToReport(d, module_env.gpa, filename) catch continue;
+        defer report.deinit();
+
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Render type checking problems
     for (checker.problems.problems.items) |prob| {
         var report = rb.build(prob) catch continue;
         defer report.deinit();
