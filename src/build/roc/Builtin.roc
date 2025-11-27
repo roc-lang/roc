@@ -70,6 +70,20 @@ Builtin :: [].{
 
 			$state
 		}
+
+		fold_rev : List(item), state, (item, state -> state) -> state
+		fold_rev = |list, init, step| {
+			var $state = init
+			var $index = list.len()
+
+			while $index > 0 {
+				$index = $index - 1
+			    item = list_get_unsafe(list, $index)
+				$state = step(item, $state)
+			}
+
+			$state
+		}
 	}
 
 	Bool := [False, True].{
