@@ -1426,7 +1426,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     // Try to find and compile platform modules
     // Extract the actual platform path from the app header to support paths like "../platform/main.roc"
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse return error.InvalidAppPath;
+    // If the roc file path has no directory component (e.g., "app.roc"), use current directory
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
 

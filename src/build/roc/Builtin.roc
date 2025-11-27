@@ -15,6 +15,14 @@ Builtin :: [].{
 		with_prefix : Str, Str -> Str
 		drop_prefix : Str, Str -> Str
 		drop_suffix : Str, Str -> Str
+		count_utf8_bytes : Str -> U64
+		with_capacity : U64 -> Str
+		reserve : Str, U64 -> Str
+		release_excess_capacity : Str -> Str
+		to_utf8 : Str -> List(U8)
+		from_utf8_lossy : List(U8) -> Str
+		split_on : Str, Str -> List(Str)
+		join_with : List(Str), Str -> Str
 
 		is_eq : Str, Str -> Bool
 	}
@@ -66,6 +74,20 @@ Builtin :: [].{
 
 			for item in list {
 				$state = step($state, item)
+			}
+
+			$state
+		}
+
+		fold_rev : List(item), state, (item, state -> state) -> state
+		fold_rev = |list, init, step| {
+			var $state = init
+			var $index = list.len()
+
+			while $index > 0 {
+				$index = $index - 1
+			    item = list_get_unsafe(list, $index)
+				$state = step(item, $state)
 			}
 
 			$state
