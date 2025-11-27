@@ -278,8 +278,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     try imported_envs.append(gpa, other_test_env.builtin_module.env);
 
     // Process explicit imports
-    const import_count = module_env.imports.imports.items().len;
-    for (module_env.imports.imports.items()[0..import_count]) |str_idx| {
+    const import_count = module_env.imports.len();
+    for (module_env.imports.imports.field(.str_idx)[0..import_count]) |str_idx| {
         const import_name = module_env.getString(str_idx);
         if (std.mem.eql(u8, import_name, other_module_name)) {
             // Cross-module import - append the other test module's env

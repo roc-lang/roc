@@ -100,7 +100,9 @@ pub const Instantiator = struct {
                                 if (rigid_subs.get(rigid.name)) |existing_flex| {
                                     break :inner_blk existing_flex;
                                 } else {
-                                    std.debug.assert(false);
+                                    // Rigid variable name not found in substitution map
+                                    // This can happen with hosted functions that have unconstrained type variables
+                                    // Just create a fresh error var to continue gracefully
                                     break :inner_blk try self.store.freshFromContentWithRank(
                                         .err,
                                         self.current_rank,
@@ -171,8 +173,8 @@ pub const Instantiator = struct {
             .flex => |flex| Content{ .flex = try self.instantiateFlex(flex) },
             .rigid => {
                 // Rigids should be handled by `instantiateVar`
-                // If we have run into one here, it is  abug
-                unreachable;
+                // If we have run into one here, it is a bug
+                @panic("instantiateContent: unexpected rigid type variable - should be handled by instantiateVar");
             },
             .alias => |alias| {
                 // Instantiate the structure recursively

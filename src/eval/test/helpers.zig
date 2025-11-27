@@ -420,7 +420,6 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 /// Rewrite deferred numeric literals to match their inferred types
 /// This is similar to what ComptimeEvaluator does but for test expressions
 fn rewriteDeferredNumericLiterals(env: *ModuleEnv, types_store: *types.Store, import_mapping: *const types.import_mapping.ImportMapping) !void {
-    _ = import_mapping;
     const literals = env.deferred_numeric_literals.items();
 
     for (literals) |literal| {

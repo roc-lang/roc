@@ -779,8 +779,8 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 const module_idx_int = @intFromEnum(e.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items().len);
-                const string_lit_idx = ir.imports.imports.items()[module_idx_int];
+                std.debug.assert(module_idx_int < ir.imports.len());
+                const string_lit_idx = ir.imports.imports.field(.str_idx)[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin")) {
@@ -975,8 +975,8 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 const module_idx_int = @intFromEnum(e.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items().len);
-                const string_lit_idx = ir.imports.imports.items()[module_idx_int];
+                std.debug.assert(module_idx_int < ir.imports.len());
+                const string_lit_idx = ir.imports.imports.field(.str_idx)[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin")) {

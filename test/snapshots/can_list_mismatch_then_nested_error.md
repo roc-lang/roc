@@ -8,17 +8,17 @@ type=expr
 [1, "hello", [3, "world"]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:5:1:5
+INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:6:1:6
 MISSING METHOD - can_list_mismatch_then_nested_error.md:1:2:1:3
 MISSING METHOD - can_list_mismatch_then_nested_error.md:1:15:1:16
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:
-**can_list_mismatch_then_nested_error.md:1:5:**
+**can_list_mismatch_then_nested_error.md:1:6:**
 ```roc
 [1, "hello", [3, "world"]]
 ```
-    ^^^^^^^  ^^^^^^^^^^^^
+     ^^^^^   ^^^^^^^^^^^^
 
 The second element has this type:
     _Str_

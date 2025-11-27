@@ -525,6 +525,12 @@ pub const Store = struct {
             .closure => {
                 // Closure layout: header + aligned capture data
                 const header_size = @sizeOf(layout_mod.Closure);
+                // SafeList uses 1-based indexing, index 0 means "no captures" for hosted lambdas
+                const captures_idx = @intFromEnum(layout.data.closure.captures_layout_idx);
+                if (captures_idx == 0) {
+                    // No captures - just the header
+                    return header_size;
+                }
                 const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
                 const captures_alignment = captures_layout.alignment(self.targetUsize());
                 const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));

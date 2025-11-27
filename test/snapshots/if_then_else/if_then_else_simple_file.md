@@ -12,12 +12,12 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:1:7:1:7
+INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:1:12:1:12
 MISSING METHOD - if_then_else_simple_file.md:1:10:1:11
 # PROBLEMS
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
-**if_then_else_simple_file.md:1:7:**
+**if_then_else_simple_file.md:1:12:**
 ```roc
 foo = if 1 A
 
@@ -25,7 +25,6 @@ foo = if 1 A
 	"hello"
     }
 ```
- ^^^^^^^
 
 The `else` branch has the type:
     _Str_

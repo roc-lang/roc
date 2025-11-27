@@ -1483,7 +1483,8 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    // SafeList uses 1-based indexing, so first element is at index 1
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(1)).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(structure_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1518,7 +1519,8 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    // SafeList uses 1-based indexing, so first element is at index 1
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(1)).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(flex_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1571,7 +1573,8 @@ test "unify - flex vs nominal type captures constraint" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    // SafeList uses 1-based indexing, so first element is at index 1
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(1)).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(nominal_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,

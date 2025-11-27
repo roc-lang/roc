@@ -173,7 +173,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify imports before serialization
     try testing.expectEqual(import1, import3); // Deduplication should work
-    try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
+    try testing.expectEqual(@as(usize, 2), original.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same 52 identifiers as original: hello, world, TestModule + 19 well-known identifiers + 18 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers from ModuleEnv.init()
@@ -192,11 +192,11 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqualStrings("TestModule", env.module_name);
 
     // Verify imports were preserved after deserialization
-    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
+    try testing.expectEqual(@as(usize, 2), env.imports.len());
 
     // Verify the import strings are correct (they reference string indices in the string store)
-    const import_str1 = env.common.strings.get(env.imports.imports.items()[0]);
-    const import_str2 = env.common.strings.get(env.imports.imports.items()[1]);
+    const import_str1 = env.common.strings.get(env.imports.imports.field(.str_idx)[0]);
+    const import_str2 = env.common.strings.get(env.imports.imports.field(.str_idx)[1]);
 
     try testing.expectEqualStrings("json.Json", import_str1);
     try testing.expectEqualStrings("core.List", import_str2);
@@ -217,7 +217,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
     // Should create new entry for new.Module
     try testing.expectEqual(@as(u32, 2), @intFromEnum(import5));
-    try testing.expectEqual(@as(usize, 3), env.imports.imports.len());
+    try testing.expectEqual(@as(usize, 3), env.imports.len());
 }
 
 // test "ModuleEnv with types CompactWriter roundtrip" {

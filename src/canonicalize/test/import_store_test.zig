@@ -40,8 +40,8 @@ test "Import.Store deduplicates module names" {
     try testing.expectEqual(@as(usize, 2), store.imports.len());
 
     // Verify we can retrieve the module names through the string store
-    const str_idx1 = store.imports.items()[@intFromEnum(idx1)];
-    const str_idx3 = store.imports.items()[@intFromEnum(idx3)];
+    const str_idx1 = store.imports.field(.str_idx)[@intFromEnum(idx1)];
+    const str_idx3 = store.imports.field(.str_idx)[@intFromEnum(idx3)];
     try testing.expectEqualStrings("test.Module", string_store.get(str_idx1));
     try testing.expectEqualStrings("other.Module", string_store.get(str_idx3));
 }
@@ -137,9 +137,9 @@ test "Import.Store basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
 
     // Verify the interned string IDs are stored correctly
-    const str_idx1 = deserialized.imports.items()[0];
-    const str_idx2 = deserialized.imports.items()[1];
-    const str_idx3 = deserialized.imports.items()[2];
+    const str_idx1 = deserialized.imports.field(.str_idx)[0];
+    const str_idx2 = deserialized.imports.field(.str_idx)[1];
+    const str_idx3 = deserialized.imports.field(.str_idx)[2];
 
     try testing.expectEqualStrings("json.Json", string_store.get(str_idx1));
     try testing.expectEqualStrings("core.List", string_store.get(str_idx2));
@@ -202,8 +202,8 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());
 
     // Get the string IDs and verify the strings
-    const str_idx1 = deserialized.imports.items()[@intFromEnum(idx1)];
-    const str_idx2 = deserialized.imports.items()[@intFromEnum(idx2)];
+    const str_idx1 = deserialized.imports.field(.str_idx)[@intFromEnum(idx1)];
+    const str_idx2 = deserialized.imports.field(.str_idx)[@intFromEnum(idx2)];
 
     try testing.expectEqualStrings("test.Module", string_store.get(str_idx1));
     try testing.expectEqualStrings("another.Module", string_store.get(str_idx2));
@@ -212,8 +212,8 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 2), deserialized.map.count());
 
     // Check that the map has correct entries for the string indices that were deserialized
-    const str_idx_0 = deserialized.imports.items()[0];
-    const str_idx_1 = deserialized.imports.items()[1];
+    const str_idx_0 = deserialized.imports.field(.str_idx)[0];
+    const str_idx_1 = deserialized.imports.field(.str_idx)[1];
 
     try testing.expect(deserialized.map.contains(str_idx_0));
     try testing.expect(deserialized.map.contains(str_idx_1));

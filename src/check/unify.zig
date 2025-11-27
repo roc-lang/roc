@@ -1421,9 +1421,12 @@ const Unifier = struct {
     }
 
     fn trackNewVars(self: *Self, start_slots: u64) error{AllocatorError}!void {
-        var slot = start_slots;
+        // With 1-based indexing: if len() was N before adding, elements were at indices 1..N
+        // After adding K elements, len() is N+K, elements are at indices 1..N+K
+        // So new elements are at indices (N+1)..(N+K), i.e., (start_slots+1)..end_slots (inclusive)
         const end_slots = self.types_store.len();
-        while (slot < end_slots) : (slot += 1) {
+        var slot = start_slots + 1; // Start at first new index (1-based)
+        while (slot <= end_slots) : (slot += 1) {
             const new_var = @as(Var, @enumFromInt(@as(u32, @intCast(slot))));
             _ = self.scratch.fresh_vars.append(self.scratch.gpa, new_var) catch return error.AllocatorError;
         }

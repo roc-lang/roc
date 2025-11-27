@@ -126,6 +126,9 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
 
 /// Cross-platform shared memory evaluation
 fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
+    // DEBUG: Test that crash mechanism works
+    // roc_ops.crash("SHIM DEBUG: About to initialize shared memory");
+
     // Initialize shared memory once per process
     try initializeSharedMemoryOnce(roc_ops);
 

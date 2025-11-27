@@ -302,7 +302,8 @@ fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
 
 /// Convert a var to a type string
 fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
-    if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
+    // With 1-based indexing: valid Vars are 1..len, so check > instead of >=
+    if (@intFromEnum(var_) > self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         _ = try self.buf.writer().write("Error");
         return;
@@ -310,7 +311,8 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
 
     const resolved = self.types.resolveVar(var_);
 
-    if (@intFromEnum(resolved.var_) >= self.types.slots.backing.len()) {
+    // With 1-based indexing: valid Vars are 1..len, so check > instead of >=
+    if (@intFromEnum(resolved.var_) > self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         _ = try self.buf.writer().write("Error");
         return;
@@ -733,7 +735,8 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
     const resolved_var = self.types.resolveVar(var_).var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
-    if (@intFromEnum(resolved_var) >= self.types.slots.backing.len()) {
+    // With 1-based indexing: valid Vars are 1..len, so check > instead of >=
+    if (@intFromEnum(resolved_var) > self.types.slots.backing.len()) {
         _ = try self.buf.writer().write("_");
         try self.generateContextualName(context);
         return;
@@ -782,7 +785,8 @@ fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.me
 }
 
 fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize) std.mem.Allocator.Error!void {
-    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return;
+    // With 1-based indexing: valid Vars are 1..len, so check > instead of >=
+    if (@intFromEnum(current_var) > self.types.slots.backing.len()) return;
 
     const resolved = self.types.resolveVar(current_var);
 

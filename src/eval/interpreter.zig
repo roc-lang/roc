@@ -242,11 +242,8 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
-        // Safely access import count
-        const import_count = if (env.imports.imports.items().len > 0)
-            env.imports.imports.items().len
-        else
-            0;
+        // Safely access import count using the new Store.len() method
+        const import_count = env.imports.len();
 
         if (other_envs.len > 0 and import_count > 0) {
             // Allocate capacity for all imports (even if some are duplicates)
@@ -1103,7 +1100,7 @@ pub const Interpreter = struct {
                 // Get the first element's variables, which is representative of all the element vars
                 const elems = self.env.store.sliceExpr(list_expr.elems);
                 std.debug.assert(elems.len > 0);
-                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
+                const first_elem_var = can.ModuleEnv.varFrom(elems[0]);
 
                 const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
@@ -1932,6 +1929,9 @@ pub const Interpreter = struct {
                                 closure_idx -= 1;
                                 const cls_val = self_interp.active_closures.items[closure_idx];
                                 if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                                    // SafeList uses 1-based indexing, index 0 means "no captures" for hosted lambdas
+                                    const captures_idx = @intFromEnum(cls_val.layout.data.closure.captures_layout_idx);
+                                    if (captures_idx == 0) continue; // Skip closures with no captures
                                     const captures_layout = self_interp.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
                                     const header_sz = @sizeOf(layout.Closure);
                                     const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
@@ -2075,10 +2075,9 @@ pub const Interpreter = struct {
 
                 var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
                 defer subst_map.deinit();
-                const func_rt_var = if (should_instantiate)
-                    try self.instantiateType(func_rt_var_orig, &subst_map)
-                else
-                    func_rt_var_orig;
+                const func_rt_var = if (should_instantiate) blk: {
+                    break :blk try self.instantiateType(func_rt_var_orig, &subst_map);
+                } else func_rt_var_orig;
 
                 // Save current rigid substitution context and merge in the new substitutions (only if we instantiated)
                 // This will be used during function body evaluation
@@ -2141,6 +2140,7 @@ pub const Interpreter = struct {
                     }
                     break :blk null;
                 };
+
                 // Get call expression's return type for low-level builtins
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
@@ -2174,6 +2174,7 @@ pub const Interpreter = struct {
                 while (j < arg_indices.len) : (j += 1) {
                     arg_values[j] = try self.evalExprMinimal(arg_indices[j], roc_ops, if (arg_rt_buf.len == 0) null else arg_rt_buf[j]);
                 }
+
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
@@ -2564,7 +2565,9 @@ pub const Interpreter = struct {
                                 // Only e_closure creates real capture values; others have uninitialized captures area
                                 const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
                                 const has_real_captures = (lambda_expr == .e_closure);
-                                if (has_real_captures) {
+                                // SafeList uses 1-based indexing, index 0 means "no captures" for hosted lambdas
+                                const captures_idx = @intFromEnum(cls_val.layout.data.closure.captures_layout_idx);
+                                if (has_real_captures and captures_idx > 0) {
                                     const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
                                     const header_sz = @sizeOf(layout.Closure);
                                     const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
@@ -2709,8 +2712,12 @@ pub const Interpreter = struct {
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = layout_val.alignment(target_usize);
         if (layout_val.tag == .closure) {
-            const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
-            alignment = alignment.max(captures_layout.alignment(target_usize));
+            // SafeList uses 1-based indexing, index 0 means "no captures" for hosted lambdas
+            const captures_idx = @intFromEnum(layout_val.data.closure.captures_layout_idx);
+            if (captures_idx > 0) {
+                const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
+                alignment = alignment.max(captures_layout.alignment(target_usize));
+            }
         }
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
@@ -2721,8 +2728,12 @@ pub const Interpreter = struct {
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
         if (src.layout.tag == .closure) {
-            const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
-            alignment = alignment.max(captures_layout.alignment(target_usize));
+            // SafeList uses 1-based indexing, index 0 means "no captures" for hosted lambdas
+            const captures_idx = @intFromEnum(src.layout.data.closure.captures_layout_idx);
+            if (captures_idx > 0) {
+                const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
+                alignment = alignment.max(captures_layout.alignment(target_usize));
+            }
         }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
         // Preserve rt_var for constant folding
@@ -6831,7 +6842,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // TODO: Don't use unreachable here
-                            unreachable;
+                            @panic("gatherTags: unexpected flat_type");
                         },
                     }
                 },
@@ -6842,7 +6853,7 @@ pub const Interpreter = struct {
                 .rigid => break,
                 else => {
                     // TODO: Don't use unreachable here
-                    unreachable;
+                    @panic("gatherTags: unexpected content");
                 },
             }
         }
