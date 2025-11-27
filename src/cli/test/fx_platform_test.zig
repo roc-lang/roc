@@ -576,10 +576,10 @@ test "fx platform string interpolation type mismatch" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // Expect the run to fail with exit code 1 (type error)
+    // The program should run (exit 0) even with type errors - errors are just warnings
     switch (run_result.term) {
         .Exited => |code| {
-            try testing.expectEqual(@as(u8, 1), code);
+            try testing.expectEqual(@as(u8, 0), code);
         },
         else => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
@@ -595,4 +595,7 @@ test "fx platform string interpolation type mismatch" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
+
+    // The program should still produce output (it runs despite errors)
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
 }

@@ -271,7 +271,8 @@ fn renderTypeProblems(
     var warning_count: usize = 0;
 
     for (checker.problems.problems.items) |prob| {
-        const report = rb.build(prob) catch continue;
+        var report = rb.build(prob) catch continue;
+        defer report.deinit();
 
         // Render the diagnostic report to stderr
         reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
@@ -1129,14 +1130,12 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
         runWithWindowsHandleInheritance(allocs, exe_path, shm_handle) catch |err| {
-            std.log.err("Failed to run with Windows handle inheritance: {}", .{err});
             return err;
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
         runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager) catch |err| {
-            std.log.err("Failed to run with POSIX fd inheritance: {}", .{err});
             return err;
         };
     }
@@ -1757,11 +1756,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
     }
 
-    // Render type errors exactly as roc check would, then fail if any errors
-    const error_count = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
-    if (error_count > 0) {
-        return error.TypeCheckFailed;
-    }
+    // Render all type problems (errors and warnings) exactly as roc check would
+    // The program still runs afterward - we don't block on errors
+    _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
 
     app_env_ptr.* = app_env;
 
