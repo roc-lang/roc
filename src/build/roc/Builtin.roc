@@ -31,6 +31,7 @@ Builtin :: [].{
 		len : List(_item) -> U64
 		is_empty : List(_item) -> Bool
 		concat : List(item), List(item) -> List(item)
+		with_capacity: U64 -> List(item)
 
 		is_eq : List(item), List(item) -> Bool
 		    where [item.is_eq : item, item -> Bool]
