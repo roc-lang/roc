@@ -9725,7 +9725,37 @@ fn setExternalTypeBinding(
     const qualified_ident = try self.env.insertIdent(Ident.for_text(qualified_name));
 
     // Add the mapping from qualified ident to local ident
-    try self.env.import_mapping.put(qualified_ident, local_ident);
+    // Only replace if the new name is "better" (shortest wins, lexicographic tiebreaker)
+    const local_name = self.env.getIdent(local_ident);
+    if (self.env.import_mapping.get(qualified_ident)) |existing_ident| {
+        const existing_name = self.env.getIdent(existing_ident);
+        if (displayNameIsBetter(local_name, existing_name)) {
+            try self.env.import_mapping.put(qualified_ident, local_ident);
+        }
+    } else {
+        try self.env.import_mapping.put(qualified_ident, local_ident);
+    }
+}
+
+/// Determine if `new_name` is a "better" display name than `existing_name`.
+/// Returns true if new_name should replace existing_name.
+///
+/// The rules are:
+/// 1. Shorter names are better (fewer characters to read in error messages)
+/// 2. For equal lengths, lexicographically smaller wins (deterministic regardless of import order)
+fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
+    // Shorter is better
+    if (new_name.len != existing_name.len) {
+        return new_name.len < existing_name.len;
+    }
+    // Equal length: lexicographic comparison (lower byte value wins)
+    for (new_name, existing_name) |new_byte, existing_byte| {
+        if (new_byte != existing_byte) {
+            return new_byte < existing_byte;
+        }
+    }
+    // Identical strings - no replacement needed
+    return false;
 }
 
 /// Look up an exposed item in parent scopes (for shadowing detection)

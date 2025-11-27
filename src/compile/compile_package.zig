@@ -813,11 +813,8 @@ pub const PackageEnv = struct {
         czer.deinit();
 
         // Type check using the SAME module_envs_map
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
-            .list = try env.insertIdent(base.Ident.for_text("List")),
-            .box = try env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -832,7 +829,7 @@ pub const PackageEnv = struct {
             imported_envs,
             module_envs_out,
             &env.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         );
         errdefer checker.deinit();
 
@@ -937,11 +934,8 @@ pub const PackageEnv = struct {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
-        const module_common_idents: Check.CommonIdents = .{
+        const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
-            .list = try env.insertIdent(base.Ident.for_text("List")),
-            .box = try env.insertIdent(base.Ident.for_text("Box")),
-            .@"try" = try env.insertIdent(base.Ident.for_text("Try")),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -968,7 +962,7 @@ pub const PackageEnv = struct {
             imported_envs,
             &module_envs_map,
             &env.store.regions,
-            module_common_idents,
+            module_builtin_ctx,
         );
         errdefer checker.deinit();
 

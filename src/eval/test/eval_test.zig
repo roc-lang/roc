@@ -715,11 +715,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const try_stmt_in_builtin_module = builtin_indices.try_type;
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
-        .list = try original_env.insertIdent(base.Ident.for_text("List")),
-        .box = try original_env.insertIdent(base.Ident.for_text("Box")),
-        .@"try" = try original_env.insertIdent(base.Ident.for_text("Try")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -749,7 +746,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Resolve imports - map each import to its index in imported_envs
     original_env.imports.resolveImports(&original_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());

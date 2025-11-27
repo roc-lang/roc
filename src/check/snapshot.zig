@@ -237,7 +237,17 @@ pub const Store = struct {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
-                else => null,
+                .recursion_var => |rec_var| rec_var.name,
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    // Other structures can appear as backing vars for nominal types.
+                    // E.g., List(a) := [Nil, Cons(a, List(a))] has a tag union as backing.
+                    // These don't have a direct name, so we fall back to contextual naming.
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
+                },
+                // Error types shouldn't create cycles
+                .err => unreachable,
             };
             return try self.contents.append(self.gpa, .{ .recursive = recursive_name });
         }
@@ -1059,11 +1069,15 @@ pub const Store = struct {
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
     }
 
-    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive.
+    /// Flex vars and rigid names carry unique identities, but recursive markers don't—they're just
+    /// placeholders indicating "reference back to a recursive type." Which type they refer to is
+    /// determined by position in the tree, not by data in the marker itself. So for deduplication,
+    /// all recursive markers are treated as equivalent.
     const DispatcherIdentity = union(enum) {
         flex_var: Var,
         rigid_name: Ident.Idx,
-        recursive: void, // All recursive types are equivalent for deduplication
+        recursive: void,
     };
 
     /// Get the dispatcher (first argument) identity from a function content
@@ -1103,7 +1117,7 @@ pub const Store = struct {
                 else => false,
             },
             .recursive => switch (b.?) {
-                .recursive => true, // All recursive types are equal
+                .recursive => true, // see DispatcherIdentity doc comment
                 else => false,
             },
         };
@@ -1919,11 +1933,15 @@ pub const SnapshotWriter = struct {
         _ = try self.static_dispatch_constraints.append(constraint_to_add);
     }
 
-    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive
+    /// Dispatcher identity for deduplication - either a Var (for flex), an Ident.Idx (for rigid), or recursive.
+    /// Flex vars and rigid names carry unique identities, but recursive markers don't—they're just
+    /// placeholders indicating "reference back to a recursive type." Which type they refer to is
+    /// determined by position in the tree, not by data in the marker itself. So for deduplication,
+    /// all recursive markers are treated as equivalent.
     const DispatcherIdentity = union(enum) {
         flex_var: Var,
         rigid_name: Ident.Idx,
-        recursive: void, // All recursive types are equivalent for deduplication
+        recursive: void,
     };
 
     /// Get the dispatcher (first argument) identity from a function content
@@ -1963,7 +1981,7 @@ pub const SnapshotWriter = struct {
                 else => false,
             },
             .recursive => switch (b.?) {
-                .recursive => true, // All recursive types are equal
+                .recursive => true, // see DispatcherIdentity doc comment
                 else => false,
             },
         };
