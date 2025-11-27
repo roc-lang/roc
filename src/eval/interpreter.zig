@@ -3574,38 +3574,46 @@ pub const Interpreter = struct {
                 const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
                 const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
 
-                // Get element layout
-                const elem_layout_idx = list_a_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                // Call listConcat, handling zero-sized types specially
+                const result_list = if (list_a_arg.layout.tag == .list_of_zst)
+                    builtins.list.listConcat(
+                        list_a.*,
+                        list_b.*,
+                        1,
+                        0,
+                        false,
+                        null,
+                        &builtins.list.rcNone,
+                        null,
+                        &builtins.list.rcNone,
+                        roc_ops,
+                    )
+                else blk: {
+                    const elem_layout_idx = list_a_arg.layout.data.list;
+                    const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                    const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                    const elem_alignment: u32 = @intCast(elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits());
+                    const elements_refcounted = elem_layout.isRefcounted();
 
-                // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                    var refcount_context = RefcountContext{
+                        .layout_store = &self.runtime_layout_store,
+                        .elem_layout = elem_layout,
+                        .roc_ops = roc_ops,
+                    };
 
-                // Set up context for refcount callbacks
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .roc_ops = roc_ops,
+                    break :blk builtins.list.listConcat(
+                        list_a.*,
+                        list_b.*,
+                        elem_alignment,
+                        elem_size,
+                        elements_refcounted,
+                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                        if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                        roc_ops,
+                    );
                 };
-
-                // Call listConcat with proper inc/dec callbacks.
-                // If elements are refcounted, pass callbacks that will inc/dec each element.
-                // Otherwise, pass no-op callbacks.
-                const result_list = builtins.list.listConcat(
-                    list_a.*,
-                    list_b.*,
-                    elem_alignment_u32,
-                    elem_size,
-                    elements_refcounted,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
-                    roc_ops,
-                );
 
                 // Allocate space for the result list
                 const result_layout = list_a_arg.layout; // Same layout as input
@@ -3634,31 +3642,40 @@ pub const Interpreter = struct {
                 const list_layout = self.runtime_layout_store.getLayout(list_layout_idx.?);
                 std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
 
-                // Get element layout
-                // TODO?: should check if the tag is .list_of_zst and call withCapacity with width 0
-                const elem_layout_idx = list_layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_width = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                // Call listWithCapacity, handling zero-sized types specially
+                const result_list = if (list_layout.tag == .list_of_zst)
+                    builtins.list.listWithCapacity(
+                        @intCast(capacity),
+                        1,
+                        0,
+                        false,
+                        null,
+                        &builtins.list.rcNone,
+                        roc_ops,
+                    )
+                else blk: {
+                    const elem_layout_idx = list_layout.data.list;
+                    const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                    const elem_width = self.runtime_layout_store.layoutSize(elem_layout);
+                    const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                    const elements_refcounted = elem_layout.isRefcounted();
 
-                // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                    var refcount_context = RefcountContext{
+                        .layout_store = &self.runtime_layout_store,
+                        .elem_layout = elem_layout,
+                        .roc_ops = roc_ops,
+                    };
 
-                // Set up context for refcount callbacks
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .roc_ops = roc_ops,
+                    break :blk builtins.list.listWithCapacity(
+                        @intCast(capacity),
+                        @intCast(elem_alignment),
+                        elem_width,
+                        elements_refcounted,
+                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                        roc_ops,
+                    );
                 };
-                const result_list = builtins.list.listWithCapacity(
-                    @intCast(capacity),
-                    @intCast(elem_alignment),
-                    elem_width,
-                    elements_refcounted,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                    roc_ops,
-                );
 
                 // Allocate space for the result list
                 var out = try self.pushRaw(list_layout, 0);

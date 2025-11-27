@@ -665,6 +665,17 @@ test "e_low_level_lambda - List.concat with empty string list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
+test "e_low_level_lambda - List.concat with zero-sized type" {
+    const src =
+        \\x : List({})
+        \\x = List.concat([{}, {}], [{}, {}, {}])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
 test "e_low_level_lambda - List.with_capacity of non refcounted elements creates empty list" {
     const src =
         \\x : List(U64)
@@ -721,6 +732,17 @@ test "e_low_level_lambda - List.with_capacity without capacity, of str (refcount
 
     const len_value = try evalModuleAndGetInt(src, 2);
     try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of zero-sized type creates empty list" {
+    const src =
+        \\x : List({})
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
 }
 
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
