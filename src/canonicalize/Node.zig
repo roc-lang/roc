@@ -85,6 +85,7 @@ pub const Tag = enum {
     expr_low_level,
     expr_expect,
     expr_record_builder,
+    expr_return,
     match_branch,
     match_branch_pattern,
     type_header,

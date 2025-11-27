@@ -8027,21 +8027,14 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
                 },
                 .@"return" => |return_stmt| {
-                    // A return statement exits the function, so the block's "value" is unit.
-                    // We still need to canonicalize the return and add it as a statement.
+                    // Create an e_return expression to preserve early return semantics
+                    // This is for when return is the final expression in a block
+                    const inner_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
                     const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
-                    const returned_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
-
-                    // Create the return statement (lambda is null for now - will be implemented later)
-                    const return_stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
-                        .expr = returned_expr.idx,
-                        .lambda = null,
+                    const return_expr_idx = try self.env.addExpr(Expr{ .e_return = .{
+                        .expr = inner_expr.idx,
                     } }, return_region);
-                    try self.env.store.addScratchStatement(return_stmt_idx);
-
-                    // The block's result is unit (empty record) since return exits the function
-                    const unit_idx = try self.env.addExpr(Expr{ .e_empty_record = .{} }, return_region);
-                    last_expr = CanonicalizedExpr{ .idx = unit_idx, .free_vars = returned_expr.free_vars };
+                    last_expr = CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = inner_expr.free_vars };
                 },
                 .crash => |crash_stmt| {
                     // For final debug statements, canonicalize as debug expression
