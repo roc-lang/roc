@@ -5059,33 +5059,26 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for try integer conversions (returns Try(To, [OutOfRange]))
-    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
-        std.debug.assert(args.len == 1);
-        const int_arg = args[0];
-        // Null argument is a compiler bug - the compiler should never produce code with null args
-        std.debug.assert(int_arg.ptr != null);
-
-        // Return type info is required - missing it is a compiler bug
-        const result_rt_var = return_rt_var orelse unreachable;
-
-        const result_layout = try self.getRuntimeLayout(result_rt_var);
-
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
-
-        // Check if conversion is in range
-        const in_range = std.math.cast(To, from_value) != null;
+    /// Generic helper for building Try(T, [OutOfRange]) results.
+    /// Used by all "try" conversion functions to construct the result tag union.
+    fn buildTryResult(
+        self: *Interpreter,
+        comptime PayloadType: type,
+        in_range: bool,
+        payload_value: PayloadType,
+        return_rt_var: types.Var,
+    ) !StackValue {
+        const result_layout = try self.getRuntimeLayout(return_rt_var);
 
         // Resolve the Try type to get Ok's payload type
-        const resolved = self.resolveBaseVar(result_rt_var);
+        const resolved = self.resolveBaseVar(return_rt_var);
         // Type system should guarantee this is a tag union - if not, it's a compiler bug
         std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
 
         // Find tag indices for Ok and Err
         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
         defer tag_list.deinit();
-        try self.appendUnionTags(result_rt_var, &tag_list);
+        try self.appendUnionTags(return_rt_var, &tag_list);
 
         var ok_index: ?usize = null;
         var err_index: ?usize = null;
@@ -5101,12 +5094,13 @@ pub const Interpreter = struct {
             }
         }
 
+        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+
         // Construct the result tag union
         if (result_layout.tag == .scalar) {
             // Simple tag with no payload (shouldn't happen for Try with payload)
             var out = try self.pushRaw(result_layout, 0);
             out.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             try out.setInt(@intCast(tag_idx));
             out.is_initialized = true;
             return out;
@@ -5124,7 +5118,6 @@ pub const Interpreter = struct {
             std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
             var tmp = tag_field;
             tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             try tmp.setInt(@intCast(tag_idx));
 
             // Clear payload area
@@ -5139,9 +5132,8 @@ pub const Interpreter = struct {
 
             // Write payload for Ok case
             if (in_range) {
-                const to_value: To = @intCast(from_value);
                 if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                    @as(*PayloadType, @ptrCast(@alignCast(payload_ptr))).* = payload_value;
                 }
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
@@ -5160,7 +5152,6 @@ pub const Interpreter = struct {
             std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
             var tmp = tag_field;
             tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             try tmp.setInt(@intCast(tag_idx));
 
             // Clear payload area (element 0)
@@ -5175,9 +5166,8 @@ pub const Interpreter = struct {
 
             // Write payload for Ok case
             if (in_range) {
-                const to_value: To = @intCast(from_value);
                 if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                    @as(*PayloadType, @ptrCast(@alignCast(payload_ptr))).* = payload_value;
                 }
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
@@ -5187,6 +5177,21 @@ pub const Interpreter = struct {
 
         // Unsupported result layout is a compiler bug
         unreachable;
+    }
+
+    /// Helper for try integer conversions (returns Try(To, [OutOfRange]))
+    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        std.debug.assert(int_arg.ptr != null);
+
+        const result_rt_var = return_rt_var orelse unreachable;
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const in_range = std.math.cast(To, from_value) != null;
+        const to_value: To = if (in_range) @intCast(from_value) else undefined;
+
+        return self.buildTryResult(To, in_range, to_value, result_rt_var);
     }
 
     /// Helper for integer to float conversions
@@ -5275,105 +5280,15 @@ pub const Interpreter = struct {
         std.debug.assert(float_arg.ptr != null);
 
         const result_rt_var = return_rt_var orelse unreachable;
-        const result_layout = try self.getRuntimeLayout(result_rt_var);
-
         const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
 
         // Check if conversion would succeed
         const min_float: From = @floatFromInt(std.math.minInt(To));
         const max_float: From = @floatFromInt(std.math.maxInt(To));
         const in_range = !std.math.isNan(from_value) and from_value >= min_float and from_value <= max_float;
+        const to_value: To = if (in_range) @intFromFloat(from_value) else undefined;
 
-        // Resolve the Try type to get Ok's payload type
-        const resolved = self.resolveBaseVar(result_rt_var);
-        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
-
-        // Find tag indices for Ok and Err
-        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.appendUnionTags(result_rt_var, &tag_list);
-
-        var ok_index: ?usize = null;
-        var err_index: ?usize = null;
-
-        const ok_ident = self.env.idents.ok;
-        const err_ident = self.env.idents.err;
-
-        for (tag_list.items, 0..) |tag_info, i| {
-            if (tag_info.name == ok_ident) {
-                ok_index = i;
-            } else if (tag_info.name == err_ident) {
-                err_index = i;
-            }
-        }
-
-        // Construct the result tag union
-        if (result_layout.tag == .scalar) {
-            var out = try self.pushRaw(result_layout, 0);
-            out.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try out.setInt(@intCast(tag_idx));
-            out.is_initialized = true;
-            return out;
-        } else if (result_layout.tag == .record) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
-            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
-
-            const tag_field = try acc.getFieldByIndex(tag_field_idx);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try acc.getFieldByIndex(payload_field_idx);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                const to_value: To = @intFromFloat(from_value);
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
-                }
-            }
-            return dest;
-        } else if (result_layout.tag == .tuple) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-            const tag_field = try result_acc.getElement(1);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try result_acc.getElement(0);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                const to_value: To = @intFromFloat(from_value);
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
-                }
-            }
-            return dest;
-        } else {
-            unreachable;
-        }
+        return self.buildTryResult(To, in_range, to_value, result_rt_var);
     }
 
     /// Helper for float widening conversion (F32 -> F64)
@@ -5421,102 +5336,13 @@ pub const Interpreter = struct {
         std.debug.assert(float_arg.ptr != null);
 
         const result_rt_var = return_rt_var orelse unreachable;
-        const result_layout = try self.getRuntimeLayout(result_rt_var);
-
         const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
 
         // Check if conversion would produce infinity from a finite value
         const to_value: To = @floatCast(from_value);
         const in_range = !std.math.isInf(to_value) or std.math.isInf(from_value);
 
-        // Resolve the Try type to get Ok's payload type
-        const resolved = self.resolveBaseVar(result_rt_var);
-        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
-
-        // Find tag indices for Ok and Err
-        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.appendUnionTags(result_rt_var, &tag_list);
-
-        var ok_index: ?usize = null;
-        var err_index: ?usize = null;
-
-        const ok_ident = self.env.idents.ok;
-        const err_ident = self.env.idents.err;
-
-        for (tag_list.items, 0..) |tag_info, i| {
-            if (tag_info.name == ok_ident) {
-                ok_index = i;
-            } else if (tag_info.name == err_ident) {
-                err_index = i;
-            }
-        }
-
-        // Construct the result tag union
-        if (result_layout.tag == .scalar) {
-            var out = try self.pushRaw(result_layout, 0);
-            out.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try out.setInt(@intCast(tag_idx));
-            out.is_initialized = true;
-            return out;
-        } else if (result_layout.tag == .record) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
-            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
-
-            const tag_field = try acc.getFieldByIndex(tag_field_idx);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try acc.getFieldByIndex(payload_field_idx);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
-                }
-            }
-            return dest;
-        } else if (result_layout.tag == .tuple) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-            const tag_field = try result_acc.getElement(1);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try result_acc.getElement(0);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
-                }
-            }
-            return dest;
-        } else {
-            unreachable;
-        }
+        return self.buildTryResult(To, in_range, to_value, result_rt_var);
     }
 
     /// Dec to integer conversion (wrapping)
@@ -5547,102 +5373,14 @@ pub const Interpreter = struct {
         std.debug.assert(from_arg.ptr != null);
 
         const result_rt_var = return_rt_var orelse unreachable;
-        const result_layout = try self.getRuntimeLayout(result_rt_var);
 
         // Dec is stored as i128 internally
         const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
         const maybe_result = dec.toIntTry(To, dec.RocDec{ .num = dec_value });
         const in_range = maybe_result != null;
+        const to_value: To = maybe_result orelse undefined;
 
-        // Resolve the Try type to get Ok's payload type
-        const resolved = self.resolveBaseVar(result_rt_var);
-        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
-
-        // Find tag indices for Ok and Err
-        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.appendUnionTags(result_rt_var, &tag_list);
-
-        var ok_index: ?usize = null;
-        var err_index: ?usize = null;
-
-        const ok_ident = self.env.idents.ok;
-        const err_ident = self.env.idents.err;
-
-        for (tag_list.items, 0..) |tag_info, i| {
-            if (tag_info.name == ok_ident) {
-                ok_index = i;
-            } else if (tag_info.name == err_ident) {
-                err_index = i;
-            }
-        }
-
-        // Construct the result tag union
-        if (result_layout.tag == .scalar) {
-            var out = try self.pushRaw(result_layout, 0);
-            out.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try out.setInt(@intCast(tag_idx));
-            out.is_initialized = true;
-            return out;
-        } else if (result_layout.tag == .record) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
-            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
-
-            const tag_field = try acc.getFieldByIndex(tag_field_idx);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try acc.getFieldByIndex(payload_field_idx);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = maybe_result.?;
-                }
-            }
-            return dest;
-        } else if (result_layout.tag == .tuple) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-            // Tag field is element 1, payload is element 0 (following floatToIntTry pattern)
-            const tag_field = try result_acc.getElement(1);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try result_acc.getElement(0);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = maybe_result.?;
-                }
-            }
-            return dest;
-        } else {
-            unreachable;
-        }
+        return self.buildTryResult(To, in_range, to_value, result_rt_var);
     }
 
     /// Dec to F32 conversion (wrapping - lossy)
@@ -5673,102 +5411,14 @@ pub const Interpreter = struct {
         std.debug.assert(from_arg.ptr != null);
 
         const result_rt_var = return_rt_var orelse unreachable;
-        const result_layout = try self.getRuntimeLayout(result_rt_var);
 
         // Dec is stored as i128 internally
         const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
         const maybe_result = dec.toF32Try(dec.RocDec{ .num = dec_value });
         const in_range = maybe_result != null;
+        const to_value: f32 = maybe_result orelse undefined;
 
-        // Resolve the Try type to get Ok's payload type
-        const resolved = self.resolveBaseVar(result_rt_var);
-        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
-
-        // Find tag indices for Ok and Err
-        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.appendUnionTags(result_rt_var, &tag_list);
-
-        var ok_index: ?usize = null;
-        var err_index: ?usize = null;
-
-        const ok_ident = self.env.idents.ok;
-        const err_ident = self.env.idents.err;
-
-        for (tag_list.items, 0..) |tag_info, i| {
-            if (tag_info.name == ok_ident) {
-                ok_index = i;
-            } else if (tag_info.name == err_ident) {
-                err_index = i;
-            }
-        }
-
-        // Construct the result tag union
-        if (result_layout.tag == .scalar) {
-            var out = try self.pushRaw(result_layout, 0);
-            out.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try out.setInt(@intCast(tag_idx));
-            out.is_initialized = true;
-            return out;
-        } else if (result_layout.tag == .record) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
-            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
-
-            const tag_field = try acc.getFieldByIndex(tag_field_idx);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try acc.getFieldByIndex(payload_field_idx);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = maybe_result.?;
-                }
-            }
-            return dest;
-        } else if (result_layout.tag == .tuple) {
-            var dest = try self.pushRaw(result_layout, 0);
-            var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-            // Tag field is element 1, payload is element 0 (following floatToIntTry pattern)
-            const tag_field = try result_acc.getElement(1);
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            const payload_field = try result_acc.getElement(0);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            if (in_range) {
-                if (payload_field.ptr) |payload_ptr| {
-                    @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = maybe_result.?;
-                }
-            }
-            return dest;
-        } else {
-            unreachable;
-        }
+        return self.buildTryResult(f32, in_range, to_value, result_rt_var);
     }
 
     /// Dec to F64 conversion (lossy but always succeeds for Dec range)
