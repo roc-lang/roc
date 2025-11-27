@@ -666,6 +666,64 @@ test "e_low_level_lambda - List.concat with empty string list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
+test "e_low_level_lambda - List.with_capacity of non refcounted elements creates empty list" {
+    const src =
+        \\x : List(U64)
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of str (refcounted elements) creates empty list" {
+    const src =
+        \\x : List(Str)
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of non refcounted elements can concat" {
+    const src =
+        \\y : List(U64)
+        \\y = List.with_capacity(10)
+        \\x = List.concat(y, [1])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of str (refcounted elements) can concat" {
+    const src =
+        \\y : List(Str)
+        \\y = List.with_capacity(10)
+        \\x = List.concat(y, ["hello", "world"])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity without capacity, of str (refcounted elements) can concat" {
+    const src =
+        \\y : List(Str)
+        \\y = List.with_capacity(0)
+        \\x = List.concat(y, ["hello", "world"])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 2), len_value);
+}
+
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
     const src =
         \\a : Dec

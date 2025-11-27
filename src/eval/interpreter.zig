@@ -3423,6 +3423,58 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .list_with_capacity => {
+                // List.with_capacity : U64 -> List(a)
+                std.debug.assert(args.len == 1);
+                const capacity_arg = args[0];
+                const capacity_value = try self.extractNumericValue(capacity_arg);
+                const capacity: u64 = @intCast(capacity_value.int);
+
+                std.debug.assert(return_rt_var != null);
+
+                const list_layout_idx = self.runtime_layout_store.layouts_by_var.get(return_rt_var.?);
+                std.debug.assert(list_layout_idx != null);
+
+                const list_layout = self.runtime_layout_store.getLayout(list_layout_idx.?);
+                std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
+
+                // Get element layout
+                // TODO?: should check if the tag is .list_of_zst and call withCapacity with width 0
+                const elem_layout_idx = list_layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_width = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+                const result_list = builtins.list.listWithCapacity(
+                    @intCast(capacity),
+                    @intCast(elem_alignment),
+                    elem_width,
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                var out = try self.pushRaw(list_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
