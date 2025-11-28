@@ -458,6 +458,9 @@ pub const Interpreter = struct {
                 temp_binds.items.len = 0;
             }
 
+            // Decref args after body evaluation (caller transfers ownership)
+            defer if (params.len > 0) args_tuple_value.decref(&self.runtime_layout_store, roc_ops);
+
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
