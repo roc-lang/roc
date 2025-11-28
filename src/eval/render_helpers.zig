@@ -284,37 +284,38 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
         },
         .record => |rec| {
+            // Try to render using type information first
             const ext_resolved = ctx.runtime_types.resolveVar(rec.ext);
-            const use_placeholder = switch (ext_resolved.desc.content) {
-                .structure => |st| st != .empty_record,
-                else => true,
+            const has_complete_type_info = switch (ext_resolved.desc.content) {
+                .structure => |st| st == .empty_record,
+                else => false,
             };
-            if (use_placeholder) {
-                return try gpa.dupe(u8, "<record>");
-            }
-            var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-            errdefer out.deinit();
-            try out.appendSlice("{ ");
-            var acc = try value.asRecord(ctx.layout_store);
-            const fields = ctx.runtime_types.getRecordFieldsSlice(rec.fields);
-            var i: usize = 0;
-            while (i < fields.len) : (i += 1) {
-                const f = fields.get(i);
-                const name_text = ctx.env.getIdent(f.name);
-                try out.appendSlice(name_text);
-                try out.appendSlice(": ");
-                if (acc.findFieldIndex(f.name)) |idx| {
-                    const field_val = try acc.getFieldByIndex(idx);
-                    const rendered = try renderValueRoc(ctx, field_val);
-                    defer gpa.free(rendered);
-                    try out.appendSlice(rendered);
-                } else {
-                    try out.appendSlice("<missing>");
+            if (has_complete_type_info) {
+                var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                errdefer out.deinit();
+                try out.appendSlice("{ ");
+                var acc = try value.asRecord(ctx.layout_store);
+                const fields = ctx.runtime_types.getRecordFieldsSlice(rec.fields);
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const f = fields.get(i);
+                    const name_text = ctx.env.getIdent(f.name);
+                    try out.appendSlice(name_text);
+                    try out.appendSlice(": ");
+                    if (acc.findFieldIndex(f.name)) |idx| {
+                        const field_val = try acc.getFieldByIndex(idx);
+                        const rendered = try renderValueRocWithType(ctx, field_val, f.var_);
+                        defer gpa.free(rendered);
+                        try out.appendSlice(rendered);
+                    } else {
+                        try out.appendSlice("<missing>");
+                    }
+                    if (i + 1 < fields.len) try out.appendSlice(", ");
                 }
-                if (i + 1 < fields.len) try out.appendSlice(", ");
+                try out.appendSlice(" }");
+                return out.toOwnedSlice();
             }
-            try out.appendSlice(" }");
-            return out.toOwnedSlice();
+            // Fall through to renderValueRoc which can use layout info
         },
         else => {},
     };
