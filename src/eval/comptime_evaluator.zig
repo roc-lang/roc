@@ -287,7 +287,7 @@ pub const ComptimeEvaluator = struct {
 
         const ops = self.get_ops();
 
-        const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
+        const result = self.interpreter.eval(expr_idx, ops) catch |err| {
             // If this is a lambda/closure and it failed to evaluate, just skip it
             // Top-level function definitions can fail for various reasons and that's ok
             // The interpreter will evaluate them on-demand when they're called
@@ -664,7 +664,7 @@ pub const ComptimeEvaluator = struct {
     ///    - This is a tag union with tag "Self" and Bool payload
     ///    - Can create synthetically or use interpreter to evaluate an e_tag expression
     /// 4. Invoke from_numeral via interpreter:
-    ///    - Create a function call expression or use evalMinimal
+    ///    - Create a function call expression or use eval
     ///    - Pass the Numeral value as argument
     /// 5. Handle the Try result:
     ///    - Pattern match on Ok/Err tags
@@ -1019,7 +1019,7 @@ pub const ComptimeEvaluator = struct {
         defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Evaluate the from_numeral function to get a closure
-        const func_value = self.interpreter.evalMinimal(target_def.expr, roc_ops) catch |err| {
+        const func_value = self.interpreter.eval(target_def.expr, roc_ops) catch |err| {
             const error_msg = try std.fmt.allocPrint(
                 self.allocator,
                 "Failed to evaluate from_numeral function: {s}",
@@ -1146,7 +1146,7 @@ pub const ComptimeEvaluator = struct {
             defer _ = self.interpreter.active_closures.pop();
 
             // Call the function body
-            result = self.interpreter.evalMinimal(closure_header.body_idx, roc_ops) catch |err| {
+            result = self.interpreter.eval(closure_header.body_idx, roc_ops) catch |err| {
                 const error_msg = try std.fmt.allocPrint(
                     self.allocator,
                     "from_numeral evaluation failed: {s}",

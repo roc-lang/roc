@@ -148,7 +148,7 @@ test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("\"Hello\"", rendered);
@@ -166,7 +166,7 @@ test "interpreter: (|n| n + 1)(41) yields 42" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -184,7 +184,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -204,7 +204,7 @@ test "interpreter: 6 / 3 yields 2" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("2", rendered);
@@ -224,7 +224,7 @@ test "interpreter: 7 % 3 yields 1" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("1", rendered);
@@ -242,7 +242,7 @@ test "interpreter: 0.2 + 0.3 yields 0.5" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("0.5", rendered);
@@ -260,7 +260,7 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("0.25", rendered);
@@ -314,7 +314,7 @@ test "interpreter: literal True renders True" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -333,7 +333,7 @@ test "interpreter: True == False yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -354,7 +354,7 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
     //
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -373,7 +373,7 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -392,7 +392,7 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -411,7 +411,7 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -430,7 +430,7 @@ test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -449,7 +449,7 @@ test "interpreter: record update copies base fields" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("(1, 2)", rendered);
@@ -467,7 +467,7 @@ test "interpreter: record update overrides field" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("(1, 3)", rendered);
@@ -485,7 +485,7 @@ test "interpreter: record update expression can reference base" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("7", rendered);
@@ -504,7 +504,7 @@ test "interpreter: record update expression can reference base" {
 //     defer host.deinit();
 //     var ops = host.makeOps();
 
-//     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+//     const result = try interp2.eval(resources.expr_idx, &ops);
 //     const rendered = try interp2.renderValueRoc(result);
 //     defer std.testing.allocator.free(rendered);
 //     try std.testing.expectEqualStrings("(1, 2, 3)", rendered);
@@ -523,7 +523,7 @@ test "interpreter: record update expression can reference base" {
 //     defer host.deinit();
 //     var ops = host.makeOps();
 
-//     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+//     const result = try interp2.eval(resources.expr_idx, &ops);
 //     const rendered = try interp2.renderValueRoc(result);
 //     defer std.testing.allocator.free(rendered);
 //     try std.testing.expectEqualStrings("(4, 6, 5)", rendered);
@@ -542,7 +542,7 @@ test "interpreter: record update expression can reference base" {
 //     defer host.deinit();
 //     var ops = host.makeOps();
 
-//     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+//     const result = try interp2.eval(resources.expr_idx, &ops);
 //     const rendered = try interp2.renderValueRoc(result);
 //     defer std.testing.allocator.free(rendered);
 //     try std.testing.expectEqualStrings("(7, 6, 15)", rendered);
@@ -560,7 +560,7 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -579,7 +579,7 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -598,7 +598,7 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -617,7 +617,7 @@ test "interpreter: Ok(1) == Err(1) yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -636,7 +636,7 @@ test "interpreter: match tuple pattern destructures" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("2", rendered);
@@ -654,7 +654,7 @@ test "interpreter: match bool patterns" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("1", rendered);
@@ -672,7 +672,7 @@ test "interpreter: match result tag payload" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("4", rendered);
@@ -690,7 +690,7 @@ test "interpreter: match record destructures fields" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("3", rendered);
@@ -708,7 +708,7 @@ test "interpreter: render Try.Ok literal" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -727,7 +727,7 @@ test "interpreter: render Try.Err string" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -746,7 +746,7 @@ test "interpreter: render Try.Ok tuple payload" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -765,7 +765,7 @@ test "interpreter: match tuple payload tag" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("3", rendered);
@@ -783,7 +783,7 @@ test "interpreter: match record payload tag" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("1", rendered);
@@ -801,7 +801,7 @@ test "interpreter: match list pattern destructures" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("6", rendered);
@@ -823,7 +823,7 @@ test "interpreter: match list rest binds slice" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("3", rendered);
@@ -841,7 +841,7 @@ test "interpreter: match empty list branch" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -860,7 +860,7 @@ test "interpreter: simple for loop sum" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("10", rendered);
@@ -878,7 +878,7 @@ test "interpreter: List.fold sum with inline lambda" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("10", rendered);
@@ -896,7 +896,7 @@ test "interpreter: List.fold product with inline lambda" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("24", rendered);
@@ -914,7 +914,7 @@ test "interpreter: List.fold empty list with inline lambda" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -932,7 +932,7 @@ test "interpreter: List.fold count elements with inline lambda" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("4", rendered);
@@ -951,7 +951,7 @@ test "interpreter: List.fold from Builtin using numbers" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("6", rendered);
@@ -1149,7 +1149,7 @@ test "interpreter: crash statement triggers crash error and message" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
+    try std.testing.expectError(error.Crash, interp2.eval(resources.expr_idx, &ops));
     switch (host.crashState()) {
         .did_not_crash => return error.TestUnexpectedResult,
         .crashed => |msg| try std.testing.expectEqualStrings("boom", msg),
@@ -1168,7 +1168,7 @@ test "interpreter: expect expression succeeds" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     try std.testing.expect(host.crashState() == .did_not_crash);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
@@ -1188,7 +1188,7 @@ test "interpreter: expect expression failure crashes with message" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
+    //     try std.testing.expectError(error.Crash, interp2.eval(resources.expr_idx, &ops));
     //     switch (host.crashState()) {
     //         .did_not_crash => return error.TestUnexpectedResult,
     //         .crashed => |msg| try std.testing.expectEqualStrings("Expect failed: 1 == 0", msg),
@@ -1207,7 +1207,7 @@ test "interpreter: empty record expression renders {}" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1236,7 +1236,7 @@ test "interpreter: decimal literal renders 0.125" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("0.125", rendered);
@@ -1254,7 +1254,7 @@ test "interpreter: f64 equality True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1273,7 +1273,7 @@ test "interpreter: decimal equality True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1302,7 +1302,7 @@ test "interpreter: int and f64 equality True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1331,7 +1331,7 @@ test "interpreter: int and decimal equality True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1350,7 +1350,7 @@ test "interpreter: int less-than yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1369,7 +1369,7 @@ test "interpreter: int greater-than yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1388,7 +1388,7 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1407,7 +1407,7 @@ test "interpreter: f64 greater-than yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1426,7 +1426,7 @@ test "interpreter: decimal less-than-or-equal yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1445,7 +1445,7 @@ test "interpreter: int and f64 less-than yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1464,7 +1464,7 @@ test "interpreter: int and decimal greater-than yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1483,7 +1483,7 @@ test "interpreter: bool inequality yields True" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1502,7 +1502,7 @@ test "interpreter: decimal inequality yields False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1521,7 +1521,7 @@ test "interpreter: f64 equality False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1540,7 +1540,7 @@ test "interpreter: decimal equality False" {
     //     defer host.deinit();
     //     var ops = host.makeOps();
 
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     //     defer std.testing.allocator.free(rendered);
@@ -1557,7 +1557,7 @@ test "interpreter: tuples and records" {
     var host_t = TestHost.init(std.testing.allocator);
     defer host_t.deinit();
     var ops_t = host_t.makeOps();
-    const val_t = try it.evalMinimal(res_t.expr_idx, &ops_t);
+    const val_t = try it.eval(res_t.expr_idx, &ops_t);
     const text_t = try it.renderValueRoc(val_t);
     defer std.testing.allocator.free(text_t);
     try std.testing.expectEqualStrings("(1, 2)", text_t);
@@ -1571,7 +1571,7 @@ test "interpreter: tuples and records" {
     var host_r = TestHost.init(std.testing.allocator);
     defer host_r.deinit();
     var ops_r = host_r.makeOps();
-    const val_r = try ir.evalMinimal(res_r.expr_idx, &ops_r);
+    const val_r = try ir.eval(res_r.expr_idx, &ops_r);
     const text_r = try ir.renderValueRoc(val_r);
     defer std.testing.allocator.free(text_r);
     // Sorted field order by name should be "{ x: 1, y: 2 }"
@@ -1591,7 +1591,7 @@ test "interpreter: empty list [] has list_of_zst layout" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
 
     // Check that the layout is list_of_zst
     try std.testing.expectEqual(layout.LayoutTag.list_of_zst, result.layout.tag);
@@ -1610,7 +1610,7 @@ test "interpreter: singleton list [1] has list of Dec layout" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     defer result.decref(&interp2.runtime_layout_store, &ops);
 
     // Check that the layout is a regular list (not list_of_zst)
@@ -1640,7 +1640,7 @@ test "interpreter: dbg statement in block" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp.eval(resources.expr_idx, &ops);
     defer result.decref(&interp.runtime_layout_store, &ops);
 
     // Verify the block evaluates to x + 1 = 43
@@ -1672,7 +1672,7 @@ test "interpreter: dbg statement with string" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp.eval(resources.expr_idx, &ops);
     defer result.decref(&interp.runtime_layout_store, &ops);
 
     // Verify the block evaluates to msg
@@ -1704,7 +1704,7 @@ test "interpreter: simple early return from function" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp.eval(resources.expr_idx, &ops);
     defer result.decref(&interp.runtime_layout_store, &ops);
 
     const rendered = try interp.renderValueRoc(result);
@@ -1738,7 +1738,7 @@ test "interpreter: any function with early return in for loop" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp.eval(resources.expr_idx, &ops);
     defer result.decref(&interp.runtime_layout_store, &ops);
 
     const rendered = try interp.renderValueRoc(result);
@@ -1771,7 +1771,7 @@ test "interpreter: crash at end of block in if branch" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp.eval(resources.expr_idx, &ops);
     defer result.decref(&interp.runtime_layout_store, &ops);
 
     const rendered = try interp.renderValueRoc(result);

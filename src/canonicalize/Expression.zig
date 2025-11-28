@@ -474,9 +474,6 @@ pub const Expr = union(enum) {
         list_concat,
         list_with_capacity,
 
-        // Set operations
-        set_is_empty,
-
         // Bool operations
         bool_is_eq,
 

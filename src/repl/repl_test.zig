@@ -350,7 +350,7 @@ test "Repl - minimal interpreter integration" {
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate
-    const result = try interpreter.evalMinimal(canonical_expr_idx.get_idx(), test_env.get_ops());
+    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
     defer result.decref(&interpreter.runtime_layout_store, test_env.get_ops());
 
     // Step 8: Verify result using renderer

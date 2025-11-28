@@ -62,7 +62,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    _ = interpreter.evalMinimal(resources.expr_idx, ops) catch |err| {
+    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
     };
@@ -91,7 +91,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -129,7 +129,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -168,7 +168,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -201,7 +201,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -236,7 +236,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -267,7 +267,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
 
     try std.testing.expect(result.layout.tag == .scalar);
@@ -317,7 +317,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -368,7 +368,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -698,7 +698,7 @@ test "eval tag - already primitive" {
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -730,7 +730,7 @@ test "interpreter reuse across multiple evaluations" {
 
         var iteration: usize = 0;
         while (iteration < 2) : (iteration += 1) {
-            const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+            const result = try interpreter.eval(resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
 
