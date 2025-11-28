@@ -666,6 +666,16 @@ test "e_low_level_lambda - List.concat with empty string list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
+test "e_low_level_lambda - List.append on non-empty list" {
+    const src =
+        \\x = List.append([0, 1, 2, 3], 4)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 3), len_value);
+}
+
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
     const src =
         \\a : Dec

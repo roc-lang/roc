@@ -464,6 +464,7 @@ pub const Expr = union(enum) {
         list_is_empty,
         list_get_unsafe,
         list_concat,
+        list_append,
 
         // Set operations
         set_is_empty,

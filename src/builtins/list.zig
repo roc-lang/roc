@@ -11,10 +11,10 @@ const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
 const increfDataPtrC = utils.increfDataPtrC;
 
-const Opaque = ?[*]u8;
+pub const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
-const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
+pub const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 const IncN = *const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) void;
@@ -531,7 +531,7 @@ pub fn listAppendUnsafe(
     list: RocList,
     element: Opaque,
     element_width: usize,
-    copy: CopyFn,
+    // copy: CopyFn,
 ) callconv(.c) RocList {
     const old_length = list.len();
     var output = list;
@@ -540,22 +540,23 @@ pub fn listAppendUnsafe(
     if (output.bytes) |bytes| {
         if (element) |source| {
             const target = bytes + old_length * element_width;
-            copy(target, source);
+            @memcpy(target[0..element_width], source[0..element_width]);
         }
     }
 
     return output;
 }
 
-fn listAppend(
+pub fn listAppend(
     list: RocList,
     alignment: u32,
     element: Opaque,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
     update_mode: UpdateMode,
-    copy: CopyFn,
+    // copy: CopyFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     const with_capacity = listReserve(
@@ -564,11 +565,12 @@ fn listAppend(
         1,
         element_width,
         elements_refcounted,
+        inc_context,
         inc,
         update_mode,
         roc_ops,
     );
-    return listAppendUnsafe(with_capacity, element, element_width, copy);
+    return listAppendUnsafe(with_capacity, element, element_width); // copy
 }
 
 /// Directly mutate the given list to push an element onto the end, and then return it.
