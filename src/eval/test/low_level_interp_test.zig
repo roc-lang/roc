@@ -1952,6 +1952,215 @@ test "e_low_level_lambda - U8.plus method call syntax" {
 }
 
 // =============================================================================
+// Bitwise shift operation tests
+// =============================================================================
+
+test "e_low_level_lambda - U8.shift_left_by basic" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\x = a.shift_left_by(2)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 20), value); // 5 << 2 = 20
+}
+
+test "e_low_level_lambda - U8.shift_right_by basic" {
+    const src =
+        \\a : U8
+        \\a = 20
+        \\x = a.shift_right_by(2)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), value); // 20 >> 2 = 5
+}
+
+test "e_low_level_lambda - U8.shift_right_zf_by basic" {
+    const src =
+        \\a : U8
+        \\a = 128
+        \\x = a.shift_right_zf_by(2)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 32), value); // 128 >>> 2 = 32
+}
+
+test "e_low_level_lambda - I8.shift_left_by positive" {
+    const src =
+        \\a : I8
+        \\a = 3
+        \\x = a.shift_left_by(3)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 24), value); // 3 << 3 = 24
+}
+
+test "e_low_level_lambda - I8.shift_right_by negative arithmetic" {
+    const src =
+        \\a : I8
+        \\a = -8
+        \\x = a.shift_right_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -4), value); // -8 >> 1 = -4 (arithmetic shift)
+}
+
+test "e_low_level_lambda - I8.shift_right_zf_by negative zero_fill" {
+    const src =
+        \\a : I8
+        \\a = -8
+        \\x = a.shift_right_zf_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 124), value); // -8 >>> 1 = 124 (zero-fill shift)
+}
+
+test "e_low_level_lambda - U16.shift_left_by" {
+    const src =
+        \\a : U16
+        \\a = 1
+        \\x = a.shift_left_by(4)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 16), value); // 1 << 4 = 16
+}
+
+test "e_low_level_lambda - I16.shift_right_by positive" {
+    const src =
+        \\a : I16
+        \\a = 64
+        \\x = a.shift_right_by(3)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 8), value); // 64 >> 3 = 8
+}
+
+test "e_low_level_lambda - I16.shift_right_by negative" {
+    const src =
+        \\a : I16
+        \\a = -16
+        \\x = a.shift_right_by(2)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -4), value); // -16 >> 2 = -4
+}
+
+test "e_low_level_lambda - U32.shift_left_by" {
+    const src =
+        \\a : U32
+        \\a = 16
+        \\x = a.shift_left_by(3)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 128), value); // 16 << 3 = 128
+}
+
+test "e_low_level_lambda - I32.shift_right_by negative" {
+    const src =
+        \\a : I32
+        \\a = -32
+        \\x = a.shift_right_by(3)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -4), value); // -32 >> 3 = -4
+}
+
+test "e_low_level_lambda - U64.shift_left_by" {
+    const src =
+        \\a : U64
+        \\a = 255
+        \\x = a.shift_left_by(8)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 65280), value); // 255 << 8 = 65280
+}
+
+test "e_low_level_lambda - I64.shift_right_by negative" {
+    const src =
+        \\a : I64
+        \\a = -1024
+        \\x = a.shift_right_by(2)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -256), value); // -1024 >> 2 = -256
+}
+
+test "e_low_level_lambda - U128.shift_left_by" {
+    const src =
+        \\a : U128
+        \\a = 1
+        \\x = a.shift_left_by(10)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1024), value); // 1 << 10 = 1024
+}
+
+test "e_low_level_lambda - I128.shift_right_by negative" {
+    const src =
+        \\a : I128
+        \\a = -256
+        \\x = a.shift_right_by(4)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -16), value); // -256 >> 4 = -16
+}
+
+test "e_low_level_lambda - shift_left_by with zero shift" {
+    const src =
+        \\a : U8
+        \\a = 42
+        \\x = a.shift_left_by(0)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 42), value); // 42 << 0 = 42
+}
+
+test "e_low_level_lambda - shift_right_by with zero shift" {
+    const src =
+        \\a : I8
+        \\a = -42
+        \\x = a.shift_right_by(0)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -42), value); // -42 >> 0 = -42
+}
+
+test "e_low_level_lambda - shift operations preserve type" {
+    const src =
+        \\a : U32
+        \\a = 100
+        \\b = a.shift_left_by(2)
+        \\c = b.shift_right_by(1)
+        \\x = c.shift_right_zf_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 3);
+    try testing.expectEqual(@as(i128, 200), value); // ((100 << 2) >> 1) >>> 1 = 200
+}
+
+test "e_low_level_lambda - I8.shift_right_zf_by with -1" {
+    const src =
+        \\a : I8
+        \\a = -1
+        \\x = a.shift_right_zf_by(4)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 15), value); // -1 (0xFF) >>> 4 = 15 (0x0F)
+}
+
+test "e_low_level_lambda - U16.shift_right_zf_by equals shift_right_by for unsigned" {
+    const src =
+        \\a : U16
+        \\a = 256
+        \\b = a.shift_right_by(4)
+        \\c = a.shift_right_zf_by(4)
+        \\x = U16.is_eq(b, c)
+    ;
+    const value = try evalModuleAndGetString(src, 3, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("True", value); // For unsigned, >> and >>> are the same
+}
+
+// =============================================================================
 // List.sort_with tests
 // =============================================================================
 
