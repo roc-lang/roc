@@ -680,10 +680,6 @@ pub const Repl = struct {
         };
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        if (result.layout.tag == .record) {
-            self.allocator.free(output);
-            return try self.allocator.dupe(u8, "<record>");
-        }
         return output;
     }
 
@@ -864,10 +860,6 @@ pub const Repl = struct {
         };
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        if (result.layout.tag == .record) {
-            self.allocator.free(output);
-            return .{ .expression = try self.allocator.dupe(u8, "<record>") };
-        }
         return .{ .expression = output };
     }
 };
