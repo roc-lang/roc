@@ -608,57 +608,50 @@ pub const Interpreter = struct {
         const return_layout = try self.getRuntimeLayout(return_rt_var);
         const result_value = try self.pushRaw(return_layout, 0);
 
-        // Allocate stack space for marshalled arguments
-        // The host now uses the same RocStr as builtins, so no conversion needed
-        const ArgsStruct = extern struct { str: RocStr };
-        var args_struct: ArgsStruct = undefined;
+        // Get return pointer (for ZST returns, use a dummy stack address)
+        const ret_ptr = if (result_value.ptr) |p| p else @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
 
-        // Marshal arguments into a contiguous struct matching the RocCall ABI
-        // For now, we support zero-argument and single-argument functions
+        // Calculate total size needed for packed arguments
+        var total_args_size: usize = 0;
+        var max_alignment: std.mem.Alignment = .@"1";
+        for (args) |arg| {
+            const arg_size: usize = self.runtime_layout_store.layoutSize(arg.layout);
+            const arg_align = arg.layout.alignment(self.runtime_layout_store.targetUsize());
+            max_alignment = max_alignment.max(arg_align);
+            // Align to the argument's alignment
+            total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+            total_args_size += arg_size;
+        }
+
         if (args.len == 0) {
-            // Zero argument case - pass dummy pointer for args
-            const ret_ptr = if (result_value.ptr) |p| p else blk: {
-                // Zero-sized return - pass stack address
-                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
-            };
-
-            // For zero-argument functions, we still need to pass a valid args pointer
-            // Use the address of args_struct even though it won't be read
-            const arg_ptr = @as(*anyopaque, @ptrCast(&args_struct));
-
-            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            hosted_fn(roc_ops, ret_ptr, arg_ptr);
-        } else if (args.len == 1) {
-            // Single argument case - we need to marshal it properly
-            // For strings, we need to pass a RocStr struct wrapped in Args
-            const arg_ptr = blk: {
-                // For strings, we need to pass a RocStr struct
-                // Try to determine if this is a string by checking if it contains a RocStr
-                // For now, we assume it's a string if it has a pointer (TODO: better type checking)
-                if (args[0].ptr) |str_ptr| {
-                    const roc_str: *const RocStr = @ptrCast(@alignCast(str_ptr));
-                    // Host and builtin now use the same RocStr, so just copy it
-                    args_struct.str = roc_str.*;
-                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
-                } else {
-                    // Empty or zero-sized argument - create empty small string
-                    args_struct.str = RocStr.empty();
-                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
-                }
-            };
-
-            const ret_ptr = if (result_value.ptr) |p| p else blk: {
-                // Zero-sized return - pass stack address
-                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
-            };
-
-            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            hosted_fn(roc_ops, ret_ptr, arg_ptr);
+            // Zero argument case - pass dummy pointer
+            var dummy: u8 = 0;
+            hosted_fn(roc_ops, ret_ptr, @ptrCast(&dummy));
         } else {
-            // Multi-argument case - pack arguments into a struct
-            // TODO: implement multi-argument marshalling
-            self.triggerCrash("Multi-argument hosted functions not yet implemented in interpreter", false, roc_ops);
-            return error.Crash;
+            // Allocate buffer for packed arguments
+            const args_buffer = try self.stack_memory.alloca(@intCast(total_args_size), max_alignment);
+
+            // Pack each argument into the buffer
+            var offset: usize = 0;
+            for (args) |arg| {
+                const arg_size: usize = self.runtime_layout_store.layoutSize(arg.layout);
+                const arg_align = arg.layout.alignment(self.runtime_layout_store.targetUsize());
+
+                // Align offset
+                offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+
+                // Copy argument data
+                if (arg_size > 0) {
+                    if (arg.ptr) |src_ptr| {
+                        const dest_ptr = @as([*]u8, @ptrCast(args_buffer)) + offset;
+                        @memcpy(dest_ptr[0..arg_size], @as([*]const u8, @ptrCast(src_ptr))[0..arg_size]);
+                    }
+                }
+                offset += arg_size;
+            }
+
+            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
+            hosted_fn(roc_ops, ret_ptr, args_buffer);
         }
 
         return result_value;
@@ -1362,12 +1355,6 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .set_is_empty => {
-                // TODO: implement Set.is_empty
-                self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
-                return error.Crash;
-            },
-
             // Bool operations
             .bool_is_eq => {
                 // Bool.is_eq : Bool, Bool -> Bool
