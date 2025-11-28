@@ -1,5 +1,16 @@
 Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
+		Utf8Problem := [
+			InvalidStartByte,
+			UnexpectedEndOfSequence,
+			ExpectedContinuation,
+			OverlongEncoding,
+			CodepointTooLarge,
+			EncodesSurrogateHalf,
+		].{
+			is_eq : Utf8Problem, Utf8Problem -> Bool
+		}
+
 		is_empty : Str -> Bool
 		concat : Str, Str -> Str
 		contains : Str, Str -> Bool
@@ -21,6 +32,7 @@ Builtin :: [].{
 		release_excess_capacity : Str -> Str
 		to_utf8 : Str -> List(U8)
 		from_utf8_lossy : List(U8) -> Str
+		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem: Str.Utf8Problem, index: U64 })])
 		split_on : Str, Str -> List(Str)
 		join_with : List(Str), Str -> Str
 

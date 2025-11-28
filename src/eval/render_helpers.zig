@@ -118,9 +118,17 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         try out.append('(');
                         if (arg_vars.len == 1) {
                             // Single payload: first element
+                            // Get the correct layout from the type variable, not the payload union layout
                             const payload_elem = try tup_acc.getElement(0);
                             const arg_var = arg_vars[0];
-                            const rendered = try renderValueRocWithType(ctx, payload_elem, arg_var);
+                            const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
+                            const arg_layout = ctx.layout_store.getLayout(layout_idx);
+                            const payload_value = StackValue{
+                                .layout = arg_layout,
+                                .ptr = payload_elem.ptr,
+                                .is_initialized = payload_elem.is_initialized,
+                            };
+                            const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
                             defer gpa.free(rendered);
                             try out.appendSlice(rendered);
                         } else {

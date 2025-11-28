@@ -5451,51 +5451,58 @@ pub fn createImportMapping(
             const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
             inline for (fields) |field| {
                 // Only process Statement.Idx fields (skip Ident.Idx fields)
-                if (field.type != CIR.Statement.Idx) continue;
-                const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
+                if (field.type == CIR.Statement.Idx) {
+                    const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
 
-                const stmt = builtin_env.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_nominal_decl => |decl| {
-                        const header = builtin_env.store.getTypeHeader(decl.header);
-                        const qualified_name = builtin_env.getIdentText(header.name);
-                        const relative_name = builtin_env.getIdentText(header.relative_name);
+                    // Skip invalid statement indices (index 0 is typically invalid/sentinel)
+                    const stmt_idx_int = @intFromEnum(stmt_idx);
+                    if (stmt_idx_int != 0) {
+                        const stmt = builtin_env.store.getStatement(stmt_idx);
+                        switch (stmt) {
+                            .s_nominal_decl => |decl| {
+                                const header = builtin_env.store.getTypeHeader(decl.header);
+                                const qualified_name = builtin_env.getIdentText(header.name);
+                                const relative_name = builtin_env.getIdentText(header.relative_name);
 
-                        // Extract display name (last component after dots)
-                        const display_name = blk: {
-                            var last_dot: usize = 0;
-                            for (qualified_name, 0..) |c, i| {
-                                if (c == '.') last_dot = i + 1;
-                            }
-                            break :blk qualified_name[last_dot..];
-                        };
+                                // Extract display name (last component after dots)
+                                const display_name = blk: {
+                                    var last_dot: usize = 0;
+                                    for (qualified_name, 0..) |c, i| {
+                                        if (c == '.') last_dot = i + 1;
+                                    }
+                                    break :blk qualified_name[last_dot..];
+                                };
 
-                        const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
-                        const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
-                        const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+                                const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                                const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
+                                const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
 
-                        // Add mapping for qualified_name -> display_name
-                        if (mapping.get(qualified_ident)) |existing_ident| {
-                            const existing_name = idents.getText(existing_ident);
-                            if (displayNameIsBetter(display_name, existing_name)) {
-                                try mapping.put(qualified_ident, display_ident);
-                            }
-                        } else {
-                            try mapping.put(qualified_ident, display_ident);
+                                // Add mapping for qualified_name -> display_name
+                                if (mapping.get(qualified_ident)) |existing_ident| {
+                                    const existing_name = idents.getText(existing_ident);
+                                    if (displayNameIsBetter(display_name, existing_name)) {
+                                        try mapping.put(qualified_ident, display_ident);
+                                    }
+                                } else {
+                                    try mapping.put(qualified_ident, display_ident);
+                                }
+
+                                // Also add mapping for relative_name -> display_name
+                                // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                                if (mapping.get(relative_ident)) |existing_ident| {
+                                    const existing_name = idents.getText(existing_ident);
+                                    if (displayNameIsBetter(display_name, existing_name)) {
+                                        try mapping.put(relative_ident, display_ident);
+                                    }
+                                } else {
+                                    try mapping.put(relative_ident, display_ident);
+                                }
+                            },
+                            else => {
+                                // Skip non-nominal statements (e.g., nested types that aren't directly importable)
+                            },
                         }
-
-                        // Also add mapping for relative_name -> display_name
-                        // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
-                        if (mapping.get(relative_ident)) |existing_ident| {
-                            const existing_name = idents.getText(existing_ident);
-                            if (displayNameIsBetter(display_name, existing_name)) {
-                                try mapping.put(relative_ident, display_ident);
-                            }
-                        } else {
-                            try mapping.put(relative_ident, display_ident);
-                        }
-                    },
-                    else => @panic("BuiltinIndices contains non-nominal statement"),
+                    }
                 }
             }
         }

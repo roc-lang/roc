@@ -139,6 +139,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
         try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
     }
+    if (env.common.findIdent("Builtin.Str.from_utf8")) |str_from_utf8_ident| {
+        try low_level_map.put(str_from_utf8_ident, .str_from_utf8);
+    }
     if (env.common.findIdent("Builtin.Str.split_on")) |str_split_on_ident| {
         try low_level_map.put(str_split_on_ident, .str_split_on);
     }
@@ -1293,6 +1296,9 @@ pub fn main() !void {
     const list_type_idx = try findTypeDeclaration(builtin_env, "List");
     const box_type_idx = try findTypeDeclaration(builtin_env, "Box");
 
+    // Find Utf8Problem nested inside Str (e.g., Builtin.Str.Utf8Problem)
+    const utf8_problem_type_idx = try findNestedTypeDeclaration(builtin_env, "Str", "Utf8Problem");
+
     // Find numeric types nested inside Num (e.g., Builtin.Num.U8)
     const u8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U8");
     const i8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I8");
@@ -1320,6 +1326,7 @@ pub fn main() !void {
     const str_ident = builtin_env.common.findIdent("Builtin.Str") orelse unreachable;
     const list_ident = builtin_env.common.findIdent("Builtin.List") orelse unreachable;
     const box_ident = builtin_env.common.findIdent("Builtin.Box") orelse unreachable;
+    const utf8_problem_ident = builtin_env.common.findIdent("Builtin.Str.Utf8Problem") orelse unreachable;
     const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
     const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
     const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
@@ -1378,6 +1385,7 @@ pub fn main() !void {
         .str_type = str_type_idx,
         .list_type = list_type_idx,
         .box_type = box_type_idx,
+        .utf8_problem_type = utf8_problem_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
         .u16_type = u16_type_idx,
@@ -1399,6 +1407,7 @@ pub fn main() !void {
         .str_ident = str_ident,
         .list_ident = list_ident,
         .box_ident = box_ident,
+        .utf8_problem_ident = utf8_problem_ident,
         .u8_ident = u8_ident,
         .i8_ident = i8_ident,
         .u16_ident = u16_ident,
@@ -1451,7 +1460,9 @@ fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinInd
                 const ident_text = env.getIdentText(header.name);
 
                 // Skip container types that are not auto-imported types
-                if (std.mem.eql(u8, ident_text, "Builtin") or std.mem.eql(u8, ident_text, "Builtin.Num")) {
+                if (std.mem.eql(u8, ident_text, "Builtin") or
+                    std.mem.eql(u8, ident_text, "Builtin.Num"))
+                {
                     continue;
                 }
 

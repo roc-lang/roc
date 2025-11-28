@@ -1163,6 +1163,293 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_from_utf8 => {
+                // Str.from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem: Utf8Problem, index: U64 })])
+                std.debug.assert(args.len == 1);
+
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const result = builtins.str.fromUtf8C(roc_list.*, .Immutable, roc_ops);
+
+                // Get the return layout from the caller - it should be a Try tag union
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("str_from_utf8 requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Resolve the Try type to get tag indices
+                const resolved = self.resolveBaseVar(result_rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("str_from_utf8: expected tag union return type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Find tag indices for Ok and Err
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(result_rt_var, &tag_list);
+
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+
+                const ok_ident = self.env.idents.ok;
+                const err_ident = self.env.idents.err;
+
+                for (tag_list.items, 0..) |tag_info, i| {
+                    if (tag_info.name == ok_ident) {
+                        ok_index = i;
+                    } else if (tag_info.name == err_ident) {
+                        err_index = i;
+                    }
+                }
+
+                if (result.is_ok) {
+                    // Return Ok(string)
+                    if (result_layout.tag == .tuple) {
+                        // Tuple (payload, tag)
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                        // Element 0 is the payload - clear it first since it's a union
+                        const payload_field = try acc.getElement(0);
+                        if (payload_field.ptr) |payload_ptr| {
+                            const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                            if (payload_bytes_len > 0) {
+                                const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                                @memset(bytes, 0);
+                            }
+                            // Write Str to the payload area
+                            const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
+                            str_ptr.* = result.string;
+                        }
+
+                        // Element 1 is the tag discriminant
+                        const tag_field = try acc.getElement(1);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(ok_index orelse 0));
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else if (result_layout.tag == .record) {
+                        // Record { tag, payload }
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                            self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                            self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+
+                        // Write tag discriminant
+                        const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(ok_index orelse 0));
+                        }
+
+                        // Clear payload area first since it's a union
+                        const payload_field = try acc.getFieldByIndex(payload_field_idx);
+                        if (payload_field.ptr) |payload_ptr| {
+                            const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                            if (payload_bytes_len > 0) {
+                                const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                                @memset(bytes, 0);
+                            }
+                            // Write Str to the payload area
+                            const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
+                            str_ptr.* = result.string;
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else {
+                        self.triggerCrash("str_from_utf8: unexpected result layout", false, roc_ops);
+                        return error.Crash;
+                    }
+                } else {
+                    // Return Err(BadUtf8({ problem: Utf8Problem, index: U64 }))
+                    if (result_layout.tag == .tuple) {
+                        // Tuple (payload, tag)
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                        // Element 1 is the tag discriminant
+                        const tag_field = try acc.getElement(1);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(err_index orelse 1));
+                        }
+
+                        // Element 0 is the payload - need to construct BadUtf8 record
+                        const payload_field = try acc.getElement(0);
+                        if (payload_field.layout.tag == .tuple) {
+                            // BadUtf8 is represented as a tuple containing the error record
+                            var err_tuple = try payload_field.asTuple(&self.runtime_layout_store);
+                            // First element should be the record { problem, index }
+                            const inner_payload = try err_tuple.getElement(0);
+                            if (inner_payload.layout.tag == .record) {
+                                var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                // Set problem field (tag union represented as u8)
+                                if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                    const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                    if (problem_field.ptr) |ptr| {
+                                        const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = @intFromEnum(result.problem_code);
+                                    }
+                                }
+                                // Set index field (U64)
+                                if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                    const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                    if (index_field.ptr) |ptr| {
+                                        const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = result.byte_index;
+                                    }
+                                }
+                            }
+                            // Set BadUtf8 tag discriminant (index 0 since it's the only variant)
+                            const err_tag = try err_tuple.getElement(1);
+                            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
+                                var tmp = err_tag;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(0);
+                            }
+                        } else if (payload_field.layout.tag == .record) {
+                            // Payload is a record with tag and payload for BadUtf8
+                            var err_rec = try payload_field.asRecord(&self.runtime_layout_store);
+                            if (err_rec.findFieldIndex(self.env.idents.tag)) |tag_idx| {
+                                const inner_tag = try err_rec.getFieldByIndex(tag_idx);
+                                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
+                                    var tmp = inner_tag;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(0); // BadUtf8 is index 0
+                                }
+                            }
+                            if (err_rec.findFieldIndex(self.env.idents.payload)) |inner_payload_idx| {
+                                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx);
+                                if (inner_payload.layout.tag == .record) {
+                                    var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                    if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                        const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                        if (problem_field.ptr) |ptr| {
+                                            const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = @intFromEnum(result.problem_code);
+                                        }
+                                    }
+                                    if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                        const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                        if (index_field.ptr) |ptr| {
+                                            const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = result.byte_index;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else if (result_layout.tag == .record) {
+                        // Record { tag, payload }
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                            self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                            self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+
+                        // Write tag discriminant for Err
+                        const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(err_index orelse 1));
+                        }
+
+                        // Write error payload - need to construct BadUtf8({ problem, index })
+                        const outer_payload = try acc.getFieldByIndex(payload_field_idx);
+                        if (outer_payload.layout.tag == .tuple) {
+                            var err_tuple = try outer_payload.asTuple(&self.runtime_layout_store);
+                            const inner_payload = try err_tuple.getElement(0);
+                            if (inner_payload.layout.tag == .record) {
+                                var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                    const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                    if (problem_field.ptr) |ptr| {
+                                        const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = @intFromEnum(result.problem_code);
+                                    }
+                                }
+                                if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                    const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                    if (index_field.ptr) |ptr| {
+                                        const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = result.byte_index;
+                                    }
+                                }
+                            }
+                            const err_tag = try err_tuple.getElement(1);
+                            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
+                                var tmp = err_tag;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(0);
+                            }
+                        } else if (outer_payload.layout.tag == .record) {
+                            var err_rec = try outer_payload.asRecord(&self.runtime_layout_store);
+                            if (err_rec.findFieldIndex(self.env.idents.tag)) |inner_tag_idx| {
+                                const inner_tag = try err_rec.getFieldByIndex(inner_tag_idx);
+                                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
+                                    var tmp = inner_tag;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(0);
+                                }
+                            }
+                            if (err_rec.findFieldIndex(self.env.idents.payload)) |inner_payload_idx| {
+                                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx);
+                                if (inner_payload.layout.tag == .record) {
+                                    var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                    if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                        const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                        if (problem_field.ptr) |ptr| {
+                                            const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = @intFromEnum(result.problem_code);
+                                        }
+                                    }
+                                    if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                        const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                        if (index_field.ptr) |ptr| {
+                                            const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = result.byte_index;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else {
+                        self.triggerCrash("str_from_utf8: unexpected result layout for Err", false, roc_ops);
+                        return error.Crash;
+                    }
+                }
+            },
             .str_split_on => {
                 // Str.split_on : Str, Str -> List(Str)
                 std.debug.assert(args.len == 2);
@@ -4311,11 +4598,24 @@ pub const Interpreter = struct {
                         if (arg_vars.len == 0) {
                             payload_value = null;
                         } else if (arg_vars.len == 1) {
-                            // Use the layout from the record's stored field, not from the type system.
-                            // This ensures we preserve the actual element layout (e.g., List(Dec))
-                            // rather than the type system's generic layout.
+                            // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
+                            // union in memory is sized for the largest variant. When extracting a
+                            // specific variant's payload, we need the correct layout for that variant.
+                            //
+                            // Check if the arg var has a rigid substitution (from polymorphic method
+                            // instantiation). If so, use the substituted type's layout.
+                            const arg_var = arg_vars[0];
+                            const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                            const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                    // Use the substituted concrete type's layout
+                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                }
+                                break :blk field_value.layout;
+                            } else field_value.layout;
+
                             payload_value = StackValue{
-                                .layout = field_value.layout,
+                                .layout = effective_layout,
                                 .ptr = field_value.ptr,
                                 .is_initialized = field_value.is_initialized,
                             };
@@ -4358,11 +4658,24 @@ pub const Interpreter = struct {
                     if (arg_vars.len == 0) {
                         payload_value = null;
                     } else if (arg_vars.len == 1) {
-                        // Use the layout from the tuple's stored field, not from the type system.
-                        // This ensures we preserve the actual element layout (e.g., List(Dec))
-                        // rather than the type system's generic layout (e.g., List(opaque_ptr)).
+                        // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
+                        // union in memory is sized for the largest variant. When extracting a
+                        // specific variant's payload, we need the correct layout for that variant.
+                        //
+                        // Check if the arg var has a rigid substitution (from polymorphic method
+                        // instantiation). If so, use the substituted type's layout.
+                        const arg_var = arg_vars[0];
+                        const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                        const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                // Use the substituted concrete type's layout
+                                break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                            }
+                            break :blk field_value.layout;
+                        } else field_value.layout;
+
                         payload_value = StackValue{
-                            .layout = field_value.layout,
+                            .layout = effective_layout,
                             .ptr = field_value.ptr,
                             .is_initialized = field_value.is_initialized,
                         };
@@ -6048,6 +6361,8 @@ pub const Interpreter = struct {
             has_active_closure: bool,
             /// Whether type instantiation was performed
             did_instantiate: bool,
+            /// Saved rigid_subst to restore after method call (for polymorphic dispatch)
+            saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -6349,6 +6664,10 @@ pub const Interpreter = struct {
                         },
                         .call_cleanup => |cc| {
                             if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (cc.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
                         .for_loop_iterate => |fl| {
                             // Decref the list value
@@ -9393,6 +9712,7 @@ pub const Interpreter = struct {
                         .param_count = params.len,
                         .has_active_closure = true,
                         .did_instantiate = ci.did_instantiate,
+                        .saved_rigid_subst = null,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -9423,6 +9743,12 @@ pub const Interpreter = struct {
                         }
                     }
 
+                    // Restore rigid_subst if we did polymorphic instantiation
+                    if (cleanup.saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+
                     // Restore environment and cleanup bindings
                     // Use trimBindingList to properly decref all bindings created by pattern matching
                     // (which may be more than param_count due to destructuring)
@@ -9442,6 +9768,12 @@ pub const Interpreter = struct {
                     if (self.active_closures.pop()) |closure_val| {
                         closure_val.decref(&self.runtime_layout_store, roc_ops);
                     }
+                }
+
+                // Restore rigid_subst if we did polymorphic instantiation
+                if (cleanup.saved_rigid_subst) |saved| {
+                    self.rigid_subst.deinit();
+                    self.rigid_subst = saved;
                 }
 
                 // Restore environment and cleanup bindings
@@ -9532,9 +9864,10 @@ pub const Interpreter = struct {
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                     .saved_env = saved_env,
                     .saved_bindings_len = saved_bindings_len,
-                    .param_count = 1,
+                    .param_count = params.len,
                     .has_active_closure = true,
                     .did_instantiate = false,
+                    .saved_rigid_subst = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -9674,6 +10007,7 @@ pub const Interpreter = struct {
                     .param_count = 2,
                     .has_active_closure = true,
                     .did_instantiate = false,
+                    .saved_rigid_subst = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -9817,6 +10151,7 @@ pub const Interpreter = struct {
                         .param_count = 1,
                         .has_active_closure = true,
                         .did_instantiate = false,
+                        .saved_rigid_subst = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -9926,6 +10261,73 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
 
+                // Instantiate the method's type parameters for polymorphic dispatch.
+                // This is necessary so that when pattern matching extracts payloads from
+                // generic types like Try(ok, err), the rigid type variables (ok, err) are
+                // properly substituted with the concrete types from the call site.
+                const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
+                const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                const should_instantiate_method = lambda_resolved.desc.content == .structure and
+                    (lambda_resolved.desc.content.structure == .fn_pure or
+                        lambda_resolved.desc.content.structure == .fn_effectful or
+                        lambda_resolved.desc.content.structure == .fn_unbound);
+
+                var method_subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                defer method_subst_map.deinit();
+
+                var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
+                var did_instantiate = false;
+
+                if (should_instantiate_method) {
+                    // Instantiate the method type (replaces rigid vars with fresh flex vars)
+                    _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
+
+                    // Map the fresh flex vars to concrete types from the receiver.
+                    const recv_type_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                    if (recv_type_resolved.desc.content == .structure and
+                        recv_type_resolved.desc.content.structure == .nominal_type)
+                    {
+                        const receiver_nom = recv_type_resolved.desc.content.structure.nominal_type;
+                        const receiver_args = self.runtime_types.sliceNominalArgs(receiver_nom);
+
+                        const fn_args = switch (lambda_resolved.desc.content.structure) {
+                            .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                            .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                            .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                            else => &[_]types.Var{},
+                        };
+
+                        if (fn_args.len > 0) {
+                            const first_param_resolved = self.runtime_types.resolveVar(fn_args[0]);
+                            if (first_param_resolved.desc.content == .structure and
+                                first_param_resolved.desc.content.structure == .nominal_type)
+                            {
+                                const param_nom = first_param_resolved.desc.content.structure.nominal_type;
+                                const param_args = self.runtime_types.sliceNominalArgs(param_nom);
+
+                                const min_args = @min(param_args.len, receiver_args.len);
+                                for (0..min_args) |arg_idx| {
+                                    const param_arg_resolved = self.runtime_types.resolveVar(param_args[arg_idx]);
+                                    if (param_arg_resolved.desc.content == .rigid) {
+                                        try method_subst_map.put(param_arg_resolved.var_, receiver_args[arg_idx]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Save and update rigid_subst
+                    saved_rigid_subst = try self.rigid_subst.clone();
+                    var subst_iter = method_subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                    @memset(self.var_to_layout_slot.items, 0);
+                    did_instantiate = true;
+                }
+
                 try self.active_closures.append(method_func);
 
                 // Bind receiver first
@@ -9951,7 +10353,8 @@ pub const Interpreter = struct {
                     .saved_bindings_len = saved_bindings_len,
                     .param_count = expected_params,
                     .has_active_closure = true,
-                    .did_instantiate = false,
+                    .did_instantiate = did_instantiate,
+                    .saved_rigid_subst = saved_rigid_subst,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
