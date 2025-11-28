@@ -139,6 +139,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
         try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
     }
+    if (env.common.findIdent("Builtin.Str.from_utf8")) |str_from_utf8_ident| {
+        try low_level_map.put(str_from_utf8_ident, .str_from_utf8);
+    }
     if (env.common.findIdent("Builtin.Str.split_on")) |str_split_on_ident| {
         try low_level_map.put(str_split_on_ident, .str_split_on);
     }
@@ -778,8 +781,11 @@ fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinInd
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_text = env.getIdentText(header.name);
 
-                // Skip container types that are not auto-imported types
-                if (std.mem.eql(u8, ident_text, "Builtin") or std.mem.eql(u8, ident_text, "Builtin.Num")) {
+                // Skip container types and helper types that are not auto-imported types
+                if (std.mem.eql(u8, ident_text, "Builtin") or
+                    std.mem.eql(u8, ident_text, "Builtin.Num") or
+                    std.mem.eql(u8, ident_text, "Builtin.Utf8Problem"))
+                {
                     continue;
                 }
 
