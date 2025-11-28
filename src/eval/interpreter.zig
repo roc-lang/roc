@@ -8582,14 +8582,28 @@ pub const Interpreter = struct {
                     // Provide closure context for capture lookup
                     try self.active_closures.append(func_val);
 
-                    // Bind parameters
+                    // Bind parameters using pattern matching to handle destructuring
                     for (params, 0..) |param, idx| {
-                        try self.bindings.append(.{
-                            .pattern_idx = param,
-                            .value = arg_values[idx],
-                            .expr_idx = @enumFromInt(0),
-                            .source_env = self.env,
-                        });
+                        // Get the runtime type for this parameter
+                        const param_rt_var = if (ci.arg_rt_vars_to_free) |vars|
+                            (if (idx < vars.len) vars[idx] else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param)))
+                        else
+                            try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+
+                        // Use patternMatchesBind to properly handle complex patterns (e.g., list destructuring)
+                        // patternMatchesBind borrows the value and creates copies for bindings, so we need to
+                        // decref the original arg_value after successful binding
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                            // Pattern match failed - cleanup and error
+                            self.env = saved_env;
+                            _ = self.active_closures.pop();
+                            func_val.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            return error.TypeMismatch;
+                        }
+                        // Decref the original argument value since patternMatchesBind made copies
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
                     }
 
                     // Push cleanup continuation, then evaluate body
@@ -8622,15 +8636,6 @@ pub const Interpreter = struct {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
 
-                    // Decref parameter bindings
-                    var k = cleanup.param_count;
-                    while (k > 0) {
-                        k -= 1;
-                        if (self.bindings.pop()) |binding| {
-                            binding.value.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                    }
-
                     // Pop active closure if needed
                     if (cleanup.has_active_closure) {
                         if (self.active_closures.pop()) |closure_val| {
@@ -8638,9 +8643,11 @@ pub const Interpreter = struct {
                         }
                     }
 
-                    // Restore environment and free arg_rt_vars
+                    // Restore environment and cleanup bindings
+                    // Use trimBindingList to properly decref all bindings created by pattern matching
+                    // (which may be more than param_count due to destructuring)
                     self.env = cleanup.saved_env;
-                    self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                    self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
                     try value_stack.push(return_val);
@@ -8650,15 +8657,6 @@ pub const Interpreter = struct {
                 // Normal return - result is on value stack
                 const result = value_stack.pop() orelse return error.Crash;
 
-                // Decref parameter bindings
-                var k = cleanup.param_count;
-                while (k > 0) {
-                    k -= 1;
-                    if (self.bindings.pop()) |binding| {
-                        binding.value.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                }
-
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
                     if (self.active_closures.pop()) |closure_val| {
@@ -8666,9 +8664,11 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Restore environment and free arg_rt_vars
+                // Restore environment and cleanup bindings
+                // Use trimBindingList to properly decref all bindings created by pattern matching
+                // (which may be more than param_count due to destructuring)
                 self.env = cleanup.saved_env;
-                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
                 try value_stack.push(result);
@@ -9241,6 +9241,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
@@ -9313,6 +9317,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
