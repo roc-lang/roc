@@ -3424,22 +3424,19 @@ pub const Interpreter = struct {
 
         const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
 
-        // Check if this is a low-level lambda - can be called synchronously
+        // All is_eq methods are low-level lambdas (builtins). If a type doesn't have
+        // is_eq, the type-checker catches it as a missing method error before we get here.
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
-        if (lambda_expr == .e_low_level_lambda) {
-            const low_level = lambda_expr.e_low_level_lambda;
-            var args = [2]StackValue{ lhs, rhs };
-            const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
-                return error.NotImplemented;
-            };
-            defer result.decref(&self.runtime_layout_store, roc_ops);
-            return boolValueEquals(true, result);
+        if (lambda_expr != .e_low_level_lambda) {
+            unreachable; // is_eq methods are always low-level builtins
         }
-
-        // User-defined is_eq closures cannot be called synchronously from within
-        // structural equality comparison. This is a rare edge case - most types
-        // use low-level builtins for is_eq.
-        return error.NotImplemented;
+        const low_level = lambda_expr.e_low_level_lambda;
+        var args = [2]StackValue{ lhs, rhs };
+        const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+            return error.NotImplemented;
+        };
+        defer result.decref(&self.runtime_layout_store, roc_ops);
+        return boolValueEquals(true, result);
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
