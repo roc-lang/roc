@@ -161,8 +161,6 @@ Builtin :: [].{
 	Dict :: [EmptyDict].{}
 
 	Set(item) :: [].{
-		is_empty : Set(item) -> Bool
-
 		is_eq : Set(item), Set(item) -> Bool
 		is_eq = |_a, _b| Bool.False
 	}
@@ -806,7 +804,7 @@ Builtin :: [].{
 			to_f32_try : F64 -> Try(F32, [OutOfRange])
 			to_f32_try = |num| {
 			    answer = f64_to_f32_try_unsafe(num)
-				if (answer.success) answer.val_or_memory_garbage else Err(OutOfRange)
+				if answer.success != 0 { Ok(answer.val_or_memory_garbage) } else { Err(OutOfRange) }
 			}
 		}
 	}
@@ -816,4 +814,7 @@ Builtin :: [].{
 # This is a low-level operation that gets replaced by the compiler
 list_get_unsafe : List(item), U64 -> item
 
-f64_to_f32_try_unsafe : F64 -> { success : Bool, val_or_memory_garbage : F32 }
+# Unsafe conversion functions - these return simple records instead of Try types
+# They are low-level operations that get replaced by the compiler
+# Note: success is U8 (0 = false, 1 = true) since Bool is not available at top level
+f64_to_f32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : F32 }

@@ -134,7 +134,7 @@ fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
     var i: usize = 0;
     while (i <= decl_index) : (i += 1) {
         const def = result.module_env.store.getDef(defs[i]);
-        const stack_value = try result.evaluator.interpreter.evalMinimal(def.expr, ops);
+        const stack_value = try result.evaluator.interpreter.eval(def.expr, ops);
 
         // Store the value in bindings so later declarations can reference it
         try result.evaluator.interpreter.bindings.append(.{
@@ -171,7 +171,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
     var i: usize = 0;
     while (i <= decl_index) : (i += 1) {
         const def = result.module_env.store.getDef(defs[i]);
-        const stack_value = try result.evaluator.interpreter.evalMinimal(def.expr, ops);
+        const stack_value = try result.evaluator.interpreter.eval(def.expr, ops);
 
         // Store the value in bindings so later declarations can reference it
         try result.evaluator.interpreter.bindings.append(.{

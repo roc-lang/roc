@@ -23,8 +23,7 @@ const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const RocStr = builtins.str.RocStr;
-const dec = builtins.dec;
-const RocDec = dec.RocDec;
+const RocDec = builtins.dec.RocDec;
 const RocList = builtins.list.RocList;
 const utils = builtins.utils;
 const Layout = layout.Layout;
@@ -108,6 +107,7 @@ pub const Interpreter = struct {
         MethodLookupFailed,
         MethodNotFound,
         NoSpaceLeft,
+        NotImplemented,
         NotNumeric,
         NullStackPointer,
         RecordIndexOutOfBounds,
@@ -353,9 +353,9 @@ pub const Interpreter = struct {
         return result;
     }
 
-    // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
-    pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
-        return try self.evalExprMinimal(expr_idx, roc_ops, null);
+    /// Evaluates a Roc expression and returns the result.
+    pub fn eval(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
+        return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
     pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
@@ -382,7 +382,7 @@ pub const Interpreter = struct {
         arg_ptr: ?*anyopaque,
     ) Error!void {
         if (arg_ptr) |args_ptr| {
-            const func_val = try self.evalMinimal(expr_idx, roc_ops);
+            const func_val = try self.eval(expr_idx, roc_ops);
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
@@ -461,7 +461,7 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
-            const result_value = self.evalExprMinimal(header.body_idx, roc_ops, null) catch |err| {
+            const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| {
                 if (err == error.EarlyReturn) {
                     const return_val = self.early_return_value orelse return error.Crash;
                     self.early_return_value = null;
@@ -482,7 +482,7 @@ pub const Interpreter = struct {
             return;
         }
 
-        const result = try self.evalMinimal(expr_idx, roc_ops);
+        const result = try self.eval(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
         // Only copy result if the result type is compatible with ret_ptr
@@ -515,2249 +515,7 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn evalExprMinimal(
-        self: *Interpreter,
-        expr_idx: can.CIR.Expr.Idx,
-        roc_ops: *RocOps,
-        expected_rt_var: ?types.Var,
-    ) Error!StackValue {
-        const expr = self.env.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_block => |blk| {
-                // New scope for bindings
-                const original_len = self.bindings.items.len;
-                defer self.trimBindingList(&self.bindings, original_len, roc_ops);
-
-                const stmts = self.env.store.sliceStatements(blk.stmts);
-
-                // First pass: add placeholders for all decl/var lambdas/closures (mutual recursion support)
-                for (stmts) |stmt_idx| {
-                    const stmt = self.env.store.getStatement(stmt_idx);
-                    const Placeholder = struct {
-                        fn exists(self_interp: *Interpreter, start: usize, pattern_idx: can.CIR.Pattern.Idx) bool {
-                            var i: usize = self_interp.bindings.items.len;
-                            while (i > start) {
-                                i -= 1;
-                                if (self_interp.bindings.items[i].pattern_idx == pattern_idx) return true;
-                            }
-                            return false;
-                        }
-                        fn add(self_interp: *Interpreter, patt_idx: can.CIR.Pattern.Idx, rhs_expr: can.CIR.Expr.Idx) !void {
-                            const patt_ct_var = can.ModuleEnv.varFrom(patt_idx);
-                            const patt_rt_var = try self_interp.translateTypeVar(self_interp.env, patt_ct_var);
-                            const closure_layout = try self_interp.getRuntimeLayout(patt_rt_var);
-                            if (closure_layout.tag != .closure) return; // only closures get placeholders
-                            const lam_or = self_interp.env.store.getExpr(rhs_expr);
-                            var body_idx: can.CIR.Expr.Idx = rhs_expr;
-                            var params: can.CIR.Pattern.Span = .{ .span = .{ .start = 0, .len = 0 } };
-                            if (lam_or == .e_lambda) {
-                                body_idx = lam_or.e_lambda.body;
-                                params = lam_or.e_lambda.args;
-                            } else if (lam_or == .e_closure) {
-                                const lam_expr = self_interp.env.store.getExpr(lam_or.e_closure.lambda_idx);
-                                if (lam_expr == .e_lambda) {
-                                    body_idx = lam_expr.e_lambda.body;
-                                    params = lam_expr.e_lambda.args;
-                                }
-                            } else return;
-                            const ph = try self_interp.pushRaw(closure_layout, 0);
-                            if (ph.ptr) |ptr| {
-                                const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                                header.* = .{
-                                    .body_idx = body_idx,
-                                    .params = params,
-                                    .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                                    .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                                    .lambda_expr_idx = rhs_expr,
-                                    .source_env = self_interp.env,
-                                };
-                            }
-                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr, .source_env = self_interp.env });
-                        }
-                    };
-                    switch (stmt) {
-                        .s_decl => |d| {
-                            const patt = self.env.store.getPattern(d.pattern);
-                            if (patt != .assign) continue;
-                            const rhs = self.env.store.getExpr(d.expr);
-                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
-                                try Placeholder.add(self, d.pattern, d.expr);
-                            }
-                        },
-                        .s_decl_gen => |d| {
-                            const patt = self.env.store.getPattern(d.pattern);
-                            if (patt != .assign) continue;
-                            const rhs = self.env.store.getExpr(d.expr);
-                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
-                                try Placeholder.add(self, d.pattern, d.expr);
-                            }
-                        },
-                        .s_var => |v| {
-                            const patt = self.env.store.getPattern(v.pattern_idx);
-                            if (patt != .assign) continue;
-                            const rhs = self.env.store.getExpr(v.expr);
-                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, v.pattern_idx)) {
-                                try Placeholder.add(self, v.pattern_idx, v.expr);
-                            }
-                        },
-                        else => {},
-                    }
-                }
-
-                // Second pass: evaluate statements, updating placeholders
-                for (stmts) |stmt_idx| {
-                    const stmt = self.env.store.getStatement(stmt_idx);
-                    switch (stmt) {
-                        .s_decl => |d| {
-                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                            defer {
-                                self.trimBindingList(&temp_binds, 0, roc_ops);
-                                temp_binds.deinit();
-                            }
-
-                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
-                            defer val.decref(&self.runtime_layout_store, roc_ops);
-
-                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
-                                return error.TypeMismatch;
-                            }
-
-                            for (temp_binds.items) |binding| {
-                                try self.upsertBinding(binding, original_len, roc_ops);
-                            }
-                            temp_binds.items.len = 0;
-                        },
-                        .s_decl_gen => |d| {
-                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                            defer {
-                                self.trimBindingList(&temp_binds, 0, roc_ops);
-                                temp_binds.deinit();
-                            }
-
-                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
-                            defer val.decref(&self.runtime_layout_store, roc_ops);
-
-                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
-                                return error.TypeMismatch;
-                            }
-
-                            for (temp_binds.items) |binding| {
-                                try self.upsertBinding(binding, original_len, roc_ops);
-                            }
-                            temp_binds.items.len = 0;
-                        },
-                        .s_var => |v| {
-                            const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                            defer {
-                                self.trimBindingList(&temp_binds, 0, roc_ops);
-                                temp_binds.deinit();
-                            }
-
-                            const val = try self.evalExprMinimal(v.expr, roc_ops, expr_rt_var);
-                            defer val.decref(&self.runtime_layout_store, roc_ops);
-
-                            if (!try self.patternMatchesBind(v.pattern_idx, val, expr_rt_var, roc_ops, &temp_binds, v.expr)) {
-                                return error.TypeMismatch;
-                            }
-
-                            for (temp_binds.items) |binding| {
-                                try self.upsertBinding(binding, original_len, roc_ops);
-                            }
-                            temp_binds.items.len = 0;
-                        },
-                        .s_reassign => |r| {
-                            const patt = self.env.store.getPattern(r.pattern_idx);
-                            if (patt != .assign) {
-                                self.triggerCrash("s_reassign: pattern is not an assign pattern", false, roc_ops);
-                                return error.Crash;
-                            }
-                            const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
-                            // Search through all bindings, not just current block scope
-                            // This allows reassigning variables from outer scopes (e.g., in for loops)
-                            var j: usize = self.bindings.items.len;
-                            while (j > 0) {
-                                j -= 1;
-                                if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
-                                    self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
-                                    self.bindings.items[j].value = new_val;
-                                    break;
-                                }
-                            }
-                        },
-                        .s_crash => |c| {
-                            const msg = self.env.getString(c.msg);
-                            self.triggerCrash(msg, false, roc_ops);
-                            return error.Crash;
-                        },
-                        .s_expect => |expect_stmt| {
-                            const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
-                            const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
-                            const is_true = boolValueEquals(true, cond_val);
-                            if (!is_true) {
-                                self.handleExpectFailure(expect_stmt.body, roc_ops);
-                                return error.Crash;
-                            }
-                        },
-                        .s_expr => |sx| {
-                            // Evaluate the expression - propagate early returns
-                            const expr_result = self.evalExprMinimal(sx.expr, roc_ops, null) catch |err| {
-                                return err; // Propagate EarlyReturn or other errors
-                            };
-                            expr_result.decref(&self.runtime_layout_store, roc_ops);
-                        },
-                        .s_dbg => |dbg_stmt| {
-                            const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
-                            const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-                            const value = try self.evalExprMinimal(dbg_stmt.expr, roc_ops, inner_rt_var);
-                            defer value.decref(&self.runtime_layout_store, roc_ops);
-                            const rendered = try self.renderValueRocWithType(value, inner_rt_var);
-                            defer self.allocator.free(rendered);
-                            roc_ops.dbg(rendered);
-                        },
-                        .s_for => |for_stmt| {
-                            // Evaluate the list expression
-                            const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            const list_value = try self.evalExprMinimal(for_stmt.expr, roc_ops, expr_rt_var);
-                            defer list_value.decref(&self.runtime_layout_store, roc_ops);
-
-                            // Get the list layout
-                            if (list_value.layout.tag != .list) {
-                                return error.TypeMismatch;
-                            }
-                            const elem_layout_idx = list_value.layout.data.list;
-                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                            const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
-
-                            // Get the RocList header
-                            const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
-                            const list_len = list_header.len();
-
-                            // Get the element type for binding
-                            const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
-                            const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
-
-                            // Iterate over each element
-                            var i: usize = 0;
-                            while (i < list_len) : (i += 1) {
-                                // Get pointer to element
-                                const elem_ptr = if (list_header.bytes) |buffer|
-                                    buffer + i * elem_size
-                                else
-                                    return error.TypeMismatch;
-
-                                // Create a StackValue from the element
-                                var elem_value = StackValue{
-                                    .ptr = elem_ptr,
-                                    .layout = elem_layout,
-                                    .is_initialized = true,
-                                };
-
-                                // Increment refcount since we're creating a new reference
-                                elem_value.incref();
-
-                                // Bind the pattern to the element value
-                                var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                                defer {
-                                    self.trimBindingList(&temp_binds, 0, roc_ops);
-                                    temp_binds.deinit();
-                                }
-
-                                if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds, @enumFromInt(0))) {
-                                    elem_value.decref(&self.runtime_layout_store, roc_ops);
-                                    return error.TypeMismatch;
-                                }
-
-                                // Add bindings to the environment
-                                const loop_bindings_start = self.bindings.items.len;
-                                for (temp_binds.items) |binding| {
-                                    try self.bindings.append(binding);
-                                }
-
-                                // Evaluate the body - handle early returns
-                                const body_result = self.evalExprMinimal(for_stmt.body, roc_ops, null) catch |err| {
-                                    // Clean up before propagating error
-                                    self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
-                                    elem_value.decref(&self.runtime_layout_store, roc_ops);
-                                    return err; // Propagate EarlyReturn or other errors
-                                };
-                                body_result.decref(&self.runtime_layout_store, roc_ops);
-
-                                // Clean up bindings for this iteration
-                                self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
-
-                                // Decrement the element reference (it was incremented above)
-                                elem_value.decref(&self.runtime_layout_store, roc_ops);
-                            }
-                        },
-                        .s_while => |while_stmt| {
-                            // Loop until condition becomes false
-                            while (true) {
-                                // 1. EVALUATE CONDITION
-                                const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
-                                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
-                                const cond_value = try self.evalExprMinimal(while_stmt.cond, roc_ops, cond_rt_var);
-
-                                // 2. CHECK IF CONDITION IS TRUE
-                                const cond_is_true = boolValueEquals(true, cond_value);
-
-                                // 3. EXIT LOOP IF CONDITION IS FALSE
-                                if (!cond_is_true) {
-                                    break;
-                                }
-
-                                // 4. EVALUATE BODY - propagate early returns
-                                const body_result = self.evalExprMinimal(while_stmt.body, roc_ops, null) catch |err| {
-                                    return err; // Propagate EarlyReturn or other errors
-                                };
-                                body_result.decref(&self.runtime_layout_store, roc_ops);
-
-                                // Body result is {} (empty record), so nothing to do with it
-                                // Loop continues to next iteration
-                            }
-
-                            // While loop completes and returns {} (implicitly)
-                        },
-                        .s_return => |ret| {
-                            // Early return: evaluate expression, store value, signal return
-                            const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
-                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            const return_value = try self.evalExprMinimal(ret.expr, roc_ops, expr_rt_var);
-                            // Store the return value for the caller to consume
-                            self.early_return_value = return_value;
-                            return error.EarlyReturn;
-                        },
-                        else => {
-                            self.triggerCrash("e_block: unhandled statement type", false, roc_ops);
-                            return error.Crash;
-                        },
-                    }
-                }
-
-                return try self.evalExprMinimal(blk.final_expr, roc_ops, null);
-            },
-            .e_num => |num_lit| {
-                // Use runtime type to choose layout
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                var value = try self.pushRaw(layout_val, 0);
-                // Write integer as i128 respecting precision via StackValue
-                value.is_initialized = false;
-                switch (layout_val.tag) {
-                    .scalar => switch (layout_val.data.scalar.tag) {
-                        .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
-                        .frac => switch (layout_val.data.scalar.data.frac) {
-                            .f32 => {
-                                const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
-                                // For u128 values, convert from the raw bytes
-                                if (num_lit.value.kind == .u128) {
-                                    const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                                    ptr.* = @floatFromInt(u128_val);
-                                } else {
-                                    ptr.* = @floatFromInt(num_lit.value.toI128());
-                                }
-                            },
-                            .f64 => {
-                                const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
-                                if (num_lit.value.kind == .u128) {
-                                    const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                                    ptr.* = @floatFromInt(u128_val);
-                                } else {
-                                    ptr.* = @floatFromInt(num_lit.value.toI128());
-                                }
-                            },
-                            .dec => {
-                                const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
-                            },
-                        },
-                        else => return error.TypeMismatch,
-                    },
-                    else => return error.TypeMismatch,
-                }
-                value.is_initialized = true;
-                return value;
-            },
-            .e_unary_minus => |unary_minus| {
-                // Desugar `-a` to `a.negate()`
-                // Use root_env.idents because method idents must be consistent across all modules
-                return try self.dispatchUnaryOpMethod(self.root_env.idents.negate, unary_minus.expr, roc_ops);
-            },
-            .e_unary_not => |unary_not| {
-                // Desugar `!a` to `a.not()`
-                // Use root_env.idents because method idents must be consistent across all modules
-                return try self.dispatchUnaryOpMethod(self.root_env.idents.not, unary_not.expr, roc_ops);
-            },
-            .e_binop => |binop| {
-                // Use root_env.idents for all method dispatches because method idents must be
-                // consistent across all modules. Different modules may have different ident
-                // indices for the same strings, so we always use the root module's indices.
-                switch (binop.op) {
-                    .add => {
-                        // Desugar `a + b` to `a.plus(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.plus, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .sub => {
-                        // Desugar `a - b` to `a.minus(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.minus, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .mul => {
-                        // Desugar `a * b` to `a.times(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.times, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .div => {
-                        // Desugar `a / b` to `a.div_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.div_by, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .div_trunc => {
-                        // Desugar `a // b` to `a.div_trunc_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.div_trunc_by, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .rem => {
-                        // Desugar `a % b` to `a.rem_by(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.rem_by, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .lt => {
-                        // Desugar `a < b` to `a.is_lt(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_lt, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .le => {
-                        // Desugar `a <= b` to `a.is_lte(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_lte, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .gt => {
-                        // Desugar `a > b` to `a.is_gt(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_gt, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .ge => {
-                        // Desugar `a >= b` to `a.is_gte(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_gte, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .eq => {
-                        // Desugar `a == b` to `a.is_eq(b)`
-                        return try self.dispatchBinaryOpMethod(self.root_env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
-                    },
-                    .ne => {
-                        // Desugar `a != b` to `!(a.is_eq(b))` - negate the result of is_eq
-                        // This matches the type checker which desugars to `a.is_eq(b).not()`
-                        const eq_result = try self.dispatchBinaryOpMethod(self.root_env.idents.is_eq, binop.lhs, binop.rhs, roc_ops);
-                        defer eq_result.decref(&self.runtime_layout_store, roc_ops);
-                        // Negate the boolean result
-                        const is_eq = boolValueEquals(true, eq_result);
-                        return try self.makeBoolValue(!is_eq);
-                    },
-                    .@"or" => {
-                        var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
-                        defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                        if (boolValueEquals(true, lhs)) {
-                            return try self.makeBoolValue(true);
-                        }
-
-                        var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
-                        defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                        return try self.makeBoolValue(boolValueEquals(true, rhs));
-                    },
-                    .@"and" => {
-                        var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
-                        defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                        if (boolValueEquals(false, lhs)) {
-                            return try self.makeBoolValue(false);
-                        }
-
-                        var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
-                        defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                        return try self.makeBoolValue(boolValueEquals(true, rhs));
-                    },
-                }
-            },
-            .e_if => |if_expr| {
-                const branches = self.env.store.sliceIfBranches(if_expr.branches);
-                // Evaluate branches in order; pick first true condition
-                var i: usize = 0;
-                while (i < branches.len) : (i += 1) {
-                    const br = self.env.store.getIfBranch(branches[i]);
-                    const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
-                    const cond_is_true = boolValueEquals(true, cond_val);
-                    if (cond_is_true) {
-                        return try self.evalExprMinimal(br.body, roc_ops, null);
-                    }
-                }
-                // No condition matched; evaluate final else
-                return try self.evalExprMinimal(if_expr.final_else, roc_ops, null);
-            },
-            .e_str => |str_expr| {
-                const segments = self.env.store.sliceExpr(str_expr.span);
-                if (segments.len == 0) {
-                    const value = try self.pushStr("");
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
-                    roc_str_ptr.* = RocStr.empty();
-                    return value;
-                }
-
-                var segment_strings = std.array_list.AlignedManaged(RocStr, null).init(self.allocator);
-                defer {
-                    for (segment_strings.items) |segment_str| {
-                        segment_str.decref(roc_ops);
-                    }
-                    segment_strings.deinit();
-                }
-
-                var total_len: usize = 0;
-                for (segments) |seg_idx| {
-                    const seg_expr = self.env.store.getExpr(seg_idx);
-                    if (seg_expr == .e_str_segment) {
-                        const content = self.env.getString(seg_expr.e_str_segment.literal);
-                        var literal_str = RocStr.fromSlice(content, roc_ops);
-                        total_len += literal_str.asSlice().len;
-                        try segment_strings.append(literal_str);
-                        continue;
-                    }
-
-                    const seg_ct_var = can.ModuleEnv.varFrom(seg_idx);
-                    const seg_rt_var = try self.translateTypeVar(self.env, seg_ct_var);
-                    const seg_value = try self.evalExprMinimal(seg_idx, roc_ops, seg_rt_var);
-                    const segment_str = try self.stackValueToRocStr(seg_value, seg_rt_var, roc_ops);
-                    seg_value.decref(&self.runtime_layout_store, roc_ops);
-                    total_len += segment_str.asSlice().len;
-                    try segment_strings.append(segment_str);
-                }
-
-                const result_str: RocStr = if (total_len == 0)
-                    RocStr.empty()
-                else blk: {
-                    const buffer = try self.allocator.alloc(u8, total_len);
-                    defer self.allocator.free(buffer);
-                    var offset: usize = 0;
-                    for (segment_strings.items) |segment_str| {
-                        const slice = segment_str.asSlice();
-                        std.mem.copyForwards(u8, buffer[offset .. offset + slice.len], slice);
-                        offset += slice.len;
-                    }
-                    break :blk RocStr.fromSlice(buffer, roc_ops);
-                };
-
-                const value = try self.pushStr("");
-                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
-                roc_str_ptr.* = result_str;
-                return value;
-            },
-            .e_str_segment => |seg| {
-                const content = self.env.getString(seg.literal);
-                const value = try self.pushStr(content);
-                const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
-                roc_str.* = RocStr.fromSlice(content, roc_ops);
-                return value;
-            },
-            .e_frac_f32 => |lit| {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                const value = try self.pushRaw(layout_val, 0);
-                if (value.ptr) |ptr| {
-                    const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
-                    typed_ptr.* = lit.value;
-                }
-                return value;
-            },
-            .e_frac_f64 => |lit| {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                const value = try self.pushRaw(layout_val, 0);
-                if (value.ptr) |ptr| {
-                    const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
-                    typed_ptr.* = lit.value;
-                }
-                return value;
-            },
-            .e_dec => |dec_lit| {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                const value = try self.pushRaw(layout_val, 0);
-                if (value.ptr) |ptr| {
-                    const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
-                    typed_ptr.* = dec_lit.value;
-                }
-                return value;
-            },
-            .e_dec_small => |small| {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                const value = try self.pushRaw(layout_val, 0);
-                if (value.ptr) |ptr| {
-                    const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
-                    const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
-                    const scaled = @as(i128, small.value.numerator) * scale_factor;
-                    typed_ptr.* = RocDec{ .num = scaled };
-                }
-                return value;
-            },
-            .e_tuple => |tup| {
-                // Evaluate all elements first to drive runtime unification
-                const elems = self.env.store.sliceExpr(tup.elems);
-                var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elems.len);
-                defer values.deinit();
-                for (elems) |e_idx| {
-                    const v = try self.evalExprMinimal(e_idx, roc_ops, null);
-                    try values.append(v);
-                }
-
-                // Compute tuple layout from concrete element value layouts
-                var elem_layouts = try self.allocator.alloc(Layout, values.items.len);
-                defer self.allocator.free(elem_layouts);
-                for (values.items, 0..) |v, ii| elem_layouts[ii] = v.layout;
-                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                var dest = try self.pushRaw(tuple_layout, 0);
-                var accessor = try dest.asTuple(&self.runtime_layout_store);
-
-                if (values.items.len != accessor.getElementCount()) return error.TypeMismatch;
-                var i: usize = 0;
-                while (i < values.items.len) : (i += 1) {
-                    // Pass the original index - setElement->getElement will convert to sorted internally
-                    try accessor.setElement(i, values.items[i], roc_ops);
-                }
-                return dest;
-            },
-            .e_list => |list_expr| {
-                const elem_indices = self.env.store.sliceExpr(list_expr.elems);
-                const list_rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-
-                // Get the first element's variables, which is representative of all the element vars
-                const elems = self.env.store.sliceExpr(list_expr.elems);
-                std.debug.assert(elems.len > 0);
-                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-
-                const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
-
-                var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
-                defer {
-                    // Decref temporary element values after they've been copied into the list.
-                    // copyToPtr increfs refcounted values, so we need to release the temporary references.
-                    for (values.items) |val| {
-                        val.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                    values.deinit();
-                }
-
-                for (elem_indices) |elem_idx| {
-                    const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
-                    try values.append(val);
-                }
-
-                // Handle empty list case first
-                if (values.items.len == 0) {
-                    const list_layout = try self.getRuntimeLayout(list_rt_var);
-                    const dest = try self.pushRaw(list_layout, 0);
-                    if (dest.ptr == null) return dest;
-                    const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                    header.* = RocList.empty();
-                    return dest;
-                }
-
-                // Use the actual layout from the first evaluated element, not the type-variable-derived layout.
-                // This is critical because type variables may be flex vars that get defaulted to Dec,
-                // but the actual elements (e.g., strings) have their concrete layout from evaluation.
-                const actual_elem_layout = values.items[0].layout;
-
-                // Create the list layout with the correct element layout
-                const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
-
-                const dest = try self.pushRaw(actual_list_layout, 0);
-                if (dest.ptr == null) return dest;
-                const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
-                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
-                const elements_refcounted = actual_elem_layout.isRefcounted();
-
-                var runtime_list = RocList.allocateExact(
-                    elem_alignment_u32,
-                    values.items.len,
-                    elem_size,
-                    elements_refcounted,
-                    roc_ops,
-                );
-
-                if (elem_size > 0) {
-                    if (runtime_list.bytes) |buffer| {
-                        var i: usize = 0;
-                        while (i < values.items.len) : (i += 1) {
-                            const dest_ptr = buffer + i * elem_size;
-                            try values.items[i].copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
-                        }
-                    }
-                }
-
-                markListElementCount(&runtime_list, elements_refcounted);
-                header.* = runtime_list;
-                return dest;
-            },
-            .e_record => |rec| {
-                // Allocate record and fill fields
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-
-                var union_names = std.array_list.AlignedManaged(base_pkg.Ident.Idx, null).init(self.allocator);
-                defer union_names.deinit();
-                var union_layouts = std.array_list.AlignedManaged(layout.Layout, null).init(self.allocator);
-                defer union_layouts.deinit();
-                var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
-                defer union_indices.deinit();
-
-                var field_values = std.array_list.AlignedManaged(StackValue, null).init(self.allocator);
-                defer {
-                    for (field_values.items) |val| {
-                        val.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                    field_values.deinit();
-                }
-
-                const upsert = struct {
-                    fn go(
-                        names: *std.array_list.AlignedManaged(base_pkg.Ident.Idx, null),
-                        layouts: *std.array_list.AlignedManaged(layout.Layout, null),
-                        indices: *std.AutoHashMap(u32, usize),
-                        name: base_pkg.Ident.Idx,
-                        layout_value: layout.Layout,
-                    ) !void {
-                        const key: u32 = @bitCast(name);
-                        if (indices.get(key)) |idx_ptr| {
-                            layouts.items[idx_ptr] = layout_value;
-                            names.items[idx_ptr] = name;
-                        } else {
-                            try layouts.append(layout_value);
-                            try names.append(name);
-                            try indices.put(key, layouts.items.len - 1);
-                        }
-                    }
-                }.go;
-
-                var base_accessor_opt: ?StackValue.RecordAccessor = null;
-
-                if (rec.ext) |ext_idx| {
-                    const ext_ct_var = can.ModuleEnv.varFrom(ext_idx);
-                    const ext_rt_var = try self.translateTypeVar(self.env, ext_ct_var);
-                    var base_value = try self.evalExprMinimal(ext_idx, roc_ops, ext_rt_var);
-                    if (base_value.layout.tag != .record) {
-                        base_value.decref(&self.runtime_layout_store, roc_ops);
-                        return error.TypeMismatch;
-                    }
-                    defer base_value.decref(&self.runtime_layout_store, roc_ops);
-                    var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
-                    base_accessor_opt = base_accessor;
-
-                    var idx: usize = 0;
-                    while (idx < base_accessor.getFieldCount()) : (idx += 1) {
-                        const info = base_accessor.field_layouts.get(idx);
-                        const field_layout = self.runtime_layout_store.getLayout(info.layout);
-                        try upsert(&union_names, &union_layouts, &union_indices, info.name, field_layout);
-                    }
-                }
-
-                const fields = self.env.store.sliceRecordFields(rec.fields);
-                try field_values.ensureTotalCapacity(fields.len);
-                var field_list_index: usize = 0;
-                while (field_list_index < fields.len) : (field_list_index += 1) {
-                    const field_idx_val = fields[field_list_index];
-                    const f = self.env.store.getRecordField(field_idx_val);
-                    const field_ct_var = can.ModuleEnv.varFrom(f.value);
-                    const field_rt_var = try self.translateTypeVar(self.env, field_ct_var);
-                    const val = try self.evalExprMinimal(f.value, roc_ops, field_rt_var);
-                    try field_values.append(val);
-                    const field_layout = val.layout;
-                    try upsert(&union_names, &union_layouts, &union_indices, f.name, field_layout);
-                }
-                const record_layout_idx = try self.runtime_layout_store.putRecord(self.env, union_layouts.items, union_names.items);
-                const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
-
-                const resolved_rt = self.runtime_types.resolveVar(rt_var);
-                const root_idx: usize = @intFromEnum(resolved_rt.var_);
-                try self.ensureVarLayoutCapacity(root_idx + 1);
-                self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
-
-                var dest = try self.pushRaw(rec_layout, 0);
-                var accessor = try dest.asRecord(&self.runtime_layout_store);
-
-                if (base_accessor_opt) |base_accessor| {
-                    var idx: usize = 0;
-                    while (idx < base_accessor.getFieldCount()) : (idx += 1) {
-                        const info = base_accessor.field_layouts.get(idx);
-                        const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
-                        const base_field_value = try base_accessor.getFieldByIndex(idx);
-                        try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
-                    }
-                }
-
-                for (fields, 0..) |field_idx_enum, explicit_index| {
-                    const f = self.env.store.getRecordField(field_idx_enum);
-                    const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
-                    const val = field_values.items[explicit_index];
-
-                    if (base_accessor_opt) |base_accessor| {
-                        if (base_accessor.findFieldIndex(f.name) != null) {
-                            const existing = try accessor.getFieldByIndex(dest_field_idx);
-                            existing.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                    }
-
-                    try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
-                }
-
-                return dest;
-            },
-            .e_empty_record => {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const rec_layout = try self.getRuntimeLayout(rt_var);
-                return try self.pushRaw(rec_layout, 0);
-            },
-            .e_empty_list => {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const derived_layout = try self.getRuntimeLayout(rt_var);
-
-                // Ensure we have a proper list layout even if the type variable defaulted to Dec.
-                // For empty lists, if the layout isn't already a list, create one with a default element layout.
-                const list_layout = if (derived_layout.tag == .list or derived_layout.tag == .list_of_zst)
-                    derived_layout
-                else blk: {
-                    // Default to list of Dec for empty lists when type can't be determined
-                    const default_elem_layout = Layout.frac(types.Frac.Precision.dec);
-                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(default_elem_layout);
-                    break :blk Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } };
-                };
-
-                const dest = try self.pushRaw(list_layout, 0);
-                if (dest.ptr) |ptr| {
-                    const header: *RocList = @ptrCast(@alignCast(ptr));
-                    header.* = RocList.empty();
-                }
-                return dest;
-            },
-            // no zero-argument tag handling in minimal evaluator
-            .e_nominal => |nom| {
-                // Evaluate backing expression using minimal evaluator
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
-                const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                // Check if this is Bool by comparing against the dynamic bool_stmt
-                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
-                    try self.getCanonicalBoolRuntimeVar()
-                else switch (nominal_resolved.desc.content) {
-                    .structure => |st| switch (st) {
-                        .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                        else => nominal_rt_var,
-                    },
-                    else => nominal_rt_var,
-                };
-                return try self.evalExprMinimal(nom.backing_expr, roc_ops, backing_rt_var);
-            },
-            .e_nominal_external => |nom| {
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
-                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                    const backing_rt_var = switch (nominal_resolved.desc.content) {
-                        .structure => |st| switch (st) {
-                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                            else => nominal_rt_var,
-                        },
-                        else => nominal_rt_var,
-                    };
-                    break :blk backing_rt_var;
-                };
-                return try self.evalExprMinimal(nom.backing_expr, roc_ops, rt_var);
-            },
-            .e_zero_argument_tag => |zero| {
-                // Construct a tag union value with no payload
-                // Determine discriminant index by consulting the runtime tag union type
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                // Use resolveBaseVar to unwrap nominal types (like Bool := [False, True])
-                // to get to the underlying tag union
-                const resolved = self.resolveBaseVar(rt_var);
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
-                    return error.Crash;
-                }
-                const tu = resolved.desc.content.structure.tag_union;
-                const tags = self.runtime_types.getTagsSlice(tu.tags);
-                // Find tag index by translating the source ident to the runtime store and comparing indices
-                const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
-                    const name_text = self.env.getIdent(zero.name);
-                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
-                    self.triggerCrash(msg, true, roc_ops);
-                    return error.Crash;
-                };
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                // If layout is scalar (int), write discriminant directly
-                if (layout_val.tag == .scalar) {
-                    var out = try self.pushRaw(layout_val, 0);
-                    if (layout_val.data.scalar.tag == .int) {
-                        out.is_initialized = false;
-                        try out.setInt(@intCast(tag_index));
-                        out.is_initialized = true;
-                        out.rt_var = rt_var; // Set rt_var for proper rendering
-                        return out;
-                    }
-                    self.triggerCrash("e_zero_argument_tag: scalar layout is not int", false, roc_ops);
-                    return error.Crash;
-                } else if (layout_val.tag == .record) {
-                    // Record { tag: Discriminant, payload: ZST }
-                    var dest = try self.pushRaw(layout_val, 0);
-                    var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
-                        self.triggerCrash("DEBUG: e_zero_argument_tag tag field not found", false, roc_ops);
-                        return error.Crash;
-                    };
-                    const tag_field = try acc.getFieldByIndex(tag_idx);
-                    // write tag as int
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        var tmp = tag_field;
-                        tmp.is_initialized = false;
-                        try tmp.setInt(@intCast(tag_index));
-                    } else {
-                        self.triggerCrash("e_zero_argument_tag: record tag field is not scalar int", false, roc_ops);
-                        return error.Crash;
-                    }
-                    dest.rt_var = rt_var; // Set rt_var for proper rendering
-                    return dest;
-                } else if (layout_val.tag == .tuple) {
-                    // Tuple (payload, tag) - tag unions are now represented as tuples
-                    var dest = try self.pushRaw(layout_val, 0);
-                    var acc = try dest.asTuple(&self.runtime_layout_store);
-                    // Element 1 is the tag discriminant - getElement takes original index directly
-                    const tag_field = try acc.getElement(1);
-                    // write tag as int
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        var tmp = tag_field;
-                        tmp.is_initialized = false;
-                        try tmp.setInt(@intCast(tag_index));
-                    } else {
-                        self.triggerCrash("e_zero_argument_tag: tuple tag field is not scalar int", false, roc_ops);
-                        return error.Crash;
-                    }
-                    dest.rt_var = rt_var; // Set rt_var for proper rendering
-                    return dest;
-                }
-                self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
-                return error.Crash;
-            },
-            .e_tag => |tag| {
-                // Construct a tag union value with payloads
-                var rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                // Unwrap nominal types and aliases to get the base tag union
-                var resolved = self.resolveBaseVar(rt_var);
-                // If the type is still flex and this is a True/False tag, use Bool
-                if (resolved.desc.content == .flex) {
-                    if (tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag) {
-                        rt_var = try self.getCanonicalBoolRuntimeVar();
-                        resolved = self.resolveBaseVar(rt_var);
-                    }
-                }
-                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    self.triggerCrash("e_tag: expected tag_union structure type", false, roc_ops);
-                    return error.Crash;
-                }
-                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                defer tag_list.deinit();
-                try self.appendUnionTags(rt_var, &tag_list);
-                // Find tag index by translating the source ident to the runtime store and comparing indices
-                const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
-                    const name_text = self.env.getIdent(tag.name);
-                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
-                    self.triggerCrash(msg, true, roc_ops);
-                    return error.Crash;
-                };
-
-                const layout_val = try self.getRuntimeLayout(rt_var);
-
-                if (layout_val.tag == .scalar) {
-                    // No payload union
-                    var out = try self.pushRaw(layout_val, 0);
-                    if (layout_val.data.scalar.tag == .int) {
-                        out.is_initialized = false;
-                        try out.setInt(@intCast(tag_index));
-                        out.is_initialized = true;
-                        out.rt_var = rt_var; // Set rt_var for proper rendering
-                        return out;
-                    }
-                    self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
-                    return error.Crash;
-                } else if (layout_val.tag == .record) {
-                    // Has payload: record { tag, payload }
-                    var dest = try self.pushRaw(layout_val, 0);
-                    var acc = try dest.asRecord(&self.runtime_layout_store);
-                    const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
-                        self.triggerCrash("DEBUG: e_tag tag field not found", false, roc_ops);
-                        return error.Crash;
-                    };
-                    const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
-                        self.triggerCrash("DEBUG: e_tag payload field not found", false, roc_ops);
-                        return error.Crash;
-                    };
-                    // write tag discriminant
-                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        var tmp = tag_field;
-                        tmp.is_initialized = false;
-                        try tmp.setInt(@intCast(tag_index));
-                    } else {
-                        self.triggerCrash("e_tag: record tag field is not scalar int", false, roc_ops);
-                        return error.Crash;
-                    }
-
-                    const args_exprs = self.env.store.sliceExpr(tag.args);
-                    const arg_vars_range = tag_list.items[tag_index].args;
-                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
-                    if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
-                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
-
-                    if (payload_field.ptr) |payload_ptr| {
-                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                        if (payload_bytes_len > 0) {
-                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                            @memset(bytes, 0);
-                        }
-                    }
-
-                    if (args_exprs.len == 0) {
-                        dest.rt_var = rt_var;
-                        return dest;
-                    } else if (args_exprs.len == 1) {
-                        const arg_rt_var = arg_rt_vars[0];
-                        const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
-                        defer arg_val.decref(&self.runtime_layout_store, roc_ops);
-                        if (payload_field.ptr) |payload_ptr| {
-                            try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
-                        }
-                        dest.rt_var = rt_var;
-                        return dest;
-                    } else {
-                        const arg_count = args_exprs.len;
-                        var elem_layouts = try self.allocator.alloc(Layout, arg_count);
-                        defer self.allocator.free(elem_layouts);
-                        var elem_values = try self.allocator.alloc(StackValue, arg_count);
-                        defer {
-                            for (elem_values[0..arg_count]) |val| {
-                                val.decref(&self.runtime_layout_store, roc_ops);
-                            }
-                            self.allocator.free(elem_values);
-                        }
-
-                        var j: usize = 0;
-                        while (j < arg_count) : (j += 1) {
-                            const arg_rt_var = arg_rt_vars[j];
-                            const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
-                            elem_values[j] = val;
-                            // Use actual value layout, not type system layout, to avoid mismatch
-                            elem_layouts[j] = val.layout;
-                        }
-
-                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-
-                        if (payload_field.ptr) |payload_ptr| {
-                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
-                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
-                            j = 0;
-                            while (j < elem_values.len) : (j += 1) {
-                                try tup_acc.setElement(j, elem_values[j], roc_ops);
-                            }
-                        }
-
-                        dest.rt_var = rt_var;
-                        return dest;
-                    }
-                } else if (layout_val.tag == .tuple) {
-                    // Tuple (payload, tag) - tag unions now represented as tuples
-                    var dest = try self.pushRaw(layout_val, 0);
-                    var acc = try dest.asTuple(&self.runtime_layout_store);
-
-                    // Element 0 is payload, Element 1 is tag discriminant
-                    // getElement takes original index directly - it does the mapping internally
-
-                    // Write tag discriminant (element 1)
-                    const tag_field = try acc.getElement(1);
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        var tmp = tag_field;
-                        tmp.is_initialized = false;
-                        try tmp.setInt(@intCast(tag_index));
-                    } else {
-                        self.triggerCrash("e_tag: tuple tag field is not scalar int", false, roc_ops);
-                        return error.Crash;
-                    }
-
-                    const args_exprs = self.env.store.sliceExpr(tag.args);
-                    const arg_vars_range = tag_list.items[tag_index].args;
-                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
-                    if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
-                    const payload_field = try acc.getElement(0);
-
-                    if (payload_field.ptr) |payload_ptr| {
-                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                        if (payload_bytes_len > 0) {
-                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                            @memset(bytes, 0);
-                        }
-                    }
-
-                    if (args_exprs.len == 0) {
-                        dest.rt_var = rt_var;
-                        return dest;
-                    } else if (args_exprs.len == 1) {
-                        const arg_rt_var = arg_rt_vars[0];
-                        const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
-                        defer arg_val.decref(&self.runtime_layout_store, roc_ops);
-
-                        // The tuple layout may be wrong (too small) for the actual argument.
-                        // Create a properly-sized result using the argument's actual layout.
-                        const arg_size = self.runtime_layout_store.layoutSize(arg_val.layout);
-                        const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
-
-                        // Check if layout differs (size or list element type mismatch)
-                        // For lists, the size is the same but element layout may differ
-                        const layouts_differ = arg_size > payload_size or !layoutsEqual(arg_val.layout, payload_field.layout);
-
-                        if (layouts_differ) {
-                            // The tuple layout differs - create a new properly-typed tuple
-                            // with (payload, tag) elements using the actual argument layout
-                            var elem_layouts_fixed = [2]Layout{ arg_val.layout, tag_field.layout };
-                            const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
-                            const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
-                            var proper_dest = try self.pushRaw(proper_tuple_layout, 0);
-                            var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
-
-                            // Write tag discriminant to the proper location (element 1)
-                            const proper_tag_field = try proper_acc.getElement(1);
-                            if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
-                                var tmp = proper_tag_field;
-                                tmp.is_initialized = false;
-                                try tmp.setInt(@intCast(tag_index));
-                            }
-
-                            // Write payload to the proper location (element 0)
-                            const proper_payload_field = try proper_acc.getElement(0);
-                            if (proper_payload_field.ptr) |payload_ptr| {
-                                try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
-                            }
-
-                            proper_dest.rt_var = rt_var;
-                            return proper_dest;
-                        }
-
-                        // Normal case: sizes and layouts match, use original destination
-                        if (payload_field.ptr) |payload_ptr| {
-                            try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
-                        }
-                        dest.rt_var = rt_var;
-                        return dest;
-                    } else {
-                        const arg_count = args_exprs.len;
-                        var elem_layouts = try self.allocator.alloc(Layout, arg_count);
-                        defer self.allocator.free(elem_layouts);
-                        var elem_values = try self.allocator.alloc(StackValue, arg_count);
-                        defer {
-                            for (elem_values[0..arg_count]) |val| {
-                                val.decref(&self.runtime_layout_store, roc_ops);
-                            }
-                            self.allocator.free(elem_values);
-                        }
-
-                        var j: usize = 0;
-                        while (j < arg_count) : (j += 1) {
-                            const arg_rt_var = arg_rt_vars[j];
-                            const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
-                            elem_values[j] = val;
-                            // Use actual value layout, not type system layout, to avoid mismatch
-                            // (e.g., List(Dec) actual vs List(generic_num) from type system)
-                            elem_layouts[j] = val.layout;
-                        }
-
-                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-
-                        if (payload_field.ptr) |payload_ptr| {
-                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
-                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
-                            j = 0;
-                            while (j < elem_values.len) : (j += 1) {
-                                try tup_acc.setElement(j, elem_values[j], roc_ops);
-                            }
-                        }
-
-                        // Check if the payload layout differs from what dest expects
-                        // If so, create a new outer tuple with the correct layout
-                        const layouts_differ = !layoutsEqual(tuple_layout, payload_field.layout);
-                        if (layouts_differ) {
-                            // Create properly-typed outer tuple (payload, tag)
-                            var outer_elem_layouts = [2]Layout{ tuple_layout, tag_field.layout };
-                            const proper_outer_idx = try self.runtime_layout_store.putTuple(&outer_elem_layouts);
-                            const proper_outer_layout = self.runtime_layout_store.getLayout(proper_outer_idx);
-                            var proper_dest = try self.pushRaw(proper_outer_layout, 0);
-                            var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
-
-                            // Write tag discriminant
-                            const proper_tag_field = try proper_acc.getElement(1);
-                            if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
-                                var tmp = proper_tag_field;
-                                tmp.is_initialized = false;
-                                try tmp.setInt(@intCast(tag_index));
-                            }
-
-                            // Copy payload tuple data
-                            const proper_payload_field = try proper_acc.getElement(0);
-                            if (proper_payload_field.ptr) |proper_payload_ptr| {
-                                // Copy the tuple data we already wrote
-                                const payload_size = self.runtime_layout_store.layoutSize(tuple_layout);
-                                const src_bytes = @as([*]const u8, @ptrCast(payload_field.ptr.?))[0..payload_size];
-                                const dst_bytes = @as([*]u8, @ptrCast(proper_payload_ptr))[0..payload_size];
-                                @memcpy(dst_bytes, src_bytes);
-                            }
-
-                            proper_dest.rt_var = rt_var;
-                            return proper_dest;
-                        }
-
-                        dest.rt_var = rt_var;
-                        return dest;
-                    }
-                }
-                self.triggerCrash("e_tag: unexpected layout type", false, roc_ops);
-                return error.Crash;
-            },
-            .e_match => |m| {
-                // Evaluate scrutinee once and protect from stack corruption
-                // Use pushCopy to allocate a new stack location for the scrutinee header,
-                // preventing it from being corrupted by pattern match bindings
-                const scrutinee_temp = try self.evalExprMinimal(m.cond, roc_ops, null);
-                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
-                // Decref the original since pushCopy increfd the underlying data.
-                // The copy now owns the reference, and we're transferring ownership.
-                scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
-                defer scrutinee.decref(&self.runtime_layout_store, roc_ops);
-
-                const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
-                const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
-                const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const match_result_rt_var = try self.translateTypeVar(self.env, match_result_ct_var);
-                // Iterate branches and find first matching pattern set
-                const branches = self.env.store.matchBranchSlice(m.branches);
-                for (branches) |br_idx| {
-                    const br = self.env.store.getMatchBranch(br_idx);
-                    const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
-                    var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                    defer {
-                        self.trimBindingList(&temp_binds, 0, roc_ops);
-                        temp_binds.deinit();
-                    }
-
-                    for (patterns) |bp_idx| {
-                        self.trimBindingList(&temp_binds, 0, roc_ops);
-                        if (!try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, roc_ops, &temp_binds, @enumFromInt(0))) {
-                            self.trimBindingList(&temp_binds, 0, roc_ops);
-                            continue;
-                        }
-
-                        const start_len = self.bindings.items.len;
-                        try self.bindings.appendSlice(temp_binds.items);
-                        temp_binds.items.len = 0;
-
-                        var guard_pass = true;
-                        if (br.guard) |guard_idx| {
-                            const guard_ct_var = can.ModuleEnv.varFrom(guard_idx);
-                            const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
-                            const guard_val = try self.evalExprMinimal(guard_idx, roc_ops, guard_rt_var);
-                            defer guard_val.decref(&self.runtime_layout_store, roc_ops);
-                            guard_pass = boolValueEquals(true, guard_val);
-                        }
-
-                        if (!guard_pass) {
-                            self.trimBindingList(&self.bindings, start_len, roc_ops);
-                            continue;
-                        }
-
-                        const result = try self.evalExprMinimal(br.value, roc_ops, match_result_rt_var);
-                        self.trimBindingList(&self.bindings, start_len, roc_ops);
-                        return result;
-                    }
-                }
-                self.triggerCrash("non-exhaustive match", false, roc_ops);
-                return error.Crash;
-            },
-            .e_crash => |crash_expr| {
-                const msg = self.env.getString(crash_expr.msg);
-                self.triggerCrash(msg, false, roc_ops);
-                return error.Crash;
-            },
-            .e_expect => |expect_expr| {
-                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
-                const cond_val = try self.evalExprMinimal(expect_expr.body, roc_ops, bool_rt_var);
-                const succeeded = boolValueEquals(true, cond_val);
-                if (succeeded) {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const rt_var = try self.translateTypeVar(self.env, ct_var);
-                    const layout_val = try self.getRuntimeLayout(rt_var);
-                    return try self.pushRaw(layout_val, 0);
-                }
-                self.handleExpectFailure(expect_expr.body, roc_ops);
-                return error.Crash;
-            },
-            .e_dbg => |dbg_expr| {
-                // Evaluate and print the inner expression
-                const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
-                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-                const value = try self.evalExprMinimal(dbg_expr.expr, roc_ops, inner_rt_var);
-                defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, inner_rt_var);
-                defer self.allocator.free(rendered);
-                roc_ops.dbg(rendered);
-                // dbg returns {} (empty record) - use same pattern as e_expect
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                return try self.pushRaw(layout_val, 0);
-            },
-            // no tag handling in minimal evaluator
-            .e_lambda => |lam| {
-                // Build a closure value with empty captures using the runtime layout for the lambda's type
-                // Use provided expected_rt_var if available (for cross-module instantiated functions),
-                // otherwise translate from compile-time types
-                const rt_var = if (expected_rt_var) |provided_var|
-                    provided_var
-                else blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const closure_layout = try self.getRuntimeLayout(rt_var);
-                // Expect a closure layout from type-to-layout translation
-                if (closure_layout.tag != .closure) {
-                    self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
-                    return error.Crash;
-                }
-                const value = try self.pushRaw(closure_layout, 0);
-                self.registerDefValue(expr_idx, value);
-                // Initialize the closure header
-                if (value.ptr) |ptr| {
-                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                    header.* = .{
-                        .body_idx = lam.body,
-                        .params = lam.args,
-                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // no captures in minimal path
-                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                        .lambda_expr_idx = expr_idx,
-                        .source_env = self.env,
-                    };
-                }
-                return value;
-            },
-            .e_anno_only => |_| {
-                // This represents a value that only has a type annotation, no implementation.
-                // Crash immediately when accessed or called, regardless of type.
-                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
-                return error.Crash;
-            },
-            .e_return => |ret| {
-                // Early return expression - evaluate inner expr, store value, signal return
-                // Get the expected type from the INNER expression's type variable,
-                // since e_return's type may have been unified with {} or another type
-                const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
-                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-                const return_value = try self.evalExprMinimal(ret.expr, roc_ops, inner_rt_var);
-                // Store the return value for the caller to consume at function boundary
-                self.early_return_value = return_value;
-                return error.EarlyReturn;
-            },
-            .e_low_level_lambda => |lam| {
-                // Build a closure for a low-level builtin function
-                // Use provided expected_rt_var if available (for cross-module instantiated functions),
-                // otherwise translate from compile-time types
-                const rt_var = if (expected_rt_var) |provided_var|
-                    provided_var
-                else blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const closure_layout = try self.getRuntimeLayout(rt_var);
-                const value = try self.pushRaw(closure_layout, 0);
-                self.registerDefValue(expr_idx, value);
-
-                if (value.ptr) |ptr| {
-                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                    header.* = .{
-                        .body_idx = lam.body,
-                        .params = lam.args,
-                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                        .lambda_expr_idx = expr_idx,
-                        .source_env = self.env,
-                    };
-                }
-                return value;
-            },
-            .e_hosted_lambda => |hosted| {
-                // Build a closure for a hosted function that will dispatch to the host via RocOps
-                // We MUST create a closure layout manually since the type might be flex/unknown
-
-                // Manually create a closure layout instead of using getRuntimeLayout
-                // because hosted functions might have flex types
-                const closure_layout = Layout{
-                    .tag = .closure,
-                    .data = .{
-                        .closure = .{
-                            .captures_layout_idx = @enumFromInt(0), // No captures for hosted functions
-                        },
-                    },
-                };
-                const value = try self.pushRaw(closure_layout, 0);
-                self.registerDefValue(expr_idx, value);
-
-                if (value.ptr) |ptr| {
-                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                    header.* = .{
-                        .body_idx = hosted.body,
-                        .params = hosted.args,
-                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                        .lambda_expr_idx = expr_idx,
-                        .source_env = self.env,
-                    };
-                }
-                return value;
-            },
-            .e_closure => |cls| {
-                // Build a closure value with concrete captures. The closure references a lambda.
-                const lam_expr = self.env.store.getExpr(cls.lambda_idx);
-                if (lam_expr != .e_lambda) {
-                    self.triggerCrash("e_closure: lambda_idx does not point to e_lambda", false, roc_ops);
-                    return error.Crash;
-                }
-                const lam = lam_expr.e_lambda;
-
-                // Collect capture layouts and names from current bindings
-                const caps = self.env.store.sliceCaptures(cls.captures);
-                var field_layouts = try self.allocator.alloc(Layout, caps.len);
-                defer self.allocator.free(field_layouts);
-                var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
-                defer self.allocator.free(field_names);
-
-                // Helper: resolve a capture value (from local bindings, active closure captures, or top-level defs)
-                const resolveCapture = struct {
-                    fn go(self_interp: *Interpreter, cap: can.CIR.Expr.Capture, ops: *RocOps) ?StackValue {
-                        // First try local bindings by pattern idx
-                        var i: usize = self_interp.bindings.items.len;
-                        while (i > 0) {
-                            i -= 1;
-                            const b = self_interp.bindings.items[i];
-                            if (b.pattern_idx == cap.pattern_idx) return b.value;
-                        }
-                        // Next try ALL active closure captures in reverse order (innermost to outermost)
-                        // This is critical for deeply nested lambdas where inner closures need to
-                        // capture values from outer closures
-                        if (self_interp.active_closures.items.len > 0) {
-                            var closure_idx: usize = self_interp.active_closures.items.len;
-                            while (closure_idx > 0) {
-                                closure_idx -= 1;
-                                const cls_val = self_interp.active_closures.items[closure_idx];
-                                if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                                    const captures_layout = self_interp.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
-                                    const header_sz = @sizeOf(layout.Closure);
-                                    const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
-                                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
-                                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                                    var rec_acc = (rec_val.asRecord(&self_interp.runtime_layout_store)) catch continue;
-                                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
-                                        if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
-                                            return field_val;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Finally try top-level defs by pattern idx
-                        const all_defs = self_interp.env.store.sliceDefs(self_interp.env.all_defs);
-                        for (all_defs) |def_idx| {
-                            const def = self_interp.env.store.getDef(def_idx);
-                            if (def.pattern == cap.pattern_idx) {
-                                var k: usize = self_interp.def_stack.items.len;
-                                while (k > 0) {
-                                    k -= 1;
-                                    const entry = self_interp.def_stack.items[k];
-                                    if (entry.pattern_idx == cap.pattern_idx) {
-                                        if (entry.value) |val| {
-                                            return val;
-                                        }
-                                    }
-                                }
-                                // Found the def! Evaluate it to get the captured value
-                                const new_entry = DefInProgress{
-                                    .pattern_idx = def.pattern,
-                                    .expr_idx = def.expr,
-                                    .value = null,
-                                };
-                                self_interp.def_stack.append(new_entry) catch return null;
-                                defer _ = self_interp.def_stack.pop();
-                                return self_interp.evalMinimal(def.expr, ops) catch null;
-                            }
-                        }
-                        return null;
-                    }
-                }.go;
-
-                // First, resolve all capture values and collect their actual layouts.
-                // This is critical because type variables may default to Dec, but the actual
-                // captured values (e.g., strings) have their concrete layouts from evaluation.
-                var capture_values = try self.allocator.alloc(StackValue, caps.len);
-                defer self.allocator.free(capture_values);
-
-                for (caps, 0..) |cap_idx, i| {
-                    const cap = self.env.store.getCapture(cap_idx);
-                    // Translate ident from current env to runtime layout store's env
-                    // This is necessary for cross-module closures (e.g., builtin functions)
-                    const name_text = self.env.getIdent(cap.name);
-                    field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
-
-                    // Resolve the capture value first to get its actual layout
-                    const cap_val = resolveCapture(self, cap, roc_ops) orelse {
-                        self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
-                        return error.Crash;
-                    };
-                    capture_values[i] = cap_val;
-                    // Use the actual evaluated value's layout, not the type-variable-derived layout
-                    field_layouts[i] = cap_val.layout;
-                }
-
-                const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
-                const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
-                const closure_layout = Layout.closure(captures_layout_idx);
-                const value = try self.pushRaw(closure_layout, 0);
-                self.registerDefValue(expr_idx, value);
-
-                // Initialize header
-                if (value.ptr) |ptr| {
-                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                    header.* = .{
-                        .body_idx = lam.body,
-                        .params = lam.args,
-                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
-                        .captures_layout_idx = captures_layout_idx,
-                        // Store e_closure expr_idx (not inner e_lambda) so has_real_captures check works in e_lookup_local
-                        .lambda_expr_idx = expr_idx,
-                        .source_env = self.env,
-                    };
-                    // Copy captures into record area following header (aligned)
-                    const header_size = @sizeOf(layout.Closure);
-                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
-                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
-                    const base: [*]u8 = @ptrCast(@alignCast(ptr));
-                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                    var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                    for (caps, 0..) |_, cap_i| {
-                        const cap_val = capture_values[cap_i];
-                        const translated_name = field_names[cap_i];
-                        const idx_opt = accessor.findFieldIndex(translated_name) orelse {
-                            self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
-                            return error.Crash;
-                        };
-                        try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
-                    }
-                }
-                return value;
-            },
-            .e_call => |call| {
-                const all = self.env.store.sliceExpr(call.args);
-                const func_idx = call.func;
-                const arg_indices = all[0..];
-
-                // Check if the function is an anno-only lookup that will crash
-                // If so, skip type translation and crash immediately
-                const func_expr_for_anno_check = self.env.store.getExpr(func_idx);
-                if (func_expr_for_anno_check == .e_lookup_local) {
-                    const lookup = func_expr_for_anno_check.e_lookup_local;
-                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                    for (all_defs) |def_idx| {
-                        const def = self.env.store.getDef(def_idx);
-                        if (def.pattern == lookup.pattern_idx) {
-                            const def_expr = self.env.store.getExpr(def.expr);
-                            if (def_expr == .e_anno_only) {
-                                // Calling an anno-only function - crash immediately
-                                const msg = "This function has only a type annotation - no implementation was provided";
-                                const crashed = RocCrashed{
-                                    .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
-                                    .len = msg.len,
-                                };
-                                roc_ops.roc_crashed(&crashed, roc_ops.env);
-                                return error.Crash;
-                            }
-                        }
-                    }
-                }
-
-                // Runtime unification for call: constrain return type from arg types
-                const func_expr = self.env.store.getExpr(func_idx);
-                const func_ct_var = can.ModuleEnv.varFrom(func_idx);
-                const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
-
-                // Only instantiate if we have an actual function type (not a flex variable)
-                // This is needed for cross-module calls with rigid type parameters
-                const func_rt_orig_resolved = self.runtime_types.resolveVar(func_rt_var_orig);
-                const should_instantiate = func_rt_orig_resolved.desc.content == .structure and
-                    (func_rt_orig_resolved.desc.content.structure == .fn_pure or
-                        func_rt_orig_resolved.desc.content.structure == .fn_effectful or
-                        func_rt_orig_resolved.desc.content.structure == .fn_unbound);
-
-                var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
-                defer subst_map.deinit();
-                const func_rt_var = if (should_instantiate)
-                    try self.instantiateType(func_rt_var_orig, &subst_map)
-                else
-                    func_rt_var_orig;
-
-                // Save current rigid substitution context and merge in the new substitutions (only if we instantiated)
-                // This will be used during function body evaluation
-                const saved_subst = if (should_instantiate) try self.rigid_subst.clone() else null;
-                defer {
-                    if (saved_subst) |saved| {
-                        // Restore the previous substitution context after the call
-                        self.rigid_subst.deinit();
-                        self.rigid_subst = saved;
-                    }
-                }
-
-                if (should_instantiate) {
-                    var subst_iter = subst_map.iterator();
-                    while (subst_iter.next()) |entry| {
-                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
-                    }
-
-                    // Clear the layout cache so layouts are recomputed with substitutions
-                    @memset(self.var_to_layout_slot.items, 0);
-                }
-
-                var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
-                defer self.allocator.free(arg_rt_buf);
-                var i: usize = 0;
-                while (i < arg_indices.len) : (i += 1) {
-                    const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
-                    const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
-
-                    // Apply substitution if this argument is a rigid variable that was instantiated
-                    if (should_instantiate) {
-                        const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
-                        if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
-                                arg_rt_buf[i] = substituted_arg;
-                            } else {
-                                arg_rt_buf[i] = arg_rt_var;
-                            }
-                        } else {
-                            arg_rt_buf[i] = arg_rt_var;
-                        }
-                    } else {
-                        arg_rt_buf[i] = arg_rt_var;
-                    }
-                }
-
-                // Check if this is an error expression that shouldn't be called
-                // These should return TypeMismatch immediately
-                if (func_expr == .e_runtime_error or func_expr == .e_anno_only or func_expr == .e_crash) {
-                    return error.TypeMismatch;
-                }
-
-                // Prepare polymorphic call entry
-                // For flex types this may return null if the function type isn't resolved yet
-                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf) catch |err| blk: {
-                    // If we got TypeMismatch from prepareCallWithFuncVar, allow null
-                    // The function value will be evaluated and closures will be handled
-                    if (err == error.TypeMismatch) {
-                        break :blk null;
-                    }
-                    break :blk null;
-                };
-                // Get call expression's return type for low-level builtins
-                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
-
-                // Unify this call expression's return var with the function's constrained return var
-                // Only do this if we have a polymorphic call entry (concrete function type)
-                if (poly_entry) |entry| {
-                    _ = try unify.unifyWithConf(
-                        self.env,
-                        self.runtime_types,
-                        &self.problems,
-                        &self.snapshots,
-                        &self.unify_scratch,
-                        &self.unify_scratch.occurs_scratch,
-                        unify.ModuleEnvLookup{
-                            .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                            .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                        },
-                        call_ret_rt_var,
-                        entry.return_var,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                    );
-                }
-
-                // Pass the instantiated function type so cross-module generic functions work correctly
-                const func_val = try self.evalExprMinimal(func_idx, roc_ops, func_rt_var);
-
-                var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
-                defer self.allocator.free(arg_values);
-                var j: usize = 0;
-                while (j < arg_indices.len) : (j += 1) {
-                    arg_values[j] = try self.evalExprMinimal(arg_indices[j], roc_ops, if (arg_rt_buf.len == 0) null else arg_rt_buf[j]);
-                }
-                // Support calling closures produced by evaluating expressions (including nested calls)
-                if (func_val.layout.tag == .closure) {
-                    const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
-
-                    // Switch to the closure's source module for correct expression evaluation
-                    const saved_env = self.env;
-                    const saved_bindings_len = self.bindings.items.len;
-                    self.env = @constCast(header.source_env);
-                    defer {
-                        self.env = saved_env;
-                        self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-                    }
-
-                    // Check if this is an annotation-only function (body points to e_anno_only)
-                    const body_expr = self.env.store.getExpr(header.body_idx);
-                    if (body_expr == .e_anno_only) {
-                        self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
-                        return error.Crash;
-                    }
-
-                    // Check if this is a low-level lambda - if so, dispatch to builtin implementation
-                    const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, call_ret_rt_var);
-
-                        // Decref args that aren't consumed by the builtin.
-                        // list_concat consumes its input lists (handles refcounting internally),
-                        // so we must not decref them again here to avoid double-free.
-                        if (low_level.op != .list_concat) {
-                            for (arg_values) |arg| {
-                                arg.decref(&self.runtime_layout_store, roc_ops);
-                            }
-                        }
-
-                        return result;
-                    }
-
-                    // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
-                    if (lambda_expr == .e_hosted_lambda) {
-                        const hosted = lambda_expr.e_hosted_lambda;
-                        // Get the return type from the hosted function's type annotation
-                        // The function type should be stored in the lambda expression's type variable
-                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
-                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
-
-                        // Extract the return type from the function type
-                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| blk: {
-                            // Function type has a return type
-                            break :blk func.ret;
-                        } else call_ret_rt_var;
-
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
-
-                        // Decref all args
-                        for (arg_values) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
-                        }
-
-                        return result;
-                    }
-
-                    const params = self.env.store.slicePatterns(header.params);
-                    if (params.len != arg_indices.len) return error.TypeMismatch;
-                    // Provide closure context for capture lookup during body eval
-                    try self.active_closures.append(func_val);
-                    defer _ = self.active_closures.pop();
-                    var bind_count: usize = 0;
-                    while (bind_count < params.len) : (bind_count += 1) {
-                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0), .source_env = self.env });
-                    }
-                    defer {
-                        var k = params.len;
-                        while (k > 0) {
-                            k -= 1;
-                            if (self.bindings.pop()) |binding| {
-                                binding.value.decref(&self.runtime_layout_store, roc_ops);
-                            }
-                        }
-                    }
-                    // Evaluate body, handling early returns at function boundary
-                    return self.evalExprMinimal(header.body_idx, roc_ops, call_ret_rt_var) catch |err| {
-                        if (err == error.EarlyReturn) {
-                            // Consume early return value as function result
-                            const return_val = self.early_return_value orelse return error.Crash;
-                            self.early_return_value = null;
-                            return return_val;
-                        }
-                        return err;
-                    };
-                }
-
-                // Fallback: direct lambda expression (legacy minimal path)
-                // (func_expr was already declared above for external lookup handling)
-                if (func_expr == .e_lambda) {
-                    const lambda = func_expr.e_lambda;
-                    const params = self.env.store.slicePatterns(lambda.args);
-                    if (params.len != arg_indices.len) return error.TypeMismatch;
-                    var bind_count: usize = 0;
-                    while (bind_count < params.len) : (bind_count += 1) {
-                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0), .source_env = self.env });
-                    }
-                    defer {
-                        var k = params.len;
-                        while (k > 0) {
-                            k -= 1;
-                            if (self.bindings.pop()) |binding| {
-                                binding.value.decref(&self.runtime_layout_store, roc_ops);
-                            }
-                        }
-                    }
-                    // Evaluate body, handling early returns at function boundary
-                    return self.evalExprMinimal(lambda.body, roc_ops, call_ret_rt_var) catch |err| {
-                        if (err == error.EarlyReturn) {
-                            // Consume early return value as function result
-                            const return_val = self.early_return_value orelse return error.Crash;
-                            self.early_return_value = null;
-                            return return_val;
-                        }
-                        return err;
-                    };
-                }
-
-                self.triggerCrash("e_call: func is neither closure nor lambda", false, roc_ops);
-                return error.Crash;
-            },
-            .e_dot_access => |dot_access| {
-                const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
-                const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
-                var receiver_value = try self.evalExprMinimal(dot_access.receiver, roc_ops, receiver_rt_var);
-                defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
-
-                const method_args = dot_access.args;
-
-                // Field access vs method call
-                if (method_args == null) {
-                    // This is field access on a record, not a method call
-                    if (receiver_value.layout.tag != .record) return error.TypeMismatch;
-                    // Records can have zero-sized fields
-                    const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
-                    if (rec_data.fields.count == 0) return error.TypeMismatch; // No fields to access
-                    var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(dot_access.field_name) orelse return error.TypeMismatch;
-                    const field_value = try accessor.getFieldByIndex(field_idx);
-                    return try self.pushCopy(field_value, roc_ops);
-                }
-
-                // This is a method call - resolve receiver type for dispatch
-                const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
-
-                const arg_count = if (method_args) |span| span.span.len else 0;
-                var arg_values: []StackValue = &.{};
-                if (arg_count > 0) {
-                    arg_values = try self.allocator.alloc(StackValue, arg_count);
-                }
-                defer if (arg_values.len > 0) self.allocator.free(arg_values);
-
-                if (method_args) |span| {
-                    // Use sliceExpr to properly get argument indices instead of computing them directly
-                    const arg_indices = self.env.store.sliceExpr(span);
-                    var i: usize = 0;
-                    while (i < arg_values.len) : (i += 1) {
-                        const arg_expr_idx = arg_indices[i];
-                        const arg_ct_var = can.ModuleEnv.varFrom(arg_expr_idx);
-                        const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
-                        arg_values[i] = try self.evalExprMinimal(arg_expr_idx, roc_ops, arg_rt_var);
-                    }
-                }
-
-                const base_content = resolved_receiver.desc.content;
-                if (base_content == .structure) {
-                    switch (base_content.structure) {
-                        .nominal_type => |nominal| {
-                            // Check if this is Box using ident comparison
-                            if (nominal.ident.ident_idx == self.env.idents.box) {
-                                if (dot_access.field_name == self.env.idents.box_method) {
-                                    if (arg_values.len != 1) return error.TypeMismatch;
-                                    const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
-                                    const result_layout = try self.getRuntimeLayout(result_rt_var);
-                                    return try self.makeBoxValueFromLayout(result_layout, arg_values[0], roc_ops);
-                                } else if (dot_access.field_name == self.env.idents.unbox_method) {
-                                    if (arg_values.len != 1) return error.TypeMismatch;
-                                    const box_value = arg_values[0];
-                                    const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
-                                    const result_layout = try self.getRuntimeLayout(result_rt_var);
-
-                                    if (box_value.layout.tag == .box_of_zst) {
-                                        var out = try self.pushRaw(result_layout, 0);
-                                        out.is_initialized = true;
-                                        return out;
-                                    }
-
-                                    if (box_value.layout.tag != .box) return error.TypeMismatch;
-
-                                    const elem_layout = self.runtime_layout_store.getLayout(box_value.layout.data.box);
-                                    const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                                    const data_ptr = box_value.boxDataPointer() orelse return error.NullStackPointer;
-                                    var payload_ptr_any: ?*anyopaque = null;
-                                    if (elem_size > 0) {
-                                        payload_ptr_any = @as(*anyopaque, @ptrFromInt(@intFromPtr(data_ptr)));
-                                    }
-
-                                    const payload_value = StackValue{
-                                        .layout = elem_layout,
-                                        .ptr = payload_ptr_any,
-                                        .is_initialized = true,
-                                    };
-
-                                    if (!std.meta.eql(elem_layout, result_layout)) {
-                                        var out = try self.pushRaw(result_layout, 0);
-                                        if (self.runtime_layout_store.layoutSize(result_layout) > 0 and out.ptr != null and payload_ptr_any != null) {
-                                            try payload_value.copyToPtr(&self.runtime_layout_store, out.ptr.?, roc_ops);
-                                        }
-                                        out.is_initialized = true;
-                                        return out;
-                                    }
-
-                                    return try self.pushCopy(payload_value, roc_ops);
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                }
-
-                // Try static dispatch for nominal types with method constraints
-                const method_ident = dot_access.field_name;
-
-                // Find the nominal type's origin module from the receiver type
-                var receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-
-                // If the type is still a flex/rigid var, default to Dec
-                // (Unsuffixed numeric literals default to Dec in Roc)
-                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
-                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    receiver_resolved = self.runtime_types.resolveVar(dec_var);
-                }
-
-                const nominal_info = blk: {
-                    switch (receiver_resolved.desc.content) {
-                        .structure => |s| switch (s) {
-                            .nominal_type => |nom| break :blk .{
-                                .origin = nom.origin_module,
-                                .ident = nom.ident.ident_idx,
-                            },
-                            else => return error.InvalidMethodReceiver,
-                        },
-                        else => return error.InvalidMethodReceiver,
-                    }
-                };
-
-                // Resolve and evaluate the method function
-                // method_ident comes from the CIR (self.env), not root_env
-                const method_func = self.resolveMethodFunction(
-                    nominal_info.origin,
-                    nominal_info.ident,
-                    method_ident,
-                    roc_ops,
-                ) catch |err| {
-                    if (err == error.MethodLookupFailed) {
-                        // Get type and method names for a helpful crash message
-                        // nominal_info.ident is from runtime_layout_store.env (translated during translateTypeVar)
-                        const layout_env = self.runtime_layout_store.env;
-                        const type_name = import_mapping_mod.getDisplayName(
-                            self.import_mapping,
-                            layout_env.common.getIdentStore(),
-                            nominal_info.ident,
-                        );
-                        // method_ident is from self.env (current CIR module)
-                        const method_name = self.env.getIdent(dot_access.field_name);
-                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
-                            self.triggerCrash("Method not found", false, roc_ops);
-                            return error.Crash;
-                        };
-                        self.triggerCrash(crash_msg, true, roc_ops);
-                        return error.Crash;
-                    }
-                    return err;
-                };
-                defer method_func.decref(&self.runtime_layout_store, roc_ops);
-
-                // Prepare arguments: receiver + explicit args
-                const total_args = 1 + arg_values.len;
-                var all_args = try self.allocator.alloc(StackValue, total_args);
-                defer self.allocator.free(all_args);
-
-                // First argument is the receiver
-                all_args[0] = receiver_value;
-
-                // Remaining arguments
-                for (arg_values, 0..) |arg, i| {
-                    all_args[i + 1] = arg;
-                }
-
-                // Call the method closure
-                if (method_func.layout.tag != .closure) {
-                    // Decref all args before returning error
-                    for (all_args) |arg| {
-                        arg.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                    return error.TypeMismatch;
-                }
-
-                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-                // Switch to the closure's source module for correct expression evaluation
-                const saved_env = self.env;
-                const saved_bindings_len = self.bindings.items.len;
-                self.env = @constCast(closure_header.source_env);
-                defer {
-                    self.env = saved_env;
-                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-                }
-
-                const params = self.env.store.slicePatterns(closure_header.params);
-                if (params.len != all_args.len) {
-                    // Decref all args before returning error
-                    for (all_args) |arg| {
-                        arg.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                    return error.TypeMismatch;
-                }
-
-                // Provide closure context for capture lookup during body eval
-                try self.active_closures.append(method_func);
-                defer _ = self.active_closures.pop();
-
-                // Check if this is a low-level lambda - if so, dispatch to builtin implementation
-                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
-
-                    // Get return type for low-level builtin
-                    const method_call_ret_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
-
-                    // Dispatch to actual low-level builtin implementation
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, method_call_ret_rt_var);
-
-                    // Decref args that aren't consumed by the builtin.
-                    // list_concat consumes its input lists (handles refcounting internally).
-                    if (low_level.op != .list_concat) {
-                        for (all_args) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                    }
-
-                    return result;
-                }
-
-                var bind_count: usize = 0;
-                while (bind_count < params.len) : (bind_count += 1) {
-                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count], .expr_idx = @enumFromInt(0), .source_env = self.env });
-                }
-                defer {
-                    var k = params.len;
-                    while (k > 0) {
-                        k -= 1;
-                        if (self.bindings.pop()) |binding| {
-                            binding.value.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                    }
-                }
-
-                // Evaluate body, handling early returns at function boundary
-                return self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
-                    if (err == error.EarlyReturn) {
-                        const return_val = self.early_return_value orelse return error.Crash;
-                        self.early_return_value = null;
-                        return return_val;
-                    }
-                    return err;
-                };
-            },
-            .e_lookup_local => |lookup| {
-                // Search bindings in reverse
-                var i: usize = self.bindings.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    const b = self.bindings.items[i];
-                    // Check both pattern_idx AND source module to avoid cross-module collisions.
-                    // Pattern indices are module-local, so the same pattern_idx can exist in
-                    // multiple modules. We must match the binding from the correct module.
-                    // Note: Compare by module_name_idx (interned identifier), not pointer, because
-                    // the same module can have multiple ModuleEnv instances (e.g., when closures
-                    // reference their source env).
-                    const same_module = (b.source_env == self.env) or
-                        (b.source_env.module_name_idx == self.env.module_name_idx);
-                    if (b.pattern_idx == lookup.pattern_idx and same_module) {
-                        // Check if this binding came from an e_anno_only expression
-                        // Skip check for expr_idx == 0 (sentinel for non-def bindings like parameters)
-                        const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
-                        if (expr_idx_int != 0) {
-                            const binding_expr = self.env.store.getExpr(b.expr_idx);
-                            if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
-                                // This is a non-function annotation-only value being looked up
-                                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
-                                return error.Crash;
-                            }
-                            // e_low_level_lambda is always a closure, so no special check needed
-                        }
-                        const copy_result = try self.pushCopy(b.value, roc_ops);
-                        return copy_result;
-                    }
-                }
-                // If not found, try active closure captures by variable name
-                // IMPORTANT: Only check captures if the closure header indicates it actually has captures
-                // The captures layout from the type system might not match what's actually captured
-                // Search ALL active closures in reverse order (innermost to outermost) for nested lambdas
-                if (self.active_closures.items.len > 0) {
-                    const pat2 = self.env.store.getPattern(lookup.pattern_idx);
-                    if (pat2 == .assign) {
-                        const var_ident = pat2.assign.ident;
-                        // Search from innermost to outermost closure
-                        var closure_idx: usize = self.active_closures.items.len;
-                        while (closure_idx > 0) {
-                            closure_idx -= 1;
-                            const cls_val = self.active_closures.items[closure_idx];
-                            if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                                const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
-                                // Check if this closure was created with actual captures (e_closure)
-                                // vs. a plain lambda (e_lambda) or low-level lambda (e_low_level_lambda)
-                                // Only e_closure creates real capture values; others have uninitialized captures area
-                                const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
-                                const has_real_captures = (lambda_expr == .e_closure);
-                                if (has_real_captures) {
-                                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
-                                    const header_sz = @sizeOf(layout.Closure);
-                                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
-                                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
-                                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
-                                    var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                                    if (accessor.findFieldIndex(var_ident)) |fidx| {
-                                        const field_val = try accessor.getFieldByIndex(fidx);
-                                        return try self.pushCopy(field_val, roc_ops);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
-                const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                for (all_defs) |def_idx| {
-                    const def = self.env.store.getDef(def_idx);
-                    if (def.pattern == lookup.pattern_idx) {
-                        // Evaluate the definition on demand and cache the result in bindings
-                        const result = try self.evalExprMinimal(def.expr, roc_ops, null);
-                        try self.bindings.append(.{
-                            .pattern_idx = def.pattern,
-                            .value = result,
-                            .expr_idx = def.expr,
-                            .source_env = self.env,
-                        });
-                        return result;
-                    }
-                }
-
-                self.triggerCrash("e_lookup_local: definition not found in current scope", false, roc_ops);
-                return error.Crash;
-            },
-            .e_lookup_external => |lookup| {
-                // Cross-module reference - look up in imported module
-                const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    self.triggerCrash("e_lookup_external: import_envs missing entry for module", false, roc_ops);
-                    return error.Crash;
-                };
-
-                // The target_node_idx is a Def.Idx in the other module
-                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                const target_def = other_env.store.getDef(target_def_idx);
-
-                // Save both env and bindings state
-                const saved_env = self.env;
-                const saved_bindings_len = self.bindings.items.len;
-                self.env = @constCast(other_env);
-                defer {
-                    self.env = saved_env;
-                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-                }
-
-                // Evaluate the definition's expression in the other module's context
-                // If this is being called as a function, pass through the instantiated type
-                // from the call site (via expected_rt_var) to avoid re-translating generic types
-                const result = try self.evalExprMinimal(target_def.expr, roc_ops, expected_rt_var);
-
-                return result;
-            },
-            .e_runtime_error => |rt_err| {
-                _ = rt_err;
-                self.triggerCrash("runtime error", false, roc_ops);
-                return error.Crash;
-            },
-            .e_lookup_required => {
-                // Required lookups reference values from the app that provides values to the
-                // platform's `requires` clause. These are not available during compile-time
-                // evaluation - they will be linked at runtime. Return TypeMismatch to signal
-                // that this expression cannot be evaluated at compile time.
-                return error.TypeMismatch;
-            },
-            // no if handling in minimal evaluator
-            // no second e_binop case; handled above
-            else => {
-                self.triggerCrash("evalExprMinimal: unhandled expression type", false, roc_ops);
-                return error.Crash;
-            },
-        }
-    }
-
-    fn pushStr(self: *Interpreter, content: []const u8) !StackValue {
-        _ = content; // size computed below but content copied via RocStr
+    fn pushStr(self: *Interpreter) !StackValue {
         const layout_val = Layout.str();
         const size: u32 = self.runtime_layout_store.layoutSize(layout_val);
         if (size == 0) {
@@ -2812,6 +570,23 @@ pub const Interpreter = struct {
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
     }
 
+    /// Push raw bytes with a specific size and alignment (for building records/tuples)
+    pub fn pushRawBytes(self: *Interpreter, size: usize, alignment: usize) !StackValue {
+        if (size == 0) {
+            return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = null, .is_initialized = true };
+        }
+        const align_enum: std.mem.Alignment = switch (alignment) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            8 => .@"8",
+            16 => .@"16",
+            else => .@"1",
+        };
+        const ptr = try self.stack_memory.alloca(@intCast(size), align_enum);
+        return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = ptr, .is_initialized = true };
+    }
+
     pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
@@ -2836,7 +611,7 @@ pub const Interpreter = struct {
         hosted_fn_index: u32,
         args: []StackValue,
         roc_ops: *RocOps,
-        _: types.Var, // return_rt_var - currently unused, type inferred from args.len
+        return_rt_var: types.Var,
     ) !StackValue {
         // Validate index is within bounds
         if (hosted_fn_index >= roc_ops.hosted_fns.count) {
@@ -2847,73 +622,54 @@ pub const Interpreter = struct {
         // Get the hosted function pointer from RocOps
         const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
 
-        // Allocate space for the return value
-        // Hosted lambda types aren't properly propagated from annotations, so we infer the
-        // return type based on the argument type:
-        // - If no args OR single ZST arg (like () in Stdin.line!), return type is Str
-        // - If arg is non-zero-sized (like Str in Stdout.line!), return type is {}
-        const has_zst_or_no_args = args.len == 0 or (args.len == 1 and self.runtime_layout_store.isZeroSized(args[0].layout));
-        const return_layout = if (has_zst_or_no_args) blk: {
-            // Functions taking unit () or no args return Str (e.g., Stdin.line!)
-            break :blk layout.Layout.str();
-        } else blk: {
-            // Functions taking Str return {} (e.g., Stdout.line!, Stderr.line!)
-            const empty_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
-            break :blk self.runtime_layout_store.getLayout(empty_idx);
-        };
+        // Allocate space for the return value using the actual return type
+        const return_layout = try self.getRuntimeLayout(return_rt_var);
         const result_value = try self.pushRaw(return_layout, 0);
 
-        // Allocate stack space for marshalled arguments
-        // The host now uses the same RocStr as builtins, so no conversion needed
-        const ArgsStruct = extern struct { str: RocStr };
-        var args_struct: ArgsStruct = undefined;
+        // Get return pointer (for ZST returns, use a dummy stack address)
+        const ret_ptr = if (result_value.ptr) |p| p else @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
 
-        // Marshal arguments into a contiguous struct matching the RocCall ABI
-        // For now, we support zero-argument and single-argument functions
+        // Calculate total size needed for packed arguments
+        var total_args_size: usize = 0;
+        var max_alignment: std.mem.Alignment = .@"1";
+        for (args) |arg| {
+            const arg_size: usize = self.runtime_layout_store.layoutSize(arg.layout);
+            const arg_align = arg.layout.alignment(self.runtime_layout_store.targetUsize());
+            max_alignment = max_alignment.max(arg_align);
+            // Align to the argument's alignment
+            total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+            total_args_size += arg_size;
+        }
+
         if (args.len == 0) {
-            // Zero argument case - pass dummy pointer for args
-            const ret_ptr = if (result_value.ptr) |p| p else blk: {
-                // Zero-sized return - pass stack address
-                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
-            };
-
-            // For zero-argument functions, we still need to pass a valid args pointer
-            // Use the address of args_struct even though it won't be read
-            const arg_ptr = @as(*anyopaque, @ptrCast(&args_struct));
-
-            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            hosted_fn(roc_ops, ret_ptr, arg_ptr);
-        } else if (args.len == 1) {
-            // Single argument case - we need to marshal it properly
-            // For strings, we need to pass a RocStr struct wrapped in Args
-            const arg_ptr = blk: {
-                // For strings, we need to pass a RocStr struct
-                // Try to determine if this is a string by checking if it contains a RocStr
-                // For now, we assume it's a string if it has a pointer (TODO: better type checking)
-                if (args[0].ptr) |str_ptr| {
-                    const roc_str: *const RocStr = @ptrCast(@alignCast(str_ptr));
-                    // Host and builtin now use the same RocStr, so just copy it
-                    args_struct.str = roc_str.*;
-                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
-                } else {
-                    // Empty or zero-sized argument - create empty small string
-                    args_struct.str = RocStr.empty();
-                    break :blk @as(*anyopaque, @ptrCast(&args_struct));
-                }
-            };
-
-            const ret_ptr = if (result_value.ptr) |p| p else blk: {
-                // Zero-sized return - pass stack address
-                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
-            };
-
-            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
-            hosted_fn(roc_ops, ret_ptr, arg_ptr);
+            // Zero argument case - pass dummy pointer
+            var dummy: u8 = 0;
+            hosted_fn(roc_ops, ret_ptr, @ptrCast(&dummy));
         } else {
-            // Multi-argument case - pack arguments into a struct
-            // TODO: implement multi-argument marshalling
-            self.triggerCrash("Multi-argument hosted functions not yet implemented in interpreter", false, roc_ops);
-            return error.Crash;
+            // Allocate buffer for packed arguments
+            const args_buffer = try self.stack_memory.alloca(@intCast(total_args_size), max_alignment);
+
+            // Pack each argument into the buffer
+            var offset: usize = 0;
+            for (args) |arg| {
+                const arg_size: usize = self.runtime_layout_store.layoutSize(arg.layout);
+                const arg_align = arg.layout.alignment(self.runtime_layout_store.targetUsize());
+
+                // Align offset
+                offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+
+                // Copy argument data
+                if (arg_size > 0) {
+                    if (arg.ptr) |src_ptr| {
+                        const dest_ptr = @as([*]u8, @ptrCast(args_buffer)) + offset;
+                        @memcpy(dest_ptr[0..arg_size], @as([*]const u8, @ptrCast(src_ptr))[0..arg_size]);
+                    }
+                }
+                offset += arg_size;
+            }
+
+            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
+            hosted_fn(roc_ops, ret_ptr, args_buffer);
         }
 
         return result_value;
@@ -3617,12 +1373,6 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .set_is_empty => {
-                // TODO: implement Set.is_empty
-                self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
-                return error.Crash;
-            },
-
             // Bool operations
             .bool_is_eq => {
                 // Bool.is_eq : Bool, Bool -> Bool
@@ -4661,7 +2411,7 @@ pub const Interpreter = struct {
                 const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
                 const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
 
-                const value = try self.pushStr("");
+                const value = try self.pushStr();
                 const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
                 roc_str_ptr.* = result_str;
                 return value;
@@ -4680,278 +2430,279 @@ pub const Interpreter = struct {
             .f64_to_str => return self.floatToStr(f64, args, roc_ops),
 
             // U8 conversion operations
-            .u8_to_i8_wrap => return self.intConvertWrap(u8, i8, args, roc_ops),
-            .u8_to_i8_try => return self.intConvertTry(u8, i8, args, roc_ops, return_rt_var),
-            .u8_to_i16 => return self.intConvert(u8, i16, args, roc_ops),
-            .u8_to_i32 => return self.intConvert(u8, i32, args, roc_ops),
-            .u8_to_i64 => return self.intConvert(u8, i64, args, roc_ops),
-            .u8_to_i128 => return self.intConvert(u8, i128, args, roc_ops),
-            .u8_to_u16 => return self.intConvert(u8, u16, args, roc_ops),
-            .u8_to_u32 => return self.intConvert(u8, u32, args, roc_ops),
-            .u8_to_u64 => return self.intConvert(u8, u64, args, roc_ops),
-            .u8_to_u128 => return self.intConvert(u8, u128, args, roc_ops),
-            .u8_to_f32 => return self.intToFloat(u8, f32, args, roc_ops),
-            .u8_to_f64 => return self.intToFloat(u8, f64, args, roc_ops),
-            .u8_to_dec => return self.intToDec(u8, args, roc_ops),
+            .u8_to_i8_wrap => return self.intConvertWrap(u8, i8, args),
+            .u8_to_i8_try => return self.intConvertTry(u8, i8, args, return_rt_var),
+            .u8_to_i16 => return self.intConvert(u8, i16, args),
+            .u8_to_i32 => return self.intConvert(u8, i32, args),
+            .u8_to_i64 => return self.intConvert(u8, i64, args),
+            .u8_to_i128 => return self.intConvert(u8, i128, args),
+            .u8_to_u16 => return self.intConvert(u8, u16, args),
+            .u8_to_u32 => return self.intConvert(u8, u32, args),
+            .u8_to_u64 => return self.intConvert(u8, u64, args),
+            .u8_to_u128 => return self.intConvert(u8, u128, args),
+            .u8_to_f32 => return self.intToFloat(u8, f32, args),
+            .u8_to_f64 => return self.intToFloat(u8, f64, args),
+            .u8_to_dec => return self.intToDec(u8, args),
 
             // I8 conversion operations
-            .i8_to_i16 => return self.intConvert(i8, i16, args, roc_ops),
-            .i8_to_i32 => return self.intConvert(i8, i32, args, roc_ops),
-            .i8_to_i64 => return self.intConvert(i8, i64, args, roc_ops),
-            .i8_to_i128 => return self.intConvert(i8, i128, args, roc_ops),
-            .i8_to_u8_wrap => return self.intConvertWrap(i8, u8, args, roc_ops),
-            .i8_to_u8_try => return self.intConvertTry(i8, u8, args, roc_ops, return_rt_var),
-            .i8_to_u16_wrap => return self.intConvertWrap(i8, u16, args, roc_ops),
-            .i8_to_u16_try => return self.intConvertTry(i8, u16, args, roc_ops, return_rt_var),
-            .i8_to_u32_wrap => return self.intConvertWrap(i8, u32, args, roc_ops),
-            .i8_to_u32_try => return self.intConvertTry(i8, u32, args, roc_ops, return_rt_var),
-            .i8_to_u64_wrap => return self.intConvertWrap(i8, u64, args, roc_ops),
-            .i8_to_u64_try => return self.intConvertTry(i8, u64, args, roc_ops, return_rt_var),
-            .i8_to_u128_wrap => return self.intConvertWrap(i8, u128, args, roc_ops),
-            .i8_to_u128_try => return self.intConvertTry(i8, u128, args, roc_ops, return_rt_var),
-            .i8_to_f32 => return self.intToFloat(i8, f32, args, roc_ops),
-            .i8_to_f64 => return self.intToFloat(i8, f64, args, roc_ops),
-            .i8_to_dec => return self.intToDec(i8, args, roc_ops),
+            .i8_to_i16 => return self.intConvert(i8, i16, args),
+            .i8_to_i32 => return self.intConvert(i8, i32, args),
+            .i8_to_i64 => return self.intConvert(i8, i64, args),
+            .i8_to_i128 => return self.intConvert(i8, i128, args),
+            .i8_to_u8_wrap => return self.intConvertWrap(i8, u8, args),
+            .i8_to_u8_try => return self.intConvertTry(i8, u8, args, return_rt_var),
+            .i8_to_u16_wrap => return self.intConvertWrap(i8, u16, args),
+            .i8_to_u16_try => return self.intConvertTry(i8, u16, args, return_rt_var),
+            .i8_to_u32_wrap => return self.intConvertWrap(i8, u32, args),
+            .i8_to_u32_try => return self.intConvertTry(i8, u32, args, return_rt_var),
+            .i8_to_u64_wrap => return self.intConvertWrap(i8, u64, args),
+            .i8_to_u64_try => return self.intConvertTry(i8, u64, args, return_rt_var),
+            .i8_to_u128_wrap => return self.intConvertWrap(i8, u128, args),
+            .i8_to_u128_try => return self.intConvertTry(i8, u128, args, return_rt_var),
+            .i8_to_f32 => return self.intToFloat(i8, f32, args),
+            .i8_to_f64 => return self.intToFloat(i8, f64, args),
+            .i8_to_dec => return self.intToDec(i8, args),
 
             // U16 conversion operations
-            .u16_to_i8_wrap => return self.intConvertWrap(u16, i8, args, roc_ops),
-            .u16_to_i8_try => return self.intConvertTry(u16, i8, args, roc_ops, return_rt_var),
-            .u16_to_i16_wrap => return self.intConvertWrap(u16, i16, args, roc_ops),
-            .u16_to_i16_try => return self.intConvertTry(u16, i16, args, roc_ops, return_rt_var),
-            .u16_to_i32 => return self.intConvert(u16, i32, args, roc_ops),
-            .u16_to_i64 => return self.intConvert(u16, i64, args, roc_ops),
-            .u16_to_i128 => return self.intConvert(u16, i128, args, roc_ops),
-            .u16_to_u8_wrap => return self.intConvertWrap(u16, u8, args, roc_ops),
-            .u16_to_u8_try => return self.intConvertTry(u16, u8, args, roc_ops, return_rt_var),
-            .u16_to_u32 => return self.intConvert(u16, u32, args, roc_ops),
-            .u16_to_u64 => return self.intConvert(u16, u64, args, roc_ops),
-            .u16_to_u128 => return self.intConvert(u16, u128, args, roc_ops),
-            .u16_to_f32 => return self.intToFloat(u16, f32, args, roc_ops),
-            .u16_to_f64 => return self.intToFloat(u16, f64, args, roc_ops),
-            .u16_to_dec => return self.intToDec(u16, args, roc_ops),
+            .u16_to_i8_wrap => return self.intConvertWrap(u16, i8, args),
+            .u16_to_i8_try => return self.intConvertTry(u16, i8, args, return_rt_var),
+            .u16_to_i16_wrap => return self.intConvertWrap(u16, i16, args),
+            .u16_to_i16_try => return self.intConvertTry(u16, i16, args, return_rt_var),
+            .u16_to_i32 => return self.intConvert(u16, i32, args),
+            .u16_to_i64 => return self.intConvert(u16, i64, args),
+            .u16_to_i128 => return self.intConvert(u16, i128, args),
+            .u16_to_u8_wrap => return self.intConvertWrap(u16, u8, args),
+            .u16_to_u8_try => return self.intConvertTry(u16, u8, args, return_rt_var),
+            .u16_to_u32 => return self.intConvert(u16, u32, args),
+            .u16_to_u64 => return self.intConvert(u16, u64, args),
+            .u16_to_u128 => return self.intConvert(u16, u128, args),
+            .u16_to_f32 => return self.intToFloat(u16, f32, args),
+            .u16_to_f64 => return self.intToFloat(u16, f64, args),
+            .u16_to_dec => return self.intToDec(u16, args),
 
             // I16 conversion operations
-            .i16_to_i8_wrap => return self.intConvertWrap(i16, i8, args, roc_ops),
-            .i16_to_i8_try => return self.intConvertTry(i16, i8, args, roc_ops, return_rt_var),
-            .i16_to_i32 => return self.intConvert(i16, i32, args, roc_ops),
-            .i16_to_i64 => return self.intConvert(i16, i64, args, roc_ops),
-            .i16_to_i128 => return self.intConvert(i16, i128, args, roc_ops),
-            .i16_to_u8_wrap => return self.intConvertWrap(i16, u8, args, roc_ops),
-            .i16_to_u8_try => return self.intConvertTry(i16, u8, args, roc_ops, return_rt_var),
-            .i16_to_u16_wrap => return self.intConvertWrap(i16, u16, args, roc_ops),
-            .i16_to_u16_try => return self.intConvertTry(i16, u16, args, roc_ops, return_rt_var),
-            .i16_to_u32_wrap => return self.intConvertWrap(i16, u32, args, roc_ops),
-            .i16_to_u32_try => return self.intConvertTry(i16, u32, args, roc_ops, return_rt_var),
-            .i16_to_u64_wrap => return self.intConvertWrap(i16, u64, args, roc_ops),
-            .i16_to_u64_try => return self.intConvertTry(i16, u64, args, roc_ops, return_rt_var),
-            .i16_to_u128_wrap => return self.intConvertWrap(i16, u128, args, roc_ops),
-            .i16_to_u128_try => return self.intConvertTry(i16, u128, args, roc_ops, return_rt_var),
-            .i16_to_f32 => return self.intToFloat(i16, f32, args, roc_ops),
-            .i16_to_f64 => return self.intToFloat(i16, f64, args, roc_ops),
-            .i16_to_dec => return self.intToDec(i16, args, roc_ops),
+            .i16_to_i8_wrap => return self.intConvertWrap(i16, i8, args),
+            .i16_to_i8_try => return self.intConvertTry(i16, i8, args, return_rt_var),
+            .i16_to_i32 => return self.intConvert(i16, i32, args),
+            .i16_to_i64 => return self.intConvert(i16, i64, args),
+            .i16_to_i128 => return self.intConvert(i16, i128, args),
+            .i16_to_u8_wrap => return self.intConvertWrap(i16, u8, args),
+            .i16_to_u8_try => return self.intConvertTry(i16, u8, args, return_rt_var),
+            .i16_to_u16_wrap => return self.intConvertWrap(i16, u16, args),
+            .i16_to_u16_try => return self.intConvertTry(i16, u16, args, return_rt_var),
+            .i16_to_u32_wrap => return self.intConvertWrap(i16, u32, args),
+            .i16_to_u32_try => return self.intConvertTry(i16, u32, args, return_rt_var),
+            .i16_to_u64_wrap => return self.intConvertWrap(i16, u64, args),
+            .i16_to_u64_try => return self.intConvertTry(i16, u64, args, return_rt_var),
+            .i16_to_u128_wrap => return self.intConvertWrap(i16, u128, args),
+            .i16_to_u128_try => return self.intConvertTry(i16, u128, args, return_rt_var),
+            .i16_to_f32 => return self.intToFloat(i16, f32, args),
+            .i16_to_f64 => return self.intToFloat(i16, f64, args),
+            .i16_to_dec => return self.intToDec(i16, args),
 
             // U32 conversion operations
-            .u32_to_i8_wrap => return self.intConvertWrap(u32, i8, args, roc_ops),
-            .u32_to_i8_try => return self.intConvertTry(u32, i8, args, roc_ops, return_rt_var),
-            .u32_to_i16_wrap => return self.intConvertWrap(u32, i16, args, roc_ops),
-            .u32_to_i16_try => return self.intConvertTry(u32, i16, args, roc_ops, return_rt_var),
-            .u32_to_i32_wrap => return self.intConvertWrap(u32, i32, args, roc_ops),
-            .u32_to_i32_try => return self.intConvertTry(u32, i32, args, roc_ops, return_rt_var),
-            .u32_to_i64 => return self.intConvert(u32, i64, args, roc_ops),
-            .u32_to_i128 => return self.intConvert(u32, i128, args, roc_ops),
-            .u32_to_u8_wrap => return self.intConvertWrap(u32, u8, args, roc_ops),
-            .u32_to_u8_try => return self.intConvertTry(u32, u8, args, roc_ops, return_rt_var),
-            .u32_to_u16_wrap => return self.intConvertWrap(u32, u16, args, roc_ops),
-            .u32_to_u16_try => return self.intConvertTry(u32, u16, args, roc_ops, return_rt_var),
-            .u32_to_u64 => return self.intConvert(u32, u64, args, roc_ops),
-            .u32_to_u128 => return self.intConvert(u32, u128, args, roc_ops),
-            .u32_to_f32 => return self.intToFloat(u32, f32, args, roc_ops),
-            .u32_to_f64 => return self.intToFloat(u32, f64, args, roc_ops),
-            .u32_to_dec => return self.intToDec(u32, args, roc_ops),
+            .u32_to_i8_wrap => return self.intConvertWrap(u32, i8, args),
+            .u32_to_i8_try => return self.intConvertTry(u32, i8, args, return_rt_var),
+            .u32_to_i16_wrap => return self.intConvertWrap(u32, i16, args),
+            .u32_to_i16_try => return self.intConvertTry(u32, i16, args, return_rt_var),
+            .u32_to_i32_wrap => return self.intConvertWrap(u32, i32, args),
+            .u32_to_i32_try => return self.intConvertTry(u32, i32, args, return_rt_var),
+            .u32_to_i64 => return self.intConvert(u32, i64, args),
+            .u32_to_i128 => return self.intConvert(u32, i128, args),
+            .u32_to_u8_wrap => return self.intConvertWrap(u32, u8, args),
+            .u32_to_u8_try => return self.intConvertTry(u32, u8, args, return_rt_var),
+            .u32_to_u16_wrap => return self.intConvertWrap(u32, u16, args),
+            .u32_to_u16_try => return self.intConvertTry(u32, u16, args, return_rt_var),
+            .u32_to_u64 => return self.intConvert(u32, u64, args),
+            .u32_to_u128 => return self.intConvert(u32, u128, args),
+            .u32_to_f32 => return self.intToFloat(u32, f32, args),
+            .u32_to_f64 => return self.intToFloat(u32, f64, args),
+            .u32_to_dec => return self.intToDec(u32, args),
 
             // I32 conversion operations
-            .i32_to_i8_wrap => return self.intConvertWrap(i32, i8, args, roc_ops),
-            .i32_to_i8_try => return self.intConvertTry(i32, i8, args, roc_ops, return_rt_var),
-            .i32_to_i16_wrap => return self.intConvertWrap(i32, i16, args, roc_ops),
-            .i32_to_i16_try => return self.intConvertTry(i32, i16, args, roc_ops, return_rt_var),
-            .i32_to_i64 => return self.intConvert(i32, i64, args, roc_ops),
-            .i32_to_i128 => return self.intConvert(i32, i128, args, roc_ops),
-            .i32_to_u8_wrap => return self.intConvertWrap(i32, u8, args, roc_ops),
-            .i32_to_u8_try => return self.intConvertTry(i32, u8, args, roc_ops, return_rt_var),
-            .i32_to_u16_wrap => return self.intConvertWrap(i32, u16, args, roc_ops),
-            .i32_to_u16_try => return self.intConvertTry(i32, u16, args, roc_ops, return_rt_var),
-            .i32_to_u32_wrap => return self.intConvertWrap(i32, u32, args, roc_ops),
-            .i32_to_u32_try => return self.intConvertTry(i32, u32, args, roc_ops, return_rt_var),
-            .i32_to_u64_wrap => return self.intConvertWrap(i32, u64, args, roc_ops),
-            .i32_to_u64_try => return self.intConvertTry(i32, u64, args, roc_ops, return_rt_var),
-            .i32_to_u128_wrap => return self.intConvertWrap(i32, u128, args, roc_ops),
-            .i32_to_u128_try => return self.intConvertTry(i32, u128, args, roc_ops, return_rt_var),
-            .i32_to_f32 => return self.intToFloat(i32, f32, args, roc_ops),
-            .i32_to_f64 => return self.intToFloat(i32, f64, args, roc_ops),
-            .i32_to_dec => return self.intToDec(i32, args, roc_ops),
+            .i32_to_i8_wrap => return self.intConvertWrap(i32, i8, args),
+            .i32_to_i8_try => return self.intConvertTry(i32, i8, args, return_rt_var),
+            .i32_to_i16_wrap => return self.intConvertWrap(i32, i16, args),
+            .i32_to_i16_try => return self.intConvertTry(i32, i16, args, return_rt_var),
+            .i32_to_i64 => return self.intConvert(i32, i64, args),
+            .i32_to_i128 => return self.intConvert(i32, i128, args),
+            .i32_to_u8_wrap => return self.intConvertWrap(i32, u8, args),
+            .i32_to_u8_try => return self.intConvertTry(i32, u8, args, return_rt_var),
+            .i32_to_u16_wrap => return self.intConvertWrap(i32, u16, args),
+            .i32_to_u16_try => return self.intConvertTry(i32, u16, args, return_rt_var),
+            .i32_to_u32_wrap => return self.intConvertWrap(i32, u32, args),
+            .i32_to_u32_try => return self.intConvertTry(i32, u32, args, return_rt_var),
+            .i32_to_u64_wrap => return self.intConvertWrap(i32, u64, args),
+            .i32_to_u64_try => return self.intConvertTry(i32, u64, args, return_rt_var),
+            .i32_to_u128_wrap => return self.intConvertWrap(i32, u128, args),
+            .i32_to_u128_try => return self.intConvertTry(i32, u128, args, return_rt_var),
+            .i32_to_f32 => return self.intToFloat(i32, f32, args),
+            .i32_to_f64 => return self.intToFloat(i32, f64, args),
+            .i32_to_dec => return self.intToDec(i32, args),
 
             // U64 conversion operations
-            .u64_to_i8_wrap => return self.intConvertWrap(u64, i8, args, roc_ops),
-            .u64_to_i8_try => return self.intConvertTry(u64, i8, args, roc_ops, return_rt_var),
-            .u64_to_i16_wrap => return self.intConvertWrap(u64, i16, args, roc_ops),
-            .u64_to_i16_try => return self.intConvertTry(u64, i16, args, roc_ops, return_rt_var),
-            .u64_to_i32_wrap => return self.intConvertWrap(u64, i32, args, roc_ops),
-            .u64_to_i32_try => return self.intConvertTry(u64, i32, args, roc_ops, return_rt_var),
-            .u64_to_i64_wrap => return self.intConvertWrap(u64, i64, args, roc_ops),
-            .u64_to_i64_try => return self.intConvertTry(u64, i64, args, roc_ops, return_rt_var),
-            .u64_to_i128 => return self.intConvert(u64, i128, args, roc_ops),
-            .u64_to_u8_wrap => return self.intConvertWrap(u64, u8, args, roc_ops),
-            .u64_to_u8_try => return self.intConvertTry(u64, u8, args, roc_ops, return_rt_var),
-            .u64_to_u16_wrap => return self.intConvertWrap(u64, u16, args, roc_ops),
-            .u64_to_u16_try => return self.intConvertTry(u64, u16, args, roc_ops, return_rt_var),
-            .u64_to_u32_wrap => return self.intConvertWrap(u64, u32, args, roc_ops),
-            .u64_to_u32_try => return self.intConvertTry(u64, u32, args, roc_ops, return_rt_var),
-            .u64_to_u128 => return self.intConvert(u64, u128, args, roc_ops),
-            .u64_to_f32 => return self.intToFloat(u64, f32, args, roc_ops),
-            .u64_to_f64 => return self.intToFloat(u64, f64, args, roc_ops),
-            .u64_to_dec => return self.intToDec(u64, args, roc_ops),
+            .u64_to_i8_wrap => return self.intConvertWrap(u64, i8, args),
+            .u64_to_i8_try => return self.intConvertTry(u64, i8, args, return_rt_var),
+            .u64_to_i16_wrap => return self.intConvertWrap(u64, i16, args),
+            .u64_to_i16_try => return self.intConvertTry(u64, i16, args, return_rt_var),
+            .u64_to_i32_wrap => return self.intConvertWrap(u64, i32, args),
+            .u64_to_i32_try => return self.intConvertTry(u64, i32, args, return_rt_var),
+            .u64_to_i64_wrap => return self.intConvertWrap(u64, i64, args),
+            .u64_to_i64_try => return self.intConvertTry(u64, i64, args, return_rt_var),
+            .u64_to_i128 => return self.intConvert(u64, i128, args),
+            .u64_to_u8_wrap => return self.intConvertWrap(u64, u8, args),
+            .u64_to_u8_try => return self.intConvertTry(u64, u8, args, return_rt_var),
+            .u64_to_u16_wrap => return self.intConvertWrap(u64, u16, args),
+            .u64_to_u16_try => return self.intConvertTry(u64, u16, args, return_rt_var),
+            .u64_to_u32_wrap => return self.intConvertWrap(u64, u32, args),
+            .u64_to_u32_try => return self.intConvertTry(u64, u32, args, return_rt_var),
+            .u64_to_u128 => return self.intConvert(u64, u128, args),
+            .u64_to_f32 => return self.intToFloat(u64, f32, args),
+            .u64_to_f64 => return self.intToFloat(u64, f64, args),
+            .u64_to_dec => return self.intToDec(u64, args),
 
             // I64 conversion operations
-            .i64_to_i8_wrap => return self.intConvertWrap(i64, i8, args, roc_ops),
-            .i64_to_i8_try => return self.intConvertTry(i64, i8, args, roc_ops, return_rt_var),
-            .i64_to_i16_wrap => return self.intConvertWrap(i64, i16, args, roc_ops),
-            .i64_to_i16_try => return self.intConvertTry(i64, i16, args, roc_ops, return_rt_var),
-            .i64_to_i32_wrap => return self.intConvertWrap(i64, i32, args, roc_ops),
-            .i64_to_i32_try => return self.intConvertTry(i64, i32, args, roc_ops, return_rt_var),
-            .i64_to_i128 => return self.intConvert(i64, i128, args, roc_ops),
-            .i64_to_u8_wrap => return self.intConvertWrap(i64, u8, args, roc_ops),
-            .i64_to_u8_try => return self.intConvertTry(i64, u8, args, roc_ops, return_rt_var),
-            .i64_to_u16_wrap => return self.intConvertWrap(i64, u16, args, roc_ops),
-            .i64_to_u16_try => return self.intConvertTry(i64, u16, args, roc_ops, return_rt_var),
-            .i64_to_u32_wrap => return self.intConvertWrap(i64, u32, args, roc_ops),
-            .i64_to_u32_try => return self.intConvertTry(i64, u32, args, roc_ops, return_rt_var),
-            .i64_to_u64_wrap => return self.intConvertWrap(i64, u64, args, roc_ops),
-            .i64_to_u64_try => return self.intConvertTry(i64, u64, args, roc_ops, return_rt_var),
-            .i64_to_u128_wrap => return self.intConvertWrap(i64, u128, args, roc_ops),
-            .i64_to_u128_try => return self.intConvertTry(i64, u128, args, roc_ops, return_rt_var),
-            .i64_to_f32 => return self.intToFloat(i64, f32, args, roc_ops),
-            .i64_to_f64 => return self.intToFloat(i64, f64, args, roc_ops),
-            .i64_to_dec => return self.intToDec(i64, args, roc_ops),
+            .i64_to_i8_wrap => return self.intConvertWrap(i64, i8, args),
+            .i64_to_i8_try => return self.intConvertTry(i64, i8, args, return_rt_var),
+            .i64_to_i16_wrap => return self.intConvertWrap(i64, i16, args),
+            .i64_to_i16_try => return self.intConvertTry(i64, i16, args, return_rt_var),
+            .i64_to_i32_wrap => return self.intConvertWrap(i64, i32, args),
+            .i64_to_i32_try => return self.intConvertTry(i64, i32, args, return_rt_var),
+            .i64_to_i128 => return self.intConvert(i64, i128, args),
+            .i64_to_u8_wrap => return self.intConvertWrap(i64, u8, args),
+            .i64_to_u8_try => return self.intConvertTry(i64, u8, args, return_rt_var),
+            .i64_to_u16_wrap => return self.intConvertWrap(i64, u16, args),
+            .i64_to_u16_try => return self.intConvertTry(i64, u16, args, return_rt_var),
+            .i64_to_u32_wrap => return self.intConvertWrap(i64, u32, args),
+            .i64_to_u32_try => return self.intConvertTry(i64, u32, args, return_rt_var),
+            .i64_to_u64_wrap => return self.intConvertWrap(i64, u64, args),
+            .i64_to_u64_try => return self.intConvertTry(i64, u64, args, return_rt_var),
+            .i64_to_u128_wrap => return self.intConvertWrap(i64, u128, args),
+            .i64_to_u128_try => return self.intConvertTry(i64, u128, args, return_rt_var),
+            .i64_to_f32 => return self.intToFloat(i64, f32, args),
+            .i64_to_f64 => return self.intToFloat(i64, f64, args),
+            .i64_to_dec => return self.intToDec(i64, args),
 
             // U128 conversion operations
-            .u128_to_i8_wrap => return self.intConvertWrap(u128, i8, args, roc_ops),
-            .u128_to_i8_try => return self.intConvertTry(u128, i8, args, roc_ops, return_rt_var),
-            .u128_to_i16_wrap => return self.intConvertWrap(u128, i16, args, roc_ops),
-            .u128_to_i16_try => return self.intConvertTry(u128, i16, args, roc_ops, return_rt_var),
-            .u128_to_i32_wrap => return self.intConvertWrap(u128, i32, args, roc_ops),
-            .u128_to_i32_try => return self.intConvertTry(u128, i32, args, roc_ops, return_rt_var),
-            .u128_to_i64_wrap => return self.intConvertWrap(u128, i64, args, roc_ops),
-            .u128_to_i64_try => return self.intConvertTry(u128, i64, args, roc_ops, return_rt_var),
-            .u128_to_i128_wrap => return self.intConvertWrap(u128, i128, args, roc_ops),
-            .u128_to_i128_try => return self.intConvertTry(u128, i128, args, roc_ops, return_rt_var),
-            .u128_to_u8_wrap => return self.intConvertWrap(u128, u8, args, roc_ops),
-            .u128_to_u8_try => return self.intConvertTry(u128, u8, args, roc_ops, return_rt_var),
-            .u128_to_u16_wrap => return self.intConvertWrap(u128, u16, args, roc_ops),
-            .u128_to_u16_try => return self.intConvertTry(u128, u16, args, roc_ops, return_rt_var),
-            .u128_to_u32_wrap => return self.intConvertWrap(u128, u32, args, roc_ops),
-            .u128_to_u32_try => return self.intConvertTry(u128, u32, args, roc_ops, return_rt_var),
-            .u128_to_u64_wrap => return self.intConvertWrap(u128, u64, args, roc_ops),
-            .u128_to_u64_try => return self.intConvertTry(u128, u64, args, roc_ops, return_rt_var),
-            .u128_to_f32 => return self.intToFloat(u128, f32, args, roc_ops),
-            .u128_to_f64 => return self.intToFloat(u128, f64, args, roc_ops),
-            .u128_to_dec_try => return self.intToDecTry(u128, args, roc_ops, return_rt_var),
+            .u128_to_i8_wrap => return self.intConvertWrap(u128, i8, args),
+            .u128_to_i8_try => return self.intConvertTry(u128, i8, args, return_rt_var),
+            .u128_to_i16_wrap => return self.intConvertWrap(u128, i16, args),
+            .u128_to_i16_try => return self.intConvertTry(u128, i16, args, return_rt_var),
+            .u128_to_i32_wrap => return self.intConvertWrap(u128, i32, args),
+            .u128_to_i32_try => return self.intConvertTry(u128, i32, args, return_rt_var),
+            .u128_to_i64_wrap => return self.intConvertWrap(u128, i64, args),
+            .u128_to_i64_try => return self.intConvertTry(u128, i64, args, return_rt_var),
+            .u128_to_i128_wrap => return self.intConvertWrap(u128, i128, args),
+            .u128_to_i128_try => return self.intConvertTry(u128, i128, args, return_rt_var),
+            .u128_to_u8_wrap => return self.intConvertWrap(u128, u8, args),
+            .u128_to_u8_try => return self.intConvertTry(u128, u8, args, return_rt_var),
+            .u128_to_u16_wrap => return self.intConvertWrap(u128, u16, args),
+            .u128_to_u16_try => return self.intConvertTry(u128, u16, args, return_rt_var),
+            .u128_to_u32_wrap => return self.intConvertWrap(u128, u32, args),
+            .u128_to_u32_try => return self.intConvertTry(u128, u32, args, return_rt_var),
+            .u128_to_u64_wrap => return self.intConvertWrap(u128, u64, args),
+            .u128_to_u64_try => return self.intConvertTry(u128, u64, args, return_rt_var),
+            .u128_to_f32 => return self.intToFloat(u128, f32, args),
+            .u128_to_f64 => return self.intToFloat(u128, f64, args),
 
             // I128 conversion operations
-            .i128_to_i8_wrap => return self.intConvertWrap(i128, i8, args, roc_ops),
-            .i128_to_i8_try => return self.intConvertTry(i128, i8, args, roc_ops, return_rt_var),
-            .i128_to_i16_wrap => return self.intConvertWrap(i128, i16, args, roc_ops),
-            .i128_to_i16_try => return self.intConvertTry(i128, i16, args, roc_ops, return_rt_var),
-            .i128_to_i32_wrap => return self.intConvertWrap(i128, i32, args, roc_ops),
-            .i128_to_i32_try => return self.intConvertTry(i128, i32, args, roc_ops, return_rt_var),
-            .i128_to_i64_wrap => return self.intConvertWrap(i128, i64, args, roc_ops),
-            .i128_to_i64_try => return self.intConvertTry(i128, i64, args, roc_ops, return_rt_var),
-            .i128_to_u8_wrap => return self.intConvertWrap(i128, u8, args, roc_ops),
-            .i128_to_u8_try => return self.intConvertTry(i128, u8, args, roc_ops, return_rt_var),
-            .i128_to_u16_wrap => return self.intConvertWrap(i128, u16, args, roc_ops),
-            .i128_to_u16_try => return self.intConvertTry(i128, u16, args, roc_ops, return_rt_var),
-            .i128_to_u32_wrap => return self.intConvertWrap(i128, u32, args, roc_ops),
-            .i128_to_u32_try => return self.intConvertTry(i128, u32, args, roc_ops, return_rt_var),
-            .i128_to_u64_wrap => return self.intConvertWrap(i128, u64, args, roc_ops),
-            .i128_to_u64_try => return self.intConvertTry(i128, u64, args, roc_ops, return_rt_var),
-            .i128_to_u128_wrap => return self.intConvertWrap(i128, u128, args, roc_ops),
-            .i128_to_u128_try => return self.intConvertTry(i128, u128, args, roc_ops, return_rt_var),
-            .i128_to_f32 => return self.intToFloat(i128, f32, args, roc_ops),
-            .i128_to_f64 => return self.intToFloat(i128, f64, args, roc_ops),
-            .i128_to_dec_try => return self.intToDecTry(i128, args, roc_ops, return_rt_var),
+            .i128_to_i8_wrap => return self.intConvertWrap(i128, i8, args),
+            .i128_to_i8_try => return self.intConvertTry(i128, i8, args, return_rt_var),
+            .i128_to_i16_wrap => return self.intConvertWrap(i128, i16, args),
+            .i128_to_i16_try => return self.intConvertTry(i128, i16, args, return_rt_var),
+            .i128_to_i32_wrap => return self.intConvertWrap(i128, i32, args),
+            .i128_to_i32_try => return self.intConvertTry(i128, i32, args, return_rt_var),
+            .i128_to_i64_wrap => return self.intConvertWrap(i128, i64, args),
+            .i128_to_i64_try => return self.intConvertTry(i128, i64, args, return_rt_var),
+            .i128_to_u8_wrap => return self.intConvertWrap(i128, u8, args),
+            .i128_to_u8_try => return self.intConvertTry(i128, u8, args, return_rt_var),
+            .i128_to_u16_wrap => return self.intConvertWrap(i128, u16, args),
+            .i128_to_u16_try => return self.intConvertTry(i128, u16, args, return_rt_var),
+            .i128_to_u32_wrap => return self.intConvertWrap(i128, u32, args),
+            .i128_to_u32_try => return self.intConvertTry(i128, u32, args, return_rt_var),
+            .i128_to_u64_wrap => return self.intConvertWrap(i128, u64, args),
+            .i128_to_u64_try => return self.intConvertTry(i128, u64, args, return_rt_var),
+            .i128_to_u128_wrap => return self.intConvertWrap(i128, u128, args),
+            .i128_to_u128_try => return self.intConvertTry(i128, u128, args, return_rt_var),
+            .i128_to_f32 => return self.intToFloat(i128, f32, args),
+            .i128_to_f64 => return self.intToFloat(i128, f64, args),
+
+            // U128 to Dec (try_unsafe - can overflow Dec's range)
+            .u128_to_dec_try_unsafe => return self.intToDecTryUnsafe(u128, args),
+            // I128 to Dec (try_unsafe - can overflow Dec's range)
+            .i128_to_dec_try_unsafe => return self.intToDecTryUnsafe(i128, args),
 
             // F32 conversion operations
-            .f32_to_i8_trunc => return self.floatToIntTrunc(f32, i8, args, roc_ops),
-            .f32_to_i8_try => return self.floatToIntTry(f32, i8, args, roc_ops, return_rt_var),
-            .f32_to_i16_trunc => return self.floatToIntTrunc(f32, i16, args, roc_ops),
-            .f32_to_i16_try => return self.floatToIntTry(f32, i16, args, roc_ops, return_rt_var),
-            .f32_to_i32_trunc => return self.floatToIntTrunc(f32, i32, args, roc_ops),
-            .f32_to_i32_try => return self.floatToIntTry(f32, i32, args, roc_ops, return_rt_var),
-            .f32_to_i64_trunc => return self.floatToIntTrunc(f32, i64, args, roc_ops),
-            .f32_to_i64_try => return self.floatToIntTry(f32, i64, args, roc_ops, return_rt_var),
-            .f32_to_i128_trunc => return self.floatToIntTrunc(f32, i128, args, roc_ops),
-            .f32_to_i128_try => return self.floatToIntTry(f32, i128, args, roc_ops, return_rt_var),
-            .f32_to_u8_trunc => return self.floatToIntTrunc(f32, u8, args, roc_ops),
-            .f32_to_u8_try => return self.floatToIntTry(f32, u8, args, roc_ops, return_rt_var),
-            .f32_to_u16_trunc => return self.floatToIntTrunc(f32, u16, args, roc_ops),
-            .f32_to_u16_try => return self.floatToIntTry(f32, u16, args, roc_ops, return_rt_var),
-            .f32_to_u32_trunc => return self.floatToIntTrunc(f32, u32, args, roc_ops),
-            .f32_to_u32_try => return self.floatToIntTry(f32, u32, args, roc_ops, return_rt_var),
-            .f32_to_u64_trunc => return self.floatToIntTrunc(f32, u64, args, roc_ops),
-            .f32_to_u64_try => return self.floatToIntTry(f32, u64, args, roc_ops, return_rt_var),
-            .f32_to_u128_trunc => return self.floatToIntTrunc(f32, u128, args, roc_ops),
-            .f32_to_u128_try => return self.floatToIntTry(f32, u128, args, roc_ops, return_rt_var),
-            .f32_to_f64 => return self.floatWiden(f32, f64, args, roc_ops),
+            .f32_to_i8_trunc => return self.floatToIntTrunc(f32, i8, args),
+            .f32_to_i8_try_unsafe => return self.floatToIntTryUnsafe(f32, i8, args),
+            .f32_to_i16_trunc => return self.floatToIntTrunc(f32, i16, args),
+            .f32_to_i16_try_unsafe => return self.floatToIntTryUnsafe(f32, i16, args),
+            .f32_to_i32_trunc => return self.floatToIntTrunc(f32, i32, args),
+            .f32_to_i32_try_unsafe => return self.floatToIntTryUnsafe(f32, i32, args),
+            .f32_to_i64_trunc => return self.floatToIntTrunc(f32, i64, args),
+            .f32_to_i64_try_unsafe => return self.floatToIntTryUnsafe(f32, i64, args),
+            .f32_to_i128_trunc => return self.floatToIntTrunc(f32, i128, args),
+            .f32_to_i128_try_unsafe => return self.floatToIntTryUnsafe(f32, i128, args),
+            .f32_to_u8_trunc => return self.floatToIntTrunc(f32, u8, args),
+            .f32_to_u8_try_unsafe => return self.floatToIntTryUnsafe(f32, u8, args),
+            .f32_to_u16_trunc => return self.floatToIntTrunc(f32, u16, args),
+            .f32_to_u16_try_unsafe => return self.floatToIntTryUnsafe(f32, u16, args),
+            .f32_to_u32_trunc => return self.floatToIntTrunc(f32, u32, args),
+            .f32_to_u32_try_unsafe => return self.floatToIntTryUnsafe(f32, u32, args),
+            .f32_to_u64_trunc => return self.floatToIntTrunc(f32, u64, args),
+            .f32_to_u64_try_unsafe => return self.floatToIntTryUnsafe(f32, u64, args),
+            .f32_to_u128_trunc => return self.floatToIntTrunc(f32, u128, args),
+            .f32_to_u128_try_unsafe => return self.floatToIntTryUnsafe(f32, u128, args),
+            .f32_to_f64 => return self.floatWiden(f32, f64, args),
 
             // F64 conversion operations
-            .f64_to_i8_trunc => return self.floatToIntTrunc(f64, i8, args, roc_ops),
-            .f64_to_i8_try => return self.floatToIntTry(f64, i8, args, roc_ops, return_rt_var),
-            .f64_to_i16_trunc => return self.floatToIntTrunc(f64, i16, args, roc_ops),
-            .f64_to_i16_try => return self.floatToIntTry(f64, i16, args, roc_ops, return_rt_var),
-            .f64_to_i32_trunc => return self.floatToIntTrunc(f64, i32, args, roc_ops),
-            .f64_to_i32_try => return self.floatToIntTry(f64, i32, args, roc_ops, return_rt_var),
-            .f64_to_i64_trunc => return self.floatToIntTrunc(f64, i64, args, roc_ops),
-            .f64_to_i64_try => return self.floatToIntTry(f64, i64, args, roc_ops, return_rt_var),
-            .f64_to_i128_trunc => return self.floatToIntTrunc(f64, i128, args, roc_ops),
-            .f64_to_i128_try => return self.floatToIntTry(f64, i128, args, roc_ops, return_rt_var),
-            .f64_to_u8_trunc => return self.floatToIntTrunc(f64, u8, args, roc_ops),
-            .f64_to_u8_try => return self.floatToIntTry(f64, u8, args, roc_ops, return_rt_var),
-            .f64_to_u16_trunc => return self.floatToIntTrunc(f64, u16, args, roc_ops),
-            .f64_to_u16_try => return self.floatToIntTry(f64, u16, args, roc_ops, return_rt_var),
-            .f64_to_u32_trunc => return self.floatToIntTrunc(f64, u32, args, roc_ops),
-            .f64_to_u32_try => return self.floatToIntTry(f64, u32, args, roc_ops, return_rt_var),
-            .f64_to_u64_trunc => return self.floatToIntTrunc(f64, u64, args, roc_ops),
-            .f64_to_u64_try => return self.floatToIntTry(f64, u64, args, roc_ops, return_rt_var),
-            .f64_to_u128_trunc => return self.floatToIntTrunc(f64, u128, args, roc_ops),
-            .f64_to_u128_try => return self.floatToIntTry(f64, u128, args, roc_ops, return_rt_var),
-            .f64_to_f32_wrap => return self.floatNarrowWrap(f64, f32, args, roc_ops),
-            .f64_to_f32_try => return self.floatNarrowTry(f64, f32, args, roc_ops, return_rt_var),
+            .f64_to_i8_trunc => return self.floatToIntTrunc(f64, i8, args),
+            .f64_to_i8_try_unsafe => return self.floatToIntTryUnsafe(f64, i8, args),
+            .f64_to_i16_trunc => return self.floatToIntTrunc(f64, i16, args),
+            .f64_to_i16_try_unsafe => return self.floatToIntTryUnsafe(f64, i16, args),
+            .f64_to_i32_trunc => return self.floatToIntTrunc(f64, i32, args),
+            .f64_to_i32_try_unsafe => return self.floatToIntTryUnsafe(f64, i32, args),
+            .f64_to_i64_trunc => return self.floatToIntTrunc(f64, i64, args),
+            .f64_to_i64_try_unsafe => return self.floatToIntTryUnsafe(f64, i64, args),
+            .f64_to_i128_trunc => return self.floatToIntTrunc(f64, i128, args),
+            .f64_to_i128_try_unsafe => return self.floatToIntTryUnsafe(f64, i128, args),
+            .f64_to_u8_trunc => return self.floatToIntTrunc(f64, u8, args),
+            .f64_to_u8_try_unsafe => return self.floatToIntTryUnsafe(f64, u8, args),
+            .f64_to_u16_trunc => return self.floatToIntTrunc(f64, u16, args),
+            .f64_to_u16_try_unsafe => return self.floatToIntTryUnsafe(f64, u16, args),
+            .f64_to_u32_trunc => return self.floatToIntTrunc(f64, u32, args),
+            .f64_to_u32_try_unsafe => return self.floatToIntTryUnsafe(f64, u32, args),
+            .f64_to_u64_trunc => return self.floatToIntTrunc(f64, u64, args),
+            .f64_to_u64_try_unsafe => return self.floatToIntTryUnsafe(f64, u64, args),
+            .f64_to_u128_trunc => return self.floatToIntTrunc(f64, u128, args),
+            .f64_to_u128_try_unsafe => return self.floatToIntTryUnsafe(f64, u128, args),
+            .f64_to_f32_wrap => return self.floatNarrow(f64, f32, args),
+            .f64_to_f32_try_unsafe => return self.floatNarrowTryUnsafe(f64, f32, args),
 
-            // Dec -> integer conversions
-            .dec_to_i8_trunc => return self.decToIntTrunc(i8, args, roc_ops),
-            .dec_to_i8_try => return self.decToIntTry(i8, args, roc_ops, return_rt_var),
-            .dec_to_i16_trunc => return self.decToIntTrunc(i16, args, roc_ops),
-            .dec_to_i16_try => return self.decToIntTry(i16, args, roc_ops, return_rt_var),
-            .dec_to_i32_trunc => return self.decToIntTrunc(i32, args, roc_ops),
-            .dec_to_i32_try => return self.decToIntTry(i32, args, roc_ops, return_rt_var),
-            .dec_to_i64_trunc => return self.decToIntTrunc(i64, args, roc_ops),
-            .dec_to_i64_try => return self.decToIntTry(i64, args, roc_ops, return_rt_var),
-            .dec_to_i128_trunc => return self.decToIntTrunc(i128, args, roc_ops),
-            .dec_to_i128_try => return self.decToIntTry(i128, args, roc_ops, return_rt_var),
-            .dec_to_u8_trunc => return self.decToIntTrunc(u8, args, roc_ops),
-            .dec_to_u8_try => return self.decToIntTry(u8, args, roc_ops, return_rt_var),
-            .dec_to_u16_trunc => return self.decToIntTrunc(u16, args, roc_ops),
-            .dec_to_u16_try => return self.decToIntTry(u16, args, roc_ops, return_rt_var),
-            .dec_to_u32_trunc => return self.decToIntTrunc(u32, args, roc_ops),
-            .dec_to_u32_try => return self.decToIntTry(u32, args, roc_ops, return_rt_var),
-            .dec_to_u64_trunc => return self.decToIntTrunc(u64, args, roc_ops),
-            .dec_to_u64_try => return self.decToIntTry(u64, args, roc_ops, return_rt_var),
-            .dec_to_u128_trunc => return self.decToIntTrunc(u128, args, roc_ops),
-            .dec_to_u128_try => return self.decToIntTry(u128, args, roc_ops, return_rt_var),
-
-            // Dec -> float conversions
-            .dec_to_f32_wrap => return self.decToF32Wrap(args, roc_ops),
-            .dec_to_f32_try => return self.decToF32Try(args, roc_ops, return_rt_var),
-            .dec_to_f64 => return self.decToF64(args, roc_ops),
+            // Dec conversion operations
+            .dec_to_i8_trunc => return self.decToIntTrunc(i8, args),
+            .dec_to_i8_try_unsafe => return self.decToIntTryUnsafe(i8, args),
+            .dec_to_i16_trunc => return self.decToIntTrunc(i16, args),
+            .dec_to_i16_try_unsafe => return self.decToIntTryUnsafe(i16, args),
+            .dec_to_i32_trunc => return self.decToIntTrunc(i32, args),
+            .dec_to_i32_try_unsafe => return self.decToIntTryUnsafe(i32, args),
+            .dec_to_i64_trunc => return self.decToIntTrunc(i64, args),
+            .dec_to_i64_try_unsafe => return self.decToIntTryUnsafe(i64, args),
+            .dec_to_i128_trunc => return self.decToIntTrunc(i128, args),
+            .dec_to_i128_try_unsafe => return self.decToI128TryUnsafe(args),
+            .dec_to_u8_trunc => return self.decToIntTrunc(u8, args),
+            .dec_to_u8_try_unsafe => return self.decToIntTryUnsafe(u8, args),
+            .dec_to_u16_trunc => return self.decToIntTrunc(u16, args),
+            .dec_to_u16_try_unsafe => return self.decToIntTryUnsafe(u16, args),
+            .dec_to_u32_trunc => return self.decToIntTrunc(u32, args),
+            .dec_to_u32_try_unsafe => return self.decToIntTryUnsafe(u32, args),
+            .dec_to_u64_trunc => return self.decToIntTrunc(u64, args),
+            .dec_to_u64_try_unsafe => return self.decToIntTryUnsafe(u64, args),
+            .dec_to_u128_trunc => return self.decToIntTrunc(u128, args),
+            .dec_to_u128_try_unsafe => return self.decToIntTryUnsafe(u128, args),
+            .dec_to_f32_wrap => return self.decToF32Wrap(args),
+            .dec_to_f32_try_unsafe => return self.decToF32TryUnsafe(args),
+            .dec_to_f64 => return self.decToF64(args),
         }
     }
 
@@ -4980,7 +2731,7 @@ pub const Interpreter = struct {
         var buf: [40]u8 = undefined; // 40 is enough for i128
         const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch unreachable;
 
-        const value = try self.pushStr("");
+        const value = try self.pushStr();
         const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
@@ -4999,15 +2750,14 @@ pub const Interpreter = struct {
         var buf: [400]u8 = undefined;
         const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch unreachable;
 
-        const value = try self.pushStr("");
+        const value = try self.pushStr();
         const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
     }
 
     /// Helper for safe integer conversions (widening)
-    fn intConvert(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intConvert(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -5025,8 +2775,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper for wrapping integer conversions (potentially lossy)
-    fn intConvertWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intConvertWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -5059,46 +2808,32 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Possible errors for float/Dec to integer conversions
-    const NumConversionError = enum {
-        none, // Success - not an error
-        not_int, // Value has fractional part
-        out_of_range, // Value outside target type's range
-    };
+    /// Helper for try integer conversions (returns Try(To, [OutOfRange]))
+    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, return_rt_var: ?types.Var) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        // Null argument is a compiler bug - the compiler should never produce code with null args
+        std.debug.assert(int_arg.ptr != null);
 
-    /// Generic helper for building Try(T, [OutOfRange]) results.
-    /// Used by all "try" conversion functions to construct the result tag union.
-    fn buildTryResult(
-        self: *Interpreter,
-        comptime PayloadType: type,
-        in_range: bool,
-        payload_value: PayloadType,
-        return_rt_var: types.Var,
-    ) !StackValue {
-        const err = if (in_range) NumConversionError.none else NumConversionError.out_of_range;
-        return self.buildTryResultWithError(PayloadType, err, payload_value, return_rt_var);
-    }
+        // Return type info is required - missing it is a compiler bug
+        const result_rt_var = return_rt_var orelse unreachable;
 
-    /// Generic helper for building Try(T, [NotInt, OutOfRange]) or Try(T, [OutOfRange]) results.
-    /// Handles conversions where there can be multiple error types.
-    fn buildTryResultWithError(
-        self: *Interpreter,
-        comptime PayloadType: type,
-        err: NumConversionError,
-        payload_value: PayloadType,
-        return_rt_var: types.Var,
-    ) !StackValue {
-        const result_layout = try self.getRuntimeLayout(return_rt_var);
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+
+        // Check if conversion is in range
+        const in_range = std.math.cast(To, from_value) != null;
 
         // Resolve the Try type to get Ok's payload type
-        const resolved = self.resolveBaseVar(return_rt_var);
+        const resolved = self.resolveBaseVar(result_rt_var);
         // Type system should guarantee this is a tag union - if not, it's a compiler bug
         std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
 
         // Find tag indices for Ok and Err
         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
         defer tag_list.deinit();
-        try self.appendUnionTags(return_rt_var, &tag_list);
+        try self.appendUnionTags(result_rt_var, &tag_list);
 
         var ok_index: ?usize = null;
         var err_index: ?usize = null;
@@ -5114,13 +2849,12 @@ pub const Interpreter = struct {
             }
         }
 
-        const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-
         // Construct the result tag union
         if (result_layout.tag == .scalar) {
             // Simple tag with no payload (shouldn't happen for Try with payload)
             var out = try self.pushRaw(result_layout, 0);
             out.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             try out.setInt(@intCast(tag_idx));
             out.is_initialized = true;
             return out;
@@ -5138,6 +2872,7 @@ pub const Interpreter = struct {
             std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
             var tmp = tag_field;
             tmp.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             try tmp.setInt(@intCast(tag_idx));
 
             // Clear payload area
@@ -5152,8 +2887,9 @@ pub const Interpreter = struct {
 
             // Write payload for Ok case
             if (in_range) {
+                const to_value: To = @intCast(from_value);
                 if (payload_field.ptr) |payload_ptr| {
-                    @as(*PayloadType, @ptrCast(@alignCast(payload_ptr))).* = payload_value;
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
                 }
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
@@ -5172,6 +2908,7 @@ pub const Interpreter = struct {
             std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
             var tmp = tag_field;
             tmp.is_initialized = false;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             try tmp.setInt(@intCast(tag_idx));
 
             // Clear payload area (element 0)
@@ -5186,8 +2923,9 @@ pub const Interpreter = struct {
 
             // Write payload for Ok case
             if (in_range) {
+                const to_value: To = @intCast(from_value);
                 if (payload_field.ptr) |payload_ptr| {
-                    @as(*PayloadType, @ptrCast(@alignCast(payload_ptr))).* = payload_value;
+                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
                 }
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
@@ -5199,24 +2937,8 @@ pub const Interpreter = struct {
         unreachable;
     }
 
-    /// Helper for try integer conversions (returns Try(To, [OutOfRange]))
-    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
-        std.debug.assert(args.len == 1);
-        const int_arg = args[0];
-        std.debug.assert(int_arg.ptr != null);
-
-        const result_rt_var = return_rt_var orelse unreachable;
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
-        const in_range = std.math.cast(To, from_value) != null;
-        const to_value: To = if (in_range) @intCast(from_value) else undefined;
-
-        return self.buildTryResult(To, in_range, to_value, result_rt_var);
-    }
-
     /// Helper for integer to float conversions
-    fn intToFloat(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intToFloat(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -5233,16 +2955,15 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for integer to Dec conversions (for types that always fit in Dec's range)
-    fn intToDec(self: *Interpreter, comptime From: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for integer to Dec conversions
+    fn intToDec(self: *Interpreter, comptime From: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
+        // Null argument is a compiler bug - the compiler should never produce code with null args
         std.debug.assert(int_arg.ptr != null);
 
         const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
-        const signed_value: i128 = from_value;
-        const dec_value = RocDec{ .num = signed_value * RocDec.one_point_zero_i128 };
+        const dec_value = RocDec{ .num = @as(i128, from_value) * RocDec.one_point_zero_i128 };
 
         const dec_layout = Layout.frac(.dec);
         var out = try self.pushRaw(dec_layout, 0);
@@ -5252,61 +2973,42 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for integer to Dec conversions that may overflow (i128, u128)
-    fn intToDecTry(self: *Interpreter, comptime From: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
+    /// Helper for integer to Dec try_unsafe conversions (for u128/i128 which can overflow)
+    /// Returns { success: Bool, val_or_memory_garbage: Dec }
+    fn intToDecTryUnsafe(self: *Interpreter, comptime From: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         std.debug.assert(int_arg.ptr != null);
 
-        const result_rt_var = return_rt_var orelse unreachable;
         const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
 
-        // Check if value fits in Dec's range: must fit in i128 and not overflow when multiplied by 10^18
-        const max_dec_whole: i128 = @divTrunc(std.math.maxInt(i128), RocDec.one_point_zero_i128);
-        const min_dec_whole: i128 = @divTrunc(std.math.minInt(i128), RocDec.one_point_zero_i128);
+        // Dec's max whole number is ~1.7×10^20, which is less than u128's max (~3.4×10^38)
+        // Dec is stored as i128 * 10^18, so max safe value is i128.max / 10^18
+        const dec_max_whole: i128 = @divFloor(std.math.maxInt(i128), RocDec.one_point_zero_i128);
+        const dec_min_whole: i128 = @divFloor(std.math.minInt(i128), RocDec.one_point_zero_i128);
 
-        const in_range = if (From == u128)
-            from_value <= @as(u128, @intCast(max_dec_whole))
+        // Check if conversion is safe
+        const success = if (From == u128)
+            from_value <= @as(u128, @intCast(dec_max_whole))
+        else if (From == i128)
+            from_value >= dec_min_whole and from_value <= dec_max_whole
         else
-            from_value >= min_dec_whole and from_value <= max_dec_whole;
+            @compileError("intToDecTryUnsafe only supports u128 and i128");
 
-        const dec_value: RocDec = if (in_range)
-            RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 }
-        else
-            undefined;
-
-        return self.buildTryResult(RocDec, in_range, dec_value, result_rt_var);
+        // Build the result record: { success: Bool, val_or_memory_garbage: Dec }
+        return try self.buildSuccessValRecord(success, if (success) RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 } else RocDec{ .num = 0 });
     }
 
-    /// Helper for truncating float to integer conversions (truncates toward zero, clamps to range)
-    fn floatToIntTrunc(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for float to int truncating conversions
+    fn floatToIntTrunc(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
         const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
 
-        // For wrapping conversion, we need to handle out-of-range floats
-        // Zig's @intFromFloat will panic on out-of-range, so we need to clamp or wrap
-        const to_value: To = blk: {
-            // Check for NaN - convert to 0
-            if (std.math.isNan(from_value)) {
-                break :blk 0;
-            }
-            // Check for infinity or out of range
-            const min_float: From = @floatFromInt(std.math.minInt(To));
-            const max_float: From = @floatFromInt(std.math.maxInt(To));
-            if (from_value < min_float) {
-                break :blk std.math.minInt(To);
-            }
-            if (from_value > max_float) {
-                break :blk std.math.maxInt(To);
-            }
-            // Truncate toward zero
-            break :blk @intFromFloat(from_value);
-        };
+        // Truncate float to integer (clamping to range and truncating fractional part)
+        const to_value: To = floatToIntSaturating(From, To, from_value);
 
         const to_layout = Layout.int(comptime intTypeFromZigType(To));
         var out = try self.pushRaw(to_layout, 0);
@@ -5316,28 +3018,31 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for try float to integer conversions (returns Try(To, [OutOfRange]))
-    fn floatToIntTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
+    /// Helper for float to int try_unsafe conversions
+    /// Returns { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn floatToIntTryUnsafe(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const result_rt_var = return_rt_var orelse unreachable;
         const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
 
-        // Check if conversion would succeed
-        const min_float: From = @floatFromInt(std.math.minInt(To));
-        const max_float: From = @floatFromInt(std.math.maxInt(To));
-        const in_range = !std.math.isNan(from_value) and from_value >= min_float and from_value <= max_float;
-        const to_value: To = if (in_range) @intFromFloat(from_value) else undefined;
+        // Check if it's an integer (no fractional part) and not NaN/Inf
+        const is_int = !std.math.isNan(from_value) and !std.math.isInf(from_value) and @trunc(from_value) == from_value;
 
-        return self.buildTryResult(To, in_range, to_value, result_rt_var);
+        // Check if in range for target type
+        const min_val: From = @floatFromInt(std.math.minInt(To));
+        const max_val: From = @floatFromInt(std.math.maxInt(To));
+        const in_range = from_value >= min_val and from_value <= max_val;
+
+        const val: To = if (is_int and in_range) @intFromFloat(from_value) else 0;
+
+        // Build the result record: { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+        return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
     }
 
-    /// Helper for float widening conversion (F32 -> F64)
-    fn floatWiden(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for float widening (F32 -> F64)
+    fn floatWiden(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
@@ -5353,15 +3058,13 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for wrapping float narrowing conversion (F64 -> F32)
-    fn floatNarrowWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for float narrowing (F64 -> F32)
+    fn floatNarrow(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
         const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
-        // @floatCast handles overflow by producing infinity
         const to_value: To = @floatCast(from_value);
 
         const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
@@ -5372,117 +3075,249 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for try float narrowing conversion (F64 -> F32)
-    fn floatNarrowTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
+    /// Helper for float narrowing try_unsafe (F64 -> F32)
+    /// Returns { success: Bool, val_or_memory_garbage: F32 }
+    fn floatNarrowTryUnsafe(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const result_rt_var = return_rt_var orelse unreachable;
         const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
-
-        // Check if conversion would produce infinity from a finite value
         const to_value: To = @floatCast(from_value);
-        const in_range = !std.math.isInf(to_value) or std.math.isInf(from_value);
 
-        return self.buildTryResult(To, in_range, to_value, result_rt_var);
+        // Check if the conversion is lossless (converting back gives the same value)
+        // Also check for infinity which indicates overflow
+        const success = !std.math.isInf(to_value) or std.math.isInf(from_value);
+        const back: From = @floatCast(to_value);
+        const lossless = from_value == back or (std.math.isNan(from_value) and std.math.isNan(back));
+
+        return try self.buildSuccessValRecordF32(success and lossless, to_value);
     }
 
-    /// Dec to integer conversion (truncating - drops fractional part)
-    fn decToIntTrunc(self: *Interpreter, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for Dec to int truncating conversions
+    fn decToIntTrunc(self: *Interpreter, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
-        const from_arg = args[0];
-        std.debug.assert(from_arg.ptr != null);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
 
-        // Dec is stored as i128 internally
-        const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
-        const result = dec.toIntWrap(To, dec.RocDec{ .num = dec_value });
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
 
-        // Create result value
-        const to_layout = Layout.int(intTypeFromZigType(To));
+        // Get the whole number part by dividing by one_point_zero
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        // Saturate to target range
+        const to_value: To = std.math.cast(To, whole_part) orelse if (whole_part < 0) std.math.minInt(To) else std.math.maxInt(To);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
         var out = try self.pushRaw(to_layout, 0);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = result;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
         out.is_initialized = true;
         return out;
     }
 
-    /// Dec to integer conversion (try - returns error if out of range)
-    fn decToIntTry(self: *Interpreter, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
+    /// Helper for Dec to int try_unsafe conversions
+    /// Returns { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn decToIntTryUnsafe(self: *Interpreter, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
-        const from_arg = args[0];
-        std.debug.assert(from_arg.ptr != null);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
 
-        const result_rt_var = return_rt_var orelse unreachable;
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
 
-        // Dec is stored as i128 internally
-        const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
-        const maybe_result = dec.toIntTry(To, dec.RocDec{ .num = dec_value });
-        const in_range = maybe_result != null;
-        const to_value: To = maybe_result orelse undefined;
+        // Check if it's an integer (no fractional part)
+        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const is_int = remainder == 0;
 
-        return self.buildTryResult(To, in_range, to_value, result_rt_var);
+        // Get the whole number part
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        // Check if in range for target type
+        const in_range = std.math.cast(To, whole_part) != null;
+
+        const val: To = if (is_int and in_range) @intCast(whole_part) else 0;
+
+        return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
     }
 
-    /// Dec to F32 conversion (wrapping - lossy)
-    fn decToF32Wrap(self: *Interpreter, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for Dec to i128 try_unsafe conversions (special case - always in range)
+    /// Returns { is_int: Bool, val_or_memory_garbage: I128 }
+    fn decToI128TryUnsafe(self: *Interpreter, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
-        const from_arg = args[0];
-        std.debug.assert(from_arg.ptr != null);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
 
-        // Dec is stored as i128 internally
-        const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
-        const result = dec.toF32(dec.RocDec{ .num = dec_value });
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
 
-        // Create result value
+        // Check if it's an integer (no fractional part)
+        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const is_int = remainder == 0;
+
+        // Get the whole number part - always fits in i128
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        return try self.buildIsIntValRecord(is_int, whole_part);
+    }
+
+    /// Helper for Dec to F32 wrapping conversion
+    fn decToF32Wrap(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+        const f32_value: f32 = @floatCast(f64_value);
+
         const to_layout = Layout.frac(.f32);
         var out = try self.pushRaw(to_layout, 0);
         out.is_initialized = false;
-        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = result;
+        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = f32_value;
         out.is_initialized = true;
         return out;
     }
 
-    /// Dec to F32 conversion (try - returns error if out of range)
-    fn decToF32Try(self: *Interpreter, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
+    /// Helper for Dec to F32 try_unsafe conversion
+    /// Returns { success: Bool, val_or_memory_garbage: F32 }
+    fn decToF32TryUnsafe(self: *Interpreter, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
-        const from_arg = args[0];
-        std.debug.assert(from_arg.ptr != null);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
 
-        const result_rt_var = return_rt_var orelse unreachable;
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+        const f32_value: f32 = @floatCast(f64_value);
 
-        // Dec is stored as i128 internally
-        const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
-        const maybe_result = dec.toF32Try(dec.RocDec{ .num = dec_value });
-        const in_range = maybe_result != null;
-        const to_value: f32 = maybe_result orelse undefined;
+        // Check if conversion is lossless by converting back
+        const back_f64: f64 = @floatCast(f32_value);
+        const back_dec = RocDec.fromF64(back_f64);
+        const success = back_dec != null and back_dec.?.num == dec_value.num;
 
-        return self.buildTryResult(f32, in_range, to_value, result_rt_var);
+        return try self.buildSuccessValRecordF32(success, f32_value);
     }
 
-    /// Dec to F64 conversion (lossy but always succeeds for Dec range)
-    fn decToF64(self: *Interpreter, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    /// Helper for Dec to F64 conversion
+    fn decToF64(self: *Interpreter, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
-        const from_arg = args[0];
-        std.debug.assert(from_arg.ptr != null);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
 
-        // Dec is stored as i128 internally
-        const dec_value: i128 = @as(*const i128, @ptrCast(@alignCast(from_arg.ptr.?))).*;
-        const result = dec.toF64(dec.RocDec{ .num = dec_value });
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
 
-        // Create result value
         const to_layout = Layout.frac(.f64);
         var out = try self.pushRaw(to_layout, 0);
         out.is_initialized = false;
-        @as(*f64, @ptrCast(@alignCast(out.ptr.?))).* = result;
+        @as(*f64, @ptrCast(@alignCast(out.ptr.?))).* = f64_value;
         out.is_initialized = true;
         return out;
+    }
+
+    /// Build a record { success: Bool, val_or_memory_garbage: Dec }
+    fn buildSuccessValRecord(self: *Interpreter, success: bool, val: RocDec) !StackValue {
+        // Layout: tuple (Dec, Bool) where element 0 is Dec (16 bytes) and element 1 is Bool (1 byte)
+        // Total size with alignment: 24 bytes (16 for Dec + 8 for alignment of Bool field)
+        const dec_layout = Layout.frac(.dec);
+        const bool_layout = Layout.int(.u8);
+
+        // We need to create a tuple layout for the result
+        // For now, allocate raw bytes and set them directly
+        // The tuple is (val_or_memory_garbage: Dec, success: Bool)
+        const tuple_size: usize = 24; // 16 bytes Dec + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 16);
+        out.is_initialized = false;
+
+        // Write Dec at offset 0
+        @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 16
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
+        bool_ptr.* = @intFromBool(success);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        _ = dec_layout;
+        _ = bool_layout;
+        return out;
+    }
+
+    /// Build a record { success: Bool, val_or_memory_garbage: F32 }
+    fn buildSuccessValRecordF32(self: *Interpreter, success: bool, val: f32) !StackValue {
+        // Layout: tuple (F32, Bool) where element 0 is F32 (4 bytes) and element 1 is Bool (1 byte)
+        const tuple_size: usize = 8; // 4 bytes F32 + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 4);
+        out.is_initialized = false;
+
+        // Write F32 at offset 0
+        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 4
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 4);
+        bool_ptr.* = @intFromBool(success);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Build a record { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn buildIsIntInRangeValRecord(self: *Interpreter, is_int: bool, in_range: bool, comptime To: type, val: To) !StackValue {
+        // Layout depends on To's size
+        const val_size = @sizeOf(To);
+        const val_align = @alignOf(To);
+        // Structure: (val, is_int, in_range) with proper alignment
+        const tuple_size: usize = val_size + 2; // val + 2 bools
+        const padded_size = (tuple_size + val_align - 1) / val_align * val_align;
+
+        var out = try self.pushRawBytes(padded_size, val_align);
+        out.is_initialized = false;
+
+        // Write val at offset 0
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write is_int at offset val_size
+        const is_int_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size);
+        is_int_ptr.* = @intFromBool(is_int);
+
+        // Write in_range at offset val_size + 1
+        const in_range_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size + 1);
+        in_range_ptr.* = @intFromBool(in_range);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Build a record { is_int: Bool, val_or_memory_garbage: I128 } (for dec_to_i128 which is always in range)
+    fn buildIsIntValRecord(self: *Interpreter, is_int: bool, val: i128) !StackValue {
+        // Layout: tuple (I128, Bool)
+        const tuple_size: usize = 24; // 16 bytes I128 + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 16);
+        out.is_initialized = false;
+
+        // Write I128 at offset 0
+        @as(*i128, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 16
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
+        bool_ptr.* = @intFromBool(is_int);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Helper to convert float to int with saturation (for trunc operations)
+    fn floatToIntSaturating(comptime From: type, comptime To: type, value: From) To {
+        if (std.math.isNan(value)) return 0;
+
+        const min_val: From = @floatFromInt(std.math.minInt(To));
+        const max_val: From = @floatFromInt(std.math.maxInt(To));
+
+        if (value <= min_val) return std.math.minInt(To);
+        if (value >= max_val) return std.math.maxInt(To);
+
+        return @intFromFloat(value);
     }
 
     /// Convert Zig integer type to types.Int.Precision
@@ -5889,6 +3724,7 @@ pub const Interpreter = struct {
         lhs_var: types.Var,
         rhs: StackValue,
         _: types.Var, // rhs_var unused
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         // Handle scalar comparisons (numbers, strings) directly.
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
@@ -5919,19 +3755,19 @@ pub const Interpreter = struct {
         return switch (lhs_content.structure) {
             .tuple => |tuple| {
                 const elem_vars = self.runtime_types.sliceVars(tuple.elems);
-                return try self.structuralEqualTuple(lhs, rhs, elem_vars);
+                return try self.structuralEqualTuple(lhs, rhs, elem_vars, roc_ops);
             },
             .record => |record| {
-                return try self.structuralEqualRecord(lhs, rhs, record);
+                return try self.structuralEqualRecord(lhs, rhs, record, roc_ops);
             },
             .tag_union => {
-                return try self.structuralEqualTag(lhs, rhs, lhs_var);
+                return try self.structuralEqualTag(lhs, rhs, lhs_var, roc_ops);
             },
             .empty_record => true,
             .empty_tag_union => true,
             .nominal_type => |nom| {
                 // For nominal types, dispatch to their is_eq method
-                return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var);
+                return try self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops);
             },
             .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => @panic("valuesStructurallyEqual: cannot compare functions or unbound records"),
         };
@@ -5942,6 +3778,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         elem_vars: []const types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         if (lhs.layout.tag != .tuple or rhs.layout.tag != .tuple) return error.TypeMismatch;
         if (elem_vars.len == 0) return true;
@@ -5962,7 +3799,7 @@ pub const Interpreter = struct {
             // getElement expects original index and converts to sorted internally
             const lhs_elem = try lhs_acc.getElement(index);
             const rhs_elem = try rhs_acc.getElement(index);
-            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_vars[index], rhs_elem, elem_vars[index]);
+            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_vars[index], rhs_elem, elem_vars[index], roc_ops);
             if (!elems_equal) {
                 return false;
             }
@@ -5976,6 +3813,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         record: types.Record,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         if (lhs.layout.tag != .record or rhs.layout.tag != .record) return error.TypeMismatch;
 
@@ -6016,7 +3854,7 @@ pub const Interpreter = struct {
             const lhs_field = try lhs_rec.getFieldByIndex(idx);
             const rhs_field = try rhs_rec.getFieldByIndex(idx);
             const field_var = field_slice.items(.var_)[idx];
-            const fields_equal = try self.valuesStructurallyEqual(lhs_field, field_var, rhs_field, field_var);
+            const fields_equal = try self.valuesStructurallyEqual(lhs_field, field_var, rhs_field, field_var, roc_ops);
             if (!fields_equal) {
                 return false;
             }
@@ -6030,6 +3868,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         elem_var: types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         const lhs_is_list = lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst;
         const rhs_is_list = rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst;
@@ -6053,7 +3892,7 @@ pub const Interpreter = struct {
         while (index < lhs_header.len()) : (index += 1) {
             const lhs_elem = try lhs_acc.getElement(index);
             const rhs_elem = try rhs_acc.getElement(index);
-            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var);
+            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
             if (!elems_equal) {
                 return false;
             }
@@ -6067,6 +3906,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         union_var: types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
         var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
         defer tag_list.deinit();
@@ -6088,7 +3928,7 @@ pub const Interpreter = struct {
         if (arg_vars.len == 1) {
             const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
             const rhs_payload = rhs_data.payload orelse return error.TypeMismatch;
-            return try self.valuesStructurallyEqual(lhs_payload, arg_vars[0], rhs_payload, arg_vars[0]);
+            return try self.valuesStructurallyEqual(lhs_payload, arg_vars[0], rhs_payload, arg_vars[0], roc_ops);
         }
 
         const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
@@ -6106,7 +3946,7 @@ pub const Interpreter = struct {
             // getElement expects original index and converts to sorted internally
             const lhs_elem = try lhs_tuple.getElement(idx);
             const rhs_elem = try rhs_tuple.getElement(idx);
-            const args_equal = try self.valuesStructurallyEqual(lhs_elem, arg_vars[idx], rhs_elem, arg_vars[idx]);
+            const args_equal = try self.valuesStructurallyEqual(lhs_elem, arg_vars[idx], rhs_elem, arg_vars[idx], roc_ops);
             if (!args_equal) {
                 return false;
             }
@@ -6121,10 +3961,8 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         nom: types.NominalType,
-        lhs_var: types.Var,
+        roc_ops: *RocOps,
     ) StructuralEqError!bool {
-        _ = lhs_var;
-
         // Check if this is a simple scalar comparison (numbers, bools represented as scalars)
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
@@ -6159,7 +3997,7 @@ pub const Interpreter = struct {
         const backing_resolved = self.runtime_types.resolveVar(backing_var);
 
         if (backing_resolved.desc.content == .structure) {
-            return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var);
+            return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops);
         }
 
         // For other cases, fall back to attempting scalar comparison
@@ -6169,10 +4007,41 @@ pub const Interpreter = struct {
             return order == .eq;
         }
 
-        // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
-        // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
-        _ = lhs_var;
-        @panic("dispatchNominalIsEq: cannot compare non-scalar nominal types without is_eq method");
+        // Look up and call the is_eq method on the nominal type
+        const method_func = self.resolveMethodFunction(
+            nom.origin_module,
+            nom.ident.ident_idx,
+            self.root_env.idents.is_eq,
+            roc_ops,
+        ) catch |err| {
+            // If method lookup fails, we can't compare this type
+            if (err == error.MethodLookupFailed) {
+                return error.NotImplemented;
+            }
+            return err;
+        };
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+        // Call the is_eq method with lhs and rhs as arguments
+        if (method_func.layout.tag != .closure) {
+            return error.TypeMismatch;
+        }
+
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+        // All is_eq methods are low-level lambdas (builtins). If a type doesn't have
+        // is_eq, the type-checker catches it as a missing method error before we get here.
+        const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
+        if (lambda_expr != .e_low_level_lambda) {
+            unreachable; // is_eq methods are always low-level builtins
+        }
+        const low_level = lambda_expr.e_low_level_lambda;
+        var args = [2]StackValue{ lhs, rhs };
+        const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+            return error.NotImplemented;
+        };
+        defer result.decref(&self.runtime_layout_store, roc_ops);
+        return boolValueEquals(true, result);
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
@@ -6983,287 +4852,6 @@ pub const Interpreter = struct {
         return error.MethodNotFound;
     }
 
-    /// Dispatch a binary operator to its corresponding method.
-    /// Handles the full method dispatch including:
-    /// - Type resolution with Dec default for flex/rigid vars
-    /// - Operand evaluation
-    /// - Method lookup and invocation
-    /// Returns the result of the method call.
-    fn dispatchBinaryOpMethod(
-        self: *Interpreter,
-        method_ident: base_pkg.Ident.Idx,
-        lhs_expr: can.CIR.Expr.Idx,
-        rhs_expr: can.CIR.Expr.Idx,
-        roc_ops: *RocOps,
-    ) Error!StackValue {
-        const lhs_ct_var = can.ModuleEnv.varFrom(lhs_expr);
-        const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-
-        const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr);
-        const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-
-        // Resolve the lhs type to get nominal type information
-        var lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-
-        // If the type is still a flex/rigid var, default to Dec
-        // (Unsuffixed numeric literals default to Dec in Roc)
-        if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
-            // Create Dec nominal type content
-            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-            const dec_var = try self.runtime_types.freshFromContent(dec_content);
-            lhs_resolved = self.runtime_types.resolveVar(dec_var);
-        }
-
-        // Evaluate both operands
-        var lhs = try self.evalExprMinimal(lhs_expr, roc_ops, lhs_rt_var);
-        defer lhs.decref(&self.runtime_layout_store, roc_ops);
-
-        var rhs = try self.evalExprMinimal(rhs_expr, roc_ops, rhs_rt_var);
-        defer rhs.decref(&self.runtime_layout_store, roc_ops);
-
-        // Get the nominal type information from lhs, or handle anonymous structural types
-        const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
-            .structure => |s| blk2: {
-                break :blk2 switch (s) {
-                    .nominal_type => |nom| .{
-                        .origin = nom.origin_module,
-                        .ident = nom.ident.ident_idx,
-                    },
-                    .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
-                        // Anonymous structural types have implicit is_eq
-                        // Use root_env.idents for consistency with method dispatch
-                        if (method_ident == self.root_env.idents.is_eq) {
-                            const result = self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var) catch |err| {
-                                // If structural equality is not implemented for this type, return false
-                                if (err == error.NotImplemented) {
-                                    self.triggerCrash("DEBUG: dispatchBinaryOpMethod NotImplemented", false, roc_ops);
-                                    return error.Crash;
-                                }
-                                return err;
-                            };
-                            return try self.makeBoolValue(result);
-                        }
-                        break :blk null;
-                    },
-                    else => null,
-                };
-            },
-            else => null,
-        };
-
-        if (nominal_info == null) {
-            return error.InvalidMethodReceiver;
-        }
-
-        // Resolve the method function
-        // method_ident comes from root_env.idents (is_lt, is_eq, etc.)
-        const method_func = try self.resolveMethodFunction(
-            nominal_info.?.origin,
-            nominal_info.?.ident,
-            method_ident,
-            roc_ops,
-        );
-        defer method_func.decref(&self.runtime_layout_store, roc_ops);
-
-        // Prepare arguments: lhs (receiver) + rhs
-        var args = [2]StackValue{ lhs, rhs };
-
-        // Call the method closure
-        if (method_func.layout.tag != .closure) {
-            return error.TypeMismatch;
-        }
-
-        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-        // Switch to the closure's source module
-        const saved_env = self.env;
-        const saved_bindings_len = self.bindings.items.len;
-        self.env = @constCast(closure_header.source_env);
-        defer {
-            self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-        }
-
-        const params = self.env.store.slicePatterns(closure_header.params);
-        if (params.len != args.len) {
-            return error.TypeMismatch;
-        }
-
-        // Provide closure context for capture lookup
-        try self.active_closures.append(method_func);
-        defer _ = self.active_closures.pop();
-
-        // Check if this is a low-level lambda - if so, dispatch to builtin
-        const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-        if (lambda_expr == .e_low_level_lambda) {
-            const low_level = lambda_expr.e_low_level_lambda;
-
-            // Dispatch to actual low-level builtin implementation
-            // Binary ops don't need return type info (not num_from_int_digits etc)
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
-        }
-
-        // Bind parameters
-        for (params, 0..) |param, i| {
-            try self.bindings.append(.{
-                .pattern_idx = param,
-                .value = args[i],
-                .expr_idx = @enumFromInt(0),
-                .source_env = self.env,
-            });
-        }
-
-        // Evaluate the method body, handling early returns at function boundary
-        const result = self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
-            // Clean up bindings before returning
-            var k = params.len;
-            while (k > 0) {
-                k -= 1;
-                _ = self.bindings.pop();
-            }
-            if (err == error.EarlyReturn) {
-                const return_val = self.early_return_value orelse return error.Crash;
-                self.early_return_value = null;
-                return return_val;
-            }
-            return err;
-        };
-
-        // Clean up bindings
-        var k = params.len;
-        while (k > 0) {
-            k -= 1;
-            _ = self.bindings.pop();
-        }
-
-        return result;
-    }
-
-    /// Dispatch a unary operator to a method call.
-    /// For example, `!a` desugars to `a.not()` and `-a` desugars to `a.negate()`.
-    fn dispatchUnaryOpMethod(
-        self: *Interpreter,
-        method_ident: base_pkg.Ident.Idx,
-        operand_expr: can.CIR.Expr.Idx,
-        roc_ops: *RocOps,
-    ) Error!StackValue {
-        const operand_ct_var = can.ModuleEnv.varFrom(operand_expr);
-        const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
-
-        // Resolve the operand type to get nominal type information
-        var operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
-
-        // If the type is still a flex/rigid var, default to Dec for numeric operations
-        // (Unsuffixed numeric literals default to Dec in Roc)
-        if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
-            // Create Dec nominal type content
-            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-            const dec_var = try self.runtime_types.freshFromContent(dec_content);
-            operand_resolved = self.runtime_types.resolveVar(dec_var);
-        }
-
-        // Evaluate the operand
-        var operand = try self.evalExprMinimal(operand_expr, roc_ops, operand_rt_var);
-        defer operand.decref(&self.runtime_layout_store, roc_ops);
-
-        // Get the nominal type information from operand
-        const nominal_info = switch (operand_resolved.desc.content) {
-            .structure => |s| switch (s) {
-                .nominal_type => |nom| .{
-                    .origin = nom.origin_module,
-                    .ident = nom.ident.ident_idx,
-                },
-                else => return error.InvalidMethodReceiver,
-            },
-            else => return error.InvalidMethodReceiver,
-        };
-
-        // Resolve the method function
-        // method_ident comes from root_env.idents (negate, not, etc.)
-        const method_func = try self.resolveMethodFunction(
-            nominal_info.origin,
-            nominal_info.ident,
-            method_ident,
-            roc_ops,
-        );
-        defer method_func.decref(&self.runtime_layout_store, roc_ops);
-
-        // Prepare arguments: just the operand (receiver)
-        var args = [1]StackValue{operand};
-
-        // Call the method closure
-        if (method_func.layout.tag != .closure) {
-            return error.TypeMismatch;
-        }
-
-        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-        // Switch to the closure's source module
-        const saved_env = self.env;
-        const saved_bindings_len = self.bindings.items.len;
-        self.env = @constCast(closure_header.source_env);
-        defer {
-            self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-        }
-
-        const params = self.env.store.slicePatterns(closure_header.params);
-        if (params.len != args.len) {
-            return error.TypeMismatch;
-        }
-
-        // Provide closure context for capture lookup
-        try self.active_closures.append(method_func);
-        defer _ = self.active_closures.pop();
-
-        // Check if this is a low-level lambda - if so, dispatch to builtin
-        const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-        if (lambda_expr == .e_low_level_lambda) {
-            const low_level = lambda_expr.e_low_level_lambda;
-            // Dispatch to actual low-level builtin implementation
-            // Binary ops don't need return type info (not num_from_int_digits etc)
-            return try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
-        }
-
-        // Bind parameters
-        for (params, 0..) |param, i| {
-            try self.bindings.append(.{
-                .pattern_idx = param,
-                .value = args[i],
-                .expr_idx = @enumFromInt(0),
-                .source_env = self.env,
-            });
-        }
-
-        // Evaluate the method body, handling early returns at function boundary
-        const result = self.evalExprMinimal(closure_header.body_idx, roc_ops, null) catch |err| {
-            // Clean up bindings before returning
-            var k = params.len;
-            while (k > 0) {
-                k -= 1;
-                _ = self.bindings.pop();
-            }
-            if (err == error.EarlyReturn) {
-                const return_val = self.early_return_value orelse return error.Crash;
-                self.early_return_value = null;
-                return return_val;
-            }
-            return err;
-        };
-
-        // Clean up bindings
-        var k = params.len;
-        while (k > 0) {
-            k -= 1;
-            _ = self.bindings.pop();
-        }
-
-        return result;
-    }
-
-    /// Resolve and evaluate a method function from its origin module.
-    /// Returns a StackValue representing the method function.
-    /// The caller is responsible for decref'ing the returned value.
     fn resolveMethodFunction(
         self: *Interpreter,
         origin_module: base_pkg.Ident.Idx,
@@ -7320,7 +4908,7 @@ pub const Interpreter = struct {
         const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
 
         // Evaluate the method's expression
-        const method_value = try self.evalExprMinimal(target_def.expr, roc_ops, rt_def_var);
+        const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
 
         return method_value;
     }
@@ -7488,7 +5076,9 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Minimal translate implementation (scaffolding): handles .str only for now
+    /// Translate a compile-time type variable from a module's type store to the runtime type store.
+    /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
+    /// Uses caching to handle recursive types and avoid duplicate work.
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
@@ -7574,7 +5164,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                         },
                         .record_unbound => |fields_range| {
-                            // TODO: Recursively unwrap record fields via ext, like tag unions
+                            // record_unbound has no extension - it's a complete set of fields
                             const ct_fields = module.types.getRecordFieldsSlice(fields_range);
                             var runtime_fields = try self.allocator.alloc(types.RecordField, ct_fields.len);
                             defer self.allocator.free(runtime_fields);
@@ -7917,13 +5507,8 @@ pub const Interpreter = struct {
         return scratch_tags;
     }
 
-    pub fn makePolyKey(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) PolyKey {
-        _ = self;
-        return PolyKey.init(module_id, func_id, args);
-    }
-
     fn polyLookup(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) ?PolyEntry {
-        const key = self.makePolyKey(module_id, func_id, args);
+        const key = PolyKey.init(module_id, func_id, args);
         return self.poly_cache.get(key);
     }
 
@@ -8032,6 +5617,4391 @@ pub const Interpreter = struct {
     /// Initial a TypeWriter from an interpreter. Useful when debugging
     fn initTypeWriter(self: *const Interpreter) std.mem.Allocator.Error!types.TypeWriter {
         return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
+    }
+
+    // ============================================================================
+    // Stack-Safe Interpreter Infrastructure
+    // ============================================================================
+    //
+    // The following types and functions implement a stack-safe interpreter that
+    // uses explicit work and value stacks instead of recursive calls. This avoids
+    // stack overflow errors on deeply nested programs.
+
+    /// Represents a unit of work to be executed by the stack-safe interpreter.
+    pub const WorkItem = union(enum) {
+        /// Evaluate an expression and push result to value stack
+        eval_expr: EvalExpr,
+
+        /// Apply a continuation to consume values from the value stack
+        apply_continuation: Continuation,
+
+        pub const EvalExpr = struct {
+            expr_idx: can.CIR.Expr.Idx,
+            expected_rt_var: ?types.Var,
+        };
+    };
+
+    /// Continuations represent "what to do next" after evaluating sub-expressions.
+    /// This is the core of continuation-passing style - each continuation captures
+    /// exactly what's needed to proceed after a sub-expression completes.
+    pub const Continuation = union(enum) {
+        /// Return the top value on the stack as the final result.
+        /// When this continuation is applied, the main loop will exit and
+        /// return the top value from the value stack.
+        return_result: void,
+
+        /// Decrement reference count of a value after use.
+        /// This is used for cleanup when intermediate values are no longer needed.
+        decref_value: DecrefValue,
+
+        /// Restore bindings to a previous length.
+        /// Used when exiting a scope to clean up local bindings.
+        trim_bindings: TrimBindings,
+
+        /// Short-circuit AND: after evaluating LHS, check if false (short-circuit)
+        /// or evaluate RHS.
+        and_short_circuit: AndShortCircuit,
+
+        /// Short-circuit OR: after evaluating LHS, check if true (short-circuit)
+        /// or evaluate RHS.
+        or_short_circuit: OrShortCircuit,
+
+        /// If branch: after evaluating condition, either evaluate body or try next branch.
+        if_branch: IfBranch,
+
+        /// Block continuation: process remaining statements in a block.
+        block_continue: BlockContinue,
+
+        /// Bind a declaration pattern to the evaluated value.
+        bind_decl: BindDecl,
+
+        /// Collect tuple elements: after evaluating an element, either continue
+        /// collecting more elements or finalize the tuple.
+        tuple_collect: TupleCollect,
+
+        /// Collect list elements: after evaluating an element, either continue
+        /// collecting more elements or finalize the list.
+        list_collect: ListCollect,
+
+        /// Collect record fields: first evaluate extension (if any), then fields.
+        record_collect: RecordCollect,
+
+        /// Handle early return - pop value from stack and signal early return.
+        early_return: EarlyReturn,
+
+        /// Collect tag payload arguments and finalize the tag union value.
+        tag_collect: TagCollect,
+
+        /// Match expression - try branches after scrutinee is evaluated.
+        match_branches: MatchBranches,
+
+        /// Match guard - check guard result and evaluate body or try next branch.
+        match_guard: MatchGuard,
+
+        /// Match cleanup - trim bindings after branch body evaluation.
+        match_cleanup: MatchCleanup,
+
+        /// Expect check - verify condition is true after evaluation.
+        expect_check: ExpectCheck,
+
+        /// Dbg print - print evaluated value and return {}.
+        dbg_print: DbgPrint,
+
+        /// String interpolation - collect segment strings.
+        str_collect: StrCollect,
+
+        /// Function call - collect arguments after function value is evaluated.
+        call_collect_args: CallCollectArgs,
+
+        /// Function call - invoke the closure after all arguments are collected.
+        call_invoke_closure: CallInvokeClosure,
+
+        /// Function call - cleanup after function body is evaluated.
+        call_cleanup: CallCleanup,
+
+        /// Unary operation - apply method after operand is evaluated.
+        unary_op_apply: UnaryOpApply,
+
+        /// Binary operation - evaluate RHS after LHS is evaluated.
+        binop_eval_rhs: BinopEvalRhs,
+
+        /// Binary operation - apply method after both operands are evaluated.
+        binop_apply: BinopApply,
+
+        /// Dot access - resolve field or method after receiver is evaluated.
+        dot_access_resolve: DotAccessResolve,
+
+        /// Dot access method call - collect arguments after receiver is evaluated.
+        dot_access_collect_args: DotAccessCollectArgs,
+
+        /// For loop - iterate over list elements after list is evaluated.
+        for_loop_iterate: ForLoopIterate,
+
+        /// For loop - process body result and continue to next iteration.
+        for_loop_body_done: ForLoopBodyDone,
+
+        /// While loop - check condition and decide whether to continue.
+        while_loop_check: WhileLoopCheck,
+
+        /// While loop - process body result and continue to next iteration.
+        while_loop_body_done: WhileLoopBodyDone,
+
+        /// Expect statement - check condition after evaluation.
+        expect_check_stmt: ExpectCheckStmt,
+
+        /// Reassign statement - update binding after expression evaluation.
+        reassign_value: ReassignValue,
+
+        /// Dbg statement - print value after evaluation.
+        dbg_print_stmt: DbgPrintStmt,
+
+        pub const DecrefValue = struct {
+            value: StackValue,
+        };
+
+        pub const TrimBindings = struct {
+            target_len: usize,
+        };
+
+        pub const AndShortCircuit = struct {
+            rhs_expr: can.CIR.Expr.Idx,
+        };
+
+        pub const OrShortCircuit = struct {
+            rhs_expr: can.CIR.Expr.Idx,
+        };
+
+        pub const IfBranch = struct {
+            /// The body to evaluate if condition is true
+            body: can.CIR.Expr.Idx,
+            /// Remaining branches to try (slice indices into store)
+            remaining_branches: []const can.CIR.Expr.IfBranch.Idx,
+            /// The final else expression
+            final_else: can.CIR.Expr.Idx,
+        };
+
+        pub const BlockContinue = struct {
+            /// Remaining statements to process
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// The final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        pub const BindDecl = struct {
+            /// The pattern to bind
+            pattern: can.CIR.Pattern.Idx,
+            /// The expression that was evaluated (for expr_idx in binding)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Remaining statements to process
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// The final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        pub const TupleCollect = struct {
+            /// Number of collected values on the value stack (collected so far)
+            collected_count: usize,
+            /// Remaining element expressions to evaluate
+            remaining_elems: []const can.CIR.Expr.Idx,
+        };
+
+        pub const ListCollect = struct {
+            /// Number of collected values on the value stack (collected so far)
+            collected_count: usize,
+            /// Remaining element expressions to evaluate
+            remaining_elems: []const can.CIR.Expr.Idx,
+            /// Element runtime type variable (for type-consistent evaluation)
+            elem_rt_var: types.Var,
+            /// List runtime type variable (for layout computation)
+            list_rt_var: types.Var,
+        };
+
+        pub const RecordCollect = struct {
+            /// Number of collected field values on the value stack (plus base record if any)
+            collected_count: usize,
+            /// Remaining field expressions to evaluate
+            remaining_fields: []const can.CIR.RecordField.Idx,
+            /// Record runtime type variable (for layout computation)
+            rt_var: types.Var,
+            /// Expression idx for caching
+            expr_idx: can.CIR.Expr.Idx,
+            /// Whether this record has an extension base (the first value on stack will be the base)
+            has_extension: bool,
+            /// All fields in the record (for name lookup during finalization)
+            all_fields: []const can.CIR.RecordField.Idx,
+        };
+
+        /// Return the value on the stack as an early return.
+        pub const EarlyReturn = struct {};
+
+        pub const TagCollect = struct {
+            /// Number of collected payload values on the value stack
+            collected_count: usize,
+            /// Remaining payload expressions to evaluate
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Argument runtime type variables
+            arg_rt_vars: []const types.Var,
+            /// Tag expression index (for type info)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Runtime type variable for the tag union
+            rt_var: types.Var,
+            /// Tag index (discriminant)
+            tag_index: usize,
+            /// Layout type: 0=record, 1=tuple
+            layout_type: u8,
+        };
+
+        /// Match continuation - after scrutinee is evaluated, try branches
+        pub const MatchBranches = struct {
+            /// Match expression index (for result type)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Scrutinee runtime type variable
+            scrutinee_rt_var: types.Var,
+            /// Result runtime type variable
+            result_rt_var: types.Var,
+            /// All branches to try
+            branches: []const can.CIR.Expr.Match.Branch.Idx,
+            /// Current branch index being tried
+            current_branch: usize,
+        };
+
+        /// Match guard continuation - after guard is evaluated, check result
+        pub const MatchGuard = struct {
+            /// Branch body to evaluate if guard passes
+            branch_body: can.CIR.Expr.Idx,
+            /// Result runtime type variable
+            result_rt_var: types.Var,
+            /// Bindings start index (to trim on failure)
+            bindings_start: usize,
+            /// Remaining branches if guard fails
+            remaining_branches: []const can.CIR.Expr.Match.Branch.Idx,
+            /// Match expression index
+            expr_idx: can.CIR.Expr.Idx,
+            /// Scrutinee value (kept on stack)
+            scrutinee_rt_var: types.Var,
+        };
+
+        /// Match cleanup continuation - trim bindings after branch body evaluation
+        pub const MatchCleanup = struct {
+            /// Bindings start index to trim to
+            bindings_start: usize,
+        };
+
+        /// Expect continuation - after condition is evaluated, check if true
+        pub const ExpectCheck = struct {
+            /// Original expect expression index (for failure reporting)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Body expression index (for failure reporting)
+            body_expr: can.CIR.Expr.Idx,
+        };
+
+        /// Dbg continuation - after expression is evaluated, print and return {}
+        pub const DbgPrint = struct {
+            /// Original dbg expression index (for type info)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Inner expression runtime type variable
+            inner_rt_var: types.Var,
+        };
+
+        /// String interpolation continuation - collect segment strings
+        pub const StrCollect = struct {
+            /// Number of segments already collected (as strings on value stack)
+            collected_count: usize,
+            /// Total number of segments
+            total_count: usize,
+            /// Remaining segment expressions to evaluate
+            remaining_segments: []const can.CIR.Expr.Idx,
+            /// Whether we need to convert the top value to a string (just evaluated an expr)
+            needs_conversion: bool,
+        };
+
+        /// Function call - collect arguments after function value is evaluated
+        pub const CallCollectArgs = struct {
+            /// Number of arguments already collected on the value stack
+            collected_count: usize,
+            /// Remaining argument expression indices
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Runtime type variables for all arguments (for type-consistent evaluation)
+            arg_rt_vars: []const types.Var,
+            /// Return type variable for the call
+            call_ret_rt_var: types.Var,
+            /// Whether type instantiation was performed (need to restore rigid_subst)
+            did_instantiate: bool,
+        };
+
+        /// Function call - invoke the closure after all arguments are collected
+        pub const CallInvokeClosure = struct {
+            /// Number of arguments on value stack (plus function value)
+            arg_count: usize,
+            /// Return type variable for the call
+            call_ret_rt_var: types.Var,
+            /// Whether type instantiation was performed
+            did_instantiate: bool,
+            /// Allocated arg_rt_vars slice to free after call completes
+            arg_rt_vars_to_free: ?[]const types.Var,
+        };
+
+        /// Function call - cleanup after function body is evaluated
+        pub const CallCleanup = struct {
+            /// Environment to restore
+            saved_env: *can.ModuleEnv,
+            /// Bindings length to restore to
+            saved_bindings_len: usize,
+            /// Number of parameter bindings that were added
+            param_count: usize,
+            /// Whether to pop an active closure
+            has_active_closure: bool,
+            /// Whether type instantiation was performed
+            did_instantiate: bool,
+            /// Allocated arg_rt_vars slice to free (null if none)
+            arg_rt_vars_to_free: ?[]const types.Var,
+        };
+
+        /// Unary operation - apply method after operand is evaluated
+        pub const UnaryOpApply = struct {
+            /// Method identifier (negate or not)
+            method_ident: base_pkg.Ident.Idx,
+            /// Runtime type of the operand (for method resolution)
+            operand_rt_var: types.Var,
+        };
+
+        /// Binary operation - evaluate RHS after LHS is evaluated
+        pub const BinopEvalRhs = struct {
+            /// Right operand expression index
+            rhs_expr: can.CIR.Expr.Idx,
+            /// Method identifier (plus, minus, times, etc.)
+            method_ident: base_pkg.Ident.Idx,
+            /// LHS runtime type variable (for method resolution)
+            lhs_rt_var: types.Var,
+            /// RHS runtime type variable
+            rhs_rt_var: types.Var,
+            /// Whether to negate the result (for != operator)
+            negate_result: bool,
+        };
+
+        /// Binary operation - apply method after both operands are evaluated
+        pub const BinopApply = struct {
+            /// Method identifier
+            method_ident: base_pkg.Ident.Idx,
+            /// Receiver type (LHS) for method resolution
+            receiver_rt_var: types.Var,
+            /// RHS runtime type variable (for structural equality)
+            rhs_rt_var: types.Var,
+            /// Whether to negate the result (for != operator)
+            negate_result: bool,
+        };
+
+        /// Dot access - resolve field or method after receiver is evaluated
+        pub const DotAccessResolve = struct {
+            /// Field/method name
+            field_name: base_pkg.Ident.Idx,
+            /// Optional method arguments (null for field access)
+            method_args: ?can.CIR.Expr.Span,
+            /// Receiver runtime type variable
+            receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Dot access method call - collect arguments after receiver is evaluated
+        pub const DotAccessCollectArgs = struct {
+            /// Method name
+            method_name: base_pkg.Ident.Idx,
+            /// Number of arguments already collected on the value stack
+            collected_count: usize,
+            /// Remaining argument expression indices
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Receiver runtime type variable (for method resolution)
+            receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// For loop - iterate over list elements
+        pub const ForLoopIterate = struct {
+            /// The list value being iterated (stored to access elements)
+            list_value: StackValue,
+            /// Current iteration index
+            current_index: usize,
+            /// Total number of elements in the list
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
+            /// Pattern to bind each element to
+            pattern: can.CIR.Pattern.Idx,
+            /// Pattern runtime type variable
+            patt_rt_var: types.Var,
+            /// Body expression to evaluate for each element
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the for loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// For loop - cleanup after body evaluation
+        pub const ForLoopBodyDone = struct {
+            /// The list value being iterated
+            list_value: StackValue,
+            /// Current iteration index (just completed)
+            current_index: usize,
+            /// Total number of elements in the list
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
+            /// Pattern to bind each element to
+            pattern: can.CIR.Pattern.Idx,
+            /// Pattern runtime type variable
+            patt_rt_var: types.Var,
+            /// Body expression to evaluate for each element
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the for loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+            /// Bindings length at iteration start (for per-iteration cleanup)
+            loop_bindings_start: usize,
+        };
+
+        /// While loop - check condition
+        pub const WhileLoopCheck = struct {
+            /// Condition expression
+            cond: can.CIR.Expr.Idx,
+            /// Body expression
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the while loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// While loop - cleanup after body evaluation
+        pub const WhileLoopBodyDone = struct {
+            /// Condition expression
+            cond: can.CIR.Expr.Idx,
+            /// Body expression
+            body: can.CIR.Expr.Idx,
+            /// Remaining statements after the while loop
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Expect statement - check condition
+        pub const ExpectCheckStmt = struct {
+            /// The expression being checked (for error reporting)
+            body_expr: can.CIR.Expr.Idx,
+            /// Remaining statements after expect
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Reassign statement - update binding
+        pub const ReassignValue = struct {
+            /// The pattern to reassign
+            pattern_idx: can.CIR.Pattern.Idx,
+            /// Remaining statements after reassign
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Dbg statement - print value
+        pub const DbgPrintStmt = struct {
+            /// Runtime type for rendering
+            rt_var: types.Var,
+            /// Remaining statements after dbg
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+    };
+
+    /// Work stack for the stack-safe interpreter.
+    /// Contains pending operations (eval expressions or apply continuations).
+    pub const WorkStack = struct {
+        items: std.array_list.AlignedManaged(WorkItem, null),
+
+        pub fn init(allocator: std.mem.Allocator) !WorkStack {
+            return .{ .items = try std.array_list.AlignedManaged(WorkItem, null).initCapacity(allocator, 64) };
+        }
+
+        pub fn deinit(self: *WorkStack) void {
+            self.items.deinit();
+        }
+
+        pub fn push(self: *WorkStack, item: WorkItem) !void {
+            try self.items.append(item);
+        }
+
+        pub fn pop(self: *WorkStack) ?WorkItem {
+            return self.items.pop();
+        }
+
+        /// Push multiple items in reverse order so they execute in forward order.
+        /// For example, if you push [A, B, C], they will be executed as A, B, C.
+        pub fn pushMultipleReverse(self: *WorkStack, items: []const WorkItem) !void {
+            var i = items.len;
+            while (i > 0) {
+                i -= 1;
+                try self.items.append(items[i]);
+            }
+        }
+    };
+
+    /// Value stack for the stack-safe interpreter.
+    /// Contains intermediate results from evaluated expressions.
+    pub const ValueStack = struct {
+        items: std.array_list.AlignedManaged(StackValue, null),
+
+        pub fn init(allocator: std.mem.Allocator) !ValueStack {
+            return .{ .items = try std.array_list.AlignedManaged(StackValue, null).initCapacity(allocator, 64) };
+        }
+
+        pub fn deinit(self: *ValueStack) void {
+            self.items.deinit();
+        }
+
+        pub fn push(self: *ValueStack, value: StackValue) !void {
+            try self.items.append(value);
+        }
+
+        pub fn pop(self: *ValueStack) ?StackValue {
+            return self.items.pop();
+        }
+
+        /// Peek at the top value without removing it.
+        pub fn peek(self: *const ValueStack) ?StackValue {
+            if (self.items.items.len == 0) return null;
+            return self.items.items[self.items.items.len - 1];
+        }
+    };
+
+    /// Stack-safe evaluation entry point.
+    /// This function evaluates expressions using explicit work and value stacks
+    /// instead of recursive calls, preventing stack overflow on deeply nested programs.
+    pub fn evalWithExpectedType(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
+        var work_stack = try WorkStack.init(self.allocator);
+        defer work_stack.deinit();
+
+        // On error, clean up any pending allocations in continuations
+        errdefer self.cleanupPendingWorkStack(&work_stack, roc_ops);
+
+        var value_stack = try ValueStack.init(self.allocator);
+        defer value_stack.deinit();
+
+        // Initial work: evaluate the root expression, then return result
+        // Push in reverse order: return_result first (will be executed last),
+        // then eval_expr (will be executed first)
+        try work_stack.push(.{ .apply_continuation = .{ .return_result = {} } });
+        try work_stack.push(.{ .eval_expr = .{
+            .expr_idx = expr_idx,
+            .expected_rt_var = expected_rt_var,
+        } });
+
+        while (work_stack.pop()) |work_item| {
+            switch (work_item) {
+                .eval_expr => |eval_item| {
+                    try self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops);
+                },
+                .apply_continuation => |cont| {
+                    const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
+                    if (!should_continue) {
+                        // return_result continuation signals completion
+                        return value_stack.pop() orelse return error.Crash;
+                    }
+                },
+            }
+        }
+
+        // Should never reach here - return_result should have exited the loop
+        return error.Crash;
+    }
+
+    /// Clean up any pending allocations in the work stack when an error occurs.
+    /// This prevents memory leaks when evaluation fails partway through.
+    fn cleanupPendingWorkStack(self: *Interpreter, work_stack: *WorkStack, roc_ops: *RocOps) void {
+        while (work_stack.pop()) |work_item| {
+            switch (work_item) {
+                .apply_continuation => |cont| {
+                    switch (cont) {
+                        .call_invoke_closure => |ci| {
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        },
+                        .call_cleanup => |cc| {
+                            if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        },
+                        .for_loop_iterate => |fl| {
+                            // Decref the list value
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .for_loop_body_done => |fl| {
+                            // Decref the list value
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        else => {},
+                    }
+                },
+                .eval_expr => {},
+            }
+        }
+    }
+
+    /// Schedule evaluation of an expression by examining it and pushing appropriate work items.
+    /// Instead of recursing, this pushes work items onto the stack to be processed by the main loop.
+    fn scheduleExprEval(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        roc_ops: *RocOps,
+    ) Error!void {
+        const expr = self.env.store.getExpr(expr_idx);
+
+        switch (expr) {
+            // ================================================================
+            // Immediate values - no sub-expressions to evaluate
+            // ================================================================
+
+            .e_num => |num_lit| {
+                const value = try self.evalNum(expr_idx, expected_rt_var, num_lit);
+                try value_stack.push(value);
+            },
+
+            .e_frac_f32 => |lit| {
+                const value = try self.evalFracF32(expr_idx, expected_rt_var, lit);
+                try value_stack.push(value);
+            },
+
+            .e_frac_f64 => |lit| {
+                const value = try self.evalFracF64(expr_idx, expected_rt_var, lit);
+                try value_stack.push(value);
+            },
+
+            .e_dec => |dec_lit| {
+                const value = try self.evalDec(expr_idx, expected_rt_var, dec_lit);
+                try value_stack.push(value);
+            },
+
+            .e_dec_small => |small| {
+                const value = try self.evalDecSmall(expr_idx, expected_rt_var, small);
+                try value_stack.push(value);
+            },
+
+            .e_str_segment => |seg| {
+                const value = try self.evalStrSegment(seg, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_str => |str_expr| {
+                const segments = self.env.store.sliceExpr(str_expr.span);
+                if (segments.len == 0) {
+                    // Empty string - return immediately
+                    const value = try self.pushStr();
+                    const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    roc_str.* = RocStr.empty();
+                    try value_stack.push(value);
+                } else {
+                    // Schedule collection of segments
+                    // Push continuation to handle all segments, starting with none collected
+                    try work_stack.push(.{
+                        .apply_continuation = .{
+                            .str_collect = .{
+                                .collected_count = 0,
+                                .total_count = segments.len,
+                                .remaining_segments = segments,
+                                .needs_conversion = false, // No value to convert yet
+                            },
+                        },
+                    });
+                }
+            },
+
+            .e_empty_record => {
+                const value = try self.evalEmptyRecord(expr_idx, expected_rt_var);
+                try value_stack.push(value);
+            },
+
+            .e_empty_list => {
+                const value = try self.evalEmptyList(expr_idx, expected_rt_var);
+                try value_stack.push(value);
+            },
+
+            .e_zero_argument_tag => |zero| {
+                const value = try self.evalZeroArgumentTag(expr_idx, expected_rt_var, zero, roc_ops);
+                try value_stack.push(value);
+            },
+
+            // ================================================================
+            // Lambda/Closure creation
+            // ================================================================
+
+            .e_lambda => |lam| {
+                const value = try self.evalLambda(expr_idx, expected_rt_var, lam, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_low_level_lambda => |lam| {
+                const value = try self.evalLowLevelLambda(expr_idx, expected_rt_var, lam);
+                try value_stack.push(value);
+            },
+
+            .e_hosted_lambda => |hosted| {
+                const value = try self.evalHostedLambda(expr_idx, hosted);
+                try value_stack.push(value);
+            },
+
+            .e_closure => |cls| {
+                const value = try self.evalClosure(expr_idx, cls, roc_ops);
+                try value_stack.push(value);
+            },
+
+            // ================================================================
+            // Variable lookups
+            // ================================================================
+
+            .e_lookup_local => |lookup| {
+                const value = try self.evalLookupLocal(lookup, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_lookup_external => |lookup| {
+                const value = try self.evalLookupExternal(lookup, expected_rt_var, roc_ops);
+                try value_stack.push(value);
+            },
+
+            .e_lookup_required => {
+                // Required lookups reference values from the app that provides values to the
+                // platform's `requires` clause. These are not available during compile-time
+                // evaluation.
+                return error.TypeMismatch;
+            },
+
+            .e_runtime_error => {
+                self.triggerCrash("runtime error", false, roc_ops);
+                return error.Crash;
+            },
+
+            // ================================================================
+            // Binary operations
+            // ================================================================
+
+            .e_binop => |binop| {
+                switch (binop.op) {
+                    .@"and" => {
+                        // Short-circuit AND: evaluate LHS first, then check
+                        // Push continuation first (will be executed after LHS)
+                        try work_stack.push(.{ .apply_continuation = .{ .and_short_circuit = .{
+                            .rhs_expr = binop.rhs,
+                        } } });
+                        // Push LHS evaluation (will be executed first)
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = binop.lhs,
+                            .expected_rt_var = null,
+                        } });
+                    },
+                    .@"or" => {
+                        // Short-circuit OR: evaluate LHS first, then check
+                        // Push continuation first (will be executed after LHS)
+                        try work_stack.push(.{ .apply_continuation = .{ .or_short_circuit = .{
+                            .rhs_expr = binop.rhs,
+                        } } });
+                        // Push LHS evaluation (will be executed first)
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = binop.lhs,
+                            .expected_rt_var = null,
+                        } });
+                    },
+                    else => {
+                        // Arithmetic and comparison operations: desugar to method calls
+                        const method_ident: base_pkg.Ident.Idx = switch (binop.op) {
+                            .add => self.root_env.idents.plus,
+                            .sub => self.root_env.idents.minus,
+                            .mul => self.root_env.idents.times,
+                            .div => self.root_env.idents.div_by,
+                            .div_trunc => self.root_env.idents.div_trunc_by,
+                            .rem => self.root_env.idents.rem_by,
+                            .lt => self.root_env.idents.is_lt,
+                            .le => self.root_env.idents.is_lte,
+                            .gt => self.root_env.idents.is_gt,
+                            .ge => self.root_env.idents.is_gte,
+                            .eq, .ne => self.root_env.idents.is_eq,
+                            .@"and", .@"or" => unreachable, // handled above
+                        };
+
+                        // Get LHS and RHS type info
+                        const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                        var lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                        const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                        const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+
+                        // Resolve the lhs type - if flex/rigid, default to Dec
+                        const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
+                        if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
+                            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                            lhs_rt_var = dec_var;
+                        }
+
+                        // For != we need to negate the result of is_eq
+                        const negate_result = binop.op == .ne;
+
+                        // Schedule: first evaluate LHS, then evaluate RHS, then apply method
+                        try work_stack.push(.{ .apply_continuation = .{ .binop_eval_rhs = .{
+                            .rhs_expr = binop.rhs,
+                            .method_ident = method_ident,
+                            .lhs_rt_var = lhs_rt_var,
+                            .rhs_rt_var = rhs_rt_var,
+                            .negate_result = negate_result,
+                        } } });
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = binop.lhs,
+                            .expected_rt_var = lhs_rt_var,
+                        } });
+                    },
+                }
+            },
+
+            // ================================================================
+            // Conditionals
+            // ================================================================
+
+            .e_if => |if_expr| {
+                const branches = self.env.store.sliceIfBranches(if_expr.branches);
+                if (branches.len > 0) {
+                    // Get first branch
+                    const first_branch = self.env.store.getIfBranch(branches[0]);
+                    // Push if_branch continuation (to be executed after condition evaluation)
+                    try work_stack.push(.{ .apply_continuation = .{ .if_branch = .{
+                        .body = first_branch.body,
+                        .remaining_branches = branches[1..],
+                        .final_else = if_expr.final_else,
+                    } } });
+                    // Push condition evaluation (to be executed first)
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = first_branch.cond,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // No branches, just evaluate final else
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = if_expr.final_else,
+                        .expected_rt_var = expected_rt_var,
+                    } });
+                }
+            },
+
+            // ================================================================
+            // Blocks
+            // ================================================================
+
+            .e_block => |blk| {
+                const stmts = self.env.store.sliceStatements(blk.stmts);
+                const bindings_start = self.bindings.items.len;
+
+                // First pass: add placeholders for all decl/var lambdas/closures (mutual recursion support)
+                try self.addClosurePlaceholders(stmts, bindings_start);
+
+                if (stmts.len == 0) {
+                    // No statements, just evaluate final expression
+                    // Push trim_bindings to clean up after evaluation
+                    try work_stack.push(.{ .apply_continuation = .{ .trim_bindings = .{
+                        .target_len = bindings_start,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = blk.final_expr,
+                        .expected_rt_var = expected_rt_var,
+                    } });
+                } else {
+                    // Schedule processing of statements
+                    // Push trim_bindings first (executed last)
+                    try work_stack.push(.{ .apply_continuation = .{ .trim_bindings = .{
+                        .target_len = bindings_start,
+                    } } });
+                    // Push block_continue to process statements
+                    try work_stack.push(.{ .apply_continuation = .{ .block_continue = .{
+                        .remaining_stmts = stmts,
+                        .final_expr = blk.final_expr,
+                        .bindings_start = bindings_start,
+                    } } });
+                }
+            },
+
+            // ================================================================
+            // Tuples
+            // ================================================================
+
+            .e_tuple => |tup| {
+                const elems = self.env.store.sliceExpr(tup.elems);
+                if (elems.len == 0) {
+                    // Empty tuple - create immediately
+                    // Compute tuple layout with no elements
+                    const tuple_layout_idx = try self.runtime_layout_store.putTuple(&[0]Layout{});
+                    const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                    const value = try self.pushRaw(tuple_layout, 0);
+                    try value_stack.push(value);
+                } else {
+                    // Schedule collection of elements
+                    // Push tuple_collect continuation (to be executed after first element)
+                    try work_stack.push(.{ .apply_continuation = .{ .tuple_collect = .{
+                        .collected_count = 0,
+                        .remaining_elems = elems,
+                    } } });
+                }
+            },
+
+            // ================================================================
+            // Lists
+            // ================================================================
+
+            .e_list => |list_expr| {
+                const elems = self.env.store.sliceExpr(list_expr.elems);
+
+                // Get list type variable
+                const list_rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+
+                if (elems.len == 0) {
+                    // Empty list - create immediately
+                    const list_layout = try self.getRuntimeLayout(list_rt_var);
+                    const dest = try self.pushRaw(list_layout, 0);
+                    if (dest.ptr != null) {
+                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                        header.* = RocList.empty();
+                    }
+                    try value_stack.push(dest);
+                } else {
+                    // Get element type variable from first element
+                    const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
+                    const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
+
+                    // Schedule collection of elements
+                    try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
+                        .collected_count = 0,
+                        .remaining_elems = elems,
+                        .elem_rt_var = elem_rt_var,
+                        .list_rt_var = list_rt_var,
+                    } } });
+                }
+            },
+
+            // ================================================================
+            // Records
+            // ================================================================
+
+            .e_record => |rec| {
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const fields = self.env.store.sliceRecordFields(rec.fields);
+
+                if (rec.ext) |ext_idx| {
+                    // Has extension record - schedule extension evaluation first
+                    try work_stack.push(.{ .apply_continuation = .{ .record_collect = .{
+                        .collected_count = 0,
+                        .remaining_fields = fields,
+                        .rt_var = rt_var,
+                        .expr_idx = expr_idx,
+                        .has_extension = true,
+                        .all_fields = fields,
+                    } } });
+                    // Evaluate extension first - it will be the first value on stack
+                    const ext_ct_var = can.ModuleEnv.varFrom(ext_idx);
+                    const ext_rt_var = try self.translateTypeVar(self.env, ext_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ext_idx,
+                        .expected_rt_var = ext_rt_var,
+                    } });
+                } else if (fields.len == 0) {
+                    // Empty record with no extension - create immediately
+                    const rec_layout = try self.getRuntimeLayout(rt_var);
+                    const dest = try self.pushRaw(rec_layout, 0);
+                    try value_stack.push(dest);
+                } else {
+                    // Non-empty record without extension
+                    try work_stack.push(.{ .apply_continuation = .{ .record_collect = .{
+                        .collected_count = 0,
+                        .remaining_fields = fields,
+                        .rt_var = rt_var,
+                        .expr_idx = expr_idx,
+                        .has_extension = false,
+                        .all_fields = fields,
+                    } } });
+                }
+            },
+
+            // ================================================================
+            // Nominal types - evaluate backing expression
+            // ================================================================
+
+            .e_nominal => |nom| {
+                // Compute the backing type variable for the nominal
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
+                    try self.getCanonicalBoolRuntimeVar()
+                else switch (nominal_resolved.desc.content) {
+                    .structure => |st| switch (st) {
+                        .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                        else => nominal_rt_var,
+                    },
+                    else => nominal_rt_var,
+                };
+                // Schedule evaluation of the backing expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = nom.backing_expr,
+                    .expected_rt_var = backing_rt_var,
+                } });
+            },
+
+            .e_nominal_external => |nom| {
+                // Compute the backing type variable for the external nominal
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    const backing_rt_var = switch (nominal_resolved.desc.content) {
+                        .structure => |st| switch (st) {
+                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                            else => nominal_rt_var,
+                        },
+                        else => nominal_rt_var,
+                    };
+                    break :blk backing_rt_var;
+                };
+                // Schedule evaluation of the backing expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = nom.backing_expr,
+                    .expected_rt_var = rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Simple error/crash expressions
+            // ================================================================
+
+            .e_crash => |crash_expr| {
+                // Get the crash message string and trigger crash
+                const msg = self.env.getString(crash_expr.msg);
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
+            },
+
+            .e_anno_only => {
+                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
+                return error.Crash;
+            },
+
+            .e_ellipsis => {
+                self.triggerCrash("This expression uses `...` as a placeholder. Implementation is required.", false, roc_ops);
+                return error.Crash;
+            },
+
+            .e_return => |ret| {
+                // Schedule the early return continuation after evaluating the inner expression
+                const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{} } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ret.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Tag unions with payloads
+            // ================================================================
+
+            .e_tag => |tag| {
+                // Determine runtime type and tag index
+                var rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                var resolved = self.resolveBaseVar(rt_var);
+                // Handle flex types for True/False
+                if (resolved.desc.content == .flex) {
+                    if (tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag) {
+                        rt_var = try self.getCanonicalBoolRuntimeVar();
+                        resolved = self.resolveBaseVar(rt_var);
+                    }
+                }
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("e_tag: expected tag_union structure type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(rt_var, &tag_list);
+
+                const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
+                    const name_text = self.env.getIdent(tag.name);
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    self.triggerCrash(msg, true, roc_ops);
+                    return error.Crash;
+                };
+
+                const layout_val = try self.getRuntimeLayout(rt_var);
+
+                if (layout_val.tag == .scalar) {
+                    // No payload union - just set discriminant
+                    var out = try self.pushRaw(layout_val, 0);
+                    if (layout_val.data.scalar.tag == .int) {
+                        out.is_initialized = false;
+                        try out.setInt(@intCast(tag_index));
+                        out.is_initialized = true;
+                        out.rt_var = rt_var;
+                        try value_stack.push(out);
+                    } else {
+                        self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
+                        return error.Crash;
+                    }
+                } else if (layout_val.tag == .record or layout_val.tag == .tuple) {
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+                    const arg_vars_range = tag_list.items[tag_index].args;
+                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+
+                    if (args_exprs.len == 0) {
+                        // No payload args - finalize immediately
+                        const value = try self.finalizeTagNoPayload(rt_var, tag_index, layout_val, roc_ops);
+                        try value_stack.push(value);
+                    } else {
+                        // Has payload args - schedule collection
+                        try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                            .collected_count = 0,
+                            .remaining_args = args_exprs,
+                            .arg_rt_vars = arg_rt_vars,
+                            .expr_idx = expr_idx,
+                            .rt_var = rt_var,
+                            .tag_index = tag_index,
+                            .layout_type = if (layout_val.tag == .record) 0 else 1,
+                        } } });
+                    }
+                } else {
+                    self.triggerCrash("e_tag: unexpected layout type", false, roc_ops);
+                    return error.Crash;
+                }
+            },
+
+            // ================================================================
+            // Pattern matching
+            // ================================================================
+
+            .e_match => |m| {
+                // Get type info for scrutinee and result
+                const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
+                const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
+                const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const match_result_rt_var = try self.translateTypeVar(self.env, match_result_ct_var);
+
+                const branches = self.env.store.matchBranchSlice(m.branches);
+
+                // Schedule: first evaluate scrutinee, then try branches
+                try work_stack.push(.{ .apply_continuation = .{ .match_branches = .{
+                    .expr_idx = expr_idx,
+                    .scrutinee_rt_var = scrutinee_rt_var,
+                    .result_rt_var = match_result_rt_var,
+                    .branches = branches,
+                    .current_branch = 0,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = m.cond,
+                    .expected_rt_var = null,
+                } });
+            },
+
+            // ================================================================
+            // Debugging and assertions
+            // ================================================================
+
+            .e_expect => |expect_expr| {
+                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                // Schedule: first evaluate condition, then check result
+                try work_stack.push(.{ .apply_continuation = .{ .expect_check = .{
+                    .expr_idx = expr_idx,
+                    .body_expr = expect_expr.body,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = expect_expr.body,
+                    .expected_rt_var = bool_rt_var,
+                } });
+            },
+
+            .e_dbg => |dbg_expr| {
+                const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                // Schedule: first evaluate inner expression, then print
+                try work_stack.push(.{ .apply_continuation = .{ .dbg_print = .{
+                    .expr_idx = expr_idx,
+                    .inner_rt_var = inner_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dbg_expr.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Function calls
+            // ================================================================
+
+            .e_call => |call| {
+                const func_idx = call.func;
+                const arg_indices = self.env.store.sliceExpr(call.args);
+
+                // Check if the function is an anno-only lookup that will crash
+                const func_expr_check = self.env.store.getExpr(func_idx);
+                if (func_expr_check == .e_lookup_local) {
+                    const lookup = func_expr_check.e_lookup_local;
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const def_expr = self.env.store.getExpr(def.expr);
+                            if (def_expr == .e_anno_only) {
+                                self.triggerCrash("This function has only a type annotation - no implementation was provided", false, roc_ops);
+                                return error.Crash;
+                            }
+                        }
+                    }
+                }
+
+                // Check if this is an error expression that shouldn't be called
+                if (func_expr_check == .e_runtime_error or func_expr_check == .e_anno_only or func_expr_check == .e_crash) {
+                    return error.TypeMismatch;
+                }
+
+                // Get function type and potentially instantiate
+                const func_ct_var = can.ModuleEnv.varFrom(func_idx);
+                const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
+
+                // Only instantiate if we have an actual function type (not a flex variable)
+                const func_rt_orig_resolved = self.runtime_types.resolveVar(func_rt_var_orig);
+                const should_instantiate = func_rt_orig_resolved.desc.content == .structure and
+                    (func_rt_orig_resolved.desc.content.structure == .fn_pure or
+                        func_rt_orig_resolved.desc.content.structure == .fn_effectful or
+                        func_rt_orig_resolved.desc.content.structure == .fn_unbound);
+
+                var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                defer subst_map.deinit();
+                const func_rt_var = if (should_instantiate)
+                    try self.instantiateType(func_rt_var_orig, &subst_map)
+                else
+                    func_rt_var_orig;
+
+                // If we instantiated, update rigid_subst (will be restored in cleanup)
+                if (should_instantiate) {
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                    // Clear the layout cache so layouts are recomputed with substitutions
+                    @memset(self.var_to_layout_slot.items, 0);
+                }
+
+                // Compute argument runtime type variables
+                var arg_rt_vars = try self.allocator.alloc(types.Var, arg_indices.len);
+                for (arg_indices, 0..) |arg_idx, i| {
+                    const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                    const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
+
+                    // Apply substitution if this argument is a rigid variable that was instantiated
+                    if (should_instantiate) {
+                        const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_vars[i] = substituted_arg;
+                            } else {
+                                arg_rt_vars[i] = arg_rt_var;
+                            }
+                        } else {
+                            arg_rt_vars[i] = arg_rt_var;
+                        }
+                    } else {
+                        arg_rt_vars[i] = arg_rt_var;
+                    }
+                }
+
+                // Get call expression's return type
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+
+                // Prepare polymorphic call entry for unification
+                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_vars) catch |err| blk: {
+                    if (err == error.TypeMismatch) {
+                        break :blk null;
+                    }
+                    break :blk null;
+                };
+
+                // Unify call return type with function's return type
+                if (poly_entry) |entry| {
+                    _ = try unify.unifyWithConf(
+                        self.env,
+                        self.runtime_types,
+                        &self.problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.unify_scratch.occurs_scratch,
+                        unify.ModuleEnvLookup{
+                            .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                            .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                        },
+                        call_ret_rt_var,
+                        entry.return_var,
+                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                    );
+                }
+
+                // Schedule: first evaluate function, then collect args, then invoke
+                // Push invoke continuation (to be executed after all args collected)
+                try work_stack.push(.{ .apply_continuation = .{ .call_invoke_closure = .{
+                    .arg_count = arg_indices.len,
+                    .call_ret_rt_var = call_ret_rt_var,
+                    .did_instantiate = should_instantiate,
+                    .arg_rt_vars_to_free = arg_rt_vars,
+                } } });
+
+                // Push arg collection continuation (to be executed after function is evaluated)
+                try work_stack.push(.{ .apply_continuation = .{ .call_collect_args = .{
+                    .collected_count = 0,
+                    .remaining_args = arg_indices,
+                    .arg_rt_vars = arg_rt_vars,
+                    .call_ret_rt_var = call_ret_rt_var,
+                    .did_instantiate = should_instantiate,
+                } } });
+
+                // Evaluate the function expression first
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = func_idx,
+                    .expected_rt_var = func_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Unary operations
+            // ================================================================
+
+            .e_unary_minus => |unary_minus| {
+                // Desugar `-a` to `a.negate()`
+                const operand_ct_var = can.ModuleEnv.varFrom(unary_minus.expr);
+                var operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+
+                // Resolve the operand type
+                const operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+
+                // If the type is still a flex/rigid var, default to Dec
+                if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    operand_rt_var = dec_var;
+                }
+
+                // Schedule: first evaluate operand, then apply method
+                try work_stack.push(.{ .apply_continuation = .{ .unary_op_apply = .{
+                    .method_ident = self.root_env.idents.negate,
+                    .operand_rt_var = operand_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = unary_minus.expr,
+                    .expected_rt_var = operand_rt_var,
+                } });
+            },
+
+            .e_unary_not => |unary_not| {
+                // Desugar `!a` to `a.not()`
+                const operand_ct_var = can.ModuleEnv.varFrom(unary_not.expr);
+                var operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+
+                // Resolve the operand type
+                const operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+
+                // If the type is still a flex/rigid var, default to Bool (shouldn't happen for bool, but be safe)
+                if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
+                    operand_rt_var = try self.getCanonicalBoolRuntimeVar();
+                }
+
+                // Schedule: first evaluate operand, then apply method
+                try work_stack.push(.{ .apply_continuation = .{ .unary_op_apply = .{
+                    .method_ident = self.root_env.idents.not,
+                    .operand_rt_var = operand_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = unary_not.expr,
+                    .expected_rt_var = operand_rt_var,
+                } });
+            },
+
+            // ================================================================
+            // Dot access (field access and method calls)
+            // ================================================================
+
+            .e_dot_access => |dot_access| {
+                const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
+                var receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
+
+                // If the receiver type is a flex/rigid var, default to Dec
+                // (Unsuffixed numeric literals default to Dec in Roc)
+                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    receiver_rt_var = dec_var;
+                }
+
+                // Schedule: first evaluate receiver, then resolve field/method
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
+                    .field_name = dot_access.field_name,
+                    .method_args = dot_access.args,
+                    .receiver_rt_var = receiver_rt_var,
+                    .expr_idx = expr_idx,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dot_access.receiver,
+                    .expected_rt_var = receiver_rt_var,
+                } });
+            },
+
+            // If we reach here, there's a new expression type that hasn't been added.
+            // else => unreachable,
+        }
+    }
+
+    // ========================================================================
+    // Helper functions for evaluating immediate values (no sub-expressions)
+    // ========================================================================
+
+    /// Evaluate a numeric literal (e_num)
+    fn evalNum(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        num_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_num),
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        var value = try self.pushRaw(layout_val, 0);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        if (num_lit.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                        }
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        if (num_lit.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(num_lit.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                        }
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
+        return value;
+    }
+
+    /// Evaluate a f32 fractional literal (e_frac_f32)
+    fn evalFracF32(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lit: @TypeOf(@as(can.CIR.Expr, undefined).e_frac_f32),
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
+            typed_ptr.* = lit.value;
+        }
+        return value;
+    }
+
+    /// Evaluate a f64 fractional literal (e_frac_f64)
+    fn evalFracF64(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lit: @TypeOf(@as(can.CIR.Expr, undefined).e_frac_f64),
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
+            typed_ptr.* = lit.value;
+        }
+        return value;
+    }
+
+    /// Evaluate a decimal literal (e_dec)
+    fn evalDec(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        dec_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_dec),
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+            typed_ptr.* = dec_lit.value;
+        }
+        return value;
+    }
+
+    /// Evaluate a small decimal literal (e_dec_small)
+    fn evalDecSmall(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        small: @TypeOf(@as(can.CIR.Expr, undefined).e_dec_small),
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(layout_val, 0);
+        if (value.ptr) |ptr| {
+            const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+            const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
+            const scaled = @as(i128, small.value.numerator) * scale_factor;
+            typed_ptr.* = RocDec{ .num = scaled };
+        }
+        return value;
+    }
+
+    /// Evaluate a string segment literal (e_str_segment)
+    fn evalStrSegment(
+        self: *Interpreter,
+        seg: @TypeOf(@as(can.CIR.Expr, undefined).e_str_segment),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const content = self.env.getString(seg.literal);
+        const value = try self.pushStr();
+        const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        roc_str.* = RocStr.fromSlice(content, roc_ops);
+        return value;
+    }
+
+    /// Evaluate an empty record literal (e_empty_record)
+    fn evalEmptyRecord(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const rec_layout = try self.getRuntimeLayout(rt_var);
+        return try self.pushRaw(rec_layout, 0);
+    }
+
+    /// Evaluate an empty list literal (e_empty_list)
+    fn evalEmptyList(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const derived_layout = try self.getRuntimeLayout(rt_var);
+
+        // Ensure we have a proper list layout even if the type variable defaulted to Dec.
+        const list_layout = if (derived_layout.tag == .list or derived_layout.tag == .list_of_zst)
+            derived_layout
+        else blk: {
+            // Default to list of Dec for empty lists when type can't be determined
+            const default_elem_layout = Layout.frac(types.Frac.Precision.dec);
+            const elem_layout_idx = try self.runtime_layout_store.insertLayout(default_elem_layout);
+            break :blk Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } };
+        };
+
+        const dest = try self.pushRaw(list_layout, 0);
+        if (dest.ptr) |ptr| {
+            const header: *RocList = @ptrCast(@alignCast(ptr));
+            header.* = RocList.empty();
+        }
+        return dest;
+    }
+
+    /// Evaluate a zero-argument tag (e_zero_argument_tag)
+    fn evalZeroArgumentTag(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        zero: @TypeOf(@as(can.CIR.Expr, undefined).e_zero_argument_tag),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        // Use resolveBaseVar to unwrap nominal types (like Bool := [False, True])
+        const resolved = self.resolveBaseVar(rt_var);
+        if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+            self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
+            return error.Crash;
+        }
+        const tu = resolved.desc.content.structure.tag_union;
+        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        // Find tag index by translating the source ident to the runtime store
+        const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+            const name_text = self.env.getIdent(zero.name);
+            const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+            self.triggerCrash(msg, true, roc_ops);
+            return error.Crash;
+        };
+        const layout_val = try self.getRuntimeLayout(rt_var);
+
+        // Handle different layout representations
+        if (layout_val.tag == .scalar) {
+            var out = try self.pushRaw(layout_val, 0);
+            if (layout_val.data.scalar.tag == .int) {
+                out.is_initialized = false;
+                try out.setInt(@intCast(tag_index));
+                out.is_initialized = true;
+                out.rt_var = rt_var;
+                return out;
+            }
+            self.triggerCrash("e_zero_argument_tag: scalar layout is not int", false, roc_ops);
+            return error.Crash;
+        } else if (layout_val.tag == .record) {
+            // Record { tag: Discriminant, payload: ZST }
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                self.triggerCrash("e_zero_argument_tag: tag field not found", false, roc_ops);
+                return error.Crash;
+            };
+            const tag_field = try acc.getFieldByIndex(tag_idx);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            } else {
+                self.triggerCrash("e_zero_argument_tag: record tag field is not scalar int", false, roc_ops);
+                return error.Crash;
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        } else if (layout_val.tag == .tuple) {
+            // Tuple (payload, tag) - tag unions are now represented as tuples
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asTuple(&self.runtime_layout_store);
+            // Element 1 is the tag discriminant
+            const tag_field = try acc.getElement(1);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            } else {
+                self.triggerCrash("e_zero_argument_tag: tuple tag field is not scalar int", false, roc_ops);
+                return error.Crash;
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        }
+        self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
+        return error.Crash;
+    }
+
+    /// Finalize a tag with no payload arguments (but may still have record/tuple layout)
+    fn finalizeTagNoPayload(
+        self: *Interpreter,
+        rt_var: types.Var,
+        tag_index: usize,
+        layout_val: Layout,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        if (layout_val.tag == .record) {
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                self.triggerCrash("e_tag: tag field not found", false, roc_ops);
+                return error.Crash;
+            };
+            const tag_field = try acc.getFieldByIndex(tag_field_idx);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        } else if (layout_val.tag == .tuple) {
+            var dest = try self.pushRaw(layout_val, 0);
+            var acc = try dest.asTuple(&self.runtime_layout_store);
+            const tag_field = try acc.getElement(1);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(tag_index));
+            }
+            dest.rt_var = rt_var;
+            return dest;
+        }
+        self.triggerCrash("e_tag: unexpected layout in finalizeTagNoPayload", false, roc_ops);
+        return error.Crash;
+    }
+
+    // ========================================================================
+    // Helper functions for lambda/closure creation
+    // ========================================================================
+
+    /// Evaluate a lambda expression (e_lambda) - creates a closure value with empty captures
+    fn evalLambda(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        // Build a closure value with empty captures using the runtime layout for the lambda's type
+        const rt_var = if (expected_rt_var) |provided_var|
+            provided_var
+        else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const closure_layout = try self.getRuntimeLayout(rt_var);
+        if (closure_layout.tag != .closure) {
+            self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
+            return error.Crash;
+        }
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = lam.body,
+                .params = lam.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+        }
+        return value;
+    }
+
+    /// Evaluate a low-level lambda expression (e_low_level_lambda) - creates a closure for builtins
+    fn evalLowLevelLambda(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_low_level_lambda),
+    ) Error!StackValue {
+        const rt_var = if (expected_rt_var) |provided_var|
+            provided_var
+        else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+        const closure_layout = try self.getRuntimeLayout(rt_var);
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = lam.body,
+                .params = lam.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+        }
+        return value;
+    }
+
+    /// Evaluate a hosted lambda expression (e_hosted_lambda) - creates a closure for host dispatch
+    fn evalHostedLambda(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        hosted: @TypeOf(@as(can.CIR.Expr, undefined).e_hosted_lambda),
+    ) Error!StackValue {
+        // Manually create a closure layout since hosted functions might have flex types
+        const closure_layout = Layout{
+            .tag = .closure,
+            .data = .{
+                .closure = .{
+                    .captures_layout_idx = @enumFromInt(0),
+                },
+            },
+        };
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = hosted.body,
+                .params = hosted.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+        }
+        return value;
+    }
+
+    /// Evaluate a closure expression (e_closure) - creates a closure with captured values
+    fn evalClosure(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        cls: @TypeOf(@as(can.CIR.Expr, undefined).e_closure),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const lam_expr = self.env.store.getExpr(cls.lambda_idx);
+        if (lam_expr != .e_lambda) {
+            self.triggerCrash("e_closure: lambda_idx does not point to e_lambda", false, roc_ops);
+            return error.Crash;
+        }
+        const lam = lam_expr.e_lambda;
+
+        const caps = self.env.store.sliceCaptures(cls.captures);
+        var field_layouts = try self.allocator.alloc(Layout, caps.len);
+        defer self.allocator.free(field_layouts);
+        var field_names = try self.allocator.alloc(base_pkg.Ident.Idx, caps.len);
+        defer self.allocator.free(field_names);
+
+        // Resolve all capture values
+        var capture_values = try self.allocator.alloc(StackValue, caps.len);
+        defer self.allocator.free(capture_values);
+
+        for (caps, 0..) |cap_idx, i| {
+            const cap = self.env.store.getCapture(cap_idx);
+            const name_text = self.env.getIdent(cap.name);
+            field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
+
+            const cap_val = self.resolveCapture(cap, roc_ops) orelse {
+                self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                return error.Crash;
+            };
+            capture_values[i] = cap_val;
+            field_layouts[i] = cap_val.layout;
+        }
+
+        const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
+        const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
+        const closure_layout = Layout.closure(captures_layout_idx);
+        const value = try self.pushRaw(closure_layout, 0);
+        self.registerDefValue(expr_idx, value);
+
+        if (value.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = lam.body,
+                .params = lam.args,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = captures_layout_idx,
+                .lambda_expr_idx = expr_idx,
+                .source_env = self.env,
+            };
+            // Copy captures into record area following header
+            const header_size = @sizeOf(layout.Closure);
+            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+            const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+            const base: [*]u8 = @ptrCast(@alignCast(ptr));
+            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+            for (caps, 0..) |_, cap_i| {
+                const cap_val = capture_values[cap_i];
+                const translated_name = field_names[cap_i];
+                const idx_opt = accessor.findFieldIndex(translated_name) orelse {
+                    self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
+                    return error.Crash;
+                };
+                try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
+            }
+        }
+        return value;
+    }
+
+    /// Helper to resolve a capture value from bindings, active closures, or top-level defs
+    fn resolveCapture(self: *Interpreter, cap: can.CIR.Expr.Capture, roc_ops: *RocOps) ?StackValue {
+        // First try local bindings by pattern idx
+        var i: usize = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            const b = self.bindings.items[i];
+            if (b.pattern_idx == cap.pattern_idx) return b.value;
+        }
+        // Next try ALL active closure captures in reverse order
+        if (self.active_closures.items.len > 0) {
+            var closure_idx: usize = self.active_closures.items.len;
+            while (closure_idx > 0) {
+                closure_idx -= 1;
+                const cls_val = self.active_closures.items[closure_idx];
+                if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                    const header_sz = @sizeOf(layout.Closure);
+                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                    var rec_acc = (rec_val.asRecord(&self.runtime_layout_store)) catch continue;
+                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
+                        if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
+                            return field_val;
+                        }
+                    }
+                }
+            }
+        }
+        // Finally try top-level defs by pattern idx
+        const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+        for (all_defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (def.pattern == cap.pattern_idx) {
+                var k: usize = self.def_stack.items.len;
+                while (k > 0) {
+                    k -= 1;
+                    const entry = self.def_stack.items[k];
+                    if (entry.pattern_idx == cap.pattern_idx) {
+                        if (entry.value) |val| {
+                            return val;
+                        }
+                    }
+                }
+                // Found the def! Evaluate it to get the captured value
+                const new_entry = DefInProgress{
+                    .pattern_idx = def.pattern,
+                    .expr_idx = def.expr,
+                    .value = null,
+                };
+                self.def_stack.append(new_entry) catch return null;
+                defer _ = self.def_stack.pop();
+                return self.eval(def.expr, roc_ops) catch null;
+            }
+        }
+        return null;
+    }
+
+    // ========================================================================
+    // Helper functions for variable lookups
+    // ========================================================================
+
+    /// Evaluate a local variable lookup (e_lookup_local)
+    /// Searches bindings in reverse order, checks closure captures, and handles
+    /// lazy evaluation of top-level definitions.
+    fn evalLookupLocal(
+        self: *Interpreter,
+        lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_local),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        // Search bindings in reverse
+        var i: usize = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            const b = self.bindings.items[i];
+            // Check both pattern_idx AND source module to avoid cross-module collisions.
+            const same_module = (b.source_env == self.env) or
+                (b.source_env.module_name_idx == self.env.module_name_idx);
+            if (b.pattern_idx == lookup.pattern_idx and same_module) {
+                // Check if this binding came from an e_anno_only expression
+                const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
+                if (expr_idx_int != 0) {
+                    const binding_expr = self.env.store.getExpr(b.expr_idx);
+                    if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
+                        self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
+                        return error.Crash;
+                    }
+                }
+                const copy_result = try self.pushCopy(b.value, roc_ops);
+                return copy_result;
+            }
+        }
+
+        // If not found, try active closure captures by variable name
+        if (self.active_closures.items.len > 0) {
+            const pat2 = self.env.store.getPattern(lookup.pattern_idx);
+            if (pat2 == .assign) {
+                const var_ident = pat2.assign.ident;
+                // Search from innermost to outermost closure
+                var closure_idx: usize = self.active_closures.items.len;
+                while (closure_idx > 0) {
+                    closure_idx -= 1;
+                    const cls_val = self.active_closures.items[closure_idx];
+                    if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                        const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
+                        const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
+                        const has_real_captures = (lambda_expr == .e_closure);
+                        if (has_real_captures) {
+                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                            const header_sz = @sizeOf(layout.Closure);
+                            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                            const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                            const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                            if (accessor.findFieldIndex(var_ident)) |fidx| {
+                                const field_val = try accessor.getFieldByIndex(fidx);
+                                return try self.pushCopy(field_val, roc_ops);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
+        const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+        for (all_defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (def.pattern == lookup.pattern_idx) {
+                // Evaluate the definition on demand and cache the result in bindings
+                const result = try self.evalWithExpectedType(def.expr, roc_ops, null);
+                try self.bindings.append(.{
+                    .pattern_idx = def.pattern,
+                    .value = result,
+                    .expr_idx = def.expr,
+                    .source_env = self.env,
+                });
+                return result;
+            }
+        }
+
+        self.triggerCrash("e_lookup_local: definition not found in current scope", false, roc_ops);
+        return error.Crash;
+    }
+
+    /// Evaluate an external variable lookup (e_lookup_external)
+    /// Handles cross-module references by switching to the imported module's context.
+    fn evalLookupExternal(
+        self: *Interpreter,
+        lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_external),
+        expected_rt_var: ?types.Var,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const other_env = self.import_envs.get(lookup.module_idx) orelse {
+            self.triggerCrash("e_lookup_external: import_envs missing entry for module", false, roc_ops);
+            return error.Crash;
+        };
+
+        // The target_node_idx is a Def.Idx in the other module
+        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+        const target_def = other_env.store.getDef(target_def_idx);
+
+        // Save both env and bindings state
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(other_env);
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        // Evaluate the definition's expression in the other module's context
+        const result = try self.evalWithExpectedType(target_def.expr, roc_ops, expected_rt_var);
+
+        return result;
+    }
+
+    // ========================================================================
+    // Helper functions for block evaluation
+    // ========================================================================
+
+    /// Add closure placeholders for mutual recursion support.
+    /// This is the first pass over statements that creates bindings for closures
+    /// before their actual evaluation, enabling mutual recursion.
+    fn addClosurePlaceholders(
+        self: *Interpreter,
+        stmts: []const can.CIR.Statement.Idx,
+        bindings_start: usize,
+    ) Error!void {
+        for (stmts) |stmt_idx| {
+            const stmt = self.env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_decl => |d| {
+                    const patt = self.env.store.getPattern(d.pattern);
+                    if (patt != .assign) continue;
+                    const rhs = self.env.store.getExpr(d.expr);
+                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, d.pattern)) {
+                        try self.addClosurePlaceholder(d.pattern, d.expr);
+                    }
+                },
+                .s_decl_gen => |d| {
+                    const patt = self.env.store.getPattern(d.pattern);
+                    if (patt != .assign) continue;
+                    const rhs = self.env.store.getExpr(d.expr);
+                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, d.pattern)) {
+                        try self.addClosurePlaceholder(d.pattern, d.expr);
+                    }
+                },
+                .s_var => |v| {
+                    const patt = self.env.store.getPattern(v.pattern_idx);
+                    if (patt != .assign) continue;
+                    const rhs = self.env.store.getExpr(v.expr);
+                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, v.pattern_idx)) {
+                        try self.addClosurePlaceholder(v.pattern_idx, v.expr);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Check if a placeholder binding already exists for a pattern.
+    fn placeholderExists(self: *Interpreter, start: usize, pattern_idx: can.CIR.Pattern.Idx) bool {
+        var i: usize = self.bindings.items.len;
+        while (i > start) {
+            i -= 1;
+            if (self.bindings.items[i].pattern_idx == pattern_idx) return true;
+        }
+        return false;
+    }
+
+    /// Add a closure placeholder binding for mutual recursion.
+    fn addClosurePlaceholder(
+        self: *Interpreter,
+        patt_idx: can.CIR.Pattern.Idx,
+        rhs_expr: can.CIR.Expr.Idx,
+    ) Error!void {
+        const patt_ct_var = can.ModuleEnv.varFrom(patt_idx);
+        const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+        const closure_layout = try self.getRuntimeLayout(patt_rt_var);
+        if (closure_layout.tag != .closure) return; // only closures get placeholders
+        const lam_or = self.env.store.getExpr(rhs_expr);
+        var body_idx: can.CIR.Expr.Idx = rhs_expr;
+        var params: can.CIR.Pattern.Span = .{ .span = .{ .start = 0, .len = 0 } };
+        if (lam_or == .e_lambda) {
+            body_idx = lam_or.e_lambda.body;
+            params = lam_or.e_lambda.args;
+        } else if (lam_or == .e_closure) {
+            const lam_expr = self.env.store.getExpr(lam_or.e_closure.lambda_idx);
+            if (lam_expr == .e_lambda) {
+                body_idx = lam_expr.e_lambda.body;
+                params = lam_expr.e_lambda.args;
+            }
+        } else return;
+        const ph = try self.pushRaw(closure_layout, 0);
+        if (ph.ptr) |ptr| {
+            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+            header.* = .{
+                .body_idx = body_idx,
+                .params = params,
+                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .lambda_expr_idx = rhs_expr,
+                .source_env = self.env,
+            };
+        }
+        try self.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr, .source_env = self.env });
+    }
+
+    /// Schedule processing of the next statement in a block.
+    fn scheduleNextStatement(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        stmt: can.CIR.Statement,
+        remaining_stmts: []const can.CIR.Statement.Idx,
+        final_expr: can.CIR.Expr.Idx,
+        bindings_start: usize,
+        roc_ops: *RocOps,
+    ) Error!void {
+        switch (stmt) {
+            .s_decl => |d| {
+                // Schedule: evaluate expression, then bind the pattern
+                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
+                    .pattern = d.pattern,
+                    .expr_idx = d.expr,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                // Push expression evaluation
+                const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = d.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_decl_gen => |d| {
+                // Same as s_decl
+                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
+                    .pattern = d.pattern,
+                    .expr_idx = d.expr,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = d.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_var => |v| {
+                // Same as s_decl but uses pattern_idx
+                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
+                    .pattern = v.pattern_idx,
+                    .expr_idx = v.expr,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = v.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_expr => |sx| {
+                // Evaluate expression, discard result, continue with remaining
+                // Push block_continue for remaining statements
+                try work_stack.push(.{ .apply_continuation = .{ .block_continue = .{
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+                // Push decref to clean up the expression result
+                // We'll handle this by pushing a special continuation or just evaluating and discarding
+                // For now, we'll just evaluate and let the block_continue handle cleanup
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = sx.expr,
+                    .expected_rt_var = null,
+                } });
+            },
+            .s_crash => |c| {
+                const msg = self.env.getString(c.msg);
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
+            },
+            .s_expect => |expect_stmt| {
+                // Evaluate condition, then check
+                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+
+                // Push expect_check_stmt continuation
+                try work_stack.push(.{ .apply_continuation = .{ .expect_check_stmt = .{
+                    .body_expr = expect_stmt.body,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate condition
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = expect_stmt.body,
+                    .expected_rt_var = bool_rt_var,
+                } });
+            },
+            .s_reassign => |r| {
+                // Evaluate expression, then reassign
+
+                // Push reassign_value continuation
+                try work_stack.push(.{ .apply_continuation = .{ .reassign_value = .{
+                    .pattern_idx = r.pattern_idx,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the new value
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = r.expr,
+                    .expected_rt_var = null,
+                } });
+            },
+            .s_dbg => |dbg_stmt| {
+                // Evaluate expression, then print
+                const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+
+                // Push dbg_print_stmt continuation
+                try work_stack.push(.{ .apply_continuation = .{ .dbg_print_stmt = .{
+                    .rt_var = inner_rt_var,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dbg_stmt.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
+            .s_return => |ret| {
+                // Early return: evaluate expression, then use early_return continuation
+                const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Push early_return continuation
+                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{} } });
+
+                // Evaluate the return expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ret.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_for => |for_stmt| {
+                // For loop: first evaluate the list, then set up iteration
+                const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Get the element type for binding
+                const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
+                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                // Push for_loop_iterate continuation (will be executed after list is evaluated)
+                // We'll fill in list_value, list_len, etc. in the continuation handler
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .for_loop_iterate = .{
+                            .list_value = undefined, // Will be set when list is evaluated
+                            .current_index = 0,
+                            .list_len = 0, // Will be set when list is evaluated
+                            .elem_size = 0, // Will be set when list is evaluated
+                            .elem_layout = undefined, // Will be set when list is evaluated
+                            .pattern = for_stmt.patt,
+                            .patt_rt_var = patt_rt_var,
+                            .body = for_stmt.body,
+                            .remaining_stmts = remaining_stmts,
+                            .final_expr = final_expr,
+                            .bindings_start = bindings_start,
+                        },
+                    },
+                });
+
+                // Evaluate the list expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = for_stmt.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+            .s_while => |while_stmt| {
+                // While loop: first evaluate condition, then decide
+                // Push while_loop_check continuation
+                try work_stack.push(.{ .apply_continuation = .{ .while_loop_check = .{
+                    .cond = while_stmt.cond,
+                    .body = while_stmt.body,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the condition
+                const cond_ct_var = can.ModuleEnv.varFrom(while_stmt.cond);
+                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = while_stmt.cond,
+                    .expected_rt_var = cond_rt_var,
+                } });
+            },
+            else => {
+                @panic("statement type not yet implemented");
+            },
+        }
+    }
+
+    /// Apply a continuation to consume values from the value stack.
+    /// Returns true to continue execution, false to exit the main loop.
+    fn applyContinuation(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        cont: Continuation,
+        roc_ops: *RocOps,
+    ) Error!bool {
+        switch (cont) {
+            .return_result => {
+                // Signal to exit the main loop - the result is on the value stack
+                return false;
+            },
+            .decref_value => |dv| {
+                // Decrement reference count of the value
+                dv.value.decref(&self.runtime_layout_store, roc_ops);
+                return true;
+            },
+            .trim_bindings => |tb| {
+                // Restore bindings to a previous length
+                self.trimBindingList(&self.bindings, tb.target_len, roc_ops);
+                return true;
+            },
+            .and_short_circuit => |sc| {
+                // Pop LHS value from stack
+                const lhs = value_stack.pop() orelse return error.Crash;
+                defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
+                if (boolValueEquals(false, lhs)) {
+                    // Short-circuit: LHS is false, so result is false
+                    const result = try self.makeBoolValue(false);
+                    try value_stack.push(result);
+                } else {
+                    // LHS is true, need to evaluate RHS
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = sc.rhs_expr,
+                        .expected_rt_var = null,
+                    } });
+                }
+                return true;
+            },
+            .or_short_circuit => |sc| {
+                // Pop LHS value from stack
+                const lhs = value_stack.pop() orelse return error.Crash;
+                defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
+                if (boolValueEquals(true, lhs)) {
+                    // Short-circuit: LHS is true, so result is true
+                    const result = try self.makeBoolValue(true);
+                    try value_stack.push(result);
+                } else {
+                    // LHS is false, need to evaluate RHS
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = sc.rhs_expr,
+                        .expected_rt_var = null,
+                    } });
+                }
+                return true;
+            },
+            .if_branch => |ib| {
+                // Pop condition value from stack
+                const cond = value_stack.pop() orelse return error.Crash;
+                defer cond.decref(&self.runtime_layout_store, roc_ops);
+
+                if (boolValueEquals(true, cond)) {
+                    // Condition is true, evaluate the body
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ib.body,
+                        .expected_rt_var = null,
+                    } });
+                } else if (ib.remaining_branches.len > 0) {
+                    // Try next branch
+                    const next_branch = self.env.store.getIfBranch(ib.remaining_branches[0]);
+                    // Push continuation for next branch
+                    try work_stack.push(.{ .apply_continuation = .{ .if_branch = .{
+                        .body = next_branch.body,
+                        .remaining_branches = ib.remaining_branches[1..],
+                        .final_else = ib.final_else,
+                    } } });
+                    // Push condition evaluation
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = next_branch.cond,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // No more branches, evaluate final else
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ib.final_else,
+                        .expected_rt_var = null,
+                    } });
+                }
+                return true;
+            },
+            .block_continue => |bc| {
+                // For s_expr statements, we need to pop and discard the value
+                // Check if there's a value to discard (from s_expr)
+                if (value_stack.items.items.len > 0) {
+                    // Pop and discard any value left from s_expr
+                    const val = value_stack.pop().?;
+                    val.decref(&self.runtime_layout_store, roc_ops);
+                }
+
+                if (bc.remaining_stmts.len == 0) {
+                    // No more statements, evaluate final expression
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = bc.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // Process next statement
+                    const next_stmt = self.env.store.getStatement(bc.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bc.remaining_stmts[1..], bc.final_expr, bc.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .bind_decl => |bd| {
+                // Pop evaluated value from stack
+                const val = value_stack.pop() orelse return error.Crash;
+                defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                // Get the runtime type for pattern matching
+                const expr_ct_var = can.ModuleEnv.varFrom(bd.expr_idx);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Bind the pattern
+                var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                defer {
+                    self.trimBindingList(&temp_binds, 0, roc_ops);
+                    temp_binds.deinit();
+                }
+
+                if (!try self.patternMatchesBind(bd.pattern, val, expr_rt_var, roc_ops, &temp_binds, bd.expr_idx)) {
+                    return error.TypeMismatch;
+                }
+
+                // Add bindings using upsertBinding to handle closure placeholders
+                for (temp_binds.items) |binding| {
+                    try self.upsertBinding(binding, bd.bindings_start, roc_ops);
+                }
+
+                // Continue with remaining statements
+                if (bd.remaining_stmts.len == 0) {
+                    // No more statements, evaluate final expression
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = bd.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // Process next statement
+                    const next_stmt = self.env.store.getStatement(bd.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bd.remaining_stmts[1..], bd.final_expr, bd.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .tuple_collect => |tc| {
+                // Tuple collection works by evaluating elements one at a time
+                // and tracking how many we've collected
+                if (tc.remaining_elems.len > 0) {
+                    // More elements to evaluate - schedule next one
+                    try work_stack.push(.{ .apply_continuation = .{ .tuple_collect = .{
+                        .collected_count = tc.collected_count + 1,
+                        .remaining_elems = tc.remaining_elems[1..],
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = tc.remaining_elems[0],
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    // All elements evaluated - finalize the tuple
+                    // Pop all collected values from the value stack
+                    const total_count = tc.collected_count;
+
+                    if (total_count == 0) {
+                        // Empty tuple (shouldn't happen as it's handled directly)
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(&[0]Layout{});
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                        const tuple_val = try self.pushRaw(tuple_layout, 0);
+                        try value_stack.push(tuple_val);
+                    } else {
+                        // Gather layouts and values
+                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                        defer self.allocator.free(elem_layouts);
+
+                        // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
+                        // We need to pop them and store in correct order
+                        var values = try self.allocator.alloc(StackValue, total_count);
+                        defer self.allocator.free(values);
+
+                        // Pop values in reverse order (last evaluated is on top)
+                        var i: usize = total_count;
+                        while (i > 0) {
+                            i -= 1;
+                            values[i] = value_stack.pop() orelse return error.Crash;
+                            elem_layouts[i] = values[i].layout;
+                        }
+
+                        // Create tuple layout
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                        var dest = try self.pushRaw(tuple_layout, 0);
+                        var accessor = try dest.asTuple(&self.runtime_layout_store);
+
+                        if (total_count != accessor.getElementCount()) return error.TypeMismatch;
+
+                        // Set all elements
+                        for (0..total_count) |idx| {
+                            try accessor.setElement(idx, values[idx], roc_ops);
+                        }
+
+                        // Decref temporary values after they've been copied into the tuple
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        try value_stack.push(dest);
+                    }
+                }
+                return true;
+            },
+            .list_collect => |lc| {
+                // List collection works by evaluating elements one at a time
+                // and tracking how many we've collected
+                if (lc.remaining_elems.len > 0) {
+                    // More elements to evaluate - schedule next one
+                    try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
+                        .collected_count = lc.collected_count + 1,
+                        .remaining_elems = lc.remaining_elems[1..],
+                        .elem_rt_var = lc.elem_rt_var,
+                        .list_rt_var = lc.list_rt_var,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = lc.remaining_elems[0],
+                        .expected_rt_var = lc.elem_rt_var,
+                    } });
+                } else {
+                    // All elements evaluated - finalize the list
+                    const total_count = lc.collected_count;
+
+                    if (total_count == 0) {
+                        // Empty list (shouldn't happen as it's handled directly)
+                        const list_layout = try self.getRuntimeLayout(lc.list_rt_var);
+                        const dest = try self.pushRaw(list_layout, 0);
+                        if (dest.ptr != null) {
+                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                            header.* = RocList.empty();
+                        }
+                        try value_stack.push(dest);
+                    } else {
+                        // Pop all collected values from the value stack
+                        var values = try self.allocator.alloc(StackValue, total_count);
+                        defer self.allocator.free(values);
+
+                        // Pop values in reverse order (last evaluated is on top)
+                        var i: usize = total_count;
+                        while (i > 0) {
+                            i -= 1;
+                            values[i] = value_stack.pop() orelse return error.Crash;
+                        }
+
+                        // Use the actual layout from the first evaluated element
+                        const actual_elem_layout = values[0].layout;
+
+                        // Create the list layout with the correct element layout
+                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
+                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+
+                        const dest = try self.pushRaw(actual_list_layout, 0);
+                        if (dest.ptr == null) {
+                            // Decref all values before returning
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            try value_stack.push(dest);
+                            return true;
+                        }
+
+                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                        const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                        const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
+                        const elements_refcounted = actual_elem_layout.isRefcounted();
+
+                        var runtime_list = RocList.allocateExact(
+                            elem_alignment_u32,
+                            total_count,
+                            elem_size,
+                            elements_refcounted,
+                            roc_ops,
+                        );
+
+                        if (elem_size > 0) {
+                            if (runtime_list.bytes) |buffer| {
+                                for (values, 0..) |val, idx| {
+                                    const dest_ptr = buffer + idx * elem_size;
+                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                }
+                            }
+                        }
+
+                        markListElementCount(&runtime_list, elements_refcounted);
+                        header.* = runtime_list;
+
+                        // Decref temporary values after they've been copied into the list
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        try value_stack.push(dest);
+                    }
+                }
+                return true;
+            },
+            .record_collect => |rc| {
+                // Record collection: evaluate extension (if any), then fields in order
+                if (rc.remaining_fields.len > 0) {
+                    // More fields to evaluate - schedule next one
+                    const next_field_idx = rc.remaining_fields[0];
+                    const f = self.env.store.getRecordField(next_field_idx);
+                    const field_ct_var = can.ModuleEnv.varFrom(f.value);
+                    const field_rt_var = try self.translateTypeVar(self.env, field_ct_var);
+
+                    try work_stack.push(.{ .apply_continuation = .{ .record_collect = .{
+                        .collected_count = rc.collected_count + 1,
+                        .remaining_fields = rc.remaining_fields[1..],
+                        .rt_var = rc.rt_var,
+                        .expr_idx = rc.expr_idx,
+                        .has_extension = rc.has_extension,
+                        .all_fields = rc.all_fields,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = f.value,
+                        .expected_rt_var = field_rt_var,
+                    } });
+                } else {
+                    // All values collected - finalize the record
+                    const total_field_values = rc.collected_count;
+
+                    // Build layout info from collected values
+                    var union_names = std.array_list.AlignedManaged(base_pkg.Ident.Idx, null).init(self.allocator);
+                    defer union_names.deinit();
+                    var union_layouts = std.array_list.AlignedManaged(layout.Layout, null).init(self.allocator);
+                    defer union_layouts.deinit();
+                    var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
+                    defer union_indices.deinit();
+
+                    // Pop field values from stack (in reverse order since last evaluated is on top)
+                    var field_values = try self.allocator.alloc(StackValue, total_field_values);
+                    defer self.allocator.free(field_values);
+
+                    var i: usize = total_field_values;
+                    while (i > 0) {
+                        i -= 1;
+                        field_values[i] = value_stack.pop() orelse return error.Crash;
+                    }
+
+                    // Handle base record if extension exists
+                    var base_value_opt: ?StackValue = null;
+                    if (rc.has_extension) {
+                        base_value_opt = value_stack.pop() orelse return error.Crash;
+                        const base_value = base_value_opt.?;
+                        if (base_value.layout.tag != .record) {
+                            base_value.decref(&self.runtime_layout_store, roc_ops);
+                            for (field_values) |fv| fv.decref(&self.runtime_layout_store, roc_ops);
+                            return error.TypeMismatch;
+                        }
+                        var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+
+                        // Add base record fields to union
+                        var idx: usize = 0;
+                        while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                            const info = base_accessor.field_layouts.get(idx);
+                            const field_layout = self.runtime_layout_store.getLayout(info.layout);
+                            const key: u32 = @bitCast(info.name);
+                            if (union_indices.get(key)) |idx_ptr| {
+                                union_layouts.items[idx_ptr] = field_layout;
+                                union_names.items[idx_ptr] = info.name;
+                            } else {
+                                try union_layouts.append(field_layout);
+                                try union_names.append(info.name);
+                                try union_indices.put(key, union_layouts.items.len - 1);
+                            }
+                        }
+                    }
+
+                    // Add explicit field layouts to union
+                    for (rc.all_fields, 0..) |field_idx_enum, idx| {
+                        const f = self.env.store.getRecordField(field_idx_enum);
+                        const field_layout = field_values[idx].layout;
+                        const key: u32 = @bitCast(f.name);
+                        if (union_indices.get(key)) |idx_ptr| {
+                            union_layouts.items[idx_ptr] = field_layout;
+                            union_names.items[idx_ptr] = f.name;
+                        } else {
+                            try union_layouts.append(field_layout);
+                            try union_names.append(f.name);
+                            try union_indices.put(key, union_layouts.items.len - 1);
+                        }
+                    }
+
+                    // Create record layout
+                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.env, union_layouts.items, union_names.items);
+                    const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
+
+                    // Cache the layout for this var
+                    const resolved_rt = self.runtime_types.resolveVar(rc.rt_var);
+                    const root_idx: usize = @intFromEnum(resolved_rt.var_);
+                    try self.ensureVarLayoutCapacity(root_idx + 1);
+                    self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
+
+                    var dest = try self.pushRaw(rec_layout, 0);
+                    var accessor = try dest.asRecord(&self.runtime_layout_store);
+
+                    // Copy base record fields first
+                    if (base_value_opt) |base_value| {
+                        var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+                        var idx: usize = 0;
+                        while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                            const info = base_accessor.field_layouts.get(idx);
+                            const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
+                            const base_field_value = try base_accessor.getFieldByIndex(idx);
+                            try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
+                        }
+                    }
+
+                    // Set explicit field values (overwriting base values if needed)
+                    for (rc.all_fields, 0..) |field_idx_enum, explicit_index| {
+                        const f = self.env.store.getRecordField(field_idx_enum);
+                        const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
+                        const val = field_values[explicit_index];
+
+                        // If overwriting a base field, decref the existing value
+                        if (base_value_opt) |base_value| {
+                            var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+                            if (base_accessor.findFieldIndex(f.name) != null) {
+                                const existing = try accessor.getFieldByIndex(dest_field_idx);
+                                existing.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
+
+                        try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
+                    }
+
+                    // Decref base value and field values after they've been copied
+                    if (base_value_opt) |base_value| {
+                        base_value.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    for (field_values) |val| {
+                        val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    try value_stack.push(dest);
+                }
+                return true;
+            },
+            .early_return => {
+                // Pop the evaluated value and signal early return
+                const return_value = value_stack.pop() orelse return error.Crash;
+                self.early_return_value = return_value;
+
+                // Drain work stack until we find call_cleanup (function boundary)
+                // This skips any remaining work items for the current function body
+                while (work_stack.pop()) |pending_item| {
+                    switch (pending_item) {
+                        .apply_continuation => |pending_cont| {
+                            switch (pending_cont) {
+                                .call_cleanup => {
+                                    // Found function boundary - put it back and continue normal processing
+                                    try work_stack.push(pending_item);
+                                    break;
+                                },
+                                .call_invoke_closure => |ci| {
+                                    // Free arg_rt_vars if we're skipping a pending call invocation
+                                    if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                },
+                                .for_loop_iterate => |fl| {
+                                    // Decref the list value when skipping a for loop
+                                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .for_loop_body_done => |fl| {
+                                    // Decref the list value and clean up bindings
+                                    self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
+                                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                else => {
+                                    // Skip this continuation - it's part of the function body being early-returned from
+                                },
+                            }
+                        },
+                        .eval_expr => {
+                            // Skip pending expression evaluations in the function body
+                        },
+                    }
+                }
+                return true;
+            },
+            .tag_collect => |tc| {
+                // Tag payload collection: evaluate each argument, then finalize tag
+                if (tc.remaining_args.len > 0) {
+                    // More arguments to evaluate
+                    const arg_idx = tc.collected_count;
+                    const arg_rt_var = if (arg_idx < tc.arg_rt_vars.len) tc.arg_rt_vars[arg_idx] else null;
+                    try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                        .collected_count = tc.collected_count + 1,
+                        .remaining_args = tc.remaining_args[1..],
+                        .arg_rt_vars = tc.arg_rt_vars,
+                        .expr_idx = tc.expr_idx,
+                        .rt_var = tc.rt_var,
+                        .tag_index = tc.tag_index,
+                        .layout_type = tc.layout_type,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = tc.remaining_args[0],
+                        .expected_rt_var = arg_rt_var,
+                    } });
+                } else {
+                    // All arguments collected - finalize the tag
+                    const total_count = tc.collected_count;
+                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
+
+                    // Pop all collected values
+                    var values = try self.allocator.alloc(StackValue, total_count);
+                    defer self.allocator.free(values);
+                    var i: usize = total_count;
+                    while (i > 0) {
+                        i -= 1;
+                        values[i] = value_stack.pop() orelse return error.Crash;
+                    }
+
+                    if (tc.layout_type == 0) {
+                        // Record layout { tag, payload }
+                        var dest = try self.pushRaw(layout_val, 0);
+                        var acc = try dest.asRecord(&self.runtime_layout_store);
+                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                            for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
+                            self.triggerCrash("e_tag: tag field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                            for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
+                            self.triggerCrash("e_tag: payload field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+
+                        // Write tag discriminant
+                        const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(tc.tag_index));
+                        }
+
+                        // Write payload
+                        const payload_field = try acc.getFieldByIndex(payload_field_idx);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (total_count == 1) {
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else {
+                                // Multiple args - create tuple payload
+                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                                defer self.allocator.free(elem_layouts);
+                                for (values, 0..) |val, idx| {
+                                    elem_layouts[idx] = val.layout;
+                                }
+                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                for (values, 0..) |val, idx| {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
+                            }
+                        }
+
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        dest.rt_var = tc.rt_var;
+                        try value_stack.push(dest);
+                    } else {
+                        // Tuple layout (payload, tag)
+                        var dest = try self.pushRaw(layout_val, 0);
+                        var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                        // Write tag discriminant (element 1)
+                        const tag_field = try acc.getElement(1);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(tc.tag_index));
+                        }
+
+                        // Write payload (element 0)
+                        const payload_field = try acc.getElement(0);
+                        if (payload_field.ptr) |payload_ptr| {
+                            if (total_count == 1) {
+                                // Check for layout mismatch and handle it
+                                const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                                const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                                const layouts_differ = arg_size > payload_size or !layoutsEqual(values[0].layout, payload_field.layout);
+
+                                if (layouts_differ) {
+                                    // Create properly-typed tuple with actual arg layout
+                                    var elem_layouts_fixed = [2]Layout{ values[0].layout, tag_field.layout };
+                                    const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
+                                    const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
+                                    var proper_dest = try self.pushRaw(proper_tuple_layout, 0);
+                                    var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                                    // Write tag
+                                    const proper_tag_field = try proper_acc.getElement(1);
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                        var tmp = proper_tag_field;
+                                        tmp.is_initialized = false;
+                                        try tmp.setInt(@intCast(tc.tag_index));
+                                    }
+
+                                    // Write payload
+                                    const proper_payload_field = try proper_acc.getElement(0);
+                                    if (proper_payload_field.ptr) |proper_ptr| {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                    }
+
+                                    for (values) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    proper_dest.rt_var = tc.rt_var;
+                                    try value_stack.push(proper_dest);
+                                    return true;
+                                }
+
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else {
+                                // Multiple args - create tuple payload
+                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                                defer self.allocator.free(elem_layouts);
+                                for (values, 0..) |val, idx| {
+                                    elem_layouts[idx] = val.layout;
+                                }
+                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                for (values, 0..) |val, idx| {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
+                            }
+                        }
+
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        dest.rt_var = tc.rt_var;
+                        try value_stack.push(dest);
+                    }
+                }
+                return true;
+            },
+            .match_branches => |mb| {
+                // Scrutinee is on value stack - get it but keep it there for potential later use
+                const scrutinee_temp = value_stack.pop() orelse return error.Crash;
+                // Make a copy to protect from corruption
+                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
+                scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
+
+                // Try branches starting from current_branch
+                var branch_idx = mb.current_branch;
+                while (branch_idx < mb.branches.len) : (branch_idx += 1) {
+                    const br = self.env.store.getMatchBranch(mb.branches[branch_idx]);
+                    const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
+
+                    for (patterns) |bp_idx| {
+                        var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                        defer {
+                            self.trimBindingList(&temp_binds, 0, roc_ops);
+                            temp_binds.deinit();
+                        }
+
+                        if (!try self.patternMatchesBind(
+                            self.env.store.getMatchBranchPattern(bp_idx).pattern,
+                            scrutinee,
+                            mb.scrutinee_rt_var,
+                            roc_ops,
+                            &temp_binds,
+                            @enumFromInt(0),
+                        )) {
+                            continue;
+                        }
+
+                        // Pattern matched! Add bindings
+                        const start_len = self.bindings.items.len;
+                        try self.bindings.appendSlice(temp_binds.items);
+                        temp_binds.items.len = 0;
+
+                        if (br.guard) |guard_idx| {
+                            // Has guard - need to evaluate it
+                            // Keep scrutinee on stack for potential next branch
+                            try value_stack.push(scrutinee);
+
+                            const guard_ct_var = can.ModuleEnv.varFrom(guard_idx);
+                            const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
+
+                            try work_stack.push(.{ .apply_continuation = .{ .match_guard = .{
+                                .branch_body = br.value,
+                                .result_rt_var = mb.result_rt_var,
+                                .bindings_start = start_len,
+                                .remaining_branches = mb.branches[branch_idx + 1 ..],
+                                .expr_idx = mb.expr_idx,
+                                .scrutinee_rt_var = mb.scrutinee_rt_var,
+                            } } });
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = guard_idx,
+                                .expected_rt_var = guard_rt_var,
+                            } });
+                            return true;
+                        }
+
+                        // No guard - evaluate body directly
+                        scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
+                        try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
+                            .bindings_start = start_len,
+                        } } });
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = br.value,
+                            .expected_rt_var = mb.result_rt_var,
+                        } });
+                        return true;
+                    }
+                }
+
+                // No branch matched
+                scrutinee.decref(&self.runtime_layout_store, roc_ops);
+                self.triggerCrash("non-exhaustive match", false, roc_ops);
+                return error.Crash;
+            },
+            .match_guard => |mg| {
+                // Guard result is on value stack
+                const guard_val = value_stack.pop() orelse return error.Crash;
+                defer guard_val.decref(&self.runtime_layout_store, roc_ops);
+
+                const guard_pass = boolValueEquals(true, guard_val);
+
+                if (guard_pass) {
+                    // Guard passed - evaluate body
+                    // Scrutinee is still on value stack - pop and decref it
+                    const scrutinee = value_stack.pop() orelse return error.Crash;
+                    scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
+                    try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
+                        .bindings_start = mg.bindings_start,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = mg.branch_body,
+                        .expected_rt_var = mg.result_rt_var,
+                    } });
+                } else {
+                    // Guard failed - try remaining branches
+                    self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
+
+                    if (mg.remaining_branches.len == 0) {
+                        // No more branches
+                        const scrutinee = value_stack.pop() orelse return error.Crash;
+                        scrutinee.decref(&self.runtime_layout_store, roc_ops);
+                        self.triggerCrash("non-exhaustive match", false, roc_ops);
+                        return error.Crash;
+                    }
+
+                    // Continue with remaining branches
+                    try work_stack.push(.{ .apply_continuation = .{ .match_branches = .{
+                        .expr_idx = mg.expr_idx,
+                        .scrutinee_rt_var = mg.scrutinee_rt_var,
+                        .result_rt_var = mg.result_rt_var,
+                        .branches = mg.remaining_branches,
+                        .current_branch = 0,
+                    } } });
+                }
+                return true;
+            },
+            .match_cleanup => |mc| {
+                // Result is on value stack - leave it there, just trim bindings
+                self.trimBindingList(&self.bindings, mc.bindings_start, roc_ops);
+                return true;
+            },
+            .expect_check => |ec| {
+                // Pop condition value from stack
+                const cond_val = value_stack.pop() orelse return error.Crash;
+                const succeeded = boolValueEquals(true, cond_val);
+                if (succeeded) {
+                    // Return {} (empty record)
+                    const ct_var = can.ModuleEnv.varFrom(ec.expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const layout_val = try self.getRuntimeLayout(rt_var);
+                    const result = try self.pushRaw(layout_val, 0);
+                    try value_stack.push(result);
+                    return true;
+                }
+                // Expect failed - trigger error
+                self.handleExpectFailure(ec.body_expr, roc_ops);
+                return error.Crash;
+            },
+            .dbg_print => |dp| {
+                // Pop evaluated value from stack
+                const value = value_stack.pop() orelse return error.Crash;
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
+                defer self.allocator.free(rendered);
+                roc_ops.dbg(rendered);
+                // Return {} (empty record)
+                const ct_var = can.ModuleEnv.varFrom(dp.expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const result = try self.pushRaw(layout_val, 0);
+                try value_stack.push(result);
+                return true;
+            },
+            .str_collect => |sc| {
+                // State machine for string interpolation:
+                // 1. If needs_conversion, convert top of value stack to string
+                // 2. If remaining segments, process next one
+                // 3. If no remaining segments, concatenate all collected strings
+
+                var collected_count = sc.collected_count;
+                var remaining = sc.remaining_segments;
+
+                // Step 1: If we just evaluated an expression, convert it to string
+                if (sc.needs_conversion) {
+                    const seg_value = value_stack.pop() orelse return error.Crash;
+
+                    // Convert to RocStr
+                    const segment_str = try self.stackValueToRocStr(seg_value, seg_value.rt_var, roc_ops);
+                    seg_value.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Push as string value
+                    const str_value = try self.pushStr();
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                    roc_str_ptr.* = segment_str;
+                    try value_stack.push(str_value);
+                    collected_count += 1;
+                    remaining = remaining[1..]; // Move past the segment we just converted
+                }
+
+                // Step 2: Process remaining segments
+                if (remaining.len == 0) {
+                    // Step 3: All segments collected - concatenate them
+                    var segment_strings = try std.array_list.AlignedManaged(RocStr, null).initCapacity(self.allocator, sc.total_count);
+                    defer {
+                        for (segment_strings.items) |s| {
+                            var str_copy = s;
+                            str_copy.decref(roc_ops);
+                        }
+                        segment_strings.deinit();
+                    }
+
+                    // Pop values in reverse order (stack is LIFO)
+                    var i: usize = 0;
+                    while (i < sc.total_count) : (i += 1) {
+                        const str_val = value_stack.pop() orelse return error.Crash;
+                        if (str_val.ptr) |ptr| {
+                            const roc_str: *RocStr = @ptrCast(@alignCast(ptr));
+                            try segment_strings.append(roc_str.*);
+                        } else {
+                            try segment_strings.append(RocStr.empty());
+                        }
+                    }
+
+                    // Reverse to get correct order
+                    std.mem.reverse(RocStr, segment_strings.items);
+
+                    // Calculate total length
+                    var total_len: usize = 0;
+                    for (segment_strings.items) |s| {
+                        total_len += s.asSlice().len;
+                    }
+
+                    // Concatenate
+                    const result_str: RocStr = if (total_len == 0)
+                        RocStr.empty()
+                    else blk: {
+                        const buffer = try self.allocator.alloc(u8, total_len);
+                        defer self.allocator.free(buffer);
+                        var offset: usize = 0;
+                        for (segment_strings.items) |segment_str| {
+                            const slice = segment_str.asSlice();
+                            std.mem.copyForwards(u8, buffer[offset .. offset + slice.len], slice);
+                            offset += slice.len;
+                        }
+                        break :blk RocStr.fromSlice(buffer, roc_ops);
+                    };
+
+                    const result = try self.pushStr();
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
+                    roc_str_ptr.* = result_str;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Process next segment
+                const next_seg = remaining[0];
+                const next_seg_expr = self.env.store.getExpr(next_seg);
+
+                if (next_seg_expr == .e_str_segment) {
+                    // Literal segment - push directly as string value
+                    const content = self.env.getString(next_seg_expr.e_str_segment.literal);
+                    const seg_str = RocStr.fromSlice(content, roc_ops);
+                    const seg_value = try self.pushStr();
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(seg_value.ptr.?));
+                    roc_str_ptr.* = seg_str;
+                    try value_stack.push(seg_value);
+
+                    // Schedule continuation for remaining (no conversion needed)
+                    try work_stack.push(.{ .apply_continuation = .{ .str_collect = .{
+                        .collected_count = collected_count + 1,
+                        .total_count = sc.total_count,
+                        .remaining_segments = remaining[1..],
+                        .needs_conversion = false,
+                    } } });
+                } else {
+                    // Expression segment - evaluate it, then convert
+                    const seg_ct_var = can.ModuleEnv.varFrom(next_seg);
+                    const seg_rt_var = try self.translateTypeVar(self.env, seg_ct_var);
+                    // Schedule continuation with needs_conversion = true
+                    try work_stack.push(.{
+                        .apply_continuation = .{
+                            .str_collect = .{
+                                .collected_count = collected_count,
+                                .total_count = sc.total_count,
+                                .remaining_segments = remaining, // Don't advance - we'll do it after conversion
+                                .needs_conversion = true,
+                            },
+                        },
+                    });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = next_seg,
+                        .expected_rt_var = seg_rt_var,
+                    } });
+                }
+                return true;
+            },
+            .call_collect_args => |cc| {
+                // Function call: collect arguments one by one
+                if (cc.remaining_args.len > 0) {
+                    // More arguments to evaluate
+                    const arg_idx = cc.collected_count;
+                    const arg_rt_var = if (arg_idx < cc.arg_rt_vars.len) cc.arg_rt_vars[arg_idx] else null;
+
+                    try work_stack.push(.{ .apply_continuation = .{ .call_collect_args = .{
+                        .collected_count = cc.collected_count + 1,
+                        .remaining_args = cc.remaining_args[1..],
+                        .arg_rt_vars = cc.arg_rt_vars,
+                        .call_ret_rt_var = cc.call_ret_rt_var,
+                        .did_instantiate = cc.did_instantiate,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = cc.remaining_args[0],
+                        .expected_rt_var = arg_rt_var,
+                    } });
+                }
+                // If no more args, the call_invoke_closure continuation handles the rest
+                return true;
+            },
+            .call_invoke_closure => |ci| {
+                // All arguments collected - pop them and the function, then invoke
+                // Stack state: [func_val, arg0, arg1, ...] (func at bottom, args on top)
+                const arg_count = ci.arg_count;
+
+                // Pop all arguments (in reverse order)
+                var arg_values = try self.allocator.alloc(StackValue, arg_count);
+                defer self.allocator.free(arg_values);
+                var i: usize = arg_count;
+                while (i > 0) {
+                    i -= 1;
+                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                }
+
+                // Pop function value
+                const func_val = value_stack.pop() orelse return error.Crash;
+
+                // Handle closure invocation
+                if (func_val.layout.tag == .closure) {
+                    const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+
+                    // Switch to the closure's source module
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(header.source_env);
+
+                    // Check if this is an annotation-only function
+                    const body_expr = self.env.store.getExpr(header.body_idx);
+                    if (body_expr == .e_anno_only) {
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
+                        return error.Crash;
+                    }
+
+                    // Check if this is a low-level lambda
+                    const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
+
+                        // Decref args (except for list_concat which handles its own refcounting)
+                        if (low_level.op != .list_concat) {
+                            for (arg_values) |arg| {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
+
+                        // Restore environment and free arg_rt_vars
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    // Check if this is a hosted lambda
+                    if (lambda_expr == .e_hosted_lambda) {
+                        const hosted = lambda_expr.e_hosted_lambda;
+                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+
+                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
+                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
+
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        // Restore environment and free arg_rt_vars
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    // Regular closure - bind parameters and evaluate body
+                    const params = self.env.store.slicePatterns(header.params);
+                    if (params.len != arg_count) {
+                        self.env = saved_env;
+                        func_val.decref(&self.runtime_layout_store, roc_ops);
+                        for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        return error.TypeMismatch;
+                    }
+
+                    // Provide closure context for capture lookup
+                    try self.active_closures.append(func_val);
+
+                    // Bind parameters
+                    for (params, 0..) |param, idx| {
+                        try self.bindings.append(.{
+                            .pattern_idx = param,
+                            .value = arg_values[idx],
+                            .expr_idx = @enumFromInt(0),
+                            .source_env = self.env,
+                        });
+                    }
+
+                    // Push cleanup continuation, then evaluate body
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = saved_env,
+                        .saved_bindings_len = saved_bindings_len,
+                        .param_count = params.len,
+                        .has_active_closure = true,
+                        .did_instantiate = ci.did_instantiate,
+                        .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = header.body_idx,
+                        .expected_rt_var = ci.call_ret_rt_var,
+                    } });
+                    return true;
+                }
+
+                // Not a closure - check if it's a direct lambda expression
+                func_val.decref(&self.runtime_layout_store, roc_ops);
+                for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                self.triggerCrash("e_call: func is neither closure nor lambda", false, roc_ops);
+                return error.Crash;
+            },
+            .call_cleanup => |cleanup| {
+                // Function body evaluated - cleanup and return result
+                // Check for early return
+                if (self.early_return_value) |return_val| {
+                    // Body triggered early return - use that value
+                    self.early_return_value = null;
+
+                    // Decref parameter bindings
+                    var k = cleanup.param_count;
+                    while (k > 0) {
+                        k -= 1;
+                        if (self.bindings.pop()) |binding| {
+                            binding.value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    // Pop active closure if needed
+                    if (cleanup.has_active_closure) {
+                        if (self.active_closures.pop()) |closure_val| {
+                            closure_val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    // Restore environment and free arg_rt_vars
+                    self.env = cleanup.saved_env;
+                    self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                    if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                    try value_stack.push(return_val);
+                    return true;
+                }
+
+                // Normal return - result is on value stack
+                const result = value_stack.pop() orelse return error.Crash;
+
+                // Decref parameter bindings
+                var k = cleanup.param_count;
+                while (k > 0) {
+                    k -= 1;
+                    if (self.bindings.pop()) |binding| {
+                        binding.value.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                }
+
+                // Pop active closure if needed
+                if (cleanup.has_active_closure) {
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                }
+
+                // Restore environment and free arg_rt_vars
+                self.env = cleanup.saved_env;
+                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                try value_stack.push(result);
+                return true;
+            },
+            .unary_op_apply => |ua| {
+                // Unary operation: operand is on stack, apply method
+                const operand = value_stack.pop() orelse return error.Crash;
+                defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+                // Resolve the operand type
+                const operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+
+                // Get nominal type info
+                const nominal_info = switch (operand_resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => {
+                            return error.InvalidMethodReceiver;
+                        },
+                    },
+                    else => {
+                        return error.InvalidMethodReceiver;
+                    },
+                };
+
+                // Resolve the method function
+                const method_func = try self.resolveMethodFunction(
+                    nominal_info.origin,
+                    nominal_info.ident,
+                    ua.method_ident,
+                    roc_ops,
+                );
+                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                // Call the method closure
+                if (method_func.layout.tag != .closure) {
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Switch to the closure's source module
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if this is a low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+                    var args = [1]StackValue{operand};
+                    const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Regular closure invocation
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != 1) {
+                    self.env = saved_env;
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context
+                try self.active_closures.append(method_func);
+
+                // Bind parameter
+                try self.bindings.append(.{
+                    .pattern_idx = params[0],
+                    .value = operand,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+
+                // Push cleanup and evaluate body
+                try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                    .saved_env = saved_env,
+                    .saved_bindings_len = saved_bindings_len,
+                    .param_count = 1,
+                    .has_active_closure = true,
+                    .did_instantiate = false,
+                    .arg_rt_vars_to_free = null,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = closure_header.body_idx,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .binop_eval_rhs => |be| {
+                // Binary operation: LHS is on stack, now evaluate RHS
+                // We keep LHS on stack, push continuation to apply method after RHS is evaluated
+                try work_stack.push(.{ .apply_continuation = .{ .binop_apply = .{
+                    .method_ident = be.method_ident,
+                    .receiver_rt_var = be.lhs_rt_var,
+                    .rhs_rt_var = be.rhs_rt_var,
+                    .negate_result = be.negate_result,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = be.rhs_expr,
+                    .expected_rt_var = be.rhs_rt_var,
+                } });
+                return true;
+            },
+            .binop_apply => |ba| {
+                // Binary operation: both operands on stack, apply method
+                // Stack: [lhs, rhs] - RHS on top
+                const rhs = value_stack.pop() orelse return error.Crash;
+                defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                const lhs = value_stack.pop() orelse return error.Crash;
+                defer lhs.decref(&self.runtime_layout_store, roc_ops);
+
+                // Resolve the lhs type
+                const lhs_resolved = self.runtime_types.resolveVar(ba.receiver_rt_var);
+
+                // Get nominal type info, or handle anonymous structural types
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                            // Anonymous structural types have implicit is_eq
+                            if (ba.method_ident == self.root_env.idents.is_eq) {
+                                var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
+                                    if (err == error.NotImplemented) {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    }
+                                    return err;
+                                };
+                                // For != operator, negate the result
+                                if (ba.negate_result) result = !result;
+                                const result_val = try self.makeBoolValue(result);
+                                try value_stack.push(result_val);
+                                return true;
+                            }
+                            break :blk null;
+                        },
+                        else => null,
+                    },
+                    else => null,
+                };
+
+                if (nominal_info == null) {
+                    return error.InvalidMethodReceiver;
+                }
+
+                // Resolve the method function
+                const method_func = try self.resolveMethodFunction(
+                    nominal_info.?.origin,
+                    nominal_info.?.ident,
+                    ba.method_ident,
+                    roc_ops,
+                );
+                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                // Call the method closure
+                if (method_func.layout.tag != .closure) {
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Switch to the closure's source module
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if this is a low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+                    var args = [2]StackValue{ lhs, rhs };
+                    var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    self.env = saved_env;
+
+                    // For != operator, negate boolean result
+                    if (ba.negate_result) {
+                        const is_eq_result = boolValueEquals(true, result);
+                        result.decref(&self.runtime_layout_store, roc_ops);
+                        result = try self.makeBoolValue(!is_eq_result);
+                    }
+
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Regular closure invocation
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != 2) {
+                    self.env = saved_env;
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context
+                try self.active_closures.append(method_func);
+
+                // Bind parameters
+                try self.bindings.append(.{
+                    .pattern_idx = params[0],
+                    .value = lhs,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+                try self.bindings.append(.{
+                    .pattern_idx = params[1],
+                    .value = rhs,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+
+                // Push cleanup and evaluate body
+                try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                    .saved_env = saved_env,
+                    .saved_bindings_len = saved_bindings_len,
+                    .param_count = 2,
+                    .has_active_closure = true,
+                    .did_instantiate = false,
+                    .arg_rt_vars_to_free = null,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = closure_header.body_idx,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .dot_access_resolve => |da| {
+                // Dot access: receiver is on stack, resolve field or method
+                const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                if (da.method_args == null) {
+                    // Field access on a record
+                    defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                    if (receiver_value.layout.tag != .record) {
+                        return error.TypeMismatch;
+                    }
+
+                    const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
+                    if (rec_data.fields.count == 0) {
+                        return error.TypeMismatch;
+                    }
+
+                    var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
+                    const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
+                    const field_value = try accessor.getFieldByIndex(field_idx);
+                    const result = try self.pushCopy(field_value, roc_ops);
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Method call - resolve receiver type for dispatch
+                // First check if the type is still a flex/rigid var, default to Dec
+                var effective_receiver_rt_var = da.receiver_rt_var;
+                const receiver_resolved_check = self.runtime_types.resolveVar(da.receiver_rt_var);
+                if (receiver_resolved_check.desc.content == .flex or receiver_resolved_check.desc.content == .rigid) {
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    effective_receiver_rt_var = dec_var;
+                }
+
+                // Don't use resolveBaseVar here - we need to keep the nominal type
+                // for method dispatch (resolveBaseVar unwraps nominal types to their backing)
+                const resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+
+                const method_args = da.method_args.?;
+                const arg_exprs = self.env.store.sliceExpr(method_args);
+
+                // Get nominal type info
+                const nominal_info = switch (resolved_receiver.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => {
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                            return error.InvalidMethodReceiver;
+                        },
+                    },
+                    else => {
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        return error.InvalidMethodReceiver;
+                    },
+                };
+
+                // Resolve the method function
+                const method_func = self.resolveMethodFunction(
+                    nominal_info.origin,
+                    nominal_info.ident,
+                    da.field_name,
+                    roc_ops,
+                ) catch |err| {
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    if (err == error.MethodLookupFailed) {
+                        const layout_env = self.runtime_layout_store.env;
+                        const type_name = import_mapping_mod.getDisplayName(
+                            self.import_mapping,
+                            layout_env.common.getIdentStore(),
+                            nominal_info.ident,
+                        );
+                        const method_name = self.env.getIdent(da.field_name);
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
+                            self.triggerCrash("Method not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        self.triggerCrash(crash_msg, true, roc_ops);
+                        return error.Crash;
+                    }
+                    return err;
+                };
+
+                if (method_func.layout.tag != .closure) {
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                // If no additional args, invoke method directly with receiver
+                if (arg_exprs.len == 0) {
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Check if low-level lambda
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var args = [1]StackValue{receiver_value};
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    const params = self.env.store.slicePatterns(closure_header.params);
+                    if (params.len != 1) {
+                        self.env = saved_env;
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+
+                    try self.active_closures.append(method_func);
+                    try self.bindings.append(.{
+                        .pattern_idx = params[0],
+                        .value = receiver_value,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = saved_env,
+                        .saved_bindings_len = saved_bindings_len,
+                        .param_count = 1,
+                        .has_active_closure = true,
+                        .did_instantiate = false,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = closure_header.body_idx,
+                        .expected_rt_var = null,
+                    } });
+                    return true;
+                }
+
+                // Has additional args - need to collect them first
+                // Push receiver back on stack, then method function, then collect args
+                try value_stack.push(receiver_value);
+                try value_stack.push(method_func);
+
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
+                    .method_name = da.field_name,
+                    .collected_count = 0,
+                    .remaining_args = arg_exprs,
+                    .receiver_rt_var = da.receiver_rt_var,
+                    .expr_idx = da.expr_idx,
+                } } });
+
+                // Start evaluating first arg
+                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = arg_exprs[0],
+                    .expected_rt_var = first_arg_rt_var,
+                } });
+                return true;
+            },
+            .dot_access_collect_args => |dac| {
+                // Dot access method call: collecting arguments
+                // Stack: [receiver, method_func, arg0, arg1, ...]
+                if (dac.remaining_args.len > 1) {
+                    // More arguments to evaluate
+                    try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
+                        .method_name = dac.method_name,
+                        .collected_count = dac.collected_count + 1,
+                        .remaining_args = dac.remaining_args[1..],
+                        .receiver_rt_var = dac.receiver_rt_var,
+                        .expr_idx = dac.expr_idx,
+                    } } });
+
+                    const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
+                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = dac.remaining_args[1],
+                        .expected_rt_var = next_arg_rt_var,
+                    } });
+                    return true;
+                }
+
+                // All arguments collected - invoke method
+                const total_args = dac.collected_count + 1; // +1 for the last arg we just got
+
+                // Pop arguments (last evaluated on top)
+                var arg_values = try self.allocator.alloc(StackValue, total_args);
+                defer self.allocator.free(arg_values);
+                var i: usize = total_args;
+                while (i > 0) {
+                    i -= 1;
+                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                }
+
+                // Pop method function and receiver
+                const method_func = value_stack.pop() orelse return error.Crash;
+                const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+
+                    // Build args array: receiver + explicit args
+                    var all_args = try self.allocator.alloc(StackValue, 1 + total_args);
+                    defer self.allocator.free(all_args);
+                    all_args[0] = receiver_value;
+                    for (arg_values, 0..) |arg, idx| {
+                        all_args[1 + idx] = arg;
+                    }
+
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, null);
+
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Regular closure invocation
+                const params = self.env.store.slicePatterns(closure_header.params);
+                const expected_params = 1 + total_args;
+                if (params.len != expected_params) {
+                    self.env = saved_env;
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                try self.active_closures.append(method_func);
+
+                // Bind receiver first
+                try self.bindings.append(.{
+                    .pattern_idx = params[0],
+                    .value = receiver_value,
+                    .expr_idx = @enumFromInt(0),
+                    .source_env = self.env,
+                });
+
+                // Bind explicit arguments
+                for (arg_values, 0..) |arg, idx| {
+                    try self.bindings.append(.{
+                        .pattern_idx = params[1 + idx],
+                        .value = arg,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+                }
+
+                try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                    .saved_env = saved_env,
+                    .saved_bindings_len = saved_bindings_len,
+                    .param_count = expected_params,
+                    .has_active_closure = true,
+                    .did_instantiate = false,
+                    .arg_rt_vars_to_free = null,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = closure_header.body_idx,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .for_loop_iterate => |fl_in| {
+                // For loop iteration: list has been evaluated, start iterating
+                const list_value = value_stack.pop() orelse return error.Crash;
+
+                // Get the list layout
+                if (list_value.layout.tag != .list) {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+                const elem_layout_idx = list_value.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                // Get the RocList header
+                const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                const list_len = list_header.len();
+
+                // Create the proper for_loop_iterate with list info filled in
+                var fl = fl_in;
+                fl.list_value = list_value;
+                fl.list_len = list_len;
+                fl.elem_size = elem_size;
+                fl.elem_layout = elem_layout;
+
+                // If list is empty, skip to remaining statements
+                if (list_len == 0) {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    if (fl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = fl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, roc_ops);
+                    }
+                    return true;
+                }
+
+                // Process first element
+                const elem_ptr = if (list_header.bytes) |buffer|
+                    buffer
+                else {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                };
+
+                var elem_value = StackValue{
+                    .ptr = elem_ptr,
+                    .layout = elem_layout,
+                    .is_initialized = true,
+                };
+                elem_value.incref();
+
+                // Bind the pattern
+                const loop_bindings_start = self.bindings.items.len;
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                // Push body_done continuation
+                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                    .list_value = fl.list_value,
+                    .current_index = 0,
+                    .list_len = fl.list_len,
+                    .elem_size = fl.elem_size,
+                    .elem_layout = fl.elem_layout,
+                    .pattern = fl.pattern,
+                    .patt_rt_var = fl.patt_rt_var,
+                    .body = fl.body,
+                    .remaining_stmts = fl.remaining_stmts,
+                    .final_expr = fl.final_expr,
+                    .bindings_start = fl.bindings_start,
+                    .loop_bindings_start = loop_bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = fl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .for_loop_body_done => |fl| {
+                // For loop body completed, clean up and continue to next iteration
+                const body_result = value_stack.pop() orelse return error.Crash;
+                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Clean up bindings for this iteration
+                self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
+
+                // Move to next element
+                const next_index = fl.current_index + 1;
+                if (next_index >= fl.list_len) {
+                    // Loop complete, decref list and continue with remaining statements
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    if (fl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = fl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, roc_ops);
+                    }
+                    return true;
+                }
+
+                // Get next element
+                const list_header: *const RocList = @ptrCast(@alignCast(fl.list_value.ptr.?));
+                const elem_ptr = if (list_header.bytes) |buffer|
+                    buffer + next_index * fl.elem_size
+                else {
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                };
+
+                var elem_value = StackValue{
+                    .ptr = elem_ptr,
+                    .layout = fl.elem_layout,
+                    .is_initialized = true,
+                };
+                elem_value.incref();
+
+                // Bind the pattern
+                const new_loop_bindings_start = self.bindings.items.len;
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                // Push body_done continuation for next iteration
+                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                    .list_value = fl.list_value,
+                    .current_index = next_index,
+                    .list_len = fl.list_len,
+                    .elem_size = fl.elem_size,
+                    .elem_layout = fl.elem_layout,
+                    .pattern = fl.pattern,
+                    .patt_rt_var = fl.patt_rt_var,
+                    .body = fl.body,
+                    .remaining_stmts = fl.remaining_stmts,
+                    .final_expr = fl.final_expr,
+                    .bindings_start = fl.bindings_start,
+                    .loop_bindings_start = new_loop_bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = fl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .while_loop_check => |wl| {
+                // While loop: condition has been evaluated
+                const cond_value = value_stack.pop() orelse return error.Crash;
+                const cond_is_true = boolValueEquals(true, cond_value);
+
+                if (!cond_is_true) {
+                    // Loop complete, continue with remaining statements
+                    if (wl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = wl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(wl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, wl.remaining_stmts[1..], wl.final_expr, wl.bindings_start, roc_ops);
+                    }
+                    return true;
+                }
+
+                // Push body_done continuation
+                try work_stack.push(.{ .apply_continuation = .{ .while_loop_body_done = .{
+                    .cond = wl.cond,
+                    .body = wl.body,
+                    .remaining_stmts = wl.remaining_stmts,
+                    .final_expr = wl.final_expr,
+                    .bindings_start = wl.bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = wl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .while_loop_body_done => |wl| {
+                // While loop body completed, check condition again
+                const body_result = value_stack.pop() orelse return error.Crash;
+                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Push check continuation for next iteration
+                try work_stack.push(.{ .apply_continuation = .{ .while_loop_check = .{
+                    .cond = wl.cond,
+                    .body = wl.body,
+                    .remaining_stmts = wl.remaining_stmts,
+                    .final_expr = wl.final_expr,
+                    .bindings_start = wl.bindings_start,
+                } } });
+
+                // Evaluate condition
+                const cond_ct_var = can.ModuleEnv.varFrom(wl.cond);
+                const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = wl.cond,
+                    .expected_rt_var = cond_rt_var,
+                } });
+                return true;
+            },
+            .expect_check_stmt => |ec| {
+                // Expect statement: check condition result
+                const cond_val = value_stack.pop() orelse return error.Crash;
+                const is_true = boolValueEquals(true, cond_val);
+                if (!is_true) {
+                    self.handleExpectFailure(ec.body_expr, roc_ops);
+                    return error.Crash;
+                }
+                // Continue with remaining statements
+                if (ec.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ec.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(ec.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, ec.remaining_stmts[1..], ec.final_expr, ec.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .reassign_value => |rv| {
+                // Reassign statement: update binding
+                const new_val = value_stack.pop() orelse return error.Crash;
+                // Search through all bindings and reassign
+                var j: usize = self.bindings.items.len;
+                while (j > 0) {
+                    j -= 1;
+                    if (self.bindings.items[j].pattern_idx == rv.pattern_idx) {
+                        self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
+                        self.bindings.items[j].value = new_val;
+                        break;
+                    }
+                }
+                // Continue with remaining statements
+                if (rv.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = rv.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(rv.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, rv.remaining_stmts[1..], rv.final_expr, rv.bindings_start, roc_ops);
+                }
+                return true;
+            },
+            .dbg_print_stmt => |dp| {
+                // Dbg statement: print value
+                const value = value_stack.pop() orelse return error.Crash;
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, dp.rt_var);
+                defer self.allocator.free(rendered);
+                roc_ops.dbg(rendered);
+                // Continue with remaining statements
+                if (dp.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = dp.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, roc_ops);
+                }
+                return true;
+            },
+        }
     }
 };
 

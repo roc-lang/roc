@@ -473,9 +473,6 @@ pub const Expr = union(enum) {
         list_get_unsafe,
         list_concat,
 
-        // Set operations
-        set_is_empty,
-
         // Bool operations
         bool_is_eq,
 
@@ -680,7 +677,7 @@ pub const Expr = union(enum) {
         u128_to_u64_try, // U128 -> Try(U64, [OutOfRange])
         u128_to_f32, // U128 -> F32 (safe)
         u128_to_f64, // U128 -> F64 (safe)
-        u128_to_dec_try, // U128 -> Try(Dec, [OutOfRange])
+        u128_to_dec_try_unsafe, // U128 -> { success: Bool, val: Dec }
 
         // Numeric conversion operations (I128)
         i128_to_i8_wrap, // I128 -> I8 (wrapping)
@@ -703,78 +700,78 @@ pub const Expr = union(enum) {
         i128_to_u128_try, // I128 -> Try(U128, [OutOfRange])
         i128_to_f32, // I128 -> F32 (safe)
         i128_to_f64, // I128 -> F64 (safe)
-        i128_to_dec_try, // I128 -> Try(Dec, [OutOfRange])
+        i128_to_dec_try_unsafe, // I128 -> { success: Bool, val: Dec }
 
         // Numeric conversion operations (F32)
         f32_to_i8_trunc, // F32 -> I8 (truncating)
-        f32_to_i8_try, // F32 -> Try(I8, [NotInt, OutOfRange])
+        f32_to_i8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I8 }
         f32_to_i16_trunc, // F32 -> I16 (truncating)
-        f32_to_i16_try, // F32 -> Try(I16, [NotInt, OutOfRange])
+        f32_to_i16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I16 }
         f32_to_i32_trunc, // F32 -> I32 (truncating)
-        f32_to_i32_try, // F32 -> Try(I32, [NotInt, OutOfRange])
+        f32_to_i32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I32 }
         f32_to_i64_trunc, // F32 -> I64 (truncating)
-        f32_to_i64_try, // F32 -> Try(I64, [NotInt, OutOfRange])
+        f32_to_i64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I64 }
         f32_to_i128_trunc, // F32 -> I128 (truncating)
-        f32_to_i128_try, // F32 -> Try(I128, [NotInt, OutOfRange])
+        f32_to_i128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I128 }
         f32_to_u8_trunc, // F32 -> U8 (truncating)
-        f32_to_u8_try, // F32 -> Try(U8, [NotInt, OutOfRange])
+        f32_to_u8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U8 }
         f32_to_u16_trunc, // F32 -> U16 (truncating)
-        f32_to_u16_try, // F32 -> Try(U16, [NotInt, OutOfRange])
+        f32_to_u16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U16 }
         f32_to_u32_trunc, // F32 -> U32 (truncating)
-        f32_to_u32_try, // F32 -> Try(U32, [NotInt, OutOfRange])
+        f32_to_u32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U32 }
         f32_to_u64_trunc, // F32 -> U64 (truncating)
-        f32_to_u64_try, // F32 -> Try(U64, [NotInt, OutOfRange])
+        f32_to_u64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U64 }
         f32_to_u128_trunc, // F32 -> U128 (truncating)
-        f32_to_u128_try, // F32 -> Try(U128, [NotInt, OutOfRange])
+        f32_to_u128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U128 }
         f32_to_f64, // F32 -> F64 (safe widening)
 
         // Numeric conversion operations (F64)
         f64_to_i8_trunc, // F64 -> I8 (truncating)
-        f64_to_i8_try, // F64 -> Try(I8, [NotInt, OutOfRange])
+        f64_to_i8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I8 }
         f64_to_i16_trunc, // F64 -> I16 (truncating)
-        f64_to_i16_try, // F64 -> Try(I16, [NotInt, OutOfRange])
+        f64_to_i16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I16 }
         f64_to_i32_trunc, // F64 -> I32 (truncating)
-        f64_to_i32_try, // F64 -> Try(I32, [NotInt, OutOfRange])
+        f64_to_i32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I32 }
         f64_to_i64_trunc, // F64 -> I64 (truncating)
-        f64_to_i64_try, // F64 -> Try(I64, [NotInt, OutOfRange])
+        f64_to_i64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I64 }
         f64_to_i128_trunc, // F64 -> I128 (truncating)
-        f64_to_i128_try, // F64 -> Try(I128, [NotInt, OutOfRange])
+        f64_to_i128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I128 }
         f64_to_u8_trunc, // F64 -> U8 (truncating)
-        f64_to_u8_try, // F64 -> Try(U8, [NotInt, OutOfRange])
+        f64_to_u8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U8 }
         f64_to_u16_trunc, // F64 -> U16 (truncating)
-        f64_to_u16_try, // F64 -> Try(U16, [NotInt, OutOfRange])
+        f64_to_u16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U16 }
         f64_to_u32_trunc, // F64 -> U32 (truncating)
-        f64_to_u32_try, // F64 -> Try(U32, [NotInt, OutOfRange])
+        f64_to_u32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U32 }
         f64_to_u64_trunc, // F64 -> U64 (truncating)
-        f64_to_u64_try, // F64 -> Try(U64, [NotInt, OutOfRange])
+        f64_to_u64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U64 }
         f64_to_u128_trunc, // F64 -> U128 (truncating)
-        f64_to_u128_try, // F64 -> Try(U128, [NotInt, OutOfRange])
+        f64_to_u128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U128 }
         f64_to_f32_wrap, // F64 -> F32 (lossy narrowing)
-        f64_to_f32_try, // F64 -> Try(F32, [OutOfRange])
+        f64_to_f32_try_unsafe, // F64 -> { success: Bool, val: F32 }
 
         // Numeric conversion operations (Dec)
         dec_to_i8_trunc, // Dec -> I8 (truncating)
-        dec_to_i8_try, // Dec -> Try(I8, [NotInt, OutOfRange])
+        dec_to_i8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I8 }
         dec_to_i16_trunc, // Dec -> I16 (truncating)
-        dec_to_i16_try, // Dec -> Try(I16, [NotInt, OutOfRange])
+        dec_to_i16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I16 }
         dec_to_i32_trunc, // Dec -> I32 (truncating)
-        dec_to_i32_try, // Dec -> Try(I32, [NotInt, OutOfRange])
+        dec_to_i32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I32 }
         dec_to_i64_trunc, // Dec -> I64 (truncating)
-        dec_to_i64_try, // Dec -> Try(I64, [NotInt, OutOfRange])
+        dec_to_i64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I64 }
         dec_to_i128_trunc, // Dec -> I128 (truncating)
-        dec_to_i128_try, // Dec -> Try(I128, [NotInt]) - always fits
+        dec_to_i128_try_unsafe, // Dec -> { is_int: Bool, val: I128 } - always in range
         dec_to_u8_trunc, // Dec -> U8 (truncating)
-        dec_to_u8_try, // Dec -> Try(U8, [NotInt, OutOfRange])
+        dec_to_u8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U8 }
         dec_to_u16_trunc, // Dec -> U16 (truncating)
-        dec_to_u16_try, // Dec -> Try(U16, [NotInt, OutOfRange])
+        dec_to_u16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U16 }
         dec_to_u32_trunc, // Dec -> U32 (truncating)
-        dec_to_u32_try, // Dec -> Try(U32, [NotInt, OutOfRange])
+        dec_to_u32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U32 }
         dec_to_u64_trunc, // Dec -> U64 (truncating)
-        dec_to_u64_try, // Dec -> Try(U64, [NotInt, OutOfRange])
+        dec_to_u64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U64 }
         dec_to_u128_trunc, // Dec -> U128 (truncating)
-        dec_to_u128_try, // Dec -> Try(U128, [NotInt]) - always fits if positive
+        dec_to_u128_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U128 }
         dec_to_f32_wrap, // Dec -> F32 (lossy narrowing)
-        dec_to_f32_try, // Dec -> Try(F32, [OutOfRange])
+        dec_to_f32_try_unsafe, // Dec -> { success: Bool, val: F32 }
         dec_to_f64, // Dec -> F64 (lossy conversion)
     };
 
