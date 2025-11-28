@@ -2321,7 +2321,7 @@ test "e_low_level_lambda - shift_right_by large shift amount clamped" {
         \\x = a.shift_right_by(200)
     ;
     const value = try evalModuleAndGetInt(src, 1);
-    try testing.expectEqual(@as(i128, 1), value); // 255 >> 127 (clamped) = 1
+    try testing.expectEqual(@as(i128, 0), value); // 255 >> 127 (clamped) = 0 (all bits shifted out)
 }
 
 test "e_low_level_lambda - U16.shift_left_by to max representable" {
