@@ -1856,3 +1856,121 @@ test "e_low_level_lambda - U8.plus method call syntax" {
     const value = try evalModuleAndGetInt(src, 2);
     try testing.expectEqual(@as(i128, 8), value);
 }
+
+// =============================================================================
+// List.sort_with tests
+// =============================================================================
+
+test "e_low_level_lambda - List.sort_with basic ascending sort" {
+    const src =
+        \\x = List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(1)", first_value);
+}
+
+test "e_low_level_lambda - List.sort_with preserves length" {
+    const src =
+        \\x = List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "e_low_level_lambda - List.sort_with with larger list" {
+    const src =
+        \\x = List.sort_with([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(1)", first_value);
+}
+
+test "e_low_level_lambda - List.sort_with with two elements" {
+    const src =
+        \\x = List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(1)", first_value);
+}
+
+test "e_low_level_lambda - List.sort_with descending order" {
+    const src =
+        \\x = List.sort_with([1, 3, 2], |a, b| if a > b LT else if a < b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    // Descending sort of [1, 3, 2] should give [3, 2, 1], first = 3
+    try testing.expectEqualStrings("Ok(3)", first_value);
+}
+
+test "e_low_level_lambda - List.sort_with empty list" {
+    const src =
+        \\x : List(U64)
+        \\x = List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.sort_with single element" {
+    const src =
+        \\x = List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(42)", first_value);
+}
+
+test "e_low_level_lambda - List.sort_with with duplicates" {
+    const src =
+        \\x = List.sort_with([3, 1, 2, 1, 3], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+        \\len = List.len(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(1)", first_value);
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "e_low_level_lambda - List.sort_with already sorted" {
+    const src =
+        \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(1)", first_value);
+}
+
+test "e_low_level_lambda - List.sort_with reverse sorted" {
+    const src =
+        \\x = List.sort_with([5, 4, 3, 2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\first = List.first(x)
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(1)", first_value);
+}

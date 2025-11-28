@@ -473,6 +473,7 @@ pub const Expr = union(enum) {
         list_get_unsafe,
         list_concat,
         list_with_capacity,
+        list_sort_with,
 
         // Bool operations
         bool_is_eq,
