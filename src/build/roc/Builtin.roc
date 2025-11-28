@@ -162,8 +162,6 @@ Builtin :: [].{
 	Dict :: [EmptyDict].{}
 
 	Set(item) :: [].{
-		is_empty : Set(item) -> Bool
-
 		is_eq : Set(item), Set(item) -> Bool
 		is_eq = |_a, _b| Bool.False
 	}

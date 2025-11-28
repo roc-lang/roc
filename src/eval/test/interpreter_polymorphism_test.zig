@@ -94,7 +94,7 @@ test "interpreter poly: return a function then call (int)" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
@@ -115,7 +115,7 @@ test "interpreter poly: return a function then call (string)" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
@@ -139,7 +139,7 @@ test "interpreter captures (monomorphic): adder" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
@@ -160,7 +160,7 @@ test "interpreter captures (monomorphic): constant function" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
@@ -184,7 +184,7 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
@@ -205,7 +205,7 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
@@ -230,7 +230,7 @@ test "interpreter higher-order: apply f then call with 41" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -250,7 +250,7 @@ test "interpreter higher-order: apply f twice" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -270,7 +270,7 @@ test "interpreter higher-order: pass constructed closure and apply" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("41", rendered);
@@ -290,7 +290,7 @@ test "interpreter higher-order: construct then pass then call" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -310,7 +310,7 @@ test "interpreter higher-order: compose id with +1" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -330,7 +330,7 @@ test "interpreter higher-order: return poly fn using captured +n" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -350,7 +350,7 @@ test "interpreter recursion: simple countdown" {
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("2", rendered);
@@ -369,7 +369,7 @@ test "interpreter if: else-if chain selects middle branch" {
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     const expected =
@@ -391,7 +391,7 @@ test "interpreter var and reassign" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("2", rendered);
@@ -410,7 +410,7 @@ test "interpreter logical or is short-circuiting" {
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     const expected =
@@ -432,7 +432,7 @@ test "interpreter logical and is short-circuiting" {
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     const expected =
@@ -454,7 +454,7 @@ test "interpreter recursion: factorial 5 -> 120" {
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("120", rendered);
@@ -477,7 +477,7 @@ test "interpreter recursion: fibonacci 5 -> 5" {
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("5", rendered);
@@ -498,7 +498,7 @@ test "interpreter tag union: one-arg tag Ok(42)" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
@@ -522,7 +522,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
