@@ -2371,6 +2371,7 @@ pub const Interpreter = struct {
             },
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
+
                 const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
                 var receiver_value = try self.evalExprMinimal(dot_access.receiver, roc_ops, receiver_rt_var);
                 defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
