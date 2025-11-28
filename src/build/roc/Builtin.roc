@@ -111,9 +111,6 @@ Builtin :: [].{
 
 		all : List(a), (a -> Bool) -> Bool
 		all = |list, predicate| {
-			if List.len(list) == 0 {
-				return False
-			}
 			for item in list {
 				if Bool.not(predicate(item)) {
 					return False

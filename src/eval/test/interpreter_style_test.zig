@@ -970,7 +970,7 @@ test "interpreter: List.any True on integers" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -990,7 +990,7 @@ test "interpreter: List.any False on unsigned integers" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1010,7 +1010,7 @@ test "interpreter: List.any False on empty list" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1030,7 +1030,7 @@ test "interpreter: List.all False when some elements are False" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1050,7 +1050,7 @@ test "interpreter: List.all True on small integers" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1070,11 +1070,11 @@ test "interpreter: List.all False on empty list" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("False", rendered);
+    try std.testing.expectEqualStrings("True", rendered);
 }
 
 test "interpreter: List.contains is False for a missing element" {
@@ -1090,7 +1090,7 @@ test "interpreter: List.contains is False for a missing element" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1110,7 +1110,7 @@ test "interpreter: List.contains is True when element is found" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1130,7 +1130,7 @@ test "interpreter: List.contains is False on empty list" {
     defer host.deinit();
     var ops = host.makeOps();
 
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
