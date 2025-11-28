@@ -1781,11 +1781,11 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .set_is_empty => {
-                // TODO: implement Set.is_empty
-                self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
-                return error.Crash;
-            },
+            // .set_is_empty => {
+            //     // TODO: implement Set.is_empty
+            //     self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
+            //     return error.Crash;
+            // },
             // Bool operations
             .bool_is_eq => {
                 // Bool.is_eq : Bool, Bool -> Bool
