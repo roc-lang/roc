@@ -2161,6 +2161,291 @@ test "e_low_level_lambda - U16.shift_right_zf_by equals shift_right_by for unsig
 }
 
 // =============================================================================
+// Bitwise shift edge case tests
+// =============================================================================
+
+test "e_low_level_lambda - U8.shift_left_by overflow wraps" {
+    const src =
+        \\a : U8
+        \\a = 128
+        \\x = a.shift_left_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), value); // 128 << 1 wraps to 0 in U8
+}
+
+test "e_low_level_lambda - I8.shift_left_by overflow wraps" {
+    const src =
+        \\a : I8
+        \\a = 64
+        \\x = a.shift_left_by(2)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), value); // 64 << 2 = 256, wraps to 0 in I8
+}
+
+test "e_low_level_lambda - I8.shift_left_by max value overflow" {
+    const src =
+        \\a : I8
+        \\a = 127
+        \\x = a.shift_left_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -2), value); // 127 << 1 = 254 = -2 in I8
+}
+
+test "e_low_level_lambda - U8.shift_right_by max value" {
+    const src =
+        \\a : U8
+        \\a = 255
+        \\x = a.shift_right_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 127), value); // 255 >> 1 = 127
+}
+
+test "e_low_level_lambda - I8.shift_right_by min value" {
+    const src =
+        \\a : I8
+        \\a = -128
+        \\x = a.shift_right_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -64), value); // -128 >> 1 = -64 (arithmetic)
+}
+
+test "e_low_level_lambda - I8.shift_right_zf_by min value" {
+    const src =
+        \\a : I8
+        \\a = -128
+        \\x = a.shift_right_zf_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 64), value); // -128 (0x80) >>> 1 = 64 (0x40)
+}
+
+test "e_low_level_lambda - shift_left_by amount at bit width boundary" {
+    const src =
+        \\a : U8
+        \\a = 1
+        \\x = a.shift_left_by(7)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 128), value); // 1 << 7 = 128 (MSB set)
+}
+
+test "e_low_level_lambda - shift_right_by amount at bit width boundary" {
+    const src =
+        \\a : U8
+        \\a = 128
+        \\x = a.shift_right_by(7)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1), value); // 128 >> 7 = 1
+}
+
+test "e_low_level_lambda - I8.shift_right_by negative all ones preserves" {
+    const src =
+        \\a : I8
+        \\a = -1
+        \\x = a.shift_right_by(7)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -1), value); // -1 >> 7 = -1 (sign extends)
+}
+
+test "e_low_level_lambda - I8.shift_right_by negative rounds toward negative infinity" {
+    const src =
+        \\a : I8
+        \\a = -3
+        \\x = a.shift_right_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -2), value); // -3 >> 1 = -2
+}
+
+test "e_low_level_lambda - U8.shift_right_zf_by all ones pattern" {
+    const src =
+        \\a : U8
+        \\a = 255
+        \\x = a.shift_right_zf_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 127), value); // 255 >>> 1 = 127
+}
+
+test "e_low_level_lambda - I8.shift_right_zf_by all ones from negative" {
+    const src =
+        \\a : I8
+        \\a = -1
+        \\x = a.shift_right_zf_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 127), value); // -1 (0xFF) >>> 1 = 127 (0x7F)
+}
+
+test "e_low_level_lambda - shift_left_by with zero value" {
+    const src =
+        \\a : U8
+        \\a = 0
+        \\x = a.shift_left_by(5)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), value); // 0 << 5 = 0
+}
+
+test "e_low_level_lambda - shift_right_zf_by with zero value" {
+    const src =
+        \\a : I8
+        \\a = 0
+        \\x = a.shift_right_zf_by(3)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), value); // 0 >>> 3 = 0
+}
+
+test "e_low_level_lambda - shift_left_by large shift amount clamped U8" {
+    const src =
+        \\a : U8
+        \\a = 1
+        \\x = a.shift_left_by(200)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), value); // 1 << 127 (clamped) wraps to 0
+}
+
+test "e_low_level_lambda - shift_right_by large shift amount clamped" {
+    const src =
+        \\a : U8
+        \\a = 255
+        \\x = a.shift_right_by(200)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1), value); // 255 >> 127 (clamped) = 1
+}
+
+test "e_low_level_lambda - U16.shift_left_by to max representable" {
+    const src =
+        \\a : U16
+        \\a = 1
+        \\x = a.shift_left_by(15)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 32768), value); // 1 << 15 = 32768 (MSB set)
+}
+
+test "e_low_level_lambda - U32.shift_left_by power of 2" {
+    const src =
+        \\a : U32
+        \\a = 1
+        \\x = a.shift_left_by(20)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1048576), value); // 1 << 20 = 2^20
+}
+
+test "e_low_level_lambda - U64.shift_left_by large power" {
+    const src =
+        \\a : U64
+        \\a = 1
+        \\x = a.shift_left_by(40)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1099511627776), value); // 1 << 40 = 2^40
+}
+
+test "e_low_level_lambda - U128.shift_left_by near max" {
+    const src =
+        \\a : U128
+        \\a = 1
+        \\x = a.shift_left_by(100)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1267650600228229401496703205376), value); // 1 << 100 = 2^100
+}
+
+test "e_low_level_lambda - I16.shift_right_by negative large magnitude" {
+    const src =
+        \\a : I16
+        \\a = -1024
+        \\x = a.shift_right_by(5)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -32), value); // -1024 >> 5 = -32
+}
+
+test "e_low_level_lambda - I32.shift_right_by min value" {
+    const src =
+        \\a : I32
+        \\a = -2147483648
+        \\x = a.shift_right_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -1073741824), value); // I32::MIN >> 1
+}
+
+test "e_low_level_lambda - I32.shift_right_zf_by min value" {
+    const src =
+        \\a : I32
+        \\a = -2147483648
+        \\x = a.shift_right_zf_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1073741824), value); // I32::MIN (0x80000000) >>> 1 = 0x40000000
+}
+
+test "e_low_level_lambda - shift single bit round trip" {
+    const src =
+        \\a : U8
+        \\a = 1
+        \\b = a.shift_left_by(5)
+        \\x = b.shift_right_by(5)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value); // (1 << 5) >> 5 = 1
+}
+
+test "e_low_level_lambda - I64.shift_right_by negative two" {
+    const src =
+        \\a : I64
+        \\a = -2
+        \\x = a.shift_right_by(1)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -1), value); // -2 >> 1 = -1
+}
+
+test "e_low_level_lambda - U32.shift_left_by shift amount exactly at width" {
+    const src =
+        \\a : U32
+        \\a = 1
+        \\x = a.shift_left_by(32)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), value); // 1 << 32 (clamped to 31) = wraps
+}
+
+test "e_low_level_lambda - I8.shift_right_by negative by 7 bits" {
+    const src =
+        \\a : I8
+        \\a = -127
+        \\x = a.shift_right_by(6)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -2), value); // -127 >> 6 = -2
+}
+
+test "e_low_level_lambda - U64.shift_right_zf_by max value by half" {
+    const src =
+        \\a : U64
+        \\a = 18446744073709551615
+        \\x = a.shift_right_zf_by(32)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4294967295), value); // U64::MAX >>> 32
+}
+
+// =============================================================================
 // List.sort_with tests
 // =============================================================================
 
