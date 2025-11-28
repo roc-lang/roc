@@ -570,6 +570,23 @@ pub const Interpreter = struct {
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
     }
 
+    /// Push raw bytes with a specific size and alignment (for building records/tuples)
+    pub fn pushRawBytes(self: *Interpreter, size: usize, alignment: usize) !StackValue {
+        if (size == 0) {
+            return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = null, .is_initialized = true };
+        }
+        const align_enum: std.mem.Alignment = switch (alignment) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            8 => .@"8",
+            16 => .@"16",
+            else => .@"1",
+        };
+        const ptr = try self.stack_memory.alloca(@intCast(size), align_enum);
+        return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = ptr, .is_initialized = true };
+    }
+
     pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
@@ -2508,6 +2525,247 @@ pub const Interpreter = struct {
             .i8_to_f32 => return self.intToFloat(i8, f32, args),
             .i8_to_f64 => return self.intToFloat(i8, f64, args),
             .i8_to_dec => return self.intToDec(i8, args),
+
+            // U16 conversion operations
+            .u16_to_i8_wrap => return self.intConvertWrap(u16, i8, args),
+            .u16_to_i8_try => return self.intConvertTry(u16, i8, args, return_rt_var),
+            .u16_to_i16_wrap => return self.intConvertWrap(u16, i16, args),
+            .u16_to_i16_try => return self.intConvertTry(u16, i16, args, return_rt_var),
+            .u16_to_i32 => return self.intConvert(u16, i32, args),
+            .u16_to_i64 => return self.intConvert(u16, i64, args),
+            .u16_to_i128 => return self.intConvert(u16, i128, args),
+            .u16_to_u8_wrap => return self.intConvertWrap(u16, u8, args),
+            .u16_to_u8_try => return self.intConvertTry(u16, u8, args, return_rt_var),
+            .u16_to_u32 => return self.intConvert(u16, u32, args),
+            .u16_to_u64 => return self.intConvert(u16, u64, args),
+            .u16_to_u128 => return self.intConvert(u16, u128, args),
+            .u16_to_f32 => return self.intToFloat(u16, f32, args),
+            .u16_to_f64 => return self.intToFloat(u16, f64, args),
+            .u16_to_dec => return self.intToDec(u16, args),
+
+            // I16 conversion operations
+            .i16_to_i8_wrap => return self.intConvertWrap(i16, i8, args),
+            .i16_to_i8_try => return self.intConvertTry(i16, i8, args, return_rt_var),
+            .i16_to_i32 => return self.intConvert(i16, i32, args),
+            .i16_to_i64 => return self.intConvert(i16, i64, args),
+            .i16_to_i128 => return self.intConvert(i16, i128, args),
+            .i16_to_u8_wrap => return self.intConvertWrap(i16, u8, args),
+            .i16_to_u8_try => return self.intConvertTry(i16, u8, args, return_rt_var),
+            .i16_to_u16_wrap => return self.intConvertWrap(i16, u16, args),
+            .i16_to_u16_try => return self.intConvertTry(i16, u16, args, return_rt_var),
+            .i16_to_u32_wrap => return self.intConvertWrap(i16, u32, args),
+            .i16_to_u32_try => return self.intConvertTry(i16, u32, args, return_rt_var),
+            .i16_to_u64_wrap => return self.intConvertWrap(i16, u64, args),
+            .i16_to_u64_try => return self.intConvertTry(i16, u64, args, return_rt_var),
+            .i16_to_u128_wrap => return self.intConvertWrap(i16, u128, args),
+            .i16_to_u128_try => return self.intConvertTry(i16, u128, args, return_rt_var),
+            .i16_to_f32 => return self.intToFloat(i16, f32, args),
+            .i16_to_f64 => return self.intToFloat(i16, f64, args),
+            .i16_to_dec => return self.intToDec(i16, args),
+
+            // U32 conversion operations
+            .u32_to_i8_wrap => return self.intConvertWrap(u32, i8, args),
+            .u32_to_i8_try => return self.intConvertTry(u32, i8, args, return_rt_var),
+            .u32_to_i16_wrap => return self.intConvertWrap(u32, i16, args),
+            .u32_to_i16_try => return self.intConvertTry(u32, i16, args, return_rt_var),
+            .u32_to_i32_wrap => return self.intConvertWrap(u32, i32, args),
+            .u32_to_i32_try => return self.intConvertTry(u32, i32, args, return_rt_var),
+            .u32_to_i64 => return self.intConvert(u32, i64, args),
+            .u32_to_i128 => return self.intConvert(u32, i128, args),
+            .u32_to_u8_wrap => return self.intConvertWrap(u32, u8, args),
+            .u32_to_u8_try => return self.intConvertTry(u32, u8, args, return_rt_var),
+            .u32_to_u16_wrap => return self.intConvertWrap(u32, u16, args),
+            .u32_to_u16_try => return self.intConvertTry(u32, u16, args, return_rt_var),
+            .u32_to_u64 => return self.intConvert(u32, u64, args),
+            .u32_to_u128 => return self.intConvert(u32, u128, args),
+            .u32_to_f32 => return self.intToFloat(u32, f32, args),
+            .u32_to_f64 => return self.intToFloat(u32, f64, args),
+            .u32_to_dec => return self.intToDec(u32, args),
+
+            // I32 conversion operations
+            .i32_to_i8_wrap => return self.intConvertWrap(i32, i8, args),
+            .i32_to_i8_try => return self.intConvertTry(i32, i8, args, return_rt_var),
+            .i32_to_i16_wrap => return self.intConvertWrap(i32, i16, args),
+            .i32_to_i16_try => return self.intConvertTry(i32, i16, args, return_rt_var),
+            .i32_to_i64 => return self.intConvert(i32, i64, args),
+            .i32_to_i128 => return self.intConvert(i32, i128, args),
+            .i32_to_u8_wrap => return self.intConvertWrap(i32, u8, args),
+            .i32_to_u8_try => return self.intConvertTry(i32, u8, args, return_rt_var),
+            .i32_to_u16_wrap => return self.intConvertWrap(i32, u16, args),
+            .i32_to_u16_try => return self.intConvertTry(i32, u16, args, return_rt_var),
+            .i32_to_u32_wrap => return self.intConvertWrap(i32, u32, args),
+            .i32_to_u32_try => return self.intConvertTry(i32, u32, args, return_rt_var),
+            .i32_to_u64_wrap => return self.intConvertWrap(i32, u64, args),
+            .i32_to_u64_try => return self.intConvertTry(i32, u64, args, return_rt_var),
+            .i32_to_u128_wrap => return self.intConvertWrap(i32, u128, args),
+            .i32_to_u128_try => return self.intConvertTry(i32, u128, args, return_rt_var),
+            .i32_to_f32 => return self.intToFloat(i32, f32, args),
+            .i32_to_f64 => return self.intToFloat(i32, f64, args),
+            .i32_to_dec => return self.intToDec(i32, args),
+
+            // U64 conversion operations
+            .u64_to_i8_wrap => return self.intConvertWrap(u64, i8, args),
+            .u64_to_i8_try => return self.intConvertTry(u64, i8, args, return_rt_var),
+            .u64_to_i16_wrap => return self.intConvertWrap(u64, i16, args),
+            .u64_to_i16_try => return self.intConvertTry(u64, i16, args, return_rt_var),
+            .u64_to_i32_wrap => return self.intConvertWrap(u64, i32, args),
+            .u64_to_i32_try => return self.intConvertTry(u64, i32, args, return_rt_var),
+            .u64_to_i64_wrap => return self.intConvertWrap(u64, i64, args),
+            .u64_to_i64_try => return self.intConvertTry(u64, i64, args, return_rt_var),
+            .u64_to_i128 => return self.intConvert(u64, i128, args),
+            .u64_to_u8_wrap => return self.intConvertWrap(u64, u8, args),
+            .u64_to_u8_try => return self.intConvertTry(u64, u8, args, return_rt_var),
+            .u64_to_u16_wrap => return self.intConvertWrap(u64, u16, args),
+            .u64_to_u16_try => return self.intConvertTry(u64, u16, args, return_rt_var),
+            .u64_to_u32_wrap => return self.intConvertWrap(u64, u32, args),
+            .u64_to_u32_try => return self.intConvertTry(u64, u32, args, return_rt_var),
+            .u64_to_u128 => return self.intConvert(u64, u128, args),
+            .u64_to_f32 => return self.intToFloat(u64, f32, args),
+            .u64_to_f64 => return self.intToFloat(u64, f64, args),
+            .u64_to_dec => return self.intToDec(u64, args),
+
+            // I64 conversion operations
+            .i64_to_i8_wrap => return self.intConvertWrap(i64, i8, args),
+            .i64_to_i8_try => return self.intConvertTry(i64, i8, args, return_rt_var),
+            .i64_to_i16_wrap => return self.intConvertWrap(i64, i16, args),
+            .i64_to_i16_try => return self.intConvertTry(i64, i16, args, return_rt_var),
+            .i64_to_i32_wrap => return self.intConvertWrap(i64, i32, args),
+            .i64_to_i32_try => return self.intConvertTry(i64, i32, args, return_rt_var),
+            .i64_to_i128 => return self.intConvert(i64, i128, args),
+            .i64_to_u8_wrap => return self.intConvertWrap(i64, u8, args),
+            .i64_to_u8_try => return self.intConvertTry(i64, u8, args, return_rt_var),
+            .i64_to_u16_wrap => return self.intConvertWrap(i64, u16, args),
+            .i64_to_u16_try => return self.intConvertTry(i64, u16, args, return_rt_var),
+            .i64_to_u32_wrap => return self.intConvertWrap(i64, u32, args),
+            .i64_to_u32_try => return self.intConvertTry(i64, u32, args, return_rt_var),
+            .i64_to_u64_wrap => return self.intConvertWrap(i64, u64, args),
+            .i64_to_u64_try => return self.intConvertTry(i64, u64, args, return_rt_var),
+            .i64_to_u128_wrap => return self.intConvertWrap(i64, u128, args),
+            .i64_to_u128_try => return self.intConvertTry(i64, u128, args, return_rt_var),
+            .i64_to_f32 => return self.intToFloat(i64, f32, args),
+            .i64_to_f64 => return self.intToFloat(i64, f64, args),
+            .i64_to_dec => return self.intToDec(i64, args),
+
+            // U128 conversion operations
+            .u128_to_i8_wrap => return self.intConvertWrap(u128, i8, args),
+            .u128_to_i8_try => return self.intConvertTry(u128, i8, args, return_rt_var),
+            .u128_to_i16_wrap => return self.intConvertWrap(u128, i16, args),
+            .u128_to_i16_try => return self.intConvertTry(u128, i16, args, return_rt_var),
+            .u128_to_i32_wrap => return self.intConvertWrap(u128, i32, args),
+            .u128_to_i32_try => return self.intConvertTry(u128, i32, args, return_rt_var),
+            .u128_to_i64_wrap => return self.intConvertWrap(u128, i64, args),
+            .u128_to_i64_try => return self.intConvertTry(u128, i64, args, return_rt_var),
+            .u128_to_i128_wrap => return self.intConvertWrap(u128, i128, args),
+            .u128_to_i128_try => return self.intConvertTry(u128, i128, args, return_rt_var),
+            .u128_to_u8_wrap => return self.intConvertWrap(u128, u8, args),
+            .u128_to_u8_try => return self.intConvertTry(u128, u8, args, return_rt_var),
+            .u128_to_u16_wrap => return self.intConvertWrap(u128, u16, args),
+            .u128_to_u16_try => return self.intConvertTry(u128, u16, args, return_rt_var),
+            .u128_to_u32_wrap => return self.intConvertWrap(u128, u32, args),
+            .u128_to_u32_try => return self.intConvertTry(u128, u32, args, return_rt_var),
+            .u128_to_u64_wrap => return self.intConvertWrap(u128, u64, args),
+            .u128_to_u64_try => return self.intConvertTry(u128, u64, args, return_rt_var),
+            .u128_to_f32 => return self.intToFloat(u128, f32, args),
+            .u128_to_f64 => return self.intToFloat(u128, f64, args),
+
+            // I128 conversion operations
+            .i128_to_i8_wrap => return self.intConvertWrap(i128, i8, args),
+            .i128_to_i8_try => return self.intConvertTry(i128, i8, args, return_rt_var),
+            .i128_to_i16_wrap => return self.intConvertWrap(i128, i16, args),
+            .i128_to_i16_try => return self.intConvertTry(i128, i16, args, return_rt_var),
+            .i128_to_i32_wrap => return self.intConvertWrap(i128, i32, args),
+            .i128_to_i32_try => return self.intConvertTry(i128, i32, args, return_rt_var),
+            .i128_to_i64_wrap => return self.intConvertWrap(i128, i64, args),
+            .i128_to_i64_try => return self.intConvertTry(i128, i64, args, return_rt_var),
+            .i128_to_u8_wrap => return self.intConvertWrap(i128, u8, args),
+            .i128_to_u8_try => return self.intConvertTry(i128, u8, args, return_rt_var),
+            .i128_to_u16_wrap => return self.intConvertWrap(i128, u16, args),
+            .i128_to_u16_try => return self.intConvertTry(i128, u16, args, return_rt_var),
+            .i128_to_u32_wrap => return self.intConvertWrap(i128, u32, args),
+            .i128_to_u32_try => return self.intConvertTry(i128, u32, args, return_rt_var),
+            .i128_to_u64_wrap => return self.intConvertWrap(i128, u64, args),
+            .i128_to_u64_try => return self.intConvertTry(i128, u64, args, return_rt_var),
+            .i128_to_u128_wrap => return self.intConvertWrap(i128, u128, args),
+            .i128_to_u128_try => return self.intConvertTry(i128, u128, args, return_rt_var),
+            .i128_to_f32 => return self.intToFloat(i128, f32, args),
+            .i128_to_f64 => return self.intToFloat(i128, f64, args),
+
+            // U128 to Dec (try_unsafe - can overflow Dec's range)
+            .u128_to_dec_try_unsafe => return self.intToDecTryUnsafe(u128, args),
+            // I128 to Dec (try_unsafe - can overflow Dec's range)
+            .i128_to_dec_try_unsafe => return self.intToDecTryUnsafe(i128, args),
+
+            // F32 conversion operations
+            .f32_to_i8_trunc => return self.floatToIntTrunc(f32, i8, args),
+            .f32_to_i8_try_unsafe => return self.floatToIntTryUnsafe(f32, i8, args),
+            .f32_to_i16_trunc => return self.floatToIntTrunc(f32, i16, args),
+            .f32_to_i16_try_unsafe => return self.floatToIntTryUnsafe(f32, i16, args),
+            .f32_to_i32_trunc => return self.floatToIntTrunc(f32, i32, args),
+            .f32_to_i32_try_unsafe => return self.floatToIntTryUnsafe(f32, i32, args),
+            .f32_to_i64_trunc => return self.floatToIntTrunc(f32, i64, args),
+            .f32_to_i64_try_unsafe => return self.floatToIntTryUnsafe(f32, i64, args),
+            .f32_to_i128_trunc => return self.floatToIntTrunc(f32, i128, args),
+            .f32_to_i128_try_unsafe => return self.floatToIntTryUnsafe(f32, i128, args),
+            .f32_to_u8_trunc => return self.floatToIntTrunc(f32, u8, args),
+            .f32_to_u8_try_unsafe => return self.floatToIntTryUnsafe(f32, u8, args),
+            .f32_to_u16_trunc => return self.floatToIntTrunc(f32, u16, args),
+            .f32_to_u16_try_unsafe => return self.floatToIntTryUnsafe(f32, u16, args),
+            .f32_to_u32_trunc => return self.floatToIntTrunc(f32, u32, args),
+            .f32_to_u32_try_unsafe => return self.floatToIntTryUnsafe(f32, u32, args),
+            .f32_to_u64_trunc => return self.floatToIntTrunc(f32, u64, args),
+            .f32_to_u64_try_unsafe => return self.floatToIntTryUnsafe(f32, u64, args),
+            .f32_to_u128_trunc => return self.floatToIntTrunc(f32, u128, args),
+            .f32_to_u128_try_unsafe => return self.floatToIntTryUnsafe(f32, u128, args),
+            .f32_to_f64 => return self.floatWiden(f32, f64, args),
+
+            // F64 conversion operations
+            .f64_to_i8_trunc => return self.floatToIntTrunc(f64, i8, args),
+            .f64_to_i8_try_unsafe => return self.floatToIntTryUnsafe(f64, i8, args),
+            .f64_to_i16_trunc => return self.floatToIntTrunc(f64, i16, args),
+            .f64_to_i16_try_unsafe => return self.floatToIntTryUnsafe(f64, i16, args),
+            .f64_to_i32_trunc => return self.floatToIntTrunc(f64, i32, args),
+            .f64_to_i32_try_unsafe => return self.floatToIntTryUnsafe(f64, i32, args),
+            .f64_to_i64_trunc => return self.floatToIntTrunc(f64, i64, args),
+            .f64_to_i64_try_unsafe => return self.floatToIntTryUnsafe(f64, i64, args),
+            .f64_to_i128_trunc => return self.floatToIntTrunc(f64, i128, args),
+            .f64_to_i128_try_unsafe => return self.floatToIntTryUnsafe(f64, i128, args),
+            .f64_to_u8_trunc => return self.floatToIntTrunc(f64, u8, args),
+            .f64_to_u8_try_unsafe => return self.floatToIntTryUnsafe(f64, u8, args),
+            .f64_to_u16_trunc => return self.floatToIntTrunc(f64, u16, args),
+            .f64_to_u16_try_unsafe => return self.floatToIntTryUnsafe(f64, u16, args),
+            .f64_to_u32_trunc => return self.floatToIntTrunc(f64, u32, args),
+            .f64_to_u32_try_unsafe => return self.floatToIntTryUnsafe(f64, u32, args),
+            .f64_to_u64_trunc => return self.floatToIntTrunc(f64, u64, args),
+            .f64_to_u64_try_unsafe => return self.floatToIntTryUnsafe(f64, u64, args),
+            .f64_to_u128_trunc => return self.floatToIntTrunc(f64, u128, args),
+            .f64_to_u128_try_unsafe => return self.floatToIntTryUnsafe(f64, u128, args),
+            .f64_to_f32_wrap => return self.floatNarrow(f64, f32, args),
+            .f64_to_f32_try_unsafe => return self.floatNarrowTryUnsafe(f64, f32, args),
+
+            // Dec conversion operations
+            .dec_to_i8_trunc => return self.decToIntTrunc(i8, args),
+            .dec_to_i8_try_unsafe => return self.decToIntTryUnsafe(i8, args),
+            .dec_to_i16_trunc => return self.decToIntTrunc(i16, args),
+            .dec_to_i16_try_unsafe => return self.decToIntTryUnsafe(i16, args),
+            .dec_to_i32_trunc => return self.decToIntTrunc(i32, args),
+            .dec_to_i32_try_unsafe => return self.decToIntTryUnsafe(i32, args),
+            .dec_to_i64_trunc => return self.decToIntTrunc(i64, args),
+            .dec_to_i64_try_unsafe => return self.decToIntTryUnsafe(i64, args),
+            .dec_to_i128_trunc => return self.decToIntTrunc(i128, args),
+            .dec_to_i128_try_unsafe => return self.decToI128TryUnsafe(args),
+            .dec_to_u8_trunc => return self.decToIntTrunc(u8, args),
+            .dec_to_u8_try_unsafe => return self.decToIntTryUnsafe(u8, args),
+            .dec_to_u16_trunc => return self.decToIntTrunc(u16, args),
+            .dec_to_u16_try_unsafe => return self.decToIntTryUnsafe(u16, args),
+            .dec_to_u32_trunc => return self.decToIntTrunc(u32, args),
+            .dec_to_u32_try_unsafe => return self.decToIntTryUnsafe(u32, args),
+            .dec_to_u64_trunc => return self.decToIntTrunc(u64, args),
+            .dec_to_u64_try_unsafe => return self.decToIntTryUnsafe(u64, args),
+            .dec_to_u128_trunc => return self.decToIntTrunc(u128, args),
+            .dec_to_u128_try_unsafe => return self.decToIntTryUnsafe(u128, args),
+            .dec_to_f32_wrap => return self.decToF32Wrap(args),
+            .dec_to_f32_try_unsafe => return self.decToF32TryUnsafe(args),
+            .dec_to_f64 => return self.decToF64(args),
         }
     }
 
@@ -2776,6 +3034,353 @@ pub const Interpreter = struct {
         @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = dec_value;
         out.is_initialized = true;
         return out;
+    }
+
+    /// Helper for integer to Dec try_unsafe conversions (for u128/i128 which can overflow)
+    /// Returns { success: Bool, val_or_memory_garbage: Dec }
+    fn intToDecTryUnsafe(self: *Interpreter, comptime From: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        std.debug.assert(int_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+
+        // Dec's max whole number is ~1.7×10^20, which is less than u128's max (~3.4×10^38)
+        // Dec is stored as i128 * 10^18, so max safe value is i128.max / 10^18
+        const dec_max_whole: i128 = @divFloor(std.math.maxInt(i128), RocDec.one_point_zero_i128);
+        const dec_min_whole: i128 = @divFloor(std.math.minInt(i128), RocDec.one_point_zero_i128);
+
+        // Check if conversion is safe
+        const success = if (From == u128)
+            from_value <= @as(u128, @intCast(dec_max_whole))
+        else if (From == i128)
+            from_value >= dec_min_whole and from_value <= dec_max_whole
+        else
+            @compileError("intToDecTryUnsafe only supports u128 and i128");
+
+        // Build the result record: { success: Bool, val_or_memory_garbage: Dec }
+        return try self.buildSuccessValRecord(success, if (success) RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 } else RocDec{ .num = 0 });
+    }
+
+    /// Helper for float to int truncating conversions
+    fn floatToIntTrunc(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Truncate float to integer (clamping to range and truncating fractional part)
+        const to_value: To = floatToIntSaturating(From, To, from_value);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for float to int try_unsafe conversions
+    /// Returns { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn floatToIntTryUnsafe(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Check if it's an integer (no fractional part) and not NaN/Inf
+        const is_int = !std.math.isNan(from_value) and !std.math.isInf(from_value) and @trunc(from_value) == from_value;
+
+        // Check if in range for target type
+        const min_val: From = @floatFromInt(std.math.minInt(To));
+        const max_val: From = @floatFromInt(std.math.maxInt(To));
+        const in_range = from_value >= min_val and from_value <= max_val;
+
+        const val: To = if (is_int and in_range) @intFromFloat(from_value) else 0;
+
+        // Build the result record: { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+        return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
+    }
+
+    /// Helper for float widening (F32 -> F64)
+    fn floatWiden(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for float narrowing (F64 -> F32)
+    fn floatNarrow(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for float narrowing try_unsafe (F64 -> F32)
+    /// Returns { success: Bool, val_or_memory_garbage: F32 }
+    fn floatNarrowTryUnsafe(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        // Check if the conversion is lossless (converting back gives the same value)
+        // Also check for infinity which indicates overflow
+        const success = !std.math.isInf(to_value) or std.math.isInf(from_value);
+        const back: From = @floatCast(to_value);
+        const lossless = from_value == back or (std.math.isNan(from_value) and std.math.isNan(back));
+
+        return try self.buildSuccessValRecordF32(success and lossless, to_value);
+    }
+
+    /// Helper for Dec to int truncating conversions
+    fn decToIntTrunc(self: *Interpreter, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+
+        // Get the whole number part by dividing by one_point_zero
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        // Saturate to target range
+        const to_value: To = std.math.cast(To, whole_part) orelse if (whole_part < 0) std.math.minInt(To) else std.math.maxInt(To);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for Dec to int try_unsafe conversions
+    /// Returns { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn decToIntTryUnsafe(self: *Interpreter, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+
+        // Check if it's an integer (no fractional part)
+        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const is_int = remainder == 0;
+
+        // Get the whole number part
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        // Check if in range for target type
+        const in_range = std.math.cast(To, whole_part) != null;
+
+        const val: To = if (is_int and in_range) @intCast(whole_part) else 0;
+
+        return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
+    }
+
+    /// Helper for Dec to i128 try_unsafe conversions (special case - always in range)
+    /// Returns { is_int: Bool, val_or_memory_garbage: I128 }
+    fn decToI128TryUnsafe(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+
+        // Check if it's an integer (no fractional part)
+        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const is_int = remainder == 0;
+
+        // Get the whole number part - always fits in i128
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        return try self.buildIsIntValRecord(is_int, whole_part);
+    }
+
+    /// Helper for Dec to F32 wrapping conversion
+    fn decToF32Wrap(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+        const f32_value: f32 = @floatCast(f64_value);
+
+        const to_layout = Layout.frac(.f32);
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = f32_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for Dec to F32 try_unsafe conversion
+    /// Returns { success: Bool, val_or_memory_garbage: F32 }
+    fn decToF32TryUnsafe(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+        const f32_value: f32 = @floatCast(f64_value);
+
+        // Check if conversion is lossless by converting back
+        const back_f64: f64 = @floatCast(f32_value);
+        const back_dec = RocDec.fromF64(back_f64);
+        const success = back_dec != null and back_dec.?.num == dec_value.num;
+
+        return try self.buildSuccessValRecordF32(success, f32_value);
+    }
+
+    /// Helper for Dec to F64 conversion
+    fn decToF64(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+
+        const to_layout = Layout.frac(.f64);
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*f64, @ptrCast(@alignCast(out.ptr.?))).* = f64_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Build a record { success: Bool, val_or_memory_garbage: Dec }
+    fn buildSuccessValRecord(self: *Interpreter, success: bool, val: RocDec) !StackValue {
+        // Layout: tuple (Dec, Bool) where element 0 is Dec (16 bytes) and element 1 is Bool (1 byte)
+        // Total size with alignment: 24 bytes (16 for Dec + 8 for alignment of Bool field)
+        const dec_layout = Layout.frac(.dec);
+        const bool_layout = Layout.int(.u8);
+
+        // We need to create a tuple layout for the result
+        // For now, allocate raw bytes and set them directly
+        // The tuple is (val_or_memory_garbage: Dec, success: Bool)
+        const tuple_size: usize = 24; // 16 bytes Dec + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 16);
+        out.is_initialized = false;
+
+        // Write Dec at offset 0
+        @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 16
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
+        bool_ptr.* = @intFromBool(success);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        _ = dec_layout;
+        _ = bool_layout;
+        return out;
+    }
+
+    /// Build a record { success: Bool, val_or_memory_garbage: F32 }
+    fn buildSuccessValRecordF32(self: *Interpreter, success: bool, val: f32) !StackValue {
+        // Layout: tuple (F32, Bool) where element 0 is F32 (4 bytes) and element 1 is Bool (1 byte)
+        const tuple_size: usize = 8; // 4 bytes F32 + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 4);
+        out.is_initialized = false;
+
+        // Write F32 at offset 0
+        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 4
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 4);
+        bool_ptr.* = @intFromBool(success);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Build a record { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn buildIsIntInRangeValRecord(self: *Interpreter, is_int: bool, in_range: bool, comptime To: type, val: To) !StackValue {
+        // Layout depends on To's size
+        const val_size = @sizeOf(To);
+        const val_align = @alignOf(To);
+        // Structure: (val, is_int, in_range) with proper alignment
+        const tuple_size: usize = val_size + 2; // val + 2 bools
+        const padded_size = (tuple_size + val_align - 1) / val_align * val_align;
+
+        var out = try self.pushRawBytes(padded_size, val_align);
+        out.is_initialized = false;
+
+        // Write val at offset 0
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write is_int at offset val_size
+        const is_int_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size);
+        is_int_ptr.* = @intFromBool(is_int);
+
+        // Write in_range at offset val_size + 1
+        const in_range_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size + 1);
+        in_range_ptr.* = @intFromBool(in_range);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Build a record { is_int: Bool, val_or_memory_garbage: I128 } (for dec_to_i128 which is always in range)
+    fn buildIsIntValRecord(self: *Interpreter, is_int: bool, val: i128) !StackValue {
+        // Layout: tuple (I128, Bool)
+        const tuple_size: usize = 24; // 16 bytes I128 + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 16);
+        out.is_initialized = false;
+
+        // Write I128 at offset 0
+        @as(*i128, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 16
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
+        bool_ptr.* = @intFromBool(is_int);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Helper to convert float to int with saturation (for trunc operations)
+    fn floatToIntSaturating(comptime From: type, comptime To: type, value: From) To {
+        if (std.math.isNan(value)) return 0;
+
+        const min_val: From = @floatFromInt(std.math.minInt(To));
+        const max_val: From = @floatFromInt(std.math.maxInt(To));
+
+        if (value <= min_val) return std.math.minInt(To);
+        if (value >= max_val) return std.math.maxInt(To);
+
+        return @intFromFloat(value);
     }
 
     /// Convert Zig integer type to types.Int.Precision
