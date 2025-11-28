@@ -932,3 +932,44 @@ test "stack safety - deep fibonacci reports graceful error" {
     ;
     try runExpectError(code, error.StackOverflow, .no_trace);
 }
+
+// Tests for nominal type equality (is_eq method dispatch)
+// These tests exercise dispatchNominalIsEq which resolves and calls is_eq methods on nominal types
+
+test "nominal type equality - Bool" {
+    // Bool is a nominal type wrapping [False, True]
+    // These test that is_eq is properly dispatched for Bool
+    try runExpectBool("Bool.True == Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False == Bool.False", true, .no_trace);
+    try runExpectBool("Bool.True == Bool.False", false, .no_trace);
+    try runExpectBool("Bool.False == Bool.True", false, .no_trace);
+}
+
+test "nominal type equality - Bool in expressions" {
+    // Bool comparisons within larger expressions
+    try runExpectBool("(1 == 1) == (2 == 2)", true, .no_trace);
+    try runExpectBool("(1 == 1) == (1 == 2)", false, .no_trace);
+    try runExpectBool("(1 != 2) == (3 != 4)", true, .no_trace);
+}
+
+test "nominal type equality - records containing Bool" {
+    // Records with Bool fields - exercises roc_ops threading through structural equality
+    try runExpectBool("{ flag: Bool.True } == { flag: Bool.True }", true, .no_trace);
+    try runExpectBool("{ flag: Bool.True } == { flag: Bool.False }", false, .no_trace);
+    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.True, b: Bool.False }", true, .no_trace);
+    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.False, b: Bool.True }", false, .no_trace);
+}
+
+test "nominal type equality - tuples containing Bool" {
+    // Tuples with Bool elements
+    try runExpectBool("(Bool.True, Bool.False) == (Bool.True, Bool.False)", true, .no_trace);
+    try runExpectBool("(Bool.True, Bool.False) == (Bool.False, Bool.True)", false, .no_trace);
+    try runExpectBool("(1, Bool.True, 2) == (1, Bool.True, 2)", true, .no_trace);
+}
+
+test "nominal type equality - nested structures with Bool" {
+    // Nested records/tuples containing Bool - tests deep roc_ops threading
+    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.True } }", true, .no_trace);
+    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.False } }", false, .no_trace);
+    try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true, .no_trace);
+}
