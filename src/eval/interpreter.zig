@@ -2721,6 +2721,80 @@ pub const Interpreter = struct {
                 return out;
             },
 
+            // Bitwise shift operations
+            .num_shift_left_by => {
+                std.debug.assert(args.len == 2); // low-level .num_shift_left_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // rhs must be an integer (U8)
+                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
+
+                switch (lhs) {
+                    .int => |l| {
+                        // Perform shift left
+                        try out.setInt(l << shift_amount);
+                    },
+                    else => unreachable, // shift operations are only for integer types
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_shift_right_by => {
+                std.debug.assert(args.len == 2); // low-level .num_shift_right_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // rhs must be an integer (U8)
+                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
+
+                switch (lhs) {
+                    .int => |l| {
+                        // Perform arithmetic shift right (preserves sign for signed integers)
+                        try out.setInt(l >> shift_amount);
+                    },
+                    else => unreachable, // shift operations are only for integer types
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_shift_right_zf_by => {
+                std.debug.assert(args.len == 2); // low-level .num_shift_right_zf_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // rhs must be an integer (U8)
+                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
+
+                switch (lhs) {
+                    .int => |l| {
+                        // Perform logical shift right (zero-fill)
+                        // For unsigned types, >> is logical. For signed, we need to cast to unsigned
+                        const unsigned_val = @as(u128, @bitCast(l));
+                        const shifted = unsigned_val >> shift_amount;
+                        try out.setInt(@as(i128, @bitCast(shifted)));
+                    },
+                    else => unreachable, // shift operations are only for integer types
+                }
+                out.is_initialized = true;
+                return out;
+            },
+
             // Numeric parsing operations
             .num_from_int_digits => {
                 // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])

@@ -504,6 +504,11 @@ pub const Expr = union(enum) {
         num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
 
+        // Bitwise shift operations (integer types only)
+        num_shift_left_by, // Int a, U8 -> Int a
+        num_shift_right_by, // Int a, U8 -> Int a (arithmetic shift for signed, logical for unsigned)
+        num_shift_right_zf_by, // Int a, U8 -> Int a (zero-fill/logical shift)
+
         // Numeric parsing operations
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
