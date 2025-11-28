@@ -77,19 +77,20 @@ test "platform resolution - file not found" {
     try testing.expectError(error.NoPlatformFound, result);
 }
 
-test "platform resolution - URL platform not supported" {
+test "platform resolution - insecure HTTP URL rejected" {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
-    // Create a temporary Roc file with URL platform
+    // Create a temporary Roc file with insecure HTTP URL (not localhost)
+    // This should be rejected for security - only HTTPS or localhost HTTP allowed
     var temp_dir = testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
     const roc_content =
-        \\app "test" packages { pf: platform "https://example.com/platform.tar.gz" } imports [pf.Task] provides [main] to pf
+        \\app "test" packages { pf: platform "http://example.com/abc123.tar.zst" } imports [pf.Task] provides [main] to pf
         \\
         \\main = "Hello, World!"
     ;
@@ -101,6 +102,7 @@ test "platform resolution - URL platform not supported" {
     const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
     defer allocs.gpa.free(roc_path);
 
+    // Insecure HTTP URLs (not localhost) should fail validation
     const result = main.resolvePlatformPaths(&allocs, roc_path);
     try testing.expectError(error.PlatformNotSupported, result);
 }

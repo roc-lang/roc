@@ -12,7 +12,9 @@ const bundle = @import("bundle.zig");
 const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const test_util = @import("test_util.zig");
+const unbundle_mod = @import("unbundle");
 const DirExtractWriter = bundle.DirExtractWriter;
+const BufferExtractWriter = unbundle_mod.BufferExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 
 // Use fast compression for tests
@@ -1566,5 +1568,171 @@ test "download from local server" {
         var src_dir = try extract_tmp.dir.openDir("src", .{});
         defer src_dir.close();
         // If we got here, src directory exists
+    }
+}
+
+// Test unbundleStream with BufferExtractWriter - simulates WASM usage
+// This tests the full pipeline: zstd decompression -> tar extraction -> memory buffer
+test "unbundleStream with BufferExtractWriter (WASM simulation)" {
+    const testing = std.testing;
+    var allocator = testing.allocator;
+
+    // Create source temp directory with test files
+    var src_tmp = testing.tmpDir(.{});
+    defer src_tmp.cleanup();
+    const src_dir = src_tmp.dir;
+
+    // Create test files
+    {
+        const file = try src_dir.createFile("main.roc", .{});
+        defer file.close();
+        try file.writeAll("app \"hello\" provides [main] to \"./platform\"\n\nmain = \"Hello!\"\n");
+    }
+    {
+        try src_dir.makePath("platform");
+        const file = try src_dir.createFile("platform/main.roc", .{});
+        defer file.close();
+        try file.writeAll("platform \"test\" requires {} { main : Str }\n");
+    }
+
+    // Bundle to memory
+    const file_paths = [_][]const u8{ "main.roc", "platform/main.roc" };
+    var file_iter = FilePathIterator{ .paths = &file_paths };
+
+    var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer bundle_writer.deinit();
+
+    const filename = try bundle.bundle(
+        &file_iter,
+        TEST_COMPRESSION_LEVEL,
+        &allocator,
+        &bundle_writer.writer,
+        src_dir,
+        null,
+        null,
+    );
+    defer allocator.free(filename);
+
+    // Parse hash from filename
+    const hash_str = filename[0 .. filename.len - ".tar.zst".len];
+    const expected_hash = (try unbundle_mod.validateBase58Hash(hash_str)).?;
+
+    // Now unbundle using BufferExtractWriter (same as WASM uses)
+    // Use arena allocator for BufferExtractWriter to simplify memory management
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var bundle_data = bundle_writer.toArrayList();
+    defer bundle_data.deinit(allocator);
+
+    var stream_reader = std.Io.Reader.fixed(bundle_data.items);
+    var buffer_writer = BufferExtractWriter.init(arena_alloc);
+    defer buffer_writer.deinit();
+
+    try unbundle_mod.unbundleStream(
+        arena_alloc,
+        &stream_reader,
+        buffer_writer.extractWriter(),
+        &expected_hash,
+        null,
+    );
+
+    // Verify files were extracted correctly
+    try testing.expectEqual(@as(usize, 2), buffer_writer.files.count());
+
+    const main_content = buffer_writer.files.get("main.roc");
+    try testing.expect(main_content != null);
+    try testing.expectEqualStrings("app \"hello\" provides [main] to \"./platform\"\n\nmain = \"Hello!\"\n", main_content.?.items);
+
+    const platform_content = buffer_writer.files.get("platform/main.roc");
+    try testing.expect(platform_content != null);
+    try testing.expectEqualStrings("platform \"test\" requires {} { main : Str }\n", platform_content.?.items);
+}
+
+// Test large file unbundle - verifies multi-block zstd streaming works correctly
+// zstd block_size_max is ~128KB, so we test with a 256KB file
+test "unbundleStream with large file (multi-block zstd)" {
+    const testing = std.testing;
+    var allocator = testing.allocator;
+
+    // Create source temp directory
+    var src_tmp = testing.tmpDir(.{});
+    defer src_tmp.cleanup();
+    const src_dir = src_tmp.dir;
+
+    // Create a 256KB file (larger than zstd block_size_max of ~128KB)
+    const large_size = 256 * 1024;
+    {
+        const file = try src_dir.createFile("large.bin", .{});
+        defer file.close();
+
+        // Write pattern that's easy to verify
+        var buf: [4096]u8 = undefined;
+        for (&buf, 0..) |*b, i| {
+            b.* = @truncate(i);
+        }
+        var written: usize = 0;
+        while (written < large_size) {
+            const to_write = @min(buf.len, large_size - written);
+            try file.writeAll(buf[0..to_write]);
+            written += to_write;
+        }
+    }
+
+    // Bundle to memory
+    const file_paths = [_][]const u8{"large.bin"};
+    var file_iter = FilePathIterator{ .paths = &file_paths };
+
+    var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer bundle_writer.deinit();
+
+    const filename = try bundle.bundle(
+        &file_iter,
+        TEST_COMPRESSION_LEVEL,
+        &allocator,
+        &bundle_writer.writer,
+        src_dir,
+        null,
+        null,
+    );
+    defer allocator.free(filename);
+
+    // Parse hash from filename
+    const hash_str = filename[0 .. filename.len - ".tar.zst".len];
+    const expected_hash = (try unbundle_mod.validateBase58Hash(hash_str)).?;
+
+    // Use arena allocator for BufferExtractWriter to simplify memory management
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    // Unbundle using BufferExtractWriter
+    var bundle_data = bundle_writer.toArrayList();
+    defer bundle_data.deinit(allocator);
+
+    var stream_reader = std.Io.Reader.fixed(bundle_data.items);
+    var buffer_writer = BufferExtractWriter.init(arena_alloc);
+    defer buffer_writer.deinit();
+
+    try unbundle_mod.unbundleStream(
+        arena_alloc,
+        &stream_reader,
+        buffer_writer.extractWriter(),
+        &expected_hash,
+        null,
+    );
+
+    // Verify file was extracted with correct size and content
+    try testing.expectEqual(@as(usize, 1), buffer_writer.files.count());
+
+    const large_content = buffer_writer.files.get("large.bin");
+    try testing.expect(large_content != null);
+    try testing.expectEqual(large_size, large_content.?.items.len);
+
+    // Verify content pattern
+    for (large_content.?.items, 0..) |b, i| {
+        const expected: u8 = @truncate(i % 4096);
+        try testing.expectEqual(expected, b);
     }
 }
