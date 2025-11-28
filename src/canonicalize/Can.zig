@@ -5813,6 +5813,9 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
                 // get the raw text of the string part and process escape sequences
                 const part_text = self.parse_ir.resolve(sp.token);
                 const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                defer if (processed_text.ptr != part_text.ptr) {
+                    self.env.gpa.free(processed_text);
+                };
                 try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
             },
             else => {
@@ -5842,6 +5845,9 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
                 const part_text = self.parse_ir.resolve(sp.token);
                 if (part_text.len != 0) {
                     const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                    defer if (processed_text.ptr != part_text.ptr) {
+                        self.env.gpa.free(processed_text);
+                    };
                     try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
                 }
                 last_string_part_end = part_node.to_tokenized_region().end;
