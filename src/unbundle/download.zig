@@ -15,6 +15,22 @@ const IO_BUFFER_SIZE: usize = 8 * 1024;
 const IPV4_LOOPBACK_BE: u32 = 0x7F000001; // Big-endian
 const IPV4_LOOPBACK_LE: u32 = 0x0100007F; // Little-endian
 
+// Maximum retries for temp file creation (handles rare collisions)
+const MAX_TEMP_FILE_RETRIES: usize = 10;
+
+// Length of random suffix for temp filenames
+const RANDOM_SUFFIX_LEN: usize = 16;
+
+/// Generate a random alphanumeric suffix for unique temp filenames.
+/// Uses cryptographically secure random bytes mapped to alphanumeric characters.
+fn generateRandomSuffix(buf: *[RANDOM_SUFFIX_LEN]u8) void {
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    std.crypto.random.bytes(buf);
+    for (buf) |*byte| {
+        byte.* = charset[byte.* % charset.len];
+    }
+}
+
 /// Get a handle to the system temp directory.
 /// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
 fn getTempDir() !std.fs.Dir {
@@ -106,19 +122,16 @@ pub fn downloadAndExtract(
         return error.InvalidHash;
     };
 
-    // Construct the final filename and temp filename (include hash to avoid race conditions)
+    // Construct the final filename (for caching after successful extraction)
     var filename_buf: [64]u8 = undefined;
     const filename = std.fmt.bufPrint(&filename_buf, "{s}.tar.zst", .{base58_hash}) catch {
         return error.InvalidHash;
     };
 
-    var temp_filename_buf: [80]u8 = undefined;
-    const temp_filename = std.fmt.bufPrint(&temp_filename_buf, ".{s}.tar.zst.tmp", .{base58_hash}) catch {
-        return error.InvalidHash;
-    };
-
-    // Download to a temp file in the extract directory
-    try downloadToFile(allocator, url, extract_dir, temp_filename);
+    // Download to a temp file with unique random suffix
+    // Buffer size: . + hash(~44) + _ + random(16) + .tmp + null = ~70 bytes, use 96 for safety
+    var temp_filename_buf: [96]u8 = undefined;
+    const temp_filename = try downloadToFile(allocator, url, extract_dir, base58_hash, &temp_filename_buf);
 
     // Open the downloaded file for reading
     var temp_file = extract_dir.openFile(temp_filename, .{}) catch {
@@ -148,13 +161,17 @@ pub fn downloadAndExtract(
     };
 }
 
-/// Download HTTP response body to a file.
+/// Download HTTP response body to a file with a unique random suffix.
+/// Creates a temp file with format: .{prefix}_{random16}.tmp
+/// Uses exclusive file creation to prevent race conditions between processes.
+/// Returns the actual filename created via the filename_out buffer.
 fn downloadToFile(
     allocator: *std.mem.Allocator,
     url: []const u8,
     dir: std.fs.Dir,
-    filename: []const u8,
-) DownloadError!void {
+    filename_prefix: []const u8,
+    filename_out: []u8,
+) DownloadError![]const u8 {
     // Create HTTP client
     var client = std.http.Client{ .allocator = allocator.* };
     defer client.deinit();
@@ -210,38 +227,64 @@ fn downloadToFile(
         }
     }
 
-    // Create temp file for writing
-    var file = dir.createFile(filename, .{}) catch {
-        return error.FileError;
-    };
-    errdefer file.close();
+    // Try to create temp file with unique random suffix
+    var attempts: usize = 0;
+    while (attempts < MAX_TEMP_FILE_RETRIES) : (attempts += 1) {
+        // Generate random suffix for this attempt
+        var random_suffix: [RANDOM_SUFFIX_LEN]u8 = undefined;
+        generateRandomSuffix(&random_suffix);
 
-    // Create a writer for the file
-    var write_buffer: [IO_BUFFER_SIZE]u8 = undefined;
-    var file_writer = file.writer(&write_buffer);
+        // Build filename: .{prefix}_{random}.tmp
+        const filename = std.fmt.bufPrint(filename_out, ".{s}_{s}.tmp", .{
+            filename_prefix,
+            random_suffix,
+        }) catch return error.FileError;
 
-    // Use fetch API with response_writer to write directly to file
-    const fetch_result = client.fetch(.{
-        .location = .{ .uri = uri },
-        .response_writer = &file_writer.interface,
-    }) catch {
+        // Try to create file with exclusive flag (fails if file already exists)
+        var file = dir.createFile(filename, .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue, // Retry with new random suffix
+            else => return error.FileError,
+        };
+        errdefer {
+            file.close();
+            dir.deleteFile(filename) catch {};
+        }
+
+        // Create a writer for the file
+        var write_buffer: [IO_BUFFER_SIZE]u8 = undefined;
+        var file_writer = file.writer(&write_buffer);
+
+        // Use fetch API with response_writer to write directly to file
+        const fetch_result = client.fetch(.{
+            .location = .{ .uri = uri },
+            .response_writer = &file_writer.interface,
+        }) catch {
+            file.close();
+            dir.deleteFile(filename) catch {};
+            return error.HttpError;
+        };
+
+        // Flush the writer before closing
+        file_writer.interface.flush() catch {
+            file.close();
+            dir.deleteFile(filename) catch {};
+            return error.FileError;
+        };
+
+        // Close file after fetch completes
         file.close();
-        return error.HttpError;
-    };
 
-    // Flush the writer before closing
-    file_writer.interface.flush() catch {
-        file.close();
-        return error.FileError;
-    };
+        // Check for successful response
+        if (fetch_result.status != .ok) {
+            dir.deleteFile(filename) catch {};
+            return error.HttpError;
+        }
 
-    // Close file after fetch completes
-    file.close();
-
-    // Check for successful response
-    if (fetch_result.status != .ok) {
-        return error.HttpError;
+        return filename;
     }
+
+    // Exhausted all retries (extremely unlikely with 16-char random suffix)
+    return error.FileError;
 }
 
 /// Download and extract a bundled tar.zst file to memory buffers.
@@ -266,12 +309,15 @@ pub fn downloadAndExtractToBuffer(
     };
     defer tmp_dir.close();
 
-    // Download to temp file (include hash in filename to avoid race conditions)
-    var temp_filename_buf: [80]u8 = undefined;
-    const temp_filename = std.fmt.bufPrint(&temp_filename_buf, ".roc_{s}.tmp", .{base58_hash}) catch {
+    // Build prefix for temp filename
+    var prefix_buf: [64]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&prefix_buf, "roc_{s}", .{base58_hash}) catch {
         return error.InvalidHash;
     };
-    try downloadToFile(allocator, url, tmp_dir, temp_filename);
+
+    // Download to temp file with unique random suffix
+    var temp_filename_buf: [96]u8 = undefined;
+    const temp_filename = try downloadToFile(allocator, url, tmp_dir, prefix, &temp_filename_buf);
     defer tmp_dir.deleteFile(temp_filename) catch {};
 
     // Open the downloaded file for reading

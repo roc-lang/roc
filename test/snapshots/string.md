@@ -204,7 +204,7 @@ x = (
 				(e-string)
 				(e-string)
 				(e-string
-					(e-literal (string "\u(1F680)")))))))
+					(e-literal (string "🚀")))))))
 ~~~
 # TYPES
 ~~~clojure
