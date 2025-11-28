@@ -2733,34 +2733,11 @@ pub const Interpreter = struct {
 
                 // rhs must be an integer (U8)
                 const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 switch (lhs) {
                     .int => |l| {
-                        // Perform shift left
-                        // We need to mask to the actual type width and use appropriate shift type
-                        const precision = result_layout.data.scalar.data.int;
-                        const result: i128 = switch (precision) {
-                            .u8, .i8 => blk: {
-                                const shift_u3 = @as(u3, @intCast(@min(shift_amount_u8, 7)));
-                                break :blk l << shift_u3;
-                            },
-                            .u16, .i16 => blk: {
-                                const shift_u4 = @as(u4, @intCast(@min(shift_amount_u8, 15)));
-                                break :blk l << shift_u4;
-                            },
-                            .u32, .i32 => blk: {
-                                const shift_u5 = @as(u5, @intCast(@min(shift_amount_u8, 31)));
-                                break :blk l << shift_u5;
-                            },
-                            .u64, .i64 => blk: {
-                                const shift_u6 = @as(u6, @intCast(@min(shift_amount_u8, 63)));
-                                break :blk l << shift_u6;
-                            },
-                            .u128, .i128 => blk: {
-                                const shift_u7 = @as(u7, @intCast(@min(shift_amount_u8, 127)));
-                                break :blk l << shift_u7;
-                            },
-                        };
+                        const result: i128 = l << shift_amount;
                         try out.setInt(result);
                     },
                     else => unreachable, // shift operations are only for integer types
@@ -2783,40 +2760,7 @@ pub const Interpreter = struct {
 
                 switch (lhs) {
                     .int => |l| {
-                        // For unsigned types, >> is logical shift (zero-fill)
-                        // For signed types, >> is arithmetic shift (sign-extend)
-                        const precision = result_layout.data.scalar.data.int;
-                        const result: i128 = switch (precision) {
-                            .u8 => blk: {
-                                const masked = @as(u8, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u3 = @as(u3, @intCast(@min(shift_amount, 7)));
-                                break :blk @as(i128, masked >> shift_u3);
-                            },
-                            .i8 => l >> shift_amount,
-                            .u16 => blk: {
-                                const masked = @as(u16, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u4 = @as(u4, @intCast(@min(shift_amount, 15)));
-                                break :blk @as(i128, masked >> shift_u4);
-                            },
-                            .i16 => l >> shift_amount,
-                            .u32 => blk: {
-                                const masked = @as(u32, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u5 = @as(u5, @intCast(@min(shift_amount, 31)));
-                                break :blk @as(i128, masked >> shift_u5);
-                            },
-                            .i32 => l >> shift_amount,
-                            .u64 => blk: {
-                                const masked = @as(u64, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u6 = @as(u6, @intCast(@min(shift_amount, 63)));
-                                break :blk @as(i128, masked >> shift_u6);
-                            },
-                            .i64 => l >> shift_amount,
-                            .u128 => blk: {
-                                const unsigned_val = @as(u128, @bitCast(l));
-                                break :blk @as(i128, @bitCast(unsigned_val >> shift_amount));
-                            },
-                            .i128 => l >> shift_amount,
-                        };
+                        const result: i128 = l >> shift_amount;
                         try out.setInt(result);
                     },
                     else => unreachable, // shift operations are only for integer types
