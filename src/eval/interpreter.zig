@@ -1265,6 +1265,69 @@ pub const Interpreter = struct {
 
                 return try self.makeBoolValue(result);
             },
+            .list_with_capacity => {
+                // List.with_capacity : U64 -> List(a)
+                // Creates an empty list with preallocated capacity
+                std.debug.assert(args.len == 1); // low-level .list_with_capacity expects 1 argument
+
+                const capacity_arg = args[0];
+                const capacity: u64 = @intCast(capacity_arg.asI128());
+
+                // Get the return type to determine element layout
+                const result_rt_var = return_rt_var orelse unreachable;
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Handle ZST lists specially - they don't actually allocate
+                if (result_layout.tag == .list_of_zst) {
+                    // For ZST lists, capacity doesn't matter - just return an empty list
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                    result_ptr.* = builtins.list.RocList.empty();
+                    out.is_initialized = true;
+                    return out;
+                }
+
+                // Get element layout from the list layout
+                std.debug.assert(result_layout.tag == .list);
+                const elem_layout_idx = result_layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Create empty list with capacity
+                const result_list = builtins.list.listWithCapacity(
+                    capacity,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_get_unsafe => {
                 // Internal operation: Get element at index without bounds checking
                 // Args: List(a), U64 (index)
@@ -9124,14 +9187,28 @@ pub const Interpreter = struct {
                     // Provide closure context for capture lookup
                     try self.active_closures.append(func_val);
 
-                    // Bind parameters
+                    // Bind parameters using pattern matching to handle destructuring
                     for (params, 0..) |param, idx| {
-                        try self.bindings.append(.{
-                            .pattern_idx = param,
-                            .value = arg_values[idx],
-                            .expr_idx = @enumFromInt(0),
-                            .source_env = self.env,
-                        });
+                        // Get the runtime type for this parameter
+                        const param_rt_var = if (ci.arg_rt_vars_to_free) |vars|
+                            (if (idx < vars.len) vars[idx] else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param)))
+                        else
+                            try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+
+                        // Use patternMatchesBind to properly handle complex patterns (e.g., list destructuring)
+                        // patternMatchesBind borrows the value and creates copies for bindings, so we need to
+                        // decref the original arg_value after successful binding
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                            // Pattern match failed - cleanup and error
+                            self.env = saved_env;
+                            _ = self.active_closures.pop();
+                            func_val.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            return error.TypeMismatch;
+                        }
+                        // Decref the original argument value since patternMatchesBind made copies
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
                     }
 
                     // Push cleanup continuation, then evaluate body
@@ -9164,15 +9241,6 @@ pub const Interpreter = struct {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
 
-                    // Decref parameter bindings
-                    var k = cleanup.param_count;
-                    while (k > 0) {
-                        k -= 1;
-                        if (self.bindings.pop()) |binding| {
-                            binding.value.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                    }
-
                     // Pop active closure if needed
                     if (cleanup.has_active_closure) {
                         if (self.active_closures.pop()) |closure_val| {
@@ -9180,9 +9248,11 @@ pub const Interpreter = struct {
                         }
                     }
 
-                    // Restore environment and free arg_rt_vars
+                    // Restore environment and cleanup bindings
+                    // Use trimBindingList to properly decref all bindings created by pattern matching
+                    // (which may be more than param_count due to destructuring)
                     self.env = cleanup.saved_env;
-                    self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                    self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
                     try value_stack.push(return_val);
@@ -9192,15 +9262,6 @@ pub const Interpreter = struct {
                 // Normal return - result is on value stack
                 const result = value_stack.pop() orelse return error.Crash;
 
-                // Decref parameter bindings
-                var k = cleanup.param_count;
-                while (k > 0) {
-                    k -= 1;
-                    if (self.bindings.pop()) |binding| {
-                        binding.value.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                }
-
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
                     if (self.active_closures.pop()) |closure_val| {
@@ -9208,9 +9269,11 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Restore environment and free arg_rt_vars
+                // Restore environment and cleanup bindings
+                // Use trimBindingList to properly decref all bindings created by pattern matching
+                // (which may be more than param_count due to destructuring)
                 self.env = cleanup.saved_env;
-                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
                 try value_stack.push(result);
@@ -9783,6 +9846,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
@@ -9855,6 +9922,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{

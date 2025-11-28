@@ -29,6 +29,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
+    checker: *Check,
 } {
     const gpa = test_allocator;
 
@@ -83,8 +84,10 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
-    defer checker.deinit();
+    const checker = try gpa.create(Check);
+    errdefer gpa.destroy(checker);
+    checker.* = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    errdefer checker.deinit();
 
     try checker.checkFile();
 
@@ -92,13 +95,14 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, null, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .builtin_module = builtin_module,
+        .checker = checker,
     };
 }
 
@@ -109,6 +113,12 @@ fn cleanupEvalModule(result: anytype) void {
     var problems_mut = result.problems;
     problems_mut.deinit(test_allocator);
     test_allocator.destroy(result.problems);
+
+    // Deinit checker (must happen after evaluator since evaluator holds pointer to import_mapping)
+    var checker_mut = result.checker;
+    checker_mut.deinit();
+    test_allocator.destroy(result.checker);
+
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
 
@@ -665,6 +675,86 @@ test "e_low_level_lambda - List.concat with empty string list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
+test "e_low_level_lambda - List.concat with zero-sized type" {
+    const src =
+        \\x : List({})
+        \\x = List.concat([{}, {}], [{}, {}, {}])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of non refcounted elements creates empty list" {
+    const src =
+        \\x : List(U64)
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of str (refcounted elements) creates empty list" {
+    const src =
+        \\x : List(Str)
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of non refcounted elements can concat" {
+    const src =
+        \\y : List(U64)
+        \\y = List.with_capacity(10)
+        \\x = List.concat(y, [1])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of str (refcounted elements) can concat" {
+    const src =
+        \\y : List(Str)
+        \\y = List.with_capacity(10)
+        \\x = List.concat(y, ["hello", "world"])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity without capacity, of str (refcounted elements) can concat" {
+    const src =
+        \\y : List(Str)
+        \\y = List.with_capacity(0)
+        \\x = List.concat(y, ["hello", "world"])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of zero-sized type creates empty list" {
+    const src =
+        \\x : List({})
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
     const src =
         \\a : Dec
@@ -1121,7 +1211,6 @@ test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hi\"", value);
 }
-
 // U8 conversion tests
 
 test "e_low_level_lambda - U8.to_i16 safe widening" {
@@ -1740,4 +1829,30 @@ test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - U8.plus basic" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = U8.plus(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 8), value);
+}
+
+test "e_low_level_lambda - U8.plus method call syntax" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = a.plus(b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 8), value);
 }

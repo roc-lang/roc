@@ -8,6 +8,6 @@ type=repl
 » (|identity| { a: identity(10), b: identity(20), c: identity(30) })(|x| x)
 ~~~
 # OUTPUT
-<record>
+{ a: 10, b: 20, c: 30 }
 # PROBLEMS
 NIL

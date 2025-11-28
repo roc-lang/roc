@@ -1880,20 +1880,9 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
     });
 }
 
-/// Write a string with JSON escaping
+/// Write a string with JSON escaping (without surrounding quotes)
 fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
-    for (str) |char| {
-        switch (char) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            // Control characters U+0000 to U+001F
-            0...8, 11, 12, 14...31 => try writer.print("\\u{x:0>4}", .{char}),
-            else => try writer.writeByte(char),
-        }
-    }
+    try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
 /// Processes a message and returns a pointer to a null-terminated, dynamically allocated JSON response string.
@@ -2024,4 +2013,109 @@ export fn validateBase58Hash(hash_ptr: [*]const u8, hash_len: usize) bool {
     } else {
         return false;
     }
+}
+
+/// Unbundle a tar.zst archive from memory, returning extracted files as JSON.
+/// The response is a JSON object with either:
+/// - {"success": true, "files": [{"path": "...", "content": "..."}], "directories": ["..."]}
+/// - {"success": false, "error": "..."}
+///
+/// Returns 0 on success, 1 on error (response buffer too small), 2 on unbundle error.
+export fn unbundleToBuffer(
+    compressed_ptr: [*]const u8,
+    compressed_len: usize,
+    hash_ptr: [*]const u8, // 32-byte BLAKE3 hash
+    response_ptr: [*]u8,
+    response_len: usize,
+) u8 {
+    const compressed = compressed_ptr[0..compressed_len];
+    const expected_hash = hash_ptr[0..32].*;
+
+    // Create a fixed buffer reader from the compressed data
+    var fixed_reader = std.Io.Reader.fixed(compressed);
+
+    // Create buffer extract writer for in-memory extraction
+    var buffer_writer = unbundle.BufferExtractWriter.init(allocator);
+    defer buffer_writer.deinit();
+
+    // Perform unbundling
+    unbundle.unbundleStream(
+        allocator,
+        &fixed_reader,
+        buffer_writer.extractWriter(),
+        &expected_hash,
+        null,
+    ) catch |err| {
+        // Write error response
+        return writeUnbundleErrorResponse(response_ptr[0..response_len], err);
+    };
+
+    // Write success response with file list as JSON
+    return writeUnbundleSuccessResponse(response_ptr[0..response_len], &buffer_writer);
+}
+
+fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
+    const error_msg = switch (err) {
+        error.DecompressionFailed => "Decompression failed",
+        error.InvalidTarHeader => "Invalid tar header",
+        error.UnexpectedEndOfStream => "Unexpected end of stream",
+        error.FileCreateFailed => "File create failed",
+        error.DirectoryCreateFailed => "Directory create failed",
+        error.FileWriteFailed => "File write failed",
+        error.HashMismatch => "Hash mismatch - archive may be corrupted",
+        error.InvalidFilename => "Invalid filename in archive",
+        error.FileTooLarge => "File too large",
+        error.InvalidPath => "Invalid path in archive",
+        error.NoDataExtracted => "No data extracted from archive",
+        error.ChecksumFailure => "Checksum failure",
+        error.DictionaryIdFlagUnsupported => "Dictionary ID flag unsupported",
+        error.MalformedBlock => "Malformed block in archive",
+        error.MalformedFrame => "Malformed frame in archive",
+        error.WriteFailed => "Write failed",
+        error.ReadFailed => "Read failed",
+        error.EndOfStream => "End of stream",
+        error.OutOfMemory => "Out of memory",
+    };
+
+    const json = std.fmt.bufPrint(response, "{{\"success\":false,\"error\":\"{s}\"}}", .{error_msg}) catch {
+        return 1; // Response buffer too small
+    };
+    _ = json;
+    return 2; // Unbundle error
+}
+
+fn writeUnbundleSuccessResponse(response: []u8, buffer_writer: *unbundle.BufferExtractWriter) u8 {
+    var writer = std.Io.Writer.fixed(response);
+
+    writer.writeAll("{\"success\":true,\"files\":[") catch return 1;
+
+    var first_file = true;
+    var iter = buffer_writer.files.iterator();
+    while (iter.next()) |entry| {
+        if (!first_file) {
+            writer.writeAll(",") catch return 1;
+        }
+        first_file = false;
+
+        writer.writeAll("{\"path\":") catch return 1;
+        std.json.Stringify.encodeJsonString(entry.key_ptr.*, .{}, &writer) catch return 1;
+        writer.writeAll(",\"content\":") catch return 1;
+        std.json.Stringify.encodeJsonString(entry.value_ptr.items, .{}, &writer) catch return 1;
+        writer.writeAll("}") catch return 1;
+    }
+
+    writer.writeAll("],\"directories\":[") catch return 1;
+
+    var first_dir = true;
+    for (buffer_writer.directories.items) |dir| {
+        if (!first_dir) {
+            writer.writeAll(",") catch return 1;
+        }
+        first_dir = false;
+
+        std.json.Stringify.encodeJsonString(dir, .{}, &writer) catch return 1;
+    }
+
+    writer.writeAll("]}") catch return 1;
+    return 0; // Success
 }
