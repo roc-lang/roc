@@ -9241,6 +9241,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
@@ -9313,6 +9317,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
