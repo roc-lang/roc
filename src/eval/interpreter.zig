@@ -8579,8 +8579,7 @@ pub const Interpreter = struct {
 
                             // If list has 0 or 1 elements, it's already sorted
                             if (list_len < 2) {
-                                // Return the list as-is (increment refcount since we're returning it)
-                                list_arg.incref();
+                                // Return the list as-is - ownership transfers from arg to return value
                                 compare_fn.decref(&self.runtime_layout_store, roc_ops);
 
                                 self.env = saved_env;
@@ -8616,15 +8615,13 @@ pub const Interpreter = struct {
                                 roc_ops,
                             );
 
-                            // Create a StackValue for the working list
-                            // Note: makeUnique handles ownership properly:
-                            // - If the list was unique (refcount 1), it returns the same list (no clone, no decref needed)
-                            // - If the list was shared, it clones and decrefs the original
-                            // So we should NOT decref list_arg here - makeUnique already handled it
-                            var working_list_value = try self.pushRaw(list_arg.layout, 0);
-                            const working_list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(working_list_value.ptr.?));
-                            working_list_ptr.* = working_list;
-                            working_list_value.is_initialized = true;
+                            // Reuse list_arg directly - write the result of makeUnique back into it.
+                            // This transfers ownership properly:
+                            // - If the list was unique, makeUnique returns the same RocList (no clone)
+                            // - If the list was shared, makeUnique clones and decrefs the original
+                            // Either way, list_arg now owns the unique working list.
+                            const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                            list_arg_ptr.* = working_list;
 
                             // Restore environment
                             self.env = saved_env;
@@ -8653,7 +8650,7 @@ pub const Interpreter = struct {
 
                             // Push continuation to handle comparison result
                             try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
-                                .list_value = working_list_value,
+                                .list_value = list_arg,
                                 .compare_fn = compare_fn,
                                 .outer_index = 1,
                                 .inner_index = 0,
@@ -8800,7 +8797,17 @@ pub const Interpreter = struct {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
 
-                    // Decref parameter bindings
+                    // First, decref any bindings that were added during body evaluation
+                    // (e.g., cached definitions from evalLookupLocal). These are at positions
+                    // saved_bindings_len + param_count to current end.
+                    const param_end = cleanup.saved_bindings_len + cleanup.param_count;
+                    while (self.bindings.items.len > param_end) {
+                        if (self.bindings.pop()) |binding| {
+                            binding.value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    // Now decref the actual parameter bindings (at saved_bindings_len to param_end)
                     var k = cleanup.param_count;
                     while (k > 0) {
                         k -= 1;
@@ -8828,7 +8835,17 @@ pub const Interpreter = struct {
                 // Normal return - result is on value stack
                 const result = value_stack.pop() orelse return error.Crash;
 
-                // Decref parameter bindings
+                // First, decref any bindings that were added during body evaluation
+                // (e.g., cached definitions from evalLookupLocal). These are at positions
+                // saved_bindings_len + param_count to current end.
+                const param_end = cleanup.saved_bindings_len + cleanup.param_count;
+                while (self.bindings.items.len > param_end) {
+                    if (self.bindings.pop()) |binding| {
+                        binding.value.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                }
+
+                // Now decref the actual parameter bindings (at saved_bindings_len to param_end)
                 var k = cleanup.param_count;
                 while (k > 0) {
                     k -= 1;
