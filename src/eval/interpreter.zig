@@ -6994,12 +6994,6 @@ pub const Interpreter = struct {
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
-        // DEBUG: Print content type for debugging method dispatch issues
-        // std.debug.print("translateTypeVar: content = {s}\n", .{@tagName(resolved.desc.content)});
-        // if (resolved.desc.content == .structure) {
-        //     std.debug.print("  structure = {s}\n", .{@tagName(resolved.desc.content.structure)});
-        // }
-
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
         if (self.translate_cache.get(key)) |found| {
             return found;

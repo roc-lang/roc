@@ -1751,8 +1751,6 @@ test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-// U8.plus tests - tests both static method call (U8.plus(a, b)) and method call syntax (a.plus(b))
-
 test "e_low_level_lambda - U8.plus basic" {
     const src =
         \\a : U8
