@@ -2559,6 +2559,88 @@ pub const Interpreter = struct {
                     self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
+                // Instantiate the method's type parameters for polymorphic dispatch.
+                // This is necessary so that when pattern matching extracts payloads from
+                // generic types like Try(ok, err), the rigid type variables (ok, err) are
+                // properly substituted with the concrete types from the call site.
+                //
+                // Get the method's function type from the lambda expression
+                const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
+                const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                // Only instantiate if we have an actual function type
+                const should_instantiate_method = lambda_resolved.desc.content == .structure and
+                    (lambda_resolved.desc.content.structure == .fn_pure or
+                        lambda_resolved.desc.content.structure == .fn_effectful or
+                        lambda_resolved.desc.content.structure == .fn_unbound);
+
+                var method_subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                defer method_subst_map.deinit();
+
+                // Save current rigid substitution context
+                const saved_rigid_subst = if (should_instantiate_method) try self.rigid_subst.clone() else null;
+                defer {
+                    if (saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+                }
+
+                if (should_instantiate_method) {
+                    // Instantiate the method type (replaces rigid vars with fresh flex vars)
+                    _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
+
+                    // Now map the fresh flex vars to concrete types from the receiver.
+                    // The receiver is a nominal type like Try(Str, [BadUtf8...]), and the method's
+                    // first parameter type should also be that nominal type with rigid type args.
+                    // We need to map the rigid -> flex substitutions to rigid -> concrete.
+                    const recv_type_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                    if (recv_type_resolved.desc.content == .structure and
+                        recv_type_resolved.desc.content.structure == .nominal_type)
+                    {
+                        const receiver_nom = recv_type_resolved.desc.content.structure.nominal_type;
+                        const receiver_args = self.runtime_types.sliceNominalArgs(receiver_nom);
+
+                        // Get the method's first parameter type to find the corresponding nominal
+                        const fn_args = switch (lambda_resolved.desc.content.structure) {
+                            .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                            .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                            .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                            else => &[_]types.Var{},
+                        };
+
+                        if (fn_args.len > 0) {
+                            const first_param_resolved = self.runtime_types.resolveVar(fn_args[0]);
+                            if (first_param_resolved.desc.content == .structure and
+                                first_param_resolved.desc.content.structure == .nominal_type)
+                            {
+                                const param_nom = first_param_resolved.desc.content.structure.nominal_type;
+                                const param_args = self.runtime_types.sliceNominalArgs(param_nom);
+
+                                // Map each rigid type arg to its concrete counterpart
+                                const min_args = @min(param_args.len, receiver_args.len);
+                                for (0..min_args) |i| {
+                                    const param_arg_resolved = self.runtime_types.resolveVar(param_args[i]);
+                                    if (param_arg_resolved.desc.content == .rigid) {
+                                        // Map this rigid to the concrete type from receiver
+                                        try method_subst_map.put(param_arg_resolved.var_, receiver_args[i]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Merge substitutions into rigid_subst for use during body evaluation
+                    var subst_iter = method_subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+
+                    // Clear the layout cache so layouts are recomputed with substitutions
+                    @memset(self.var_to_layout_slot.items, 0);
+                }
+
                 const params = self.env.store.slicePatterns(closure_header.params);
                 if (params.len != all_args.len) {
                     // Decref all args before returning error
@@ -6238,11 +6320,24 @@ pub const Interpreter = struct {
                         if (arg_vars.len == 0) {
                             payload_value = null;
                         } else if (arg_vars.len == 1) {
-                            // Use the layout from the record's stored field, not from the type system.
-                            // This ensures we preserve the actual element layout (e.g., List(Dec))
-                            // rather than the type system's generic layout.
+                            // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
+                            // union in memory is sized for the largest variant. When extracting a
+                            // specific variant's payload, we need the correct layout for that variant.
+                            //
+                            // Check if the arg var has a rigid substitution (from polymorphic method
+                            // instantiation). If so, use the substituted type's layout.
+                            const arg_var = arg_vars[0];
+                            const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                            const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                    // Use the substituted concrete type's layout
+                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                }
+                                break :blk field_value.layout;
+                            } else field_value.layout;
+
                             payload_value = StackValue{
-                                .layout = field_value.layout,
+                                .layout = effective_layout,
                                 .ptr = field_value.ptr,
                                 .is_initialized = field_value.is_initialized,
                             };
@@ -6285,11 +6380,24 @@ pub const Interpreter = struct {
                     if (arg_vars.len == 0) {
                         payload_value = null;
                     } else if (arg_vars.len == 1) {
-                        // Use the layout from the tuple's stored field, not from the type system.
-                        // This ensures we preserve the actual element layout (e.g., List(Dec))
-                        // rather than the type system's generic layout (e.g., List(opaque_ptr)).
+                        // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
+                        // union in memory is sized for the largest variant. When extracting a
+                        // specific variant's payload, we need the correct layout for that variant.
+                        //
+                        // Check if the arg var has a rigid substitution (from polymorphic method
+                        // instantiation). If so, use the substituted type's layout.
+                        const arg_var = arg_vars[0];
+                        const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                        const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                // Use the substituted concrete type's layout
+                                break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                            }
+                            break :blk field_value.layout;
+                        } else field_value.layout;
+
                         payload_value = StackValue{
-                            .layout = field_value.layout,
+                            .layout = effective_layout,
                             .ptr = field_value.ptr,
                             .is_initialized = field_value.is_initialized,
                         };

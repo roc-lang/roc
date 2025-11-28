@@ -12,6 +12,8 @@ type=repl
 » Str.from_utf8([195, 169])
 » Str.from_utf8([255]).is_err()
 » Str.from_utf8([72, 105]).is_ok()
+» Str.from_utf8([72, 105]).ok_or("fallback")
+» Str.from_utf8([255]).ok_or("fallback")
 » Str.from_utf8([255])
 ~~~
 # OUTPUT
@@ -28,6 +30,10 @@ Ok("é")
 True
 ---
 True
+---
+"Hi"
+---
+"fallback"
 ---
 Err(BadUtf8({ index: 0, problem: 3 }))
 # PROBLEMS
