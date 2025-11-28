@@ -6155,6 +6155,10 @@ pub const Interpreter = struct {
             list_value: StackValue,
             /// The comparison function closure
             compare_fn: StackValue,
+            /// Return type variable for the sort call (for rendering result)
+            call_ret_rt_var: ?types.Var,
+            /// Saved rigid_subst to restore after sort completes
+            saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Current outer index (element being inserted)
             outer_index: usize,
             /// Current inner index (position being compared)
@@ -6345,6 +6349,8 @@ pub const Interpreter = struct {
             call_ret_rt_var: types.Var,
             /// Whether type instantiation was performed
             did_instantiate: bool,
+            /// Saved rigid_subst to restore after the call completes
+            saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Allocated arg_rt_vars slice to free after call completes
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -6361,6 +6367,8 @@ pub const Interpreter = struct {
             has_active_closure: bool,
             /// Whether type instantiation was performed
             did_instantiate: bool,
+            /// Return type variable for the call (used for rendering results)
+            call_ret_rt_var: ?types.Var,
             /// Saved rigid_subst to restore after method call (for polymorphic dispatch)
             saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
@@ -6661,6 +6669,10 @@ pub const Interpreter = struct {
                     switch (cont) {
                         .call_invoke_closure => |ci| {
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (ci.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
                         .call_cleanup => |cc| {
                             if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
@@ -6681,6 +6693,10 @@ pub const Interpreter = struct {
                             // Decref the list and compare function
                             sc.list_value.decref(&self.runtime_layout_store, roc_ops);
                             sc.compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                            if (sc.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
                         else => {},
                     }
@@ -7329,6 +7345,14 @@ pub const Interpreter = struct {
                         func_rt_orig_resolved.desc.content.structure == .fn_effectful or
                         func_rt_orig_resolved.desc.content.structure == .fn_unbound);
 
+                var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
+                if (should_instantiate) {
+                    saved_rigid_subst = try self.rigid_subst.clone();
+                }
+                errdefer {
+                    if (saved_rigid_subst) |*saved| saved.deinit();
+                }
+
                 var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
                 defer subst_map.deinit();
                 const func_rt_var = if (should_instantiate)
@@ -7406,8 +7430,10 @@ pub const Interpreter = struct {
                     .arg_count = arg_indices.len,
                     .call_ret_rt_var = call_ret_rt_var,
                     .did_instantiate = should_instantiate,
+                    .saved_rigid_subst = saved_rigid_subst,
                     .arg_rt_vars_to_free = arg_rt_vars,
                 } } });
+                saved_rigid_subst = null;
 
                 // Push arg collection continuation (to be executed after function is evaluated)
                 try work_stack.push(.{ .apply_continuation = .{ .call_collect_args = .{
@@ -9448,6 +9474,14 @@ pub const Interpreter = struct {
             .call_invoke_closure => |ci| {
                 // All arguments collected - pop them and the function, then invoke
                 // Stack state: [func_val, arg0, arg1, ...] (func at bottom, args on top)
+                var saved_rigid_subst = ci.saved_rigid_subst;
+                defer {
+                    if (saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+                }
+
                 const arg_count = ci.arg_count;
 
                 // Pop all arguments (in reverse order)
@@ -9492,9 +9526,8 @@ pub const Interpreter = struct {
                             // list_sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
                             std.debug.assert(arg_values.len == 2);
 
-                            const list_arg = arg_values[0];
+                            var list_arg = arg_values[0];
                             const compare_fn = arg_values[1];
-
                             // Get list info
                             std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
@@ -9509,6 +9542,7 @@ pub const Interpreter = struct {
                                 self.env = saved_env;
                                 func_val.decref(&self.runtime_layout_store, roc_ops);
                                 if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                list_arg.rt_var = ci.call_ret_rt_var;
                                 try value_stack.push(list_arg);
                                 return true;
                             }
@@ -9546,6 +9580,7 @@ pub const Interpreter = struct {
                             // Either way, list_arg now owns the unique working list.
                             const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                             list_arg_ptr.* = working_list;
+                            list_arg.rt_var = ci.call_ret_rt_var;
 
                             // Restore environment
                             self.env = saved_env;
@@ -9576,12 +9611,15 @@ pub const Interpreter = struct {
                             try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
                                 .list_value = list_arg,
                                 .compare_fn = compare_fn,
+                                .call_ret_rt_var = ci.call_ret_rt_var,
+                                .saved_rigid_subst = saved_rigid_subst,
                                 .outer_index = 1,
                                 .inner_index = 0,
                                 .list_len = list_len,
                                 .elem_size = elem_size,
                                 .elem_layout = elem_layout,
                             } } });
+                            saved_rigid_subst = null;
 
                             // Invoke comparison function with (elem_at_outer, elem_at_inner)
                             const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
@@ -9618,6 +9656,8 @@ pub const Interpreter = struct {
                                 .param_count = 2,
                                 .has_active_closure = true,
                                 .did_instantiate = false,
+                                .call_ret_rt_var = null,
+                                .saved_rigid_subst = null,
                                 .arg_rt_vars_to_free = null,
                             } } });
                             try work_stack.push(.{ .eval_expr = .{
@@ -9628,7 +9668,7 @@ pub const Interpreter = struct {
                             return true;
                         }
 
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
+                        var result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
 
                         // Decref args (except for list_concat which handles its own refcounting)
                         if (low_level.op != .list_concat) {
@@ -9641,6 +9681,7 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        result.rt_var = ci.call_ret_rt_var;
                         try value_stack.push(result);
                         return true;
                     }
@@ -9653,7 +9694,7 @@ pub const Interpreter = struct {
                         const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
 
                         const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
+                        var result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -9664,6 +9705,7 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        result.rt_var = ret_rt_var;
                         try value_stack.push(result);
                         return true;
                     }
@@ -9706,13 +9748,16 @@ pub const Interpreter = struct {
                     }
 
                     // Push cleanup continuation, then evaluate body
+                    const cleanup_saved_rigid_subst = saved_rigid_subst;
+                    saved_rigid_subst = null;
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
                         .saved_bindings_len = saved_bindings_len,
                         .param_count = params.len,
                         .has_active_closure = true,
                         .did_instantiate = ci.did_instantiate,
-                        .saved_rigid_subst = null,
+                        .call_ret_rt_var = ci.call_ret_rt_var,
+                        .saved_rigid_subst = cleanup_saved_rigid_subst,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -9732,9 +9777,14 @@ pub const Interpreter = struct {
             .call_cleanup => |cleanup| {
                 // Function body evaluated - cleanup and return result
                 // Check for early return
-                if (self.early_return_value) |return_val| {
+                if (self.early_return_value) |return_val_in| {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
+                    var return_val = return_val_in;
+
+                    if (cleanup.call_ret_rt_var) |rt_var| {
+                        return_val.rt_var = rt_var;
+                    }
 
                     // Pop active closure if needed
                     if (cleanup.has_active_closure) {
@@ -9761,7 +9811,7 @@ pub const Interpreter = struct {
                 }
 
                 // Normal return - result is on value stack
-                const result = value_stack.pop() orelse return error.Crash;
+                var result = value_stack.pop() orelse return error.Crash;
 
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
@@ -9783,6 +9833,9 @@ pub const Interpreter = struct {
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
+                if (cleanup.call_ret_rt_var) |rt_var| {
+                    result.rt_var = rt_var;
+                }
                 try value_stack.push(result);
                 return true;
             },
@@ -9867,6 +9920,7 @@ pub const Interpreter = struct {
                     .param_count = params.len,
                     .has_active_closure = true,
                     .did_instantiate = false,
+                    .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
                     .arg_rt_vars_to_free = null,
                 } } });
@@ -10007,6 +10061,7 @@ pub const Interpreter = struct {
                     .param_count = 2,
                     .has_active_closure = true,
                     .did_instantiate = false,
+                    .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
                     .arg_rt_vars_to_free = null,
                 } } });
@@ -10151,6 +10206,7 @@ pub const Interpreter = struct {
                         .param_count = 1,
                         .has_active_closure = true,
                         .did_instantiate = false,
+                        .call_ret_rt_var = null,
                         .saved_rigid_subst = null,
                         .arg_rt_vars_to_free = null,
                     } } });
@@ -10354,6 +10410,7 @@ pub const Interpreter = struct {
                     .param_count = expected_params,
                     .has_active_closure = true,
                     .did_instantiate = did_instantiate,
+                    .call_ret_rt_var = null,
                     .saved_rigid_subst = saved_rigid_subst,
                     .arg_rt_vars_to_free = null,
                 } } });
@@ -10650,7 +10707,16 @@ pub const Interpreter = struct {
                 }
                 return true;
             },
-            .sort_compare_result => |sc| {
+            .sort_compare_result => |sc_in| {
+                var sc = sc_in;
+                var saved_rigid_subst = sc.saved_rigid_subst;
+                defer {
+                    if (saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+                }
+
                 // Process comparison result for insertion sort
                 const cmp_result = value_stack.pop() orelse return error.Crash;
                 defer cmp_result.decref(&self.runtime_layout_store, roc_ops);
@@ -10723,12 +10789,15 @@ pub const Interpreter = struct {
                         try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
                             .list_value = sc.list_value,
                             .compare_fn = sc.compare_fn,
+                            .call_ret_rt_var = sc.call_ret_rt_var,
+                            .saved_rigid_subst = saved_rigid_subst,
                             .outer_index = sc.inner_index,
                             .inner_index = new_inner,
                             .list_len = sc.list_len,
                             .elem_size = sc.elem_size,
                             .elem_layout = sc.elem_layout,
                         } } });
+                        saved_rigid_subst = null;
 
                         // Invoke comparison function
                         const cmp_header: *const layout.Closure = @ptrCast(@alignCast(sc.compare_fn.ptr.?));
@@ -10759,6 +10828,8 @@ pub const Interpreter = struct {
                             .param_count = 2,
                             .has_active_closure = true,
                             .did_instantiate = false,
+                            .call_ret_rt_var = null,
+                            .saved_rigid_subst = null,
                             .arg_rt_vars_to_free = null,
                         } } });
                         try work_stack.push(.{ .eval_expr = .{
@@ -10796,12 +10867,15 @@ pub const Interpreter = struct {
                     try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
                         .list_value = sc.list_value,
                         .compare_fn = sc.compare_fn,
+                        .call_ret_rt_var = sc.call_ret_rt_var,
+                        .saved_rigid_subst = saved_rigid_subst,
                         .outer_index = next_outer,
                         .inner_index = next_outer - 1,
                         .list_len = sc.list_len,
                         .elem_size = sc.elem_size,
                         .elem_layout = sc.elem_layout,
                     } } });
+                    saved_rigid_subst = null;
 
                     // Invoke comparison function
                     const cmp_header: *const layout.Closure = @ptrCast(@alignCast(sc.compare_fn.ptr.?));
@@ -10832,6 +10906,8 @@ pub const Interpreter = struct {
                         .param_count = 2,
                         .has_active_closure = true,
                         .did_instantiate = false,
+                        .call_ret_rt_var = null,
+                        .saved_rigid_subst = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -10844,6 +10920,14 @@ pub const Interpreter = struct {
 
                 // Sorting complete - return the sorted list
                 sc.compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                if (saved_rigid_subst) |saved| {
+                    self.rigid_subst.deinit();
+                    self.rigid_subst = saved;
+                    saved_rigid_subst = null;
+                }
+                if (sc.call_ret_rt_var) |rt_var| {
+                    sc.list_value.rt_var = rt_var;
+                }
                 try value_stack.push(sc.list_value);
                 return true;
             },
