@@ -407,7 +407,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -728,7 +728,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs_map.deinit();
     const builtin_ident = try original_env.insertIdent(base.Ident.for_text("Builtin"));
-    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env });
+    const builtin_qualified_ident = try builtin_module.env.common.insertIdent(builtin_module.env.gpa, base.Ident.for_text("Builtin"));
+    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env, .qualified_type_ident = builtin_qualified_ident });
 
     // Create canonicalizer with module_envs_map for qualified name resolution
     var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);
@@ -758,7 +759,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
-        const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
+        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), ops);
         const layout_cache = &interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
@@ -833,7 +834,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
-            const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
+            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
 
@@ -896,4 +897,79 @@ test "nested tuple equality" {
     try runExpectBool("((1, 2), 3) == ((1, 9), 3)", false, .no_trace);
     try runExpectBool("(1, (2, 3)) == (1, (2, 3))", true, .no_trace);
     try runExpectBool("(1, (2, 3)) == (1, (2, 9))", false, .no_trace);
+}
+
+test "stack safety - deep recursion reports graceful error" {
+    // Test that deep recursive function calls report a graceful StackOverflow error
+    // rather than crashing with a native stack overflow (SIGSEGV).
+    // This verifies the stack-safe interpreter is working correctly.
+    const code =
+        \\{
+        \\    countdown = |n|
+        \\        if n == 0
+        \\            0
+        \\        else
+        \\            countdown(n - 1)
+        \\    countdown(100000)
+        \\}
+    ;
+    try runExpectError(code, error.StackOverflow, .no_trace);
+}
+
+test "stack safety - deep fibonacci reports graceful error" {
+    // Test that deep recursive fibonacci reports a graceful StackOverflow error
+    // rather than crashing with a native stack overflow (SIGSEGV).
+    // The tree recursion pattern creates very deep call stacks.
+    const code =
+        \\{
+        \\    fib = |n|
+        \\        if n <= 1
+        \\            n
+        \\        else
+        \\            fib(n - 1) + fib(n - 2)
+        \\    fib(30)
+        \\}
+    ;
+    try runExpectError(code, error.StackOverflow, .no_trace);
+}
+
+// Tests for nominal type equality (is_eq method dispatch)
+// These tests exercise dispatchNominalIsEq which resolves and calls is_eq methods on nominal types
+
+test "nominal type equality - Bool" {
+    // Bool is a nominal type wrapping [False, True]
+    // These test that is_eq is properly dispatched for Bool
+    try runExpectBool("Bool.True == Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False == Bool.False", true, .no_trace);
+    try runExpectBool("Bool.True == Bool.False", false, .no_trace);
+    try runExpectBool("Bool.False == Bool.True", false, .no_trace);
+}
+
+test "nominal type equality - Bool in expressions" {
+    // Bool comparisons within larger expressions
+    try runExpectBool("(1 == 1) == (2 == 2)", true, .no_trace);
+    try runExpectBool("(1 == 1) == (1 == 2)", false, .no_trace);
+    try runExpectBool("(1 != 2) == (3 != 4)", true, .no_trace);
+}
+
+test "nominal type equality - records containing Bool" {
+    // Records with Bool fields - exercises roc_ops threading through structural equality
+    try runExpectBool("{ flag: Bool.True } == { flag: Bool.True }", true, .no_trace);
+    try runExpectBool("{ flag: Bool.True } == { flag: Bool.False }", false, .no_trace);
+    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.True, b: Bool.False }", true, .no_trace);
+    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.False, b: Bool.True }", false, .no_trace);
+}
+
+test "nominal type equality - tuples containing Bool" {
+    // Tuples with Bool elements
+    try runExpectBool("(Bool.True, Bool.False) == (Bool.True, Bool.False)", true, .no_trace);
+    try runExpectBool("(Bool.True, Bool.False) == (Bool.False, Bool.True)", false, .no_trace);
+    try runExpectBool("(1, Bool.True, 2) == (1, Bool.True, 2)", true, .no_trace);
+}
+
+test "nominal type equality - nested structures with Bool" {
+    // Nested records/tuples containing Bool - tests deep roc_ops threading
+    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.True } }", true, .no_trace);
+    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.False } }", false, .no_trace);
+    try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true, .no_trace);
 }

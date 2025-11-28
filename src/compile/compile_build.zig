@@ -17,6 +17,7 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
+const unbundle = @import("unbundle");
 
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
@@ -597,25 +598,8 @@ pub const BuildEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Add builtin types (Bool, Try, Str)
-        if (app_root_env.common.findIdent("Bool")) |bi| {
-            try module_envs_map.put(bi, .{
-                .env = builtin_module_env,
-                .statement_idx = builtin_indices.bool_type,
-            });
-        }
-        if (app_root_env.common.findIdent("Try")) |ti| {
-            try module_envs_map.put(ti, .{
-                .env = builtin_module_env,
-                .statement_idx = builtin_indices.try_type,
-            });
-        }
-        if (app_root_env.common.findIdent("Str")) |si| {
-            try module_envs_map.put(si, .{
-                .env = builtin_module_env,
-                .statement_idx = builtin_indices.str_type,
-            });
-        }
+        // Use the shared populateModuleEnvs function to set up auto-imported types
+        try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
 
         // Build builtin context for the type checker
         const builtin_ctx = Check.BuiltinContext{
@@ -959,19 +943,30 @@ pub const BuildEnv = struct {
                 const plat_rel = try self.stringFromExpr(&ast, value_expr);
                 defer self.gpa.free(plat_rel);
 
-                const header_dir = std.fs.path.dirname(file_abs) orelse ".";
-                const plat_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
-                // Restrict platform dependency path to be within the workspace root(s) even if declared by app.
-                if (!PathUtils.isWithinRoot(plat_path, self.workspace_roots.items)) {
-                    self.gpa.free(plat_path);
-                    return error.PathOutsideWorkspace;
-                }
+                // Check if this is a URL - if so, resolve it to a cached local path
+                const plat_path = if (isUrl(plat_rel)) blk: {
+                    const cached_path = try self.resolveUrlPackage(plat_rel);
+                    break :blk cached_path;
+                } else blk: {
+                    const header_dir = std.fs.path.dirname(file_abs) orelse ".";
+                    const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
+                    // Restrict platform dependency path to be within the workspace root(s) even if declared by app.
+                    if (!PathUtils.isWithinRoot(abs_path, self.workspace_roots.items)) {
+                        self.gpa.free(abs_path);
+                        return error.PathOutsideWorkspace;
+                    }
+                    break :blk abs_path;
+                };
 
                 info.platform_alias = try self.gpa.dupe(u8, alias);
                 info.platform_path = @constCast(plat_path);
-                // Seed allowed root for platform/package resolution
-                if (!PathUtils.isWithinRoot(plat_path, self.workspace_roots.items)) {
-                    // app is allowed arbitrary, but platform/package resolving must be sandboxed; we enforced above
+
+                // For URL-resolved packages, add the cache directory to workspace roots
+                // so that imports within the cached package can be resolved
+                if (isUrl(plat_rel)) {
+                    if (std.fs.path.dirname(plat_path)) |cache_pkg_dir| {
+                        try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                    }
                 }
 
                 // Packages map
@@ -987,8 +982,18 @@ pub const BuildEnv = struct {
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
                     defer self.gpa.free(relp);
 
-                    const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
-                    const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                    // Check if this is a URL - if so, resolve it to a cached local path
+                    const v = if (isUrl(relp)) blk: {
+                        const cached_path = try self.resolveUrlPackage(relp);
+                        // Add cache directory to workspace roots for URL packages
+                        if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
+                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                        }
+                        break :blk cached_path;
+                    } else blk: {
+                        const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
+                        break :blk try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                    };
 
                     // TODO: actually handle duplicate keys
                     if (info.shorthands.fetchRemove(k)) |e| {
@@ -1012,13 +1017,24 @@ pub const BuildEnv = struct {
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
                     defer self.gpa.free(relp);
 
-                    const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
-                    const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
-                    // Enforce: package header deps must be within workspace roots
-                    if (!PathUtils.isWithinRoot(v, self.workspace_roots.items)) {
-                        self.gpa.free(v);
-                        return error.PathOutsideWorkspace;
-                    }
+                    // Check if this is a URL - if so, resolve it to a cached local path
+                    const v = if (isUrl(relp)) blk: {
+                        const cached_path = try self.resolveUrlPackage(relp);
+                        // Add cache directory to workspace roots for URL packages
+                        if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
+                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                        }
+                        break :blk cached_path;
+                    } else blk: {
+                        const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
+                        const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        // Enforce: package header deps must be within workspace roots
+                        if (!PathUtils.isWithinRoot(abs_path, self.workspace_roots.items)) {
+                            self.gpa.free(abs_path);
+                            return error.PathOutsideWorkspace;
+                        }
+                        break :blk abs_path;
+                    };
 
                     // TODO: actually handle duplicate keys
                     if (info.shorthands.fetchRemove(k)) |e| {
@@ -1042,13 +1058,24 @@ pub const BuildEnv = struct {
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
                     defer self.gpa.free(relp);
 
-                    const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
-                    const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
-                    // Enforce: platform header deps must be within workspace roots
-                    if (!PathUtils.isWithinRoot(v, self.workspace_roots.items)) {
-                        self.gpa.free(v);
-                        return error.PathOutsideWorkspace;
-                    }
+                    // Check if this is a URL - if so, resolve it to a cached local path
+                    const v = if (isUrl(relp)) blk: {
+                        const cached_path = try self.resolveUrlPackage(relp);
+                        // Add cache directory to workspace roots for URL packages
+                        if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
+                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                        }
+                        break :blk cached_path;
+                    } else blk: {
+                        const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
+                        const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        // Enforce: platform header deps must be within workspace roots
+                        if (!PathUtils.isWithinRoot(abs_path, self.workspace_roots.items)) {
+                            self.gpa.free(abs_path);
+                            return error.PathOutsideWorkspace;
+                        }
+                        break :blk abs_path;
+                    };
 
                     // TODO: actually handle duplicate keys
                     if (info.shorthands.fetchRemove(k)) |e| {
@@ -1120,6 +1147,126 @@ pub const BuildEnv = struct {
         const cwd_tmp = try std.process.getCwdAlloc(std.heap.page_allocator);
         defer std.heap.page_allocator.free(cwd_tmp);
         return try std.fs.path.resolve(self.gpa, &.{ cwd_tmp, path });
+    }
+
+    /// Check if a path is a URL (http:// or https://)
+    fn isUrl(path: []const u8) bool {
+        return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
+    }
+
+    /// Cross-platform environment variable lookup.
+    /// Uses std.process.getEnvVarOwned which works on both POSIX and Windows,
+    /// unlike std.posix.getenv which only works on POSIX systems.
+    fn getEnvVar(allocator: Allocator, key: []const u8) ?[]const u8 {
+        return std.process.getEnvVarOwned(allocator, key) catch null;
+    }
+
+    /// Get the roc cache directory for downloaded packages.
+    /// Standard cache locations by platform:
+    /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
+    /// - Windows: %LOCALAPPDATA%\roc\packages\
+    fn getRocCacheDir(allocator: Allocator) ![]const u8 {
+        // Check XDG_CACHE_HOME first (Linux/macOS)
+        if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+            defer allocator.free(xdg_cache);
+            return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
+        }
+
+        // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
+        if (comptime builtin.os.tag == .windows) {
+            if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+                defer allocator.free(local_app_data);
+                return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
+            }
+        }
+
+        // Fall back to ~/.cache/roc/packages (Unix)
+        if (getEnvVar(allocator, "HOME")) |home| {
+            defer allocator.free(home);
+            return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
+        }
+
+        return error.NoCacheDir;
+    }
+
+    /// Resolve a URL package by downloading and caching it.
+    /// Returns the local path to the cached package's main.roc or platform.roc file.
+    fn resolveUrlPackage(self: *BuildEnv, url: []const u8) ![]const u8 {
+        const download = unbundle.download;
+
+        // Validate URL and extract hash
+        const base58_hash = download.validateUrl(url) catch |err| {
+            std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            return error.InvalidUrl;
+        };
+
+        // Get cache directory
+        const cache_dir_path = getRocCacheDir(self.gpa) catch {
+            std.log.err("Could not determine cache directory", .{});
+            return error.NoCacheDir;
+        };
+        defer self.gpa.free(cache_dir_path);
+
+        const package_dir_path = try std.fs.path.join(self.gpa, &.{ cache_dir_path, base58_hash });
+        errdefer self.gpa.free(package_dir_path);
+
+        // Check if already cached
+        var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => blk: {
+                // Not cached - need to download
+                std.log.info("Downloading package from {s}...", .{url});
+
+                // Create cache directory structure
+                std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                    return error.FileError;
+                };
+
+                // Create package directory
+                std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+                    error.PathAlreadyExists => {}, // Race condition, another process created it
+                    else => {
+                        std.log.err("Failed to create package directory: {}", .{make_err});
+                        return error.FileError;
+                    },
+                };
+
+                var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |open_err| {
+                    std.log.err("Failed to open package directory: {}", .{open_err});
+                    return error.FileError;
+                };
+
+                // Download and extract
+                var gpa_copy = self.gpa;
+                download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
+                    // Clean up failed download
+                    new_package_dir.close();
+                    std.fs.cwd().deleteTree(package_dir_path) catch {};
+                    std.log.err("Failed to download package: {}", .{download_err});
+                    return error.DownloadFailed;
+                };
+
+                std.log.info("Package cached at {s}", .{package_dir_path});
+                break :blk new_package_dir;
+            },
+            else => {
+                std.log.err("Failed to access package directory: {}", .{err});
+                return error.FileError;
+            },
+        };
+        defer package_dir.close();
+
+        // Packages must have a main.roc entry point
+        const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
+            return error.OutOfMemory;
+        };
+        std.fs.cwd().access(source_path, .{}) catch {
+            self.gpa.free(source_path);
+            std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            return error.NoPackageSource;
+        };
+        self.gpa.free(package_dir_path);
+        return source_path;
     }
 
     fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) ![]const u8 {
@@ -1241,7 +1388,12 @@ pub const BuildEnv = struct {
             if (pack.kind != .app) return error.Internal;
 
             const p_path = info.platform_path.?;
-            const abs = try self.makeAbsolute(p_path);
+
+            // Check if this is a URL - if so, download and resolve to cache path
+            const abs = if (isUrl(p_path))
+                try self.resolveUrlPackage(p_path)
+            else
+                try self.makeAbsolute(p_path);
             defer self.gpa.free(abs);
 
             var child_info = try self.parseHeaderDeps(abs);
@@ -1276,7 +1428,11 @@ pub const BuildEnv = struct {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
 
-            const abs = try self.makeAbsolute(path);
+            // Check if this is a URL - if so, download and resolve to cache path
+            const abs = if (isUrl(path))
+                try self.resolveUrlPackage(path)
+            else
+                try self.makeAbsolute(path);
             defer self.gpa.free(abs);
 
             var child_info = try self.parseHeaderDeps(abs);

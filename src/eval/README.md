@@ -35,7 +35,7 @@ contributor can navigate the code without prior context.
 2. **Initialization** – `Interpreter.init` translates the initial module types
    into the runtime store, ensures the slot cache is sized appropriately, and
    sets up the auxiliary state (stack, binding list, poly cache).
-3. **Minimal evaluation** – `evalMinimal` drives evaluation by calling
+3. **Minimal evaluation** – `eval` drives evaluation by calling
    `evalExprMinimal`. The interpreter pattern-matches on canonical expression
    tags (records, tuples, pattern matches, binops, calls, etc.), evaluates
    children recursively, and produces a `StackValue` annotated with layout.
@@ -53,7 +53,7 @@ contributor can navigate the code without prior context.
    record messages; the interpreter keeps no internal crash state.
 
 All RocOps interactions (alloc, dealloc, crash, expect) happen through the
-`RocOps` pointer passed into `evalMinimal`. This keeps host integrations (REPL,
+`RocOps` pointer passed into `eval`. This keeps host integrations (REPL,
 snapshot tool, CLI) consistent.
 
 ## Rendering
