@@ -35,6 +35,6 @@ True
 ---
 "fallback"
 ---
-Err(BadUtf8({ index: 0, problem: 3 }))
+Err(BadUtf8({ index: 0, problem: InvalidStartByte }))
 # PROBLEMS
 NIL
