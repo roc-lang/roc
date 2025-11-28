@@ -5752,7 +5752,7 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
             .string_part => |sp| {
                 // Add newline between consecutive string parts
                 if (last_string_part_end != null) {
-                    try self.addStringLiteralToScratch("\\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
+                    try self.addStringLiteralToScratch("\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
                 }
 
                 // Get and process the raw text of the string part
