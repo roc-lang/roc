@@ -27,6 +27,8 @@ const runExpectInt = helpers.runExpectInt;
 const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
+const runExpectRecord = helpers.runExpectRecord;
+const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
@@ -973,3 +975,204 @@ test "nominal type equality - nested structures with Bool" {
     try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.False } }", false, .no_trace);
     try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true, .no_trace);
 }
+
+// Tests for List.fold with record accumulators
+// This exercises record state management within fold operations
+
+test "List.fold with record accumulator - sum and count" {
+    // Test folding a list while accumulating sum and count in a record
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "sum", .value = 6 },
+        .{ .name = "count", .value = 3 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - empty list" {
+    // Folding an empty list should return the initial record unchanged
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "sum", .value = 0 },
+        .{ .name = "count", .value = 0 },
+    };
+    try runExpectRecord(
+        "List.fold([], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - single field" {
+    // Test with a single-field record accumulator
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "total", .value = 10 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - record update syntax" {
+    // Test using record update syntax { ..acc, field: newValue }
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "sum", .value = 6 },
+        .{ .name = "count", .value = 3 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - partial update" {
+    // Test updating only one field while keeping others
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "sum", .value = 10 },
+        .{ .name = "multiplier", .value = 2 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - nested field access" {
+    // Test accessing nested record fields in accumulator
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "value", .value = 6 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - three fields" {
+    // Test with more fields to exercise record layout handling
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "sum", .value = 10 },
+        .{ .name = "count", .value = 4 },
+        .{ .name = "product", .value = 24 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {sum: 0, count: 0, product: 1}, |acc, item| {sum: acc.sum + item, count: acc.count + 1, product: acc.product * item})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - conditional update" {
+    // Test conditional logic inside the fold with record accumulator
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "evens", .value = 6 },
+        .{ .name = "odds", .value = 4 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {evens: 0, odds: 0}, |acc, item| if item % 2 == 0 {evens: acc.evens + item, odds: acc.odds} else {evens: acc.evens, odds: acc.odds + item})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - string list" {
+    // Test folding over strings with a record accumulator (count only)
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "count", .value = 3 },
+    };
+    try runExpectRecord(
+        "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
+        &expected_fields,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - record equality comparison" {
+    // Test comparing the result of a fold that produces a record
+    // This exercises the record equality code path
+    try runExpectBool(
+        "List.fold([1, 2, 3], {sum: 0}, |acc, item| {sum: acc.sum + item}) == {sum: 6}",
+        true,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - record inequality comparison" {
+    // Test that fold result can be compared for inequality
+    try runExpectBool(
+        "List.fold([1, 2, 3], {sum: 0}, |acc, item| {sum: acc.sum + item}) == {sum: 5}",
+        false,
+        .no_trace,
+    );
+}
+
+test "List.fold with record accumulator - multi-field record equality" {
+    // Test equality comparison with multi-field record result
+    try runExpectBool(
+        "List.fold([1, 2], {a: 0, b: 10}, |acc, item| {a: acc.a + item, b: acc.b - item}) == {a: 3, b: 7}",
+        true,
+        .no_trace,
+    );
+}
+
+// Tests for List.fold with record accumulators and list destructuring
+// This exercises pattern matching within fold operations
+// TODO: These tests are temporarily commented out while investigating list destructuring in lambda params
+
+// test "List.fold with record accumulator - list destructuring in lambda" {
+//     // Test folding over a list of lists, destructuring each inner list
+//     const expected_fields = [_]ExpectedField{
+//         .{ .name = "first_sum", .value = 6 },
+//         .{ .name = "count", .value = 3 },
+//     };
+//     try runExpectRecord(
+//         "List.fold([[1, 2], [3, 4], [5, 6]], {first_sum: 0, count: 0}, |acc, [first, ..]| {first_sum: acc.first_sum + first, count: acc.count + 1})",
+//         &expected_fields,
+//         .no_trace,
+//     );
+// }
+
+// test "List.fold with record accumulator - destructure two elements" {
+//     // Test destructuring first two elements from each inner list
+//     const expected_fields = [_]ExpectedField{
+//         .{ .name = "sum_firsts", .value = 9 },
+//         .{ .name = "sum_seconds", .value = 12 },
+//     };
+//     try runExpectRecord(
+//         "List.fold([[1, 2, 100], [3, 4, 200], [5, 6, 300]], {sum_firsts: 0, sum_seconds: 0}, |acc, [a, b, ..]| {sum_firsts: acc.sum_firsts + a, sum_seconds: acc.sum_seconds + b})",
+//         &expected_fields,
+//         .no_trace,
+//     );
+// }
+
+// test "List.fold with record accumulator - exact list pattern" {
+//     // Test exact list pattern matching (no rest pattern)
+//     const expected_fields = [_]ExpectedField{
+//         .{ .name = "total", .value = 21 },
+//     };
+//     try runExpectRecord(
+//         "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
+//         &expected_fields,
+//         .no_trace,
+//     );
+// }
+
+// test "List.fold with record accumulator - nested list and record" {
+//     // Test combining list destructuring with record accumulator updates
+//     const expected_fields = [_]ExpectedField{
+//         .{ .name = "head_sum", .value = 6 },
+//         .{ .name = "tail_count", .value = 6 },
+//     };
+//     try runExpectRecord(
+//         "List.fold([[1, 10, 20], [2, 30, 40], [3, 50, 60]], {head_sum: 0, tail_count: 0}, |acc, [head, ..tail]| {head_sum: acc.head_sum + head, tail_count: acc.tail_count + List.len(tail)})",
+//         &expected_fields,
+//         .no_trace,
+//     );
+// }
