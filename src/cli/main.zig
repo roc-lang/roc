@@ -967,13 +967,13 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
-        runWithWindowsHandleInheritance(allocs, exe_path, shm_handle) catch |err| {
+        runWithWindowsHandleInheritance(allocs, exe_path, shm_handle, args.app_args) catch |err| {
             return err;
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager) catch |err| {
+        runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager, args.app_args) catch |err| {
             return err;
         };
     }
@@ -981,7 +981,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 }
 
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
-fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
+fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) !void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
         std.log.err("Failed to set handle as inheritable", .{});
@@ -994,9 +994,33 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     const cwd = try std.fs.cwd().realpathAlloc(allocs.arena, ".");
     const cwd_w = try std.unicode.utf8ToUtf16LeAllocZ(allocs.arena, cwd);
 
-    // Create command line with handle and size as arguments
+    // Create command line with handle and size as arguments, plus any app arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
-    const cmd_line = try std.fmt.allocPrintSentinel(allocs.arena, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size }, 0);
+
+    // Filter out "--" separator if it's the first app argument (common shell convention)
+    const filtered_app_args = if (app_args.len > 0 and std.mem.eql(u8, app_args[0], "--"))
+        app_args[1..]
+    else
+        app_args;
+
+    // Build command line string with proper quoting for Windows
+    var cmd_builder = std.array_list.Managed(u8).initCapacity(allocs.gpa, 256) catch |err| {
+        std.log.err("Failed to allocate command line builder: {}", .{err});
+        return err;
+    };
+    defer cmd_builder.deinit();
+    try cmd_builder.writer().print("\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    for (filtered_app_args) |arg| {
+        // Quote arguments that contain spaces or special characters
+        if (std.mem.indexOfAny(u8, arg, " \t\"") != null) {
+            try cmd_builder.writer().print(" \"{s}\"", .{arg});
+        } else {
+            try cmd_builder.writer().print(" {s}", .{arg});
+        }
+    }
+    try cmd_builder.append(0); // null terminator for sentinel
+
+    const cmd_line = cmd_builder.items[0 .. cmd_builder.items.len - 1 :0];
     const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(allocs.arena, cmd_line);
 
     // Set up process creation structures
@@ -1068,7 +1092,7 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
-fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
+fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager, app_args: []const []const u8) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(allocs.arena) catch |err| {
         std.log.err("Failed to get temp cache directory: {}", .{err});
@@ -1106,8 +1130,31 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         return error.FdConfigFailed;
     }
 
+    // Build argv array: executable path + app arguments
+    // Filter out "--" separator if it's the first app argument (common shell convention)
+    const filtered_app_args = if (app_args.len > 0 and std.mem.eql(u8, app_args[0], "--"))
+        app_args[1..]
+    else
+        app_args;
+
+    var argv = std.array_list.Managed([]const u8).initCapacity(allocs.gpa, 1 + filtered_app_args.len) catch |err| {
+        std.log.err("Failed to allocate argv: {}", .{err});
+        return err;
+    };
+    defer argv.deinit();
+    argv.append(temp_exe_path) catch |err| {
+        std.log.err("Failed to append exe path to argv: {}", .{err});
+        return err;
+    };
+    for (filtered_app_args) |arg| {
+        argv.append(arg) catch |err| {
+            std.log.err("Failed to append app arg: {}", .{err});
+            return err;
+        };
+    }
+
     // Run the interpreter as a child process from the temp directory
-    var child = std.process.Child.init(&.{temp_exe_path}, allocs.gpa);
+    var child = std.process.Child.init(argv.items, allocs.gpa);
     child.cwd = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |err| {
         std.log.err("Failed to get current directory: {}", .{err});
         return err;
@@ -1118,7 +1165,7 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     child.stderr_behavior = .Inherit;
 
     // Spawn the child process
-    std.log.debug("Spawning child process: {s}", .{temp_exe_path});
+    std.log.debug("Spawning child process: {s} with {} app args", .{ temp_exe_path, filtered_app_args.len });
     std.log.debug("Child process working directory: {s}", .{child.cwd.?});
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
