@@ -851,8 +851,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Num.U128.to_f64")) |ident| {
         try low_level_map.put(ident, .u128_to_f64);
     }
-    if (env.common.findIdent("Builtin.Num.U128.to_dec")) |ident| {
-        try low_level_map.put(ident, .u128_to_dec);
+    if (env.common.findIdent("Builtin.Num.U128.to_dec_try")) |ident| {
+        try low_level_map.put(ident, .u128_to_dec_try);
     }
 
     // I128 conversion operations
@@ -916,8 +916,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Num.I128.to_f64")) |ident| {
         try low_level_map.put(ident, .i128_to_f64);
     }
-    if (env.common.findIdent("Builtin.Num.I128.to_dec")) |ident| {
-        try low_level_map.put(ident, .i128_to_dec);
+    if (env.common.findIdent("Builtin.Num.I128.to_dec_try")) |ident| {
+        try low_level_map.put(ident, .i128_to_dec_try);
     }
 
     // F32 conversion operations

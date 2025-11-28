@@ -4854,7 +4854,7 @@ pub const Interpreter = struct {
             .u128_to_u64_try => return self.intConvertTry(u128, u64, args, roc_ops, return_rt_var),
             .u128_to_f32 => return self.intToFloat(u128, f32, args, roc_ops),
             .u128_to_f64 => return self.intToFloat(u128, f64, args, roc_ops),
-            .u128_to_dec => return self.intToDec(u128, args, roc_ops),
+            .u128_to_dec_try => return self.intToDecTry(u128, args, roc_ops, return_rt_var),
 
             // I128 conversion operations
             .i128_to_i8_wrap => return self.intConvertWrap(i128, i8, args, roc_ops),
@@ -4877,75 +4877,75 @@ pub const Interpreter = struct {
             .i128_to_u128_try => return self.intConvertTry(i128, u128, args, roc_ops, return_rt_var),
             .i128_to_f32 => return self.intToFloat(i128, f32, args, roc_ops),
             .i128_to_f64 => return self.intToFloat(i128, f64, args, roc_ops),
-            .i128_to_dec => return self.intToDec(i128, args, roc_ops),
+            .i128_to_dec_try => return self.intToDecTry(i128, args, roc_ops, return_rt_var),
 
             // F32 conversion operations
-            .f32_to_i8_wrap => return self.floatToIntWrap(f32, i8, args, roc_ops),
+            .f32_to_i8_trunc => return self.floatToIntTrunc(f32, i8, args, roc_ops),
             .f32_to_i8_try => return self.floatToIntTry(f32, i8, args, roc_ops, return_rt_var),
-            .f32_to_i16_wrap => return self.floatToIntWrap(f32, i16, args, roc_ops),
+            .f32_to_i16_trunc => return self.floatToIntTrunc(f32, i16, args, roc_ops),
             .f32_to_i16_try => return self.floatToIntTry(f32, i16, args, roc_ops, return_rt_var),
-            .f32_to_i32_wrap => return self.floatToIntWrap(f32, i32, args, roc_ops),
+            .f32_to_i32_trunc => return self.floatToIntTrunc(f32, i32, args, roc_ops),
             .f32_to_i32_try => return self.floatToIntTry(f32, i32, args, roc_ops, return_rt_var),
-            .f32_to_i64_wrap => return self.floatToIntWrap(f32, i64, args, roc_ops),
+            .f32_to_i64_trunc => return self.floatToIntTrunc(f32, i64, args, roc_ops),
             .f32_to_i64_try => return self.floatToIntTry(f32, i64, args, roc_ops, return_rt_var),
-            .f32_to_i128_wrap => return self.floatToIntWrap(f32, i128, args, roc_ops),
+            .f32_to_i128_trunc => return self.floatToIntTrunc(f32, i128, args, roc_ops),
             .f32_to_i128_try => return self.floatToIntTry(f32, i128, args, roc_ops, return_rt_var),
-            .f32_to_u8_wrap => return self.floatToIntWrap(f32, u8, args, roc_ops),
+            .f32_to_u8_trunc => return self.floatToIntTrunc(f32, u8, args, roc_ops),
             .f32_to_u8_try => return self.floatToIntTry(f32, u8, args, roc_ops, return_rt_var),
-            .f32_to_u16_wrap => return self.floatToIntWrap(f32, u16, args, roc_ops),
+            .f32_to_u16_trunc => return self.floatToIntTrunc(f32, u16, args, roc_ops),
             .f32_to_u16_try => return self.floatToIntTry(f32, u16, args, roc_ops, return_rt_var),
-            .f32_to_u32_wrap => return self.floatToIntWrap(f32, u32, args, roc_ops),
+            .f32_to_u32_trunc => return self.floatToIntTrunc(f32, u32, args, roc_ops),
             .f32_to_u32_try => return self.floatToIntTry(f32, u32, args, roc_ops, return_rt_var),
-            .f32_to_u64_wrap => return self.floatToIntWrap(f32, u64, args, roc_ops),
+            .f32_to_u64_trunc => return self.floatToIntTrunc(f32, u64, args, roc_ops),
             .f32_to_u64_try => return self.floatToIntTry(f32, u64, args, roc_ops, return_rt_var),
-            .f32_to_u128_wrap => return self.floatToIntWrap(f32, u128, args, roc_ops),
+            .f32_to_u128_trunc => return self.floatToIntTrunc(f32, u128, args, roc_ops),
             .f32_to_u128_try => return self.floatToIntTry(f32, u128, args, roc_ops, return_rt_var),
             .f32_to_f64 => return self.floatWiden(f32, f64, args, roc_ops),
 
             // F64 conversion operations
-            .f64_to_i8_wrap => return self.floatToIntWrap(f64, i8, args, roc_ops),
+            .f64_to_i8_trunc => return self.floatToIntTrunc(f64, i8, args, roc_ops),
             .f64_to_i8_try => return self.floatToIntTry(f64, i8, args, roc_ops, return_rt_var),
-            .f64_to_i16_wrap => return self.floatToIntWrap(f64, i16, args, roc_ops),
+            .f64_to_i16_trunc => return self.floatToIntTrunc(f64, i16, args, roc_ops),
             .f64_to_i16_try => return self.floatToIntTry(f64, i16, args, roc_ops, return_rt_var),
-            .f64_to_i32_wrap => return self.floatToIntWrap(f64, i32, args, roc_ops),
+            .f64_to_i32_trunc => return self.floatToIntTrunc(f64, i32, args, roc_ops),
             .f64_to_i32_try => return self.floatToIntTry(f64, i32, args, roc_ops, return_rt_var),
-            .f64_to_i64_wrap => return self.floatToIntWrap(f64, i64, args, roc_ops),
+            .f64_to_i64_trunc => return self.floatToIntTrunc(f64, i64, args, roc_ops),
             .f64_to_i64_try => return self.floatToIntTry(f64, i64, args, roc_ops, return_rt_var),
-            .f64_to_i128_wrap => return self.floatToIntWrap(f64, i128, args, roc_ops),
+            .f64_to_i128_trunc => return self.floatToIntTrunc(f64, i128, args, roc_ops),
             .f64_to_i128_try => return self.floatToIntTry(f64, i128, args, roc_ops, return_rt_var),
-            .f64_to_u8_wrap => return self.floatToIntWrap(f64, u8, args, roc_ops),
+            .f64_to_u8_trunc => return self.floatToIntTrunc(f64, u8, args, roc_ops),
             .f64_to_u8_try => return self.floatToIntTry(f64, u8, args, roc_ops, return_rt_var),
-            .f64_to_u16_wrap => return self.floatToIntWrap(f64, u16, args, roc_ops),
+            .f64_to_u16_trunc => return self.floatToIntTrunc(f64, u16, args, roc_ops),
             .f64_to_u16_try => return self.floatToIntTry(f64, u16, args, roc_ops, return_rt_var),
-            .f64_to_u32_wrap => return self.floatToIntWrap(f64, u32, args, roc_ops),
+            .f64_to_u32_trunc => return self.floatToIntTrunc(f64, u32, args, roc_ops),
             .f64_to_u32_try => return self.floatToIntTry(f64, u32, args, roc_ops, return_rt_var),
-            .f64_to_u64_wrap => return self.floatToIntWrap(f64, u64, args, roc_ops),
+            .f64_to_u64_trunc => return self.floatToIntTrunc(f64, u64, args, roc_ops),
             .f64_to_u64_try => return self.floatToIntTry(f64, u64, args, roc_ops, return_rt_var),
-            .f64_to_u128_wrap => return self.floatToIntWrap(f64, u128, args, roc_ops),
+            .f64_to_u128_trunc => return self.floatToIntTrunc(f64, u128, args, roc_ops),
             .f64_to_u128_try => return self.floatToIntTry(f64, u128, args, roc_ops, return_rt_var),
             .f64_to_f32_wrap => return self.floatNarrowWrap(f64, f32, args, roc_ops),
             .f64_to_f32_try => return self.floatNarrowTry(f64, f32, args, roc_ops, return_rt_var),
 
             // Dec -> integer conversions
-            .dec_to_i8_wrap => return self.decToIntWrap(i8, args, roc_ops),
+            .dec_to_i8_trunc => return self.decToIntTrunc(i8, args, roc_ops),
             .dec_to_i8_try => return self.decToIntTry(i8, args, roc_ops, return_rt_var),
-            .dec_to_i16_wrap => return self.decToIntWrap(i16, args, roc_ops),
+            .dec_to_i16_trunc => return self.decToIntTrunc(i16, args, roc_ops),
             .dec_to_i16_try => return self.decToIntTry(i16, args, roc_ops, return_rt_var),
-            .dec_to_i32_wrap => return self.decToIntWrap(i32, args, roc_ops),
+            .dec_to_i32_trunc => return self.decToIntTrunc(i32, args, roc_ops),
             .dec_to_i32_try => return self.decToIntTry(i32, args, roc_ops, return_rt_var),
-            .dec_to_i64_wrap => return self.decToIntWrap(i64, args, roc_ops),
+            .dec_to_i64_trunc => return self.decToIntTrunc(i64, args, roc_ops),
             .dec_to_i64_try => return self.decToIntTry(i64, args, roc_ops, return_rt_var),
-            .dec_to_i128_wrap => return self.decToIntWrap(i128, args, roc_ops),
+            .dec_to_i128_trunc => return self.decToIntTrunc(i128, args, roc_ops),
             .dec_to_i128_try => return self.decToIntTry(i128, args, roc_ops, return_rt_var),
-            .dec_to_u8_wrap => return self.decToIntWrap(u8, args, roc_ops),
+            .dec_to_u8_trunc => return self.decToIntTrunc(u8, args, roc_ops),
             .dec_to_u8_try => return self.decToIntTry(u8, args, roc_ops, return_rt_var),
-            .dec_to_u16_wrap => return self.decToIntWrap(u16, args, roc_ops),
+            .dec_to_u16_trunc => return self.decToIntTrunc(u16, args, roc_ops),
             .dec_to_u16_try => return self.decToIntTry(u16, args, roc_ops, return_rt_var),
-            .dec_to_u32_wrap => return self.decToIntWrap(u32, args, roc_ops),
+            .dec_to_u32_trunc => return self.decToIntTrunc(u32, args, roc_ops),
             .dec_to_u32_try => return self.decToIntTry(u32, args, roc_ops, return_rt_var),
-            .dec_to_u64_wrap => return self.decToIntWrap(u64, args, roc_ops),
+            .dec_to_u64_trunc => return self.decToIntTrunc(u64, args, roc_ops),
             .dec_to_u64_try => return self.decToIntTry(u64, args, roc_ops, return_rt_var),
-            .dec_to_u128_wrap => return self.decToIntWrap(u128, args, roc_ops),
+            .dec_to_u128_trunc => return self.decToIntTrunc(u128, args, roc_ops),
             .dec_to_u128_try => return self.decToIntTry(u128, args, roc_ops, return_rt_var),
 
             // Dec -> float conversions
@@ -5059,12 +5059,32 @@ pub const Interpreter = struct {
         return out;
     }
 
+    /// Possible errors for float/Dec to integer conversions
+    const NumConversionError = enum {
+        none, // Success - not an error
+        not_int, // Value has fractional part
+        out_of_range, // Value outside target type's range
+    };
+
     /// Generic helper for building Try(T, [OutOfRange]) results.
     /// Used by all "try" conversion functions to construct the result tag union.
     fn buildTryResult(
         self: *Interpreter,
         comptime PayloadType: type,
         in_range: bool,
+        payload_value: PayloadType,
+        return_rt_var: types.Var,
+    ) !StackValue {
+        const err = if (in_range) NumConversionError.none else NumConversionError.out_of_range;
+        return self.buildTryResultWithError(PayloadType, err, payload_value, return_rt_var);
+    }
+
+    /// Generic helper for building Try(T, [NotInt, OutOfRange]) or Try(T, [OutOfRange]) results.
+    /// Handles conversions where there can be multiple error types.
+    fn buildTryResultWithError(
+        self: *Interpreter,
+        comptime PayloadType: type,
+        err: NumConversionError,
         payload_value: PayloadType,
         return_rt_var: types.Var,
     ) !StackValue {
@@ -5213,18 +5233,15 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for integer to Dec conversions
+    /// Helper for integer to Dec conversions (for types that always fit in Dec's range)
     fn intToDec(self: *Interpreter, comptime From: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         _ = roc_ops;
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
-        // Null argument is a compiler bug - the compiler should never produce code with null args
         std.debug.assert(int_arg.ptr != null);
 
         const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
-        // For unsigned types that can't fit in i128, use @intCast which will panic at runtime
-        // if the value is too large (which would overflow Dec's range anyway)
-        const signed_value: i128 = @intCast(from_value);
+        const signed_value: i128 = from_value;
         const dec_value = RocDec{ .num = signed_value * RocDec.one_point_zero_i128 };
 
         const dec_layout = Layout.frac(.dec);
@@ -5235,8 +5252,35 @@ pub const Interpreter = struct {
         return out;
     }
 
-    /// Helper for wrapping float to integer conversions (truncates toward zero)
-    fn floatToIntWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+    /// Helper for integer to Dec conversions that may overflow (i128, u128)
+    fn intToDecTry(self: *Interpreter, comptime From: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+        _ = roc_ops;
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        std.debug.assert(int_arg.ptr != null);
+
+        const result_rt_var = return_rt_var orelse unreachable;
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+
+        // Check if value fits in Dec's range: must fit in i128 and not overflow when multiplied by 10^18
+        const max_dec_whole: i128 = @divTrunc(std.math.maxInt(i128), RocDec.one_point_zero_i128);
+        const min_dec_whole: i128 = @divTrunc(std.math.minInt(i128), RocDec.one_point_zero_i128);
+
+        const in_range = if (From == u128)
+            from_value <= @as(u128, @intCast(max_dec_whole))
+        else
+            from_value >= min_dec_whole and from_value <= max_dec_whole;
+
+        const dec_value: RocDec = if (in_range)
+            RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 }
+        else
+            undefined;
+
+        return self.buildTryResult(RocDec, in_range, dec_value, result_rt_var);
+    }
+
+    /// Helper for truncating float to integer conversions (truncates toward zero, clamps to range)
+    fn floatToIntTrunc(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         _ = roc_ops;
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
@@ -5345,8 +5389,8 @@ pub const Interpreter = struct {
         return self.buildTryResult(To, in_range, to_value, result_rt_var);
     }
 
-    /// Dec to integer conversion (wrapping)
-    fn decToIntWrap(self: *Interpreter, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
+    /// Dec to integer conversion (truncating - drops fractional part)
+    fn decToIntTrunc(self: *Interpreter, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         _ = roc_ops;
         std.debug.assert(args.len == 1);
         const from_arg = args[0];

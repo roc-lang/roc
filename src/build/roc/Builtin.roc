@@ -594,7 +594,9 @@ Builtin :: [].{
 			# Conversions to floating point (all safe)
 			to_f32 : U128 -> F32
 			to_f64 : U128 -> F64
-			to_dec : U128 -> Dec
+
+			# Conversion to Dec (can overflow)
+			to_dec_try : U128 -> Try(Dec, [OutOfRange])
 		}
 
 		I128 :: [].{
@@ -644,7 +646,9 @@ Builtin :: [].{
 			# Conversions to floating point (all safe)
 			to_f32 : I128 -> F32
 			to_f64 : I128 -> F64
-			to_dec : I128 -> Dec
+
+			# Conversion to Dec (can overflow)
+			to_dec_try : I128 -> Try(Dec, [OutOfRange])
 		}
 
 		Dec :: [].{
@@ -798,7 +802,12 @@ Builtin :: [].{
 
 			# Conversion to F32 (lossy narrowing)
 			to_f32_wrap : F64 -> F32
+
 			to_f32_try : F64 -> Try(F32, [OutOfRange])
+			to_f32_try = |num| {
+			    answer = f64_to_f32_try_unsafe(num)
+				if (answer.success) answer.val_or_memory_garbage else Err(OutOfRange)
+			}
 		}
 	}
 }
@@ -806,3 +815,5 @@ Builtin :: [].{
 # Private top-level function for unsafe list access
 # This is a low-level operation that gets replaced by the compiler
 list_get_unsafe : List(item), U64 -> item
+
+f64_to_f32_try_unsafe : F64 -> { success : Bool, val_or_memory_garbage : F32 }
