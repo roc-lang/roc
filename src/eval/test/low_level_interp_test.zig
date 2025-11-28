@@ -2134,7 +2134,7 @@ test "e_low_level_lambda - shift operations preserve type" {
         \\x = c.shift_right_zf_by(1)
     ;
     const value = try evalModuleAndGetInt(src, 3);
-    try testing.expectEqual(@as(i128, 200), value); // ((100 << 2) >> 1) >>> 1 = 200
+    try testing.expectEqual(@as(i128, 100), value); // ((100 << 2) >> 1) >>> 1 = (400 >> 1) >>> 1 = 200 >>> 1 = 100
 }
 
 test "e_low_level_lambda - I8.shift_right_zf_by with -1" {
