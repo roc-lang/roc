@@ -89,7 +89,12 @@ DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
 MISSING METHOD - Color.md:22:17:22:24
-MISSING METHOD - Color.md:29:17:29:24
+MISSING METHOD - Color.md:35:19:35:39
+MISSING METHOD - Color.md:36:23:36:43
+MISSING METHOD - Color.md:37:23:37:43
+MISSING METHOD - Color.md:38:23:38:43
+MISSING METHOD - Color.md:39:23:39:43
+MISSING METHOD - Color.md:40:23:40:43
 TYPE MISMATCH - Color.md:32:5:45:6
 MISSING METHOD - Color.md:62:12:62:26
 MISSING METHOD - Color.md:56:26:56:32
@@ -224,18 +229,88 @@ The value's type, which does not have a method named **to_frac**, is:
 **Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_utf8** method is being called on a value whose type doesn't have that method:
-**Color.md:29:17:29:24:**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:35:19:35:39:**
 ```roc
-    bytes = str.to_utf8()
+                a.is_char_in_hex_range()
 ```
-                ^^^^^^^
+                  ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **to_utf8**, is:
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _Str_
+    _U8_
 
-**Hint: **For this to work, the type would need to have a method named **to_utf8** associated with it in the type's declaration.
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:36:23:36:43:**
+```roc
+                and b.is_char_in_hex_range()
+```
+                      ^^^^^^^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
+
+    _U8_
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:37:23:37:43:**
+```roc
+                and c.is_char_in_hex_range()
+```
+                      ^^^^^^^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
+
+    _U8_
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:38:23:38:43:**
+```roc
+                and d.is_char_in_hex_range()
+```
+                      ^^^^^^^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
+
+    _U8_
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:39:23:39:43:**
+```roc
+                and e.is_char_in_hex_range()
+```
+                      ^^^^^^^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
+
+    _U8_
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:40:23:40:43:**
+```roc
+                and f.is_char_in_hex_range()
+```
+                      ^^^^^^^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
+
+    _U8_
+
+**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

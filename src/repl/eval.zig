@@ -647,7 +647,7 @@ pub const Repl = struct {
             ctx.reset();
         }
 
-        const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
                 if (self.crash_ctx) |ctx| {
                     if (ctx.crashMessage()) |msg| {
@@ -680,10 +680,6 @@ pub const Repl = struct {
         };
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        if (result.layout.tag == .record) {
-            self.allocator.free(output);
-            return try self.allocator.dupe(u8, "<record>");
-        }
         return output;
     }
 
@@ -836,7 +832,7 @@ pub const Repl = struct {
             ctx.reset();
         }
 
-        const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
                 if (self.crash_ctx) |ctx| {
                     if (ctx.crashMessage()) |msg| {
@@ -864,10 +860,6 @@ pub const Repl = struct {
         };
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        if (result.layout.tag == .record) {
-            self.allocator.free(output);
-            return .{ .expression = try self.allocator.dupe(u8, "<record>") };
-        }
         return .{ .expression = output };
     }
 };

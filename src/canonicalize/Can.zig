@@ -28,9 +28,12 @@ const Node = @import("Node.zig");
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
     env: *const ModuleEnv,
-    /// Optional statement index for nested types (e.g., Builtin.Bool, Builtin.Str)
+    /// Optional statement index for types (e.g., Builtin.Bool, Builtin.Num.U8)
     /// When set, this points directly to the type declaration, avoiding string lookups
     statement_idx: ?CIR.Statement.Idx = null,
+    /// The fully qualified type identifier (e.g., "Builtin.Str" for Str, "Builtin.Num.U8" for U8)
+    /// Used for looking up members like U8.to_i16 -> "Builtin.Num.U8.to_i16"
+    qualified_type_ident: Ident.Idx,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -262,39 +265,53 @@ pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: CIR.BuiltinIndices, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
+    builtin_indices: CIR.BuiltinIndices,
 ) !void {
-    const types_to_add = .{
-        .{ "Bool", builtin_indices.bool_type },
-        .{ "Try", builtin_indices.try_type },
-        .{ "Dict", builtin_indices.dict_type },
-        .{ "Set", builtin_indices.set_type },
-        .{ "Str", builtin_indices.str_type },
-        .{ "List", builtin_indices.list_type },
-        .{ "U8", builtin_indices.u8_type },
-        .{ "I8", builtin_indices.i8_type },
-        .{ "U16", builtin_indices.u16_type },
-        .{ "I16", builtin_indices.i16_type },
-        .{ "U32", builtin_indices.u32_type },
-        .{ "I32", builtin_indices.i32_type },
-        .{ "U64", builtin_indices.u64_type },
-        .{ "I64", builtin_indices.i64_type },
-        .{ "U128", builtin_indices.u128_type },
-        .{ "I128", builtin_indices.i128_type },
-        .{ "Dec", builtin_indices.dec_type },
-        .{ "F32", builtin_indices.f32_type },
-        .{ "F64", builtin_indices.f64_type },
-        .{ "Numeral", builtin_indices.numeral_type },
+    // All auto-imported types with their statement index and fully-qualified ident
+    // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
+    // Nested types under Num: "Builtin.Num.U8", etc.
+    //
+    // Note: builtin_indices.*_ident values are indices into the builtin module's ident store.
+    // We need to get the text and re-insert into the calling module's store since
+    // Ident.Idx values are not transferable between stores.
+    const builtin_types = .{
+        .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
+        .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
+        .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
+        .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
+        .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
+        .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
+        .{ "U8", builtin_indices.u8_type, builtin_indices.u8_ident },
+        .{ "I8", builtin_indices.i8_type, builtin_indices.i8_ident },
+        .{ "U16", builtin_indices.u16_type, builtin_indices.u16_ident },
+        .{ "I16", builtin_indices.i16_type, builtin_indices.i16_ident },
+        .{ "U32", builtin_indices.u32_type, builtin_indices.u32_ident },
+        .{ "I32", builtin_indices.i32_type, builtin_indices.i32_ident },
+        .{ "U64", builtin_indices.u64_type, builtin_indices.u64_ident },
+        .{ "I64", builtin_indices.i64_type, builtin_indices.i64_ident },
+        .{ "U128", builtin_indices.u128_type, builtin_indices.u128_ident },
+        .{ "I128", builtin_indices.i128_type, builtin_indices.i128_ident },
+        .{ "Dec", builtin_indices.dec_type, builtin_indices.dec_ident },
+        .{ "F32", builtin_indices.f32_type, builtin_indices.f32_ident },
+        .{ "F64", builtin_indices.f64_type, builtin_indices.f64_ident },
+        .{ "Numeral", builtin_indices.numeral_type, builtin_indices.numeral_ident },
     };
 
-    inline for (types_to_add) |type_info| {
+    inline for (builtin_types) |type_info| {
         const type_name = type_info[0];
         const statement_idx = type_info[1];
+        const builtin_qualified_ident = type_info[2];
+
+        // Get the qualified ident text from the builtin module and re-insert into calling module
+        const qualified_text = builtin_module_env.getIdent(builtin_qualified_ident);
+        const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_text));
 
         const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(type_name));
         try module_envs_map.put(type_ident, .{
             .env = builtin_module_env,
             .statement_idx = statement_idx,
+            .qualified_type_ident = qualified_ident,
         });
     }
 }
@@ -3978,18 +3995,21 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
-                                    // For regular module imports (e.g., A), just use the field name directly
-                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
-                                        // Associated items are stored with the full qualified parent type name
-                                        const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
-                                        const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
-                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
-                                        break :blk_name self.env.getIdent(fully_qualified_idx);
+                                    // For auto-imported types with statement_idx (builtin types and platform modules),
+                                    // build the full qualified name using qualified_type_ident.
+                                    // For regular user module imports (statement_idx is null), use field_text directly.
+                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| name_blk: {
+                                        // Build the fully qualified member name using the type's qualified ident
+                                        // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
+                                        // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                        // Note: qualified_type_ident is always stored in the calling module's ident store
+                                        // (self.env), since Ident.Idx values are not transferable between stores.
+                                        const qualified_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
+                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                        break :name_blk self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
 
-                                    // Look up the associated item by its qualified name
+                                    // Look up the associated item by its name
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
@@ -5672,6 +5692,88 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }
 }
 
+/// Process escape sequences in a string, returning the processed string.
+/// Handles: \n, \r, \t, \\, \", \', \$, and \u(XXXX) unicode escapes.
+fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
+    // Quick check: if no backslashes, return the input as-is
+    if (std.mem.indexOfScalar(u8, input, '\\') == null) {
+        return input;
+    }
+
+    var result = try std.ArrayList(u8).initCapacity(allocator, input.len);
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
+            const next = input[i + 1];
+            switch (next) {
+                'n' => {
+                    try result.append(allocator, '\n');
+                    i += 2;
+                },
+                'r' => {
+                    try result.append(allocator, '\r');
+                    i += 2;
+                },
+                't' => {
+                    try result.append(allocator, '\t');
+                    i += 2;
+                },
+                '\\' => {
+                    try result.append(allocator, '\\');
+                    i += 2;
+                },
+                '"' => {
+                    try result.append(allocator, '"');
+                    i += 2;
+                },
+                '\'' => {
+                    try result.append(allocator, '\'');
+                    i += 2;
+                },
+                '$' => {
+                    try result.append(allocator, '$');
+                    i += 2;
+                },
+                'u' => {
+                    // Unicode escape: \u(XXXX)
+                    if (i + 2 < input.len and input[i + 2] == '(') {
+                        // Find the closing paren
+                        if (std.mem.indexOfScalarPos(u8, input, i + 3, ')')) |close_paren| {
+                            const hex_code = input[i + 3 .. close_paren];
+                            if (std.fmt.parseInt(u21, hex_code, 16)) |codepoint| {
+                                if (std.unicode.utf8ValidCodepoint(codepoint)) {
+                                    var buf: [4]u8 = undefined;
+                                    const len = std.unicode.utf8Encode(codepoint, &buf) catch {
+                                        // Invalid, keep original
+                                        try result.append(allocator, input[i]);
+                                        i += 1;
+                                        continue;
+                                    };
+                                    try result.appendSlice(allocator, buf[0..len]);
+                                    i = close_paren + 1;
+                                    continue;
+                                }
+                            } else |_| {}
+                        }
+                    }
+                    // Invalid unicode escape, keep original
+                    try result.append(allocator, input[i]);
+                    i += 1;
+                },
+                else => {
+                    // Unknown escape, keep as-is
+                    try result.append(allocator, input[i]);
+                    i += 1;
+                },
+            }
+        } else {
+            try result.append(allocator, input[i]);
+            i += 1;
+        }
+    }
+    return result.toOwnedSlice(allocator);
+}
+
 /// Helper function to create a string literal expression and add it to the scratch stack
 fn addStringLiteralToScratch(self: *Self, text: []const u8, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     // intern the string in the ModuleEnv
@@ -5709,9 +5811,13 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
         const part_node = self.parse_ir.store.getExpr(part);
         switch (part_node) {
             .string_part => |sp| {
-                // get the raw text of the string part
+                // get the raw text of the string part and process escape sequences
                 const part_text = self.parse_ir.resolve(sp.token);
-                try self.addStringLiteralToScratch(part_text, part_node.to_tokenized_region());
+                const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                defer if (processed_text.ptr != part_text.ptr) {
+                    self.env.gpa.free(processed_text);
+                };
+                try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
             },
             else => {
                 try self.addInterpolationToScratch(part, part_node);
@@ -5733,13 +5839,17 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
             .string_part => |sp| {
                 // Add newline between consecutive string parts
                 if (last_string_part_end != null) {
-                    try self.addStringLiteralToScratch("\\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
+                    try self.addStringLiteralToScratch("\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
                 }
 
-                // Get and process the raw text of the string part
+                // Get and process the raw text of the string part (including escape sequences)
                 const part_text = self.parse_ir.resolve(sp.token);
                 if (part_text.len != 0) {
-                    try self.addStringLiteralToScratch(part_text, part_node.to_tokenized_region());
+                    const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                    defer if (processed_text.ptr != part_text.ptr) {
+                        self.env.gpa.free(processed_text);
+                    };
+                    try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
                 }
                 last_string_part_end = part_node.to_tokenized_region().end;
             },

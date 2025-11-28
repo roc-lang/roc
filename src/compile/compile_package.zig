@@ -278,10 +278,15 @@ pub const PackageEnv = struct {
 
     pub fn buildRoot(self: *PackageEnv, root_file_path: []const u8) !void {
         const name = moduleNameFromPath(root_file_path);
+        const prev_module_count = self.modules.items.len;
         const module_id = try self.ensureModule(name, root_file_path);
         // root depth = 0
         try self.setDepthIfSmaller(module_id, 0);
-        self.remaining_modules = 1;
+        // Only increment remaining_modules if the root module is new (wasn't already scheduled)
+        // This can happen when external imports schedule modules via scheduleModule before buildRoot is called
+        if (module_id >= prev_module_count) {
+            self.remaining_modules += 1;
+        }
         try self.enqueue(module_id);
 
         // Notify schedule hook so a global queue can pick this up
@@ -387,10 +392,11 @@ pub const PackageEnv = struct {
 
     /// Public API for cross-package schedulers: ensure a module exists, set its depth, and enqueue it
     pub fn scheduleModule(self: *PackageEnv, name: []const u8, path: []const u8, depth: u32) !void {
+        const prev_module_count = self.modules.items.len;
         const module_id = try self.ensureModule(name, path);
-        const existed = module_id < self.modules.items.len - 1; // If it wasn't the last one added
+        const is_new = module_id >= prev_module_count;
         try self.setDepthIfSmaller(module_id, depth);
-        if (!existed) {
+        if (is_new) {
             self.remaining_modules += 1;
             // Invoke scheduling hook for external scheduling
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, path, depth);
@@ -660,11 +666,12 @@ pub const PackageEnv = struct {
             // Local import - schedule in this package
             const import_path = try self.resolveModulePath(mod_name);
             defer self.gpa.free(import_path);
+            const prev_module_count = self.modules.items.len;
             const child_id = try self.ensureModule(mod_name, import_path);
             // Refresh st and env pointers in case ensureModule grew the modules array
             st = &self.modules.items[module_id];
             env = &st.env.?;
-            const existed = child_id < self.modules.items.len - 1;
+            const is_new_import = child_id >= prev_module_count;
             try st.imports.append(self.gpa, child_id);
             // parent depth + 1
             try self.setDepthIfSmaller(child_id, st.depth + 1);
@@ -733,7 +740,7 @@ pub const PackageEnv = struct {
                 return;
             }
 
-            if (!existed) {
+            if (is_new_import) {
                 self.remaining_modules += 1;
                 any_new = true;
             }
@@ -911,12 +918,15 @@ pub const PackageEnv = struct {
             // Extract module name without .roc extension
             const module_name = entry.name[0 .. entry.name.len - 4];
 
-            // Add to module_envs with a null env (just to pass the "contains" check)
+            // Add to module_envs with a placeholder env (just to pass the "contains" check)
             // We use builtin_module_env as a placeholder - the actual env will be loaded later
             const module_ident = try env.insertIdent(base.Ident.for_text(module_name));
+            // For user modules, the qualified name is just the module name itself
+            // Use env (not builtin_module_env) since it's mutable
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(module_name));
             // Only add if not already present
             if (!module_envs_map.contains(module_ident)) {
-                try module_envs_map.put(module_ident, .{ .env = builtin_module_env });
+                try module_envs_map.put(module_ident, .{ .env = builtin_module_env, .qualified_type_ident = qualified_ident });
             }
         }
 

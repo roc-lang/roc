@@ -155,6 +155,14 @@ pub const CommonIdents = extern struct {
     from_numeral: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
+    // from_utf8 result fields
+    byte_index: Ident.Idx,
+    string: Ident.Idx,
+    is_ok: Ident.Idx,
+    problem_code: Ident.Idx,
+    // from_utf8 error payload fields (BadUtf8 record)
+    problem: Ident.Idx,
+    index: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -212,6 +220,14 @@ pub const CommonIdents = extern struct {
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
+            // from_utf8 result fields
+            .byte_index = try common.insertIdent(gpa, Ident.for_text("byte_index")),
+            .string = try common.insertIdent(gpa, Ident.for_text("string")),
+            .is_ok = try common.insertIdent(gpa, Ident.for_text("is_ok")),
+            .problem_code = try common.insertIdent(gpa, Ident.for_text("problem_code")),
+            // from_utf8 error payload fields (BadUtf8 record)
+            .problem = try common.insertIdent(gpa, Ident.for_text("problem")),
+            .index = try common.insertIdent(gpa, Ident.for_text("index")),
         };
     }
 
@@ -272,6 +288,14 @@ pub const CommonIdents = extern struct {
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
+            // from_utf8 result fields
+            .byte_index = common.findIdent("byte_index") orelse unreachable,
+            .string = common.findIdent("string") orelse unreachable,
+            .is_ok = common.findIdent("is_ok") orelse unreachable,
+            .problem_code = common.findIdent("problem_code") orelse unreachable,
+            // from_utf8 error payload fields (BadUtf8 record)
+            .problem = common.findIdent("problem") orelse unreachable,
+            .index = common.findIdent("index") orelse unreachable,
         };
     }
 };

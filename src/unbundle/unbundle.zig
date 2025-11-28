@@ -1,23 +1,20 @@
-//! Unbundle compressed tar archives using Zig's standard library
+//! Unbundle compressed tar archives
 //!
-//! This module provides unbundling functionality that works on all platforms
-//! including WebAssembly, by using Zig's std.compress.zstd instead of
-//! the C zstd library.
+//! This module provides functionality to extract .tar.zst archives created
+//! by `roc bundle`, with hash verification for integrity checking.
 
 const builtin = @import("builtin");
 const std = @import("std");
 const base58 = @import("base58");
+const zstd = std.compress.zstd;
 
 // Constants
 const TAR_EXTENSION = ".tar.zst";
 const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
-
-/// Size of the decompression window buffer for zstd.
-/// 8MB (2^23 bytes) is the default and recommended size for zstd decompression.
-/// This matches zstd's default maximum window size, allowing us to decompress
-/// any standard zstd stream. Smaller buffers would fail on streams compressed
-/// with larger window sizes.
-const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
+// Buffer size for stdlib zstd decompressor: window_len + block_size_max for tar extraction
+const DECOMPRESS_BUFFER_SIZE: usize = zstd.default_window_len + zstd.block_size_max;
+// Max path bytes - use 4096 on WASM/freestanding, std.fs.max_path_bytes elsewhere
+const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std.fs.max_path_bytes;
 
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
@@ -393,44 +390,145 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     return null;
 }
 
+/// A reader wrapper that hashes all data as it passes through
 const HashingReader = struct {
-    child_reader: *std.Io.Reader,
+    inner: *std.Io.Reader,
     hasher: *std.crypto.hash.Blake3,
     interface: std.Io.Reader,
 
     const Self = @This();
 
-    pub fn init(child_reader: *std.Io.Reader, hasher: *std.crypto.hash.Blake3) Self {
+    pub fn init(inner: *std.Io.Reader, hasher: *std.crypto.hash.Blake3, buffer: []u8) Self {
         var result = Self{
-            .child_reader = child_reader,
+            .inner = inner,
             .hasher = hasher,
             .interface = undefined,
         };
         result.interface = .{
-            .vtable = &.{
-                .stream = stream,
-            },
-            .buffer = &.{},
+            .vtable = &vtable,
+            .buffer = buffer,
             .seek = 0,
             .end = 0,
         };
         return result;
     }
 
+    const vtable: std.Io.Reader.VTable = .{
+        .stream = stream,
+    };
+
     fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", r));
-        const n = self.child_reader.stream(w, limit) catch |err| switch (err) {
-            error.EndOfStream => return std.Io.Reader.StreamError.EndOfStream,
-            error.ReadFailed => return std.Io.Reader.StreamError.ReadFailed,
-            error.WriteFailed => return std.Io.Reader.StreamError.WriteFailed,
+
+        // Read from inner reader into the writer's buffer
+        const out_buf = limit.slice(try w.writableSliceGreedy(1));
+        var vec: [1][]u8 = .{out_buf};
+        const bytes_read = self.inner.readVec(&vec) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => return error.ReadFailed,
         };
-        if (n == 0) {
-            return std.Io.Reader.StreamError.EndOfStream;
+
+        if (bytes_read > 0) {
+            // Hash the compressed data as it passes through
+            self.hasher.update(out_buf[0..bytes_read]);
+            w.advance(bytes_read);
         }
-        // Update hash with data that was written
-        const written_slice = w.buffer[w.buffer.len - n ..];
-        self.hasher.update(written_slice);
-        return n;
+        return bytes_read;
+    }
+};
+
+/// A reader that decompresses zstd data and verifies hash incrementally
+/// Uses Zig's stdlib zstd for WASM compatibility
+/// Note: Must be heap-allocated to avoid self-referential pointer invalidation
+const DecompressingHashReader = struct {
+    allocator: std.mem.Allocator,
+    hasher: std.crypto.hash.Blake3,
+    expected_hash: [32]u8,
+    hash_verified: bool,
+    hashing_reader: HashingReader,
+    decompressor: zstd.Decompress,
+    hashing_buffer: []u8,
+    decompressor_buffer: []u8,
+
+    const Self = @This();
+
+    /// Create a heap-allocated DecompressingHashReader.
+    /// The caller must call deinit() to free resources.
+    pub fn create(
+        allocator: std.mem.Allocator,
+        input_reader: *std.Io.Reader,
+        expected_hash: [32]u8,
+    ) !*Self {
+        // Allocate the struct itself on the heap so pointers remain stable
+        const self = try allocator.create(Self);
+        errdefer allocator.destroy(self);
+
+        // Allocate buffer for hashing reader
+        const hashing_buffer = try allocator.alloc(u8, STREAM_BUFFER_SIZE);
+        errdefer allocator.free(hashing_buffer);
+
+        // Allocate buffer for decompressor (needs window_len + block_size_max for tar)
+        const decompressor_buffer = try allocator.alloc(u8, DECOMPRESS_BUFFER_SIZE);
+        errdefer allocator.free(decompressor_buffer);
+
+        self.* = Self{
+            .allocator = allocator,
+            .hasher = std.crypto.hash.Blake3.init(.{}),
+            .expected_hash = expected_hash,
+            .hash_verified = false,
+            .hashing_reader = undefined,
+            .decompressor = undefined,
+            .hashing_buffer = hashing_buffer,
+            .decompressor_buffer = decompressor_buffer,
+        };
+
+        // Create hashing wrapper around input reader
+        // Now safe because self is heap-allocated and won't move
+        self.hashing_reader = HashingReader.init(input_reader, &self.hasher, hashing_buffer);
+
+        // Create decompressor reading from hashing reader
+        self.decompressor = zstd.Decompress.init(
+            &self.hashing_reader.interface,
+            decompressor_buffer,
+            .{},
+        );
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.hashing_buffer);
+        self.allocator.free(self.decompressor_buffer);
+        self.allocator.destroy(self);
+    }
+
+    /// Get the reader interface for tar extraction
+    pub fn reader(self: *Self) *std.Io.Reader {
+        return &self.decompressor.reader;
+    }
+
+    /// Verify that the hash matches. This should be called after reading is complete.
+    pub fn verifyComplete(self: *Self) !void {
+        // Drain remaining compressed data through the hashing reader
+        // This ensures all compressed bytes are hashed even if tar didn't need them
+        while (true) {
+            // Try to read more compressed data through the decompressor
+            var discard_buf: [4096]u8 = undefined;
+            const bytes_read = self.decompressor.reader.readSliceShort(&discard_buf) catch {
+                // ReadFailed indicates stream is done or error occurred
+                break;
+            };
+            if (bytes_read == 0) break;
+        }
+
+        if (!self.hash_verified) {
+            var actual_hash: [32]u8 = undefined;
+            self.hasher.final(&actual_hash);
+            if (!std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
+                return error.HashMismatch;
+            }
+            self.hash_verified = true;
+        }
     }
 };
 
@@ -440,22 +538,24 @@ const HashingReader = struct {
 /// unbundling and network-based downloading.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundleStream(
+    allocator: std.mem.Allocator,
     input_reader: *std.Io.Reader,
     extract_writer: ExtractWriter,
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
-    var hasher = std.crypto.hash.Blake3.init(.{});
-    var hashing_reader = HashingReader.init(input_reader, &hasher);
+    const decompress_reader = DecompressingHashReader.create(
+        allocator,
+        input_reader,
+        expected_hash.*,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer decompress_reader.deinit();
 
-    var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
-
-    const zstd_stream = std.compress.zstd.Decompress.init(&hashing_reader.interface, &window_buffer, .{});
-    var decompressed_reader = zstd_stream.reader;
-
-    var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iterator = std.tar.Iterator.init(&decompressed_reader, .{
+    var file_name_buffer: [MAX_PATH_BYTES]u8 = undefined;
+    var link_name_buffer: [MAX_PATH_BYTES]u8 = undefined;
+    var tar_iterator = std.tar.Iterator.init(decompress_reader.reader(), .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
@@ -528,12 +628,10 @@ pub fn unbundleStream(
         }
     }
 
-    var actual_hash: [32]u8 = undefined;
-    hasher.final(&actual_hash);
-
-    if (!std.mem.eql(u8, &actual_hash, expected_hash)) {
-        return error.HashMismatch;
-    }
+    // Verify hash after all data is read
+    decompress_reader.verifyComplete() catch |err| switch (err) {
+        error.HashMismatch => return error.HashMismatch,
+    };
 
     if (!data_extracted) {
         return error.NoDataExtracted;
@@ -578,5 +676,5 @@ pub fn unbundle(
 
     var dir_writer = DirExtractWriter.init(extract_dir, allocator);
     defer dir_writer.deinit();
-    return unbundleStream(input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
+    return unbundleStream(allocator, input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
 }

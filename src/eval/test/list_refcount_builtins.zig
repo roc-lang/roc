@@ -43,6 +43,15 @@ test "list refcount builtins - phase 12 limitation documented" {
 // - "e_low_level_lambda - List.concat with strings (refcounted elements)"
 // - "e_low_level_lambda - List.concat with nested lists (refcounted elements)"
 // - "e_low_level_lambda - List.concat with empty string list"
+// - "e_low_level_lambda - List.concat with zero-sized type"
+//
+// - "e_low_level_lambda - List.with_capacity of non refcounted elements creates empty list"
+// - "e_low_level_lambda - List.with_capacity of str (refcounted elements) creates empty list"
+// - "e_low_level_lambda - List.with_capacity of non refcounted elements can concat"
+// - "e_low_level_lambda - List.with_capacity of str (refcounted elements) can concat"
+// - "e_low_level_lambda - List.with_capacity without capacity, of str (refcounted elements) can concat"
+// - "e_low_level_lambda - List.with_capacity of zero-sized type creates empty list"
+//
 // - "e_low_level_lambda - List.append on non-empty list"
 // - "e_low_level_lambda - List.append on empty list"
 // - "e_low_level_lambda - List.append a list on empty list"
