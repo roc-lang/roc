@@ -6,13 +6,40 @@ const builtin = @import("builtin");
 const unbundle = @import("unbundle.zig");
 
 // Network constants
-const HTTPS_DEFAULT_PORT: u16 = 443;
 const HTTP_DEFAULT_PORT: u16 = 80;
-const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
+
+// Buffer size for file I/O operations (8KB is efficient for typical filesystem block sizes)
+const IO_BUFFER_SIZE: usize = 8 * 1024;
 
 // IPv4 loopback address 127.0.0.1 in network byte order
 const IPV4_LOOPBACK_BE: u32 = 0x7F000001; // Big-endian
 const IPV4_LOOPBACK_LE: u32 = 0x0100007F; // Little-endian
+
+/// Get a handle to the system temp directory.
+/// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
+fn getTempDir() !std.fs.Dir {
+    // Check TMPDIR first (standard on Unix)
+    if (std.posix.getenv("TMPDIR")) |tmpdir| {
+        return std.fs.cwd().openDir(tmpdir, .{}) catch return error.FileError;
+    }
+
+    // Check TEMP (common on Windows)
+    if (std.posix.getenv("TEMP")) |temp| {
+        return std.fs.cwd().openDir(temp, .{}) catch return error.FileError;
+    }
+
+    // Check TMP (fallback on Windows)
+    if (std.posix.getenv("TMP")) |tmp| {
+        return std.fs.cwd().openDir(tmp, .{}) catch return error.FileError;
+    }
+
+    // Fall back to /tmp on Unix-like systems
+    if (comptime builtin.os.tag != .windows) {
+        return std.fs.cwd().openDir("/tmp", .{}) catch return error.FileError;
+    }
+
+    return error.FileError;
+}
 
 /// Errors that can occur during the download operation.
 pub const DownloadError = error{
@@ -21,6 +48,8 @@ pub const DownloadError = error{
     InvalidHash,
     HttpError,
     NoHashInUrl,
+    NetworkError,
+    FileError,
 } || unbundle.UnbundleError || std.mem.Allocator.Error;
 
 /// Parse URL and validate it meets our security requirements.
@@ -62,6 +91,8 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
 /// - Start with "https://" or "http://127.0.0.1"
 /// - Have the base58-encoded blake3 hash as the last path segment
 /// - Point to a tar.zst file created with `roc bundle`
+///
+/// Downloads to a temp file first, then streams from that file for extraction.
 pub fn downloadAndExtract(
     allocator: *std.mem.Allocator,
     url: []const u8,
@@ -75,6 +106,55 @@ pub fn downloadAndExtract(
         return error.InvalidHash;
     };
 
+    // Construct the final filename and temp filename (include hash to avoid race conditions)
+    var filename_buf: [64]u8 = undefined;
+    const filename = std.fmt.bufPrint(&filename_buf, "{s}.tar.zst", .{base58_hash}) catch {
+        return error.InvalidHash;
+    };
+
+    var temp_filename_buf: [80]u8 = undefined;
+    const temp_filename = std.fmt.bufPrint(&temp_filename_buf, ".{s}.tar.zst.tmp", .{base58_hash}) catch {
+        return error.InvalidHash;
+    };
+
+    // Download to a temp file in the extract directory
+    try downloadToFile(allocator, url, extract_dir, temp_filename);
+
+    // Open the downloaded file for reading
+    var temp_file = extract_dir.openFile(temp_filename, .{}) catch {
+        return error.FileError;
+    };
+    defer temp_file.close();
+
+    // Create a buffered reader from the file
+    var read_buffer: [IO_BUFFER_SIZE]u8 = undefined;
+    var file_reader = temp_file.reader(&read_buffer);
+
+    // Setup directory extract writer
+    var dir_writer = unbundle.DirExtractWriter.init(extract_dir, allocator.*);
+    defer dir_writer.deinit();
+
+    // Extract the content using the streaming architecture
+    unbundle.unbundleStream(allocator.*, &file_reader.interface, dir_writer.extractWriter(), &expected_hash, null) catch |err| {
+        // Clean up temp file on error
+        extract_dir.deleteFile(temp_filename) catch {};
+        return err;
+    };
+
+    // Rename temp file to final name (keeps bundle cached)
+    extract_dir.rename(temp_filename, filename) catch {
+        // If rename fails, just delete the temp file
+        extract_dir.deleteFile(temp_filename) catch {};
+    };
+}
+
+/// Download HTTP response body to a file.
+fn downloadToFile(
+    allocator: *std.mem.Allocator,
+    url: []const u8,
+    dir: std.fs.Dir,
+    filename: []const u8,
+) DownloadError!void {
     // Create HTTP client
     var client = std.http.Client{ .allocator = allocator.* };
     defer client.deinit();
@@ -82,25 +162,13 @@ pub fn downloadAndExtract(
     // Parse the URL
     const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
-    // Check if we need to resolve localhost
-    var extra_headers: []const std.http.Header = &.{};
+    // Check if we need to resolve localhost and verify loopback
     if (uri.host) |host| {
         if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
             // Security: We must resolve "localhost" and verify it points to a loopback address.
-            // This prevents attacks where:
-            // 1. An attacker modifies /etc/hosts to make localhost resolve to their server
-            // 2. A compromised DNS makes localhost resolve to an external IP
-            // 3. Container/VM networking misconfiguration exposes localhost to external IPs
-            //
-            // We're being intentionally strict here:
-            // - For IPv4: We only accept exactly 127.0.0.1 (not the full 127.0.0.0/8 range)
-            // - For IPv6: We only accept exactly ::1 (not other loopback addresses)
-            //
-            // While the specs technically allow any 127.x.y.z address for IPv4 loopback
-            // and multiple forms for IPv6, in practice localhost almost always resolves
-            // to these exact addresses, and being stricter improves security.
-
-            const address_list = try std.net.getAddressList(allocator.*, "localhost", uri.port orelse HTTP_DEFAULT_PORT);
+            const address_list = std.net.getAddressList(allocator.*, "localhost", uri.port orelse HTTP_DEFAULT_PORT) catch {
+                return error.NetworkError;
+            };
             defer address_list.deinit();
 
             if (address_list.addrs.len == 0) {
@@ -120,7 +188,6 @@ pub fn downloadAndExtract(
                     },
                     std.posix.AF.INET6 => {
                         const ipv6_addr = addr.in6.sa.addr;
-                        // Check if it's exactly ::1 (all zeros except last byte is 1)
                         var is_loopback = true;
                         for (ipv6_addr[0..15]) |byte| {
                             if (byte != 0) {
@@ -133,46 +200,48 @@ pub fn downloadAndExtract(
                             break;
                         }
                     },
-                    else => {}, // Ignore other address families
+                    else => {},
                 }
             }
 
             if (!found_loopback) {
                 return error.LocalhostWasNotLoopback;
             }
-
-            // Since we're using "localhost", we need to set the Host header manually
-            // to match what the server expects
-            extra_headers = &.{
-                .{ .name = "Host", .value = "localhost" },
-            };
         }
     }
 
-    // Start the HTTP request
-    var header_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
-    var request = try client.open(.GET, uri, .{
-        .server_header_buffer = &header_buffer,
-        .extra_headers = extra_headers,
-    });
-    defer request.deinit();
+    // Create temp file for writing
+    var file = dir.createFile(filename, .{}) catch {
+        return error.FileError;
+    };
+    errdefer file.close();
 
-    // Send the request and wait for response
-    try request.send();
-    try request.wait();
+    // Create a writer for the file
+    var write_buffer: [IO_BUFFER_SIZE]u8 = undefined;
+    var file_writer = file.writer(&write_buffer);
+
+    // Use fetch API with response_writer to write directly to file
+    const fetch_result = client.fetch(.{
+        .location = .{ .uri = uri },
+        .response_writer = &file_writer.interface,
+    }) catch {
+        file.close();
+        return error.HttpError;
+    };
+
+    // Flush the writer before closing
+    file_writer.interface.flush() catch {
+        file.close();
+        return error.FileError;
+    };
+
+    // Close file after fetch completes
+    file.close();
 
     // Check for successful response
-    if (request.response.status != .ok) {
+    if (fetch_result.status != .ok) {
         return error.HttpError;
     }
-
-    const reader = request.reader();
-
-    // Setup directory extract writer
-    var dir_writer = unbundle.DirExtractWriter.init(extract_dir);
-
-    // Stream and extract the content
-    try unbundle.unbundleStream(reader, dir_writer.extractWriter(), &expected_hash, null);
 }
 
 /// Download and extract a bundled tar.zst file to memory buffers.
@@ -191,37 +260,36 @@ pub fn downloadAndExtractToBuffer(
         return error.InvalidHash;
     };
 
-    // Create HTTP client
-    var client = std.http.Client{ .allocator = allocator.* };
-    defer client.deinit();
+    // Use a temp directory for downloading
+    var tmp_dir = getTempDir() catch {
+        return error.FileError;
+    };
+    defer tmp_dir.close();
 
-    // Parse the URL
-    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+    // Download to temp file (include hash in filename to avoid race conditions)
+    var temp_filename_buf: [80]u8 = undefined;
+    const temp_filename = std.fmt.bufPrint(&temp_filename_buf, ".roc_{s}.tmp", .{base58_hash}) catch {
+        return error.InvalidHash;
+    };
+    try downloadToFile(allocator, url, tmp_dir, temp_filename);
+    defer tmp_dir.deleteFile(temp_filename) catch {};
 
-    // Start the HTTP request (simplified version without localhost resolution for brevity)
-    var header_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
-    var request = try client.open(.GET, uri, .{
-        .server_header_buffer = &header_buffer,
-    });
-    defer request.deinit();
+    // Open the downloaded file for reading
+    var temp_file = tmp_dir.openFile(temp_filename, .{}) catch {
+        return error.FileError;
+    };
+    defer temp_file.close();
 
-    // Send the request and wait for response
-    try request.send();
-    try request.wait();
-
-    // Check for successful response
-    if (request.response.status != .ok) {
-        return error.HttpError;
-    }
-
-    const reader = request.reader();
+    // Create a buffered reader from the file
+    var read_buffer: [IO_BUFFER_SIZE]u8 = undefined;
+    var file_reader = temp_file.reader(&read_buffer);
 
     // Setup buffer extract writer
     var buffer_writer = unbundle.BufferExtractWriter.init(allocator);
     errdefer buffer_writer.deinit();
 
-    // Stream and extract the content
-    try unbundle.unbundleStream(reader, buffer_writer.extractWriter(), &expected_hash, null);
+    // Extract the content using the streaming architecture
+    try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null);
 
     return buffer_writer;
 }

@@ -1248,6 +1248,69 @@ pub const Interpreter = struct {
 
                 return try self.makeBoolValue(result);
             },
+            .list_with_capacity => {
+                // List.with_capacity : U64 -> List(a)
+                // Creates an empty list with preallocated capacity
+                std.debug.assert(args.len == 1); // low-level .list_with_capacity expects 1 argument
+
+                const capacity_arg = args[0];
+                const capacity: u64 = @intCast(capacity_arg.asI128());
+
+                // Get the return type to determine element layout
+                const result_rt_var = return_rt_var orelse unreachable;
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Handle ZST lists specially - they don't actually allocate
+                if (result_layout.tag == .list_of_zst) {
+                    // For ZST lists, capacity doesn't matter - just return an empty list
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                    result_ptr.* = builtins.list.RocList.empty();
+                    out.is_initialized = true;
+                    return out;
+                }
+
+                // Get element layout from the list layout
+                std.debug.assert(result_layout.tag == .list);
+                const elem_layout_idx = result_layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Create empty list with capacity
+                const result_list = builtins.list.listWithCapacity(
+                    capacity,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .list_get_unsafe => {
                 // Internal operation: Get element at index without bounds checking
                 // Args: List(a), U64 (index)
