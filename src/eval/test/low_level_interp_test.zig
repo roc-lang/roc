@@ -768,17 +768,19 @@ test "e_low_level_lambda - List.append on non-empty list" {
 test "e_low_level_lambda - List.append on empty list" {
     const src =
         \\x = List.append([], 0)
-        \\len = List.len(x)
+        \\got = List.get(x, 0)
     ;
 
-    const len_value = try evalModuleAndGetInt(src, 1);
-    try testing.expectEqual(@as(i128, 1), len_value);
+    const get_value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(get_value);
+    try testing.expectEqualStrings("Ok(0)", get_value);
 }
 
 test "e_low_level_lambda - List.append a list on empty list" {
     const src =
         \\x = List.append([], [])
         \\len = List.len(x)
+        \\got = List.get(x, 0)
     ;
 
     const len_value = try evalModuleAndGetInt(src, 1);
@@ -789,10 +791,15 @@ test "e_low_level_lambda - List.append for strings" {
     const src =
         \\x = List.append(["cat", "chases"], "rat")
         \\len = List.len(x)
+        \\got = List.get(x, 2)
     ;
 
     const len_value = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 3), len_value);
+
+    const get_value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(get_value);
+    try testing.expectEqualStrings("Ok(\"rat\")", get_value);
 }
 
 test "e_low_level_lambda - List.append for list of lists" {
