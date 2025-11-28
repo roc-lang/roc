@@ -284,21 +284,51 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
         },
         .record => |rec| {
-            // Try to render using type information first
-            const ext_resolved = ctx.runtime_types.resolveVar(rec.ext);
-            const has_complete_type_info = switch (ext_resolved.desc.content) {
-                .structure => |st| st == .empty_record,
-                else => false,
-            };
-            if (has_complete_type_info) {
+            // Gather all record fields by following the extension chain
+            var all_fields = std.array_list.AlignedManaged(types.RecordField, null).init(gpa);
+            defer all_fields.deinit();
+
+            // Add fields from the initial record
+            const initial_fields = ctx.runtime_types.getRecordFieldsSlice(rec.fields);
+            for (initial_fields.items(.name), initial_fields.items(.var_)) |name, var_| {
+                try all_fields.append(.{ .name = name, .var_ = var_ });
+            }
+
+            // Follow the extension chain to gather all fields
+            var ext = rec.ext;
+            var is_valid = true;
+            while (is_valid) {
+                const ext_resolved = ctx.runtime_types.resolveVar(ext);
+                switch (ext_resolved.desc.content) {
+                    .structure => |flat_type| switch (flat_type) {
+                        .record => |ext_record| {
+                            const ext_fields = ctx.runtime_types.getRecordFieldsSlice(ext_record.fields);
+                            for (ext_fields.items(.name), ext_fields.items(.var_)) |name, var_| {
+                                try all_fields.append(.{ .name = name, .var_ = var_ });
+                            }
+                            ext = ext_record.ext;
+                        },
+                        .empty_record => break, // Reached the end of the extension chain
+                        else => {
+                            is_valid = false;
+                        },
+                    },
+                    .alias => |alias| {
+                        // Follow alias to its backing type
+                        ext = ctx.runtime_types.getAliasBackingVar(alias);
+                    },
+                    else => {
+                        is_valid = false;
+                    },
+                }
+            }
+
+            if (is_valid and all_fields.items.len > 0) {
                 var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                 errdefer out.deinit();
                 try out.appendSlice("{ ");
                 var acc = try value.asRecord(ctx.layout_store);
-                const fields = ctx.runtime_types.getRecordFieldsSlice(rec.fields);
-                var i: usize = 0;
-                while (i < fields.len) : (i += 1) {
-                    const f = fields.get(i);
+                for (all_fields.items, 0..) |f, i| {
                     const name_text = ctx.env.getIdent(f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
@@ -310,7 +340,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     } else {
                         try out.appendSlice("<missing>");
                     }
-                    if (i + 1 < fields.len) try out.appendSlice(", ");
+                    if (i + 1 < all_fields.items.len) try out.appendSlice(", ");
                 }
                 try out.appendSlice(" }");
                 return out.toOwnedSlice();
