@@ -175,9 +175,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         break :blk null;
     };
 
+    // For user modules, the qualified name is just the module name itself
+    // Note: Insert into module_env (calling module), not other_test_env.module_env (target module)
+    // since Ident.Idx values are not transferable between stores.
+    const other_qualified_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
     try module_envs.put(other_module_ident, .{
         .env = other_test_env.module_env,
         .statement_idx = statement_idx,
+        .qualified_type_ident = other_qualified_ident,
     });
 
     // Populate module_envs with Bool, Try, Dict, Set using shared function

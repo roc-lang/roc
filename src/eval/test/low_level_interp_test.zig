@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const parse = @import("parse");
-const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
@@ -30,6 +29,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
+    checker: *Check,
 } {
     const gpa = test_allocator;
 
@@ -84,8 +84,10 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
-    defer checker.deinit();
+    const checker = try gpa.create(Check);
+    errdefer gpa.destroy(checker);
+    checker.* = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    errdefer checker.deinit();
 
     try checker.checkFile();
 
@@ -93,13 +95,14 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, null, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .builtin_module = builtin_module,
+        .checker = checker,
     };
 }
 
@@ -110,6 +113,12 @@ fn cleanupEvalModule(result: anytype) void {
     var problems_mut = result.problems;
     problems_mut.deinit(test_allocator);
     test_allocator.destroy(result.problems);
+
+    // Deinit checker (must happen after evaluator since evaluator holds pointer to import_mapping)
+    var checker_mut = result.checker;
+    checker_mut.deinit();
+    test_allocator.destroy(result.checker);
+
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
 
@@ -666,6 +675,86 @@ test "e_low_level_lambda - List.concat with empty string list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
+test "e_low_level_lambda - List.concat with zero-sized type" {
+    const src =
+        \\x : List({})
+        \\x = List.concat([{}, {}], [{}, {}, {}])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of non refcounted elements creates empty list" {
+    const src =
+        \\x : List(U64)
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of str (refcounted elements) creates empty list" {
+    const src =
+        \\x : List(Str)
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of non refcounted elements can concat" {
+    const src =
+        \\y : List(U64)
+        \\y = List.with_capacity(10)
+        \\x = List.concat(y, [1])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of str (refcounted elements) can concat" {
+    const src =
+        \\y : List(Str)
+        \\y = List.with_capacity(10)
+        \\x = List.concat(y, ["hello", "world"])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity without capacity, of str (refcounted elements) can concat" {
+    const src =
+        \\y : List(Str)
+        \\y = List.with_capacity(0)
+        \\x = List.concat(y, ["hello", "world"])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.with_capacity of zero-sized type creates empty list" {
+    const src =
+        \\x : List({})
+        \\x = List.with_capacity(10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
     const src =
         \\a : Dec
@@ -1121,4 +1210,649 @@ test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
     const value = try evalModuleAndGetString(src, 0, test_allocator);
     defer test_allocator.free(value);
     try testing.expectEqualStrings("\"hi\"", value);
+}
+// U8 conversion tests
+
+test "e_low_level_lambda - U8.to_i16 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 200u8
+        \\x = U8.to_i16(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 200), value);
+}
+
+test "e_low_level_lambda - U8.to_i32 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 255u8
+        \\x = U8.to_i32(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 255), value);
+}
+
+test "e_low_level_lambda - U8.to_i64 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 128u8
+        \\x = U8.to_i64(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 128), value);
+}
+
+test "e_low_level_lambda - U8.to_i128 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 100u8
+        \\x = U8.to_i128(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 100), value);
+}
+
+test "e_low_level_lambda - U8.to_u16 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 200u8
+        \\x = U8.to_u16(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 200), value);
+}
+
+test "e_low_level_lambda - U8.to_u32 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 255u8
+        \\x = U8.to_u32(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 255), value);
+}
+
+test "e_low_level_lambda - U8.to_u64 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 128u8
+        \\x = U8.to_u64(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 128), value);
+}
+
+test "e_low_level_lambda - U8.to_u128 safe widening" {
+    const src =
+        \\a : U8
+        \\a = 50u8
+        \\x = U8.to_u128(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 50), value);
+}
+
+test "e_low_level_lambda - U8.to_i8_wrap in range" {
+    const src =
+        \\a : U8
+        \\a = 100u8
+        \\x = U8.to_i8_wrap(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 100), value);
+}
+
+test "e_low_level_lambda - U8.to_i8_wrap out of range wraps" {
+    const src =
+        \\a : U8
+        \\a = 200u8
+        \\x = U8.to_i8_wrap(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    // 200 as u8 wraps to -56 as i8 (200 - 256 = -56)
+    try testing.expectEqual(@as(i128, -56), value);
+}
+
+test "e_low_level_lambda - U8.to_i8_try in range returns Ok" {
+    const src =
+        \\a : U8
+        \\a = 100u8
+        \\x = U8.to_i8_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(100)", value);
+}
+
+test "e_low_level_lambda - U8.to_i8_try out of range returns Err" {
+    const src =
+        \\a : U8
+        \\a = 200u8
+        \\x = U8.to_i8_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Err(OutOfRange)", value);
+}
+
+test "e_low_level_lambda - U8.to_f32" {
+    const src =
+        \\a : U8
+        \\a = 42u8
+        \\x = U8.to_f32(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "42"));
+}
+
+test "e_low_level_lambda - U8.to_f64" {
+    const src =
+        \\a : U8
+        \\a = 255u8
+        \\x = U8.to_f64(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "255"));
+}
+
+test "e_low_level_lambda - U8.to_dec" {
+    const src =
+        \\a : U8
+        \\a = 123u8
+        \\x = U8.to_dec(a)
+        \\y = Dec.to_str(x)
+    ;
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"123.0\"", value);
+}
+
+// I8 conversion tests
+
+test "e_low_level_lambda - I8.to_i16 safe widening positive" {
+    const src =
+        \\a : I8
+        \\a = 100i8
+        \\x = I8.to_i16(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 100), value);
+}
+
+test "e_low_level_lambda - I8.to_i16 safe widening negative" {
+    const src =
+        \\a : I8
+        \\a = -50i8
+        \\x = I8.to_i16(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -50), value);
+}
+
+test "e_low_level_lambda - I8.to_i32 safe widening" {
+    const src =
+        \\a : I8
+        \\a = -128i8
+        \\x = I8.to_i32(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -128), value);
+}
+
+test "e_low_level_lambda - I8.to_i64 safe widening" {
+    const src =
+        \\a : I8
+        \\a = 127i8
+        \\x = I8.to_i64(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 127), value);
+}
+
+test "e_low_level_lambda - I8.to_i128 safe widening" {
+    const src =
+        \\a : I8
+        \\a = -1i8
+        \\x = I8.to_i128(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, -1), value);
+}
+
+test "e_low_level_lambda - I8.to_u8_wrap in range" {
+    const src =
+        \\a : I8
+        \\a = 50i8
+        \\x = I8.to_u8_wrap(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 50), value);
+}
+
+test "e_low_level_lambda - I8.to_u8_wrap negative wraps" {
+    const src =
+        \\a : I8
+        \\a = -1i8
+        \\x = I8.to_u8_wrap(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    // -1 as i8 wraps to 255 as u8
+    try testing.expectEqual(@as(i128, 255), value);
+}
+
+test "e_low_level_lambda - I8.to_u8_try in range returns Ok" {
+    const src =
+        \\a : I8
+        \\a = 100i8
+        \\x = I8.to_u8_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(100)", value);
+}
+
+test "e_low_level_lambda - I8.to_u8_try negative returns Err" {
+    const src =
+        \\a : I8
+        \\a = -10i8
+        \\x = I8.to_u8_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Err(OutOfRange)", value);
+}
+
+test "e_low_level_lambda - I8.to_u16_wrap positive" {
+    const src =
+        \\a : I8
+        \\a = 100i8
+        \\x = I8.to_u16_wrap(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 100), value);
+}
+
+test "e_low_level_lambda - I8.to_u16_wrap negative wraps" {
+    const src =
+        \\a : I8
+        \\a = -1i8
+        \\x = I8.to_u16_wrap(a)
+    ;
+    const value = try evalModuleAndGetInt(src, 1);
+    // -1 as i8 sign-extends to u16 as 65535
+    try testing.expectEqual(@as(i128, 65535), value);
+}
+
+test "e_low_level_lambda - I8.to_u16_try in range returns Ok" {
+    const src =
+        \\a : I8
+        \\a = 50i8
+        \\x = I8.to_u16_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(50)", value);
+}
+
+test "e_low_level_lambda - I8.to_u16_try negative returns Err" {
+    const src =
+        \\a : I8
+        \\a = -5i8
+        \\x = I8.to_u16_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Err(OutOfRange)", value);
+}
+
+test "e_low_level_lambda - I8.to_u32_try negative returns Err" {
+    const src =
+        \\a : I8
+        \\a = -100i8
+        \\x = I8.to_u32_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Err(OutOfRange)", value);
+}
+
+test "e_low_level_lambda - I8.to_u64_try positive returns Ok" {
+    const src =
+        \\a : I8
+        \\a = 127i8
+        \\x = I8.to_u64_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(127)", value);
+}
+
+test "e_low_level_lambda - I8.to_u128_try zero returns Ok" {
+    const src =
+        \\a : I8
+        \\a = 0i8
+        \\x = I8.to_u128_try(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(0)", value);
+}
+
+test "e_low_level_lambda - I8.to_f32 positive" {
+    const src =
+        \\a : I8
+        \\a = 42i8
+        \\x = I8.to_f32(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "42"));
+}
+
+test "e_low_level_lambda - I8.to_f64 negative" {
+    const src =
+        \\a : I8
+        \\a = -100i8
+        \\x = I8.to_f64(a)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "-100"));
+}
+
+test "e_low_level_lambda - I8.to_dec positive" {
+    const src =
+        \\a : I8
+        \\a = 50i8
+        \\x = I8.to_dec(a)
+        \\y = Dec.to_str(x)
+    ;
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"50.0\"", value);
+}
+
+test "e_low_level_lambda - I8.to_dec negative" {
+    const src =
+        \\a : I8
+        \\a = -25i8
+        \\x = I8.to_dec(a)
+        \\y = Dec.to_str(x)
+    ;
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"-25.0\"", value);
+}
+
+// count_utf8_bytes tests
+test "e_low_level_lambda - Str.count_utf8_bytes empty string" {
+    const src =
+        \\x = Str.count_utf8_bytes("")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+test "e_low_level_lambda - Str.count_utf8_bytes ASCII string" {
+    const src =
+        \\x = Str.count_utf8_bytes("hello")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 5), value);
+}
+
+test "e_low_level_lambda - Str.count_utf8_bytes multi-byte UTF-8" {
+    const src =
+        \\x = Str.count_utf8_bytes("é")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "e_low_level_lambda - Str.count_utf8_bytes emoji" {
+    const src =
+        \\x = Str.count_utf8_bytes("🎉")
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 4), value);
+}
+
+// with_capacity tests
+test "e_low_level_lambda - Str.with_capacity returns empty string" {
+    const src =
+        \\x = Str.with_capacity(0)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.with_capacity with capacity returns empty string" {
+    const src =
+        \\x = Str.with_capacity(100)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// reserve tests
+test "e_low_level_lambda - Str.reserve preserves content" {
+    const src =
+        \\x = Str.reserve("hello", 100)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.reserve empty string" {
+    const src =
+        \\x = Str.reserve("", 50)
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// release_excess_capacity tests
+test "e_low_level_lambda - Str.release_excess_capacity preserves content" {
+    const src =
+        \\x = Str.release_excess_capacity("hello")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.release_excess_capacity empty string" {
+    const src =
+        \\x = Str.release_excess_capacity("")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+// to_utf8 tests (using List.len to verify)
+test "e_low_level_lambda - Str.to_utf8 empty string" {
+    const src =
+        \\x = List.len(Str.to_utf8(""))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+test "e_low_level_lambda - Str.to_utf8 ASCII string" {
+    const src =
+        \\x = List.len(Str.to_utf8("hello"))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 5), value);
+}
+
+test "e_low_level_lambda - Str.to_utf8 multi-byte UTF-8" {
+    const src =
+        \\x = List.len(Str.to_utf8("é"))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+// from_utf8_lossy tests (roundtrip through to_utf8)
+test "e_low_level_lambda - Str.from_utf8_lossy roundtrip ASCII" {
+    const src =
+        \\x = Str.from_utf8_lossy(Str.to_utf8("hello"))
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.from_utf8_lossy roundtrip empty" {
+    const src =
+        \\x = Str.from_utf8_lossy(Str.to_utf8(""))
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.from_utf8_lossy roundtrip UTF-8" {
+    const src =
+        \\x = Str.from_utf8_lossy(Str.to_utf8("hello 🎉 world"))
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello 🎉 world\"", value);
+}
+
+// split_on tests
+test "e_low_level_lambda - Str.split_on basic split count" {
+    const src =
+        \\x = List.len(Str.split_on("hello world", " "))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "e_low_level_lambda - Str.split_on basic split first element" {
+    const src =
+        \\parts = Str.split_on("hello world", " ")
+        \\first = List.first(parts)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"hello\")", value);
+}
+
+test "e_low_level_lambda - Str.split_on multiple delimiters count" {
+    const src =
+        \\x = List.len(Str.split_on("a,b,c,d", ","))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 4), value);
+}
+
+test "e_low_level_lambda - Str.split_on multiple delimiters first element" {
+    const src =
+        \\parts = Str.split_on("a,b,c,d", ",")
+        \\first = List.first(parts)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"a\")", value);
+}
+
+test "e_low_level_lambda - Str.split_on no match" {
+    const src =
+        \\parts = Str.split_on("hello", "x")
+        \\first = List.first(parts)
+    ;
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"hello\")", value);
+}
+
+test "e_low_level_lambda - Str.split_on empty string" {
+    const src =
+        \\x = List.len(Str.split_on("", ","))
+    ;
+    const value = try evalModuleAndGetInt(src, 0);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+// join_with tests
+test "e_low_level_lambda - Str.join_with basic join" {
+    const src =
+        \\x = Str.join_with(["hello", "world"], " ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with multiple elements" {
+    const src =
+        \\x = Str.join_with(["a", "b", "c", "d"], ",")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"a,b,c,d\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with single element" {
+    const src =
+        \\x = Str.join_with(["hello"], "-")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with empty list" {
+    const src =
+        \\x = Str.join_with([], ",")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"\"", value);
+}
+
+test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
+    const src =
+        \\x = Str.join_with(Str.split_on("hello world", " "), " ")
+    ;
+    const value = try evalModuleAndGetString(src, 0, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("\"hello world\"", value);
+}
+
+test "e_low_level_lambda - U8.plus basic" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = U8.plus(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 8), value);
+}
+
+test "e_low_level_lambda - U8.plus method call syntax" {
+    const src =
+        \\a : U8
+        \\a = 5
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = a.plus(b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 8), value);
 }

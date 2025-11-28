@@ -443,6 +443,14 @@ pub const Expr = union(enum) {
         str_with_prefix,
         str_drop_prefix,
         str_drop_suffix,
+        str_count_utf8_bytes,
+        str_with_capacity,
+        str_reserve,
+        str_release_excess_capacity,
+        str_to_utf8,
+        str_from_utf8_lossy,
+        str_split_on,
+        str_join_with,
 
         // Numeric to_str operations
         u8_to_str,
@@ -464,6 +472,7 @@ pub const Expr = union(enum) {
         list_is_empty,
         list_get_unsafe,
         list_concat,
+        list_with_capacity,
 
         // Set operations
         set_is_empty,
@@ -496,6 +505,40 @@ pub const Expr = union(enum) {
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
         num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
+
+        // Numeric conversion operations (U8)
+        u8_to_i8_wrap, // U8 -> I8 (wrapping)
+        u8_to_i8_try, // U8 -> Try(I8, [OutOfRange])
+        u8_to_i16, // U8 -> I16 (safe)
+        u8_to_i32, // U8 -> I32 (safe)
+        u8_to_i64, // U8 -> I64 (safe)
+        u8_to_i128, // U8 -> I128 (safe)
+        u8_to_u16, // U8 -> U16 (safe)
+        u8_to_u32, // U8 -> U32 (safe)
+        u8_to_u64, // U8 -> U64 (safe)
+        u8_to_u128, // U8 -> U128 (safe)
+        u8_to_f32, // U8 -> F32 (safe)
+        u8_to_f64, // U8 -> F64 (safe)
+        u8_to_dec, // U8 -> Dec (safe)
+
+        // Numeric conversion operations (I8)
+        i8_to_i16, // I8 -> I16 (safe)
+        i8_to_i32, // I8 -> I32 (safe)
+        i8_to_i64, // I8 -> I64 (safe)
+        i8_to_i128, // I8 -> I128 (safe)
+        i8_to_u8_wrap, // I8 -> U8 (wrapping)
+        i8_to_u8_try, // I8 -> Try(U8, [OutOfRange])
+        i8_to_u16_wrap, // I8 -> U16 (wrapping)
+        i8_to_u16_try, // I8 -> Try(U16, [OutOfRange])
+        i8_to_u32_wrap, // I8 -> U32 (wrapping)
+        i8_to_u32_try, // I8 -> Try(U32, [OutOfRange])
+        i8_to_u64_wrap, // I8 -> U64 (wrapping)
+        i8_to_u64_try, // I8 -> Try(U64, [OutOfRange])
+        i8_to_u128_wrap, // I8 -> U128 (wrapping)
+        i8_to_u128_try, // I8 -> Try(U128, [OutOfRange])
+        i8_to_f32, // I8 -> F32 (safe)
+        i8_to_f64, // I8 -> F64 (safe)
+        i8_to_dec, // I8 -> Dec (safe)
     };
 
     pub const Idx = enum(u32) { _ };
