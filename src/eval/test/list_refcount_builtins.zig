@@ -43,6 +43,12 @@ test "list refcount builtins - phase 12 limitation documented" {
 // - "e_low_level_lambda - List.concat with strings (refcounted elements)"
 // - "e_low_level_lambda - List.concat with nested lists (refcounted elements)"
 // - "e_low_level_lambda - List.concat with empty string list"
+// - "e_low_level_lambda - List.append on non-empty list"
+// - "e_low_level_lambda - List.append on empty list"
+// - "e_low_level_lambda - List.append a list on empty list"
+// - "e_low_level_lambda - List.append for strings"
+// - "e_low_level_lambda - List.append for list of lists"
+// - "e_low_level_lambda - List.append for already refcounted elt"
 //
 // interpreter_style_test.zig:
 // - "interpreter: match list pattern destructures"

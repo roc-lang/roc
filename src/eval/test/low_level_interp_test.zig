@@ -673,7 +673,59 @@ test "e_low_level_lambda - List.append on non-empty list" {
     ;
 
     const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "e_low_level_lambda - List.append on empty list" {
+    const src =
+        \\x = List.append([], 0)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1), len_value);
+}
+
+test "e_low_level_lambda - List.append a list on empty list" {
+    const src =
+        \\x = List.append([], [])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1), len_value);
+}
+
+test "e_low_level_lambda - List.append for strings" {
+    const src =
+        \\x = List.append(["cat", "chases"], "rat")
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 3), len_value);
+}
+
+test "e_low_level_lambda - List.append for list of lists" {
+    const src =
+        \\x = List.append([[0, 1], [2, 3, 4], [5, 6, 7]], [8,9])
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4), len_value);
+}
+
+test "e_low_level_lambda - List.append for already refcounted elt" {
+    const src =
+        \\new = [8, 9]
+        \\w = [new, new, new, [10, 11]]
+        \\x = List.append([[0, 1], [2, 3, 4], [5, 6, 7]], new)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 3);
+    try testing.expectEqual(@as(i128, 4), len_value);
 }
 
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {

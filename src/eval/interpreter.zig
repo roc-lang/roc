@@ -3424,72 +3424,58 @@ pub const Interpreter = struct {
                 return out;
             },
 
-            // .list_append => {
-            //     // List.append: List(a), a -> List(a)
-            //     std.debug.assert(args.len == 2); // low-level .list_get_unsafe expects 2 arguments
-            //
-            //     const roc_list_arg = args[0];
-            //     const elt_arg = args[1];
-            //
-            //     std.debug.assert(roc_list_arg.ptr != null); // low-level .list_get_unsafe expects non-null list pointer
-            //
-            //     // Extract element layout from List(a)
-            //     std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
-            //
-            //     const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
-            //
-            //     // const append_elt: *const builtins.list.Opaque = @ptrCast(@alignCast(elt_arg.ptr.?));
-            //
-            //     // Get element layout
-            //     const elem_layout_idx = roc_list_arg.layout.data.list;
-            //     const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-            //     const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
-            //     const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-            //     const elem_alignment_u32: u32 = @intCast(elem_alignment);
-            //
-            //     // Determine if elements are refcounted
-            //     const elements_refcounted = elem_layout.isRefcounted();
-            //
-            //     var temp_ptr: [32]u8 align(@alignOf(u128)) = undefined;
-            //
-            //     try elt_arg.copyToPtr(&self.runtime_layout_store, &temp_ptr, roc_ops);
-            //
-            //     const append_elt: *const builtins.list.Opaque = @ptrCast(@alignCast(&temp_ptr));
-            //
-            //     // Determine if list can be mutated in place
-            //     const update_mode = if (roc_list.isUnique()) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
-            //
-            //     // Set up context for refcount callbacks
-            //     var refcount_context = RefcountContext{
-            //         .layout_store = &self.runtime_layout_store,
-            //         .elem_layout = elem_layout,
-            //         .roc_ops = roc_ops,
-            //     };
-            //
-            //     // const sized_copy = struct {
-            //     //     const item_size = elem_size;
-            //     //     fn copy_fn(target: builtins.list.Opaque, src: builtins.list.Opaque) callconv(.c) void {
-            //     //         const target_ptr: [*]u8 = target.?;
-            //     //         const src_ptr: [*]u8 = src.?;
-            //     //         @memcpy(target_ptr, src_ptr[0..item_size]);
-            //     //     }
-            //     // };
-            //
-            //     const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt.*, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, roc_ops);
-            //
-            //     // Allocate space for the result list
-            //     const result_layout = roc_list_arg.layout; // Same layout as input
-            //     var out = try self.pushRaw(result_layout, 0);
-            //     out.is_initialized = false;
-            //
-            //     // Copy the result list structure to the output
-            //     const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-            //     result_ptr.* = result_list;
-            //
-            //     out.is_initialized = true;
-            //     return out;
-            //     // return error.Crash;
-            // },
+            .list_append => {
+                // List.append: List(a), a -> List(a)
+                std.debug.assert(args.len == 2); // low-level .list_append expects 2 arguments
+
+                const roc_list_arg = args[0];
+                const elt_arg = args[1];
+
+                std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
+                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
+
+                // Extract element layout from List(a)
+                std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
+
+                // Format arguments into proper types
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                const append_elt: builtins.list.Opaque = non_null_bytes;
+
+                // Get element layout
+                const elem_layout_idx = roc_list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Determine if list can be mutated in place
+                const update_mode = if (roc_list.isUnique()) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, roc_ops);
+
+                // Allocate space for the result list
+                const result_layout = roc_list_arg.layout; // Same layout as input
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
