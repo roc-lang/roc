@@ -216,18 +216,22 @@ NO CHANGE
 		(p-assign (ident "value3"))
 		(e-string
 			(e-literal (string "This is a string"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-literal (string "With multiple lines"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-lookup-local
 				(p-assign (ident "value1")))))
 	(d-let
 		(p-assign (ident "value4"))
 		(e-string
 			(e-literal (string "This is a string"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-literal (string "With multiple lines"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-lookup-local
 				(p-assign (ident "value2")))))
 	(d-let
@@ -260,7 +264,8 @@ NO CHANGE
 		(p-assign (ident "x"))
 		(e-block
 			(e-string
-				(e-literal (string "\n"))))))
+				(e-literal (string "
+"))))))
 ~~~
 # TYPES
 ~~~clojure

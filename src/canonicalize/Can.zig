@@ -5691,6 +5691,88 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }
 }
 
+/// Process escape sequences in a string, returning the processed string.
+/// Handles: \n, \r, \t, \\, \", \', \$, and \u(XXXX) unicode escapes.
+fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
+    // Quick check: if no backslashes, return the input as-is
+    if (std.mem.indexOfScalar(u8, input, '\\') == null) {
+        return input;
+    }
+
+    var result = try std.ArrayList(u8).initCapacity(allocator, input.len);
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
+            const next = input[i + 1];
+            switch (next) {
+                'n' => {
+                    try result.append(allocator, '\n');
+                    i += 2;
+                },
+                'r' => {
+                    try result.append(allocator, '\r');
+                    i += 2;
+                },
+                't' => {
+                    try result.append(allocator, '\t');
+                    i += 2;
+                },
+                '\\' => {
+                    try result.append(allocator, '\\');
+                    i += 2;
+                },
+                '"' => {
+                    try result.append(allocator, '"');
+                    i += 2;
+                },
+                '\'' => {
+                    try result.append(allocator, '\'');
+                    i += 2;
+                },
+                '$' => {
+                    try result.append(allocator, '$');
+                    i += 2;
+                },
+                'u' => {
+                    // Unicode escape: \u(XXXX)
+                    if (i + 2 < input.len and input[i + 2] == '(') {
+                        // Find the closing paren
+                        if (std.mem.indexOfScalarPos(u8, input, i + 3, ')')) |close_paren| {
+                            const hex_code = input[i + 3 .. close_paren];
+                            if (std.fmt.parseInt(u21, hex_code, 16)) |codepoint| {
+                                if (std.unicode.utf8ValidCodepoint(codepoint)) {
+                                    var buf: [4]u8 = undefined;
+                                    const len = std.unicode.utf8Encode(codepoint, &buf) catch {
+                                        // Invalid, keep original
+                                        try result.append(allocator, input[i]);
+                                        i += 1;
+                                        continue;
+                                    };
+                                    try result.appendSlice(allocator, buf[0..len]);
+                                    i = close_paren + 1;
+                                    continue;
+                                }
+                            } else |_| {}
+                        }
+                    }
+                    // Invalid unicode escape, keep original
+                    try result.append(allocator, input[i]);
+                    i += 1;
+                },
+                else => {
+                    // Unknown escape, keep as-is
+                    try result.append(allocator, input[i]);
+                    i += 1;
+                },
+            }
+        } else {
+            try result.append(allocator, input[i]);
+            i += 1;
+        }
+    }
+    return result.toOwnedSlice(allocator);
+}
+
 /// Helper function to create a string literal expression and add it to the scratch stack
 fn addStringLiteralToScratch(self: *Self, text: []const u8, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     // intern the string in the ModuleEnv
@@ -5728,9 +5810,13 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
         const part_node = self.parse_ir.store.getExpr(part);
         switch (part_node) {
             .string_part => |sp| {
-                // get the raw text of the string part
+                // get the raw text of the string part and process escape sequences
                 const part_text = self.parse_ir.resolve(sp.token);
-                try self.addStringLiteralToScratch(part_text, part_node.to_tokenized_region());
+                const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                defer if (processed_text.ptr != part_text.ptr) {
+                    self.env.gpa.free(processed_text);
+                };
+                try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
             },
             else => {
                 try self.addInterpolationToScratch(part, part_node);
@@ -5752,13 +5838,17 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
             .string_part => |sp| {
                 // Add newline between consecutive string parts
                 if (last_string_part_end != null) {
-                    try self.addStringLiteralToScratch("\\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
+                    try self.addStringLiteralToScratch("\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
                 }
 
-                // Get and process the raw text of the string part
+                // Get and process the raw text of the string part (including escape sequences)
                 const part_text = self.parse_ir.resolve(sp.token);
                 if (part_text.len != 0) {
-                    try self.addStringLiteralToScratch(part_text, part_node.to_tokenized_region());
+                    const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                    defer if (processed_text.ptr != part_text.ptr) {
+                        self.env.gpa.free(processed_text);
+                    };
+                    try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
                 }
                 last_string_part_end = part_node.to_tokenized_region().end;
             },
