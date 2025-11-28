@@ -647,7 +647,7 @@ pub const Repl = struct {
             ctx.reset();
         }
 
-        const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
                 if (self.crash_ctx) |ctx| {
                     if (ctx.crashMessage()) |msg| {
@@ -836,7 +836,7 @@ pub const Repl = struct {
             ctx.reset();
         }
 
-        const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
                 if (self.crash_ctx) |ctx| {
                     if (ctx.crashMessage()) |msg| {

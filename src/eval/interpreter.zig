@@ -353,8 +353,8 @@ pub const Interpreter = struct {
     }
 
     /// Evaluates a Roc expression and returns the result.
-    pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
-        return try self.evalStackSafe(expr_idx, roc_ops, null);
+    pub fn eval(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
+        return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
     pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
@@ -381,7 +381,7 @@ pub const Interpreter = struct {
         arg_ptr: ?*anyopaque,
     ) Error!void {
         if (arg_ptr) |args_ptr| {
-            const func_val = try self.evalMinimal(expr_idx, roc_ops);
+            const func_val = try self.eval(expr_idx, roc_ops);
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
@@ -460,7 +460,7 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
-            const result_value = self.evalStackSafe(header.body_idx, roc_ops, null) catch |err| {
+            const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| {
                 if (err == error.EarlyReturn) {
                     const return_val = self.early_return_value orelse return error.Crash;
                     self.early_return_value = null;
@@ -481,7 +481,7 @@ pub const Interpreter = struct {
             return;
         }
 
-        const result = try self.evalMinimal(expr_idx, roc_ops);
+        const result = try self.eval(expr_idx, roc_ops);
         defer result.decref(&self.runtime_layout_store, roc_ops);
 
         // Only copy result if the result type is compatible with ret_ptr
@@ -514,8 +514,7 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn pushStr(self: *Interpreter, content: []const u8) !StackValue {
-        _ = content; // size computed below but content copied via RocStr
+    fn pushStr(self: *Interpreter) !StackValue {
         const layout_val = Layout.str();
         const size: u32 = self.runtime_layout_store.layoutSize(layout_val);
         if (size == 0) {
@@ -594,7 +593,7 @@ pub const Interpreter = struct {
         hosted_fn_index: u32,
         args: []StackValue,
         roc_ops: *RocOps,
-        _: types.Var, // return_rt_var - currently unused, type inferred from args.len
+        return_rt_var: types.Var,
     ) !StackValue {
         // Validate index is within bounds
         if (hosted_fn_index >= roc_ops.hosted_fns.count) {
@@ -605,20 +604,8 @@ pub const Interpreter = struct {
         // Get the hosted function pointer from RocOps
         const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
 
-        // Allocate space for the return value
-        // Hosted lambda types aren't properly propagated from annotations, so we infer the
-        // return type based on the argument type:
-        // - If no args OR single ZST arg (like () in Stdin.line!), return type is Str
-        // - If arg is non-zero-sized (like Str in Stdout.line!), return type is {}
-        const has_zst_or_no_args = args.len == 0 or (args.len == 1 and self.runtime_layout_store.isZeroSized(args[0].layout));
-        const return_layout = if (has_zst_or_no_args) blk: {
-            // Functions taking unit () or no args return Str (e.g., Stdin.line!)
-            break :blk layout.Layout.str();
-        } else blk: {
-            // Functions taking Str return {} (e.g., Stdout.line!, Stderr.line!)
-            const empty_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
-            break :blk self.runtime_layout_store.getLayout(empty_idx);
-        };
+        // Allocate space for the return value using the actual return type
+        const return_layout = try self.getRuntimeLayout(return_rt_var);
         const result_value = try self.pushRaw(return_layout, 0);
 
         // Allocate stack space for marshalled arguments
@@ -2419,7 +2406,7 @@ pub const Interpreter = struct {
                 const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
                 const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
 
-                const value = try self.pushStr("");
+                const value = try self.pushStr();
                 const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
                 roc_str_ptr.* = result_str;
                 return value;
@@ -2438,38 +2425,38 @@ pub const Interpreter = struct {
             .f64_to_str => return self.floatToStr(f64, args, roc_ops),
 
             // U8 conversion operations
-            .u8_to_i8_wrap => return self.intConvertWrap(u8, i8, args, roc_ops),
-            .u8_to_i8_try => return self.intConvertTry(u8, i8, args, roc_ops, return_rt_var),
-            .u8_to_i16 => return self.intConvert(u8, i16, args, roc_ops),
-            .u8_to_i32 => return self.intConvert(u8, i32, args, roc_ops),
-            .u8_to_i64 => return self.intConvert(u8, i64, args, roc_ops),
-            .u8_to_i128 => return self.intConvert(u8, i128, args, roc_ops),
-            .u8_to_u16 => return self.intConvert(u8, u16, args, roc_ops),
-            .u8_to_u32 => return self.intConvert(u8, u32, args, roc_ops),
-            .u8_to_u64 => return self.intConvert(u8, u64, args, roc_ops),
-            .u8_to_u128 => return self.intConvert(u8, u128, args, roc_ops),
-            .u8_to_f32 => return self.intToFloat(u8, f32, args, roc_ops),
-            .u8_to_f64 => return self.intToFloat(u8, f64, args, roc_ops),
-            .u8_to_dec => return self.intToDec(u8, args, roc_ops),
+            .u8_to_i8_wrap => return self.intConvertWrap(u8, i8, args),
+            .u8_to_i8_try => return self.intConvertTry(u8, i8, args, return_rt_var),
+            .u8_to_i16 => return self.intConvert(u8, i16, args),
+            .u8_to_i32 => return self.intConvert(u8, i32, args),
+            .u8_to_i64 => return self.intConvert(u8, i64, args),
+            .u8_to_i128 => return self.intConvert(u8, i128, args),
+            .u8_to_u16 => return self.intConvert(u8, u16, args),
+            .u8_to_u32 => return self.intConvert(u8, u32, args),
+            .u8_to_u64 => return self.intConvert(u8, u64, args),
+            .u8_to_u128 => return self.intConvert(u8, u128, args),
+            .u8_to_f32 => return self.intToFloat(u8, f32, args),
+            .u8_to_f64 => return self.intToFloat(u8, f64, args),
+            .u8_to_dec => return self.intToDec(u8, args),
 
             // I8 conversion operations
-            .i8_to_i16 => return self.intConvert(i8, i16, args, roc_ops),
-            .i8_to_i32 => return self.intConvert(i8, i32, args, roc_ops),
-            .i8_to_i64 => return self.intConvert(i8, i64, args, roc_ops),
-            .i8_to_i128 => return self.intConvert(i8, i128, args, roc_ops),
-            .i8_to_u8_wrap => return self.intConvertWrap(i8, u8, args, roc_ops),
-            .i8_to_u8_try => return self.intConvertTry(i8, u8, args, roc_ops, return_rt_var),
-            .i8_to_u16_wrap => return self.intConvertWrap(i8, u16, args, roc_ops),
-            .i8_to_u16_try => return self.intConvertTry(i8, u16, args, roc_ops, return_rt_var),
-            .i8_to_u32_wrap => return self.intConvertWrap(i8, u32, args, roc_ops),
-            .i8_to_u32_try => return self.intConvertTry(i8, u32, args, roc_ops, return_rt_var),
-            .i8_to_u64_wrap => return self.intConvertWrap(i8, u64, args, roc_ops),
-            .i8_to_u64_try => return self.intConvertTry(i8, u64, args, roc_ops, return_rt_var),
-            .i8_to_u128_wrap => return self.intConvertWrap(i8, u128, args, roc_ops),
-            .i8_to_u128_try => return self.intConvertTry(i8, u128, args, roc_ops, return_rt_var),
-            .i8_to_f32 => return self.intToFloat(i8, f32, args, roc_ops),
-            .i8_to_f64 => return self.intToFloat(i8, f64, args, roc_ops),
-            .i8_to_dec => return self.intToDec(i8, args, roc_ops),
+            .i8_to_i16 => return self.intConvert(i8, i16, args),
+            .i8_to_i32 => return self.intConvert(i8, i32, args),
+            .i8_to_i64 => return self.intConvert(i8, i64, args),
+            .i8_to_i128 => return self.intConvert(i8, i128, args),
+            .i8_to_u8_wrap => return self.intConvertWrap(i8, u8, args),
+            .i8_to_u8_try => return self.intConvertTry(i8, u8, args, return_rt_var),
+            .i8_to_u16_wrap => return self.intConvertWrap(i8, u16, args),
+            .i8_to_u16_try => return self.intConvertTry(i8, u16, args, return_rt_var),
+            .i8_to_u32_wrap => return self.intConvertWrap(i8, u32, args),
+            .i8_to_u32_try => return self.intConvertTry(i8, u32, args, return_rt_var),
+            .i8_to_u64_wrap => return self.intConvertWrap(i8, u64, args),
+            .i8_to_u64_try => return self.intConvertTry(i8, u64, args, return_rt_var),
+            .i8_to_u128_wrap => return self.intConvertWrap(i8, u128, args),
+            .i8_to_u128_try => return self.intConvertTry(i8, u128, args, return_rt_var),
+            .i8_to_f32 => return self.intToFloat(i8, f32, args),
+            .i8_to_f64 => return self.intToFloat(i8, f64, args),
+            .i8_to_dec => return self.intToDec(i8, args),
         }
     }
 
@@ -2498,7 +2485,7 @@ pub const Interpreter = struct {
         var buf: [40]u8 = undefined; // 40 is enough for i128
         const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch unreachable;
 
-        const value = try self.pushStr("");
+        const value = try self.pushStr();
         const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
@@ -2517,15 +2504,14 @@ pub const Interpreter = struct {
         var buf: [400]u8 = undefined;
         const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch unreachable;
 
-        const value = try self.pushStr("");
+        const value = try self.pushStr();
         const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
     }
 
     /// Helper for safe integer conversions (widening)
-    fn intConvert(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intConvert(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -2543,8 +2529,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper for wrapping integer conversions (potentially lossy)
-    fn intConvertWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intConvertWrap(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -2578,8 +2563,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper for try integer conversions (returns Try(To, [OutOfRange]))
-    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
-        _ = roc_ops;
+    fn intConvertTry(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, return_rt_var: ?types.Var) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -2708,8 +2692,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper for integer to float conversions
-    fn intToFloat(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intToFloat(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -2727,8 +2710,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper for integer to Dec conversions
-    fn intToDec(self: *Interpreter, comptime From: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
-        _ = roc_ops;
+    fn intToDec(self: *Interpreter, comptime From: type, args: []const StackValue) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
         // Null argument is a compiler bug - the compiler should never produce code with null args
@@ -3191,7 +3173,7 @@ pub const Interpreter = struct {
             .empty_tag_union => true,
             .nominal_type => |nom| {
                 // For nominal types, dispatch to their is_eq method
-                return try self.dispatchNominalIsEq(lhs, rhs, nom, lhs_var);
+                return try self.dispatchNominalIsEq(lhs, rhs, nom);
             },
             .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => @panic("valuesStructurallyEqual: cannot compare functions or unbound records"),
         };
@@ -3381,10 +3363,7 @@ pub const Interpreter = struct {
         lhs: StackValue,
         rhs: StackValue,
         nom: types.NominalType,
-        lhs_var: types.Var,
     ) StructuralEqError!bool {
-        _ = lhs_var;
-
         // Check if this is a simple scalar comparison (numbers, bools represented as scalars)
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
@@ -3431,7 +3410,6 @@ pub const Interpreter = struct {
 
         // Can't compare - likely a user-defined nominal type that needs is_eq dispatch
         // TODO: Implement proper method dispatch by looking up is_eq in the nominal type's module
-        _ = lhs_var;
         @panic("dispatchNominalIsEq: cannot compare non-scalar nominal types without is_eq method");
     }
 
@@ -4299,7 +4277,7 @@ pub const Interpreter = struct {
         const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
 
         // Evaluate the method's expression
-        const method_value = try self.evalStackSafe(target_def.expr, roc_ops, rt_def_var);
+        const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
 
         return method_value;
     }
@@ -4896,13 +4874,8 @@ pub const Interpreter = struct {
         return scratch_tags;
     }
 
-    pub fn makePolyKey(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) PolyKey {
-        _ = self;
-        return PolyKey.init(module_id, func_id, args);
-    }
-
     fn polyLookup(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) ?PolyEntry {
-        const key = self.makePolyKey(module_id, func_id, args);
+        const key = PolyKey.init(module_id, func_id, args);
         return self.poly_cache.get(key);
     }
 
@@ -5597,7 +5570,7 @@ pub const Interpreter = struct {
     /// Stack-safe evaluation entry point.
     /// This function evaluates expressions using explicit work and value stacks
     /// instead of recursive calls, preventing stack overflow on deeply nested programs.
-    pub fn evalStackSafe(
+    pub fn evalWithExpectedType(
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
         roc_ops: *RocOps,
@@ -5623,8 +5596,8 @@ pub const Interpreter = struct {
 
         while (work_stack.pop()) |work_item| {
             switch (work_item) {
-                .eval_expr => |eval| {
-                    try self.scheduleExprEval(&work_stack, &value_stack, eval.expr_idx, eval.expected_rt_var, roc_ops);
+                .eval_expr => |eval_item| {
+                    try self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops);
                 },
                 .apply_continuation => |cont| {
                     const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
@@ -5720,7 +5693,7 @@ pub const Interpreter = struct {
                 const segments = self.env.store.sliceExpr(str_expr.span);
                 if (segments.len == 0) {
                     // Empty string - return immediately
-                    const value = try self.pushStr("");
+                    const value = try self.pushStr();
                     const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
                     roc_str.* = RocStr.empty();
                     try value_stack.push(value);
@@ -6189,7 +6162,7 @@ pub const Interpreter = struct {
 
                     if (args_exprs.len == 0) {
                         // No payload args - finalize immediately
-                        const value = try self.finalizeTagNoPayload(expr_idx, rt_var, tag_index, layout_val, roc_ops);
+                        const value = try self.finalizeTagNoPayload(rt_var, tag_index, layout_val, roc_ops);
                         try value_stack.push(value);
                     } else {
                         // Has payload args - schedule collection
@@ -6635,7 +6608,7 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
     ) Error!StackValue {
         const content = self.env.getString(seg.literal);
-        const value = try self.pushStr(content);
+        const value = try self.pushStr();
         const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
         roc_str.* = RocStr.fromSlice(content, roc_ops);
         return value;
@@ -6769,13 +6742,11 @@ pub const Interpreter = struct {
     /// Finalize a tag with no payload arguments (but may still have record/tuple layout)
     fn finalizeTagNoPayload(
         self: *Interpreter,
-        expr_idx: can.CIR.Expr.Idx,
         rt_var: types.Var,
         tag_index: usize,
         layout_val: Layout,
         roc_ops: *RocOps,
     ) Error!StackValue {
-        _ = expr_idx;
         if (layout_val.tag == .record) {
             var dest = try self.pushRaw(layout_val, 0);
             var acc = try dest.asRecord(&self.runtime_layout_store);
@@ -7037,7 +7008,7 @@ pub const Interpreter = struct {
                 };
                 self.def_stack.append(new_entry) catch return null;
                 defer _ = self.def_stack.pop();
-                return self.evalMinimal(def.expr, roc_ops) catch null;
+                return self.eval(def.expr, roc_ops) catch null;
             }
         }
         return null;
@@ -7117,7 +7088,7 @@ pub const Interpreter = struct {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == lookup.pattern_idx) {
                 // Evaluate the definition on demand and cache the result in bindings
-                const result = try self.evalStackSafe(def.expr, roc_ops, null);
+                const result = try self.evalWithExpectedType(def.expr, roc_ops, null);
                 try self.bindings.append(.{
                     .pattern_idx = def.pattern,
                     .value = result,
@@ -7159,7 +7130,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the definition's expression in the other module's context
-        const result = try self.evalStackSafe(target_def.expr, roc_ops, expected_rt_var);
+        const result = try self.evalWithExpectedType(target_def.expr, roc_ops, expected_rt_var);
 
         return result;
     }
@@ -8299,7 +8270,7 @@ pub const Interpreter = struct {
                     seg_value.decref(&self.runtime_layout_store, roc_ops);
 
                     // Push as string value
-                    const str_value = try self.pushStr("");
+                    const str_value = try self.pushStr();
                     const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
                     roc_str_ptr.* = segment_str;
                     try value_stack.push(str_value);
@@ -8355,7 +8326,7 @@ pub const Interpreter = struct {
                         break :blk RocStr.fromSlice(buffer, roc_ops);
                     };
 
-                    const result = try self.pushStr("");
+                    const result = try self.pushStr();
                     const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
                     roc_str_ptr.* = result_str;
                     try value_stack.push(result);
@@ -8370,7 +8341,7 @@ pub const Interpreter = struct {
                     // Literal segment - push directly as string value
                     const content = self.env.getString(next_seg_expr.e_str_segment.literal);
                     const seg_str = RocStr.fromSlice(content, roc_ops);
-                    const seg_value = try self.pushStr("");
+                    const seg_value = try self.pushStr();
                     const roc_str_ptr: *RocStr = @ptrCast(@alignCast(seg_value.ptr.?));
                     roc_str_ptr.* = seg_str;
                     try value_stack.push(seg_value);

@@ -407,7 +407,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
@@ -759,7 +759,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
-        const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
+        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), ops);
         const layout_cache = &interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
@@ -834,7 +834,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
-            const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
+            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
 

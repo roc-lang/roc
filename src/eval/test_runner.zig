@@ -195,7 +195,7 @@ pub const TestRunner = struct {
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
         const ops = self.get_ops();
-        const result = try self.interpreter.evalMinimal(expr_idx, ops);
+        const result = try self.interpreter.eval(expr_idx, ops);
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
