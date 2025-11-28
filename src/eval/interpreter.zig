@@ -2781,63 +2781,44 @@ pub const Interpreter = struct {
                 const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
+                // Helper function to perform zero-fill shift for a given type
+                const shiftRightZeroFill = struct {
+                    inline fn apply(comptime UnsignedT: type, comptime SignedT: type, value: i128, shift: u7) i128 {
+                        const masked = @as(UnsignedT, @truncate(@as(u128, @bitCast(value))));
+                        const ShiftT = std.math.Log2Int(UnsignedT);
+                        const max_shift = @bitSizeOf(UnsignedT) - 1;
+                        const shift_clamped = @as(ShiftT, @intCast(@min(shift, max_shift)));
+                        const shifted = masked >> shift_clamped;
+
+                        if (UnsignedT == SignedT) {
+                            // Unsigned case (e.g., u8 == u8)
+                            // For smaller types we can use direct cast, but u128 needs bitCast
+                            if (UnsignedT == u128) {
+                                return @as(i128, @bitCast(shifted));
+                            } else {
+                                return @as(i128, shifted);
+                            }
+                        } else {
+                            // Signed case (e.g., u8 != i8)
+                            return @as(i128, @as(SignedT, @bitCast(shifted)));
+                        }
+                    }
+                }.apply;
+
                 switch (lhs) {
                     .int => |l| {
-                        // Perform logical shift right (zero-fill)
-                        // We need to:
-                        // 1. Mask the value to its actual bit width
-                        // 2. Perform unsigned shift
-                        // 3. Convert back to signed
                         const precision = result_layout.data.scalar.data.int;
                         const result: i128 = switch (precision) {
-                            .u8 => blk: {
-                                const masked = @as(u8, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u3 = @as(u3, @intCast(@min(shift_amount, 7)));
-                                break :blk @as(i128, masked >> shift_u3);
-                            },
-                            .i8 => blk: {
-                                const masked = @as(u8, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u3 = @as(u3, @intCast(@min(shift_amount, 7)));
-                                break :blk @as(i128, @as(i8, @bitCast(masked >> shift_u3)));
-                            },
-                            .u16 => blk: {
-                                const masked = @as(u16, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u4 = @as(u4, @intCast(@min(shift_amount, 15)));
-                                break :blk @as(i128, masked >> shift_u4);
-                            },
-                            .i16 => blk: {
-                                const masked = @as(u16, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u4 = @as(u4, @intCast(@min(shift_amount, 15)));
-                                break :blk @as(i128, @as(i16, @bitCast(masked >> shift_u4)));
-                            },
-                            .u32 => blk: {
-                                const masked = @as(u32, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u5 = @as(u5, @intCast(@min(shift_amount, 31)));
-                                break :blk @as(i128, masked >> shift_u5);
-                            },
-                            .i32 => blk: {
-                                const masked = @as(u32, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u5 = @as(u5, @intCast(@min(shift_amount, 31)));
-                                break :blk @as(i128, @as(i32, @bitCast(masked >> shift_u5)));
-                            },
-                            .u64 => blk: {
-                                const masked = @as(u64, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u6 = @as(u6, @intCast(@min(shift_amount, 63)));
-                                break :blk @as(i128, masked >> shift_u6);
-                            },
-                            .i64 => blk: {
-                                const masked = @as(u64, @truncate(@as(u128, @bitCast(l))));
-                                const shift_u6 = @as(u6, @intCast(@min(shift_amount, 63)));
-                                break :blk @as(i128, @as(i64, @bitCast(masked >> shift_u6)));
-                            },
-                            .u128 => blk: {
-                                const unsigned_val = @as(u128, @bitCast(l));
-                                break :blk @as(i128, @bitCast(unsigned_val >> shift_amount));
-                            },
-                            .i128 => blk: {
-                                const unsigned_val = @as(u128, @bitCast(l));
-                                break :blk @as(i128, @bitCast(unsigned_val >> shift_amount));
-                            },
+                            .u8 => shiftRightZeroFill(u8, u8, l, shift_amount),
+                            .i8 => shiftRightZeroFill(u8, i8, l, shift_amount),
+                            .u16 => shiftRightZeroFill(u16, u16, l, shift_amount),
+                            .i16 => shiftRightZeroFill(u16, i16, l, shift_amount),
+                            .u32 => shiftRightZeroFill(u32, u32, l, shift_amount),
+                            .i32 => shiftRightZeroFill(u32, i32, l, shift_amount),
+                            .u64 => shiftRightZeroFill(u64, u64, l, shift_amount),
+                            .i64 => shiftRightZeroFill(u64, i64, l, shift_amount),
+                            .u128 => shiftRightZeroFill(u128, u128, l, shift_amount),
+                            .i128 => shiftRightZeroFill(u128, i128, l, shift_amount),
                         };
                         try out.setInt(result);
                     },
