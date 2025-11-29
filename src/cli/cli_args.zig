@@ -19,6 +19,7 @@ pub const CliArgs = union(enum) {
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
+    clean_cache,
     help: []const u8,
     licenses,
     problem: CliProblem,
@@ -149,6 +150,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
+    if (mem.eql(u8, args[0], "clean-cache")) return parseCleanCache(args[1..]);
 
     return try parseRun(alloc, args);
 }
@@ -171,6 +173,7 @@ const main_help =
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
     \\  experimental-lsp Start the experimental language server (LSP) implementation
+    \\  clean-cache      Delete the Roc cache directory
     \\  help             Print this message
     \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
     \\
@@ -562,7 +565,7 @@ fn parseVersion(args: []const []const u8) CliArgs {
 fn parseLicenses(args: []const []const u8) CliArgs {
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Prints license info for Roc as well as attributions to other projects used by Roc
             \\
             \\Usage: roc licenses
@@ -576,6 +579,31 @@ fn parseLicenses(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs.licenses;
+}
+
+fn parseCleanCache(args: []const []const u8) CliArgs {
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help =
+            \\Delete the Roc cache directory
+            \\
+            \\This removes all cached packages and temporary files.
+            \\Cache locations by platform:
+            \\  - Linux: ~/.cache/roc/ (or $XDG_CACHE_HOME/roc/)
+            \\  - macOS: ~/Library/Caches/roc/ (or $XDG_CACHE_HOME/roc/)
+            \\  - Windows: %APPDATA%\Roc\
+            \\
+            \\Usage: roc clean-cache
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
+        } else {
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "clean-cache", .arg = arg } } };
+        }
+    }
+    return CliArgs.clean_cache;
 }
 
 fn parseDocs(args: []const []const u8) CliArgs {
@@ -1227,5 +1255,29 @@ test "roc licenses" {
         const result = try parse(gpa, &[_][]const u8{ "licenses", "extrastuff" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("extrastuff", result.problem.unexpected_argument.arg);
+    }
+}
+
+test "roc clean-cache" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, &[_][]const u8{"clean-cache"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(.clean_cache, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "clean-cache", "extrastuff" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("extrastuff", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "clean-cache", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "clean-cache", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }

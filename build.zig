@@ -573,7 +573,7 @@ pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
-    const test_step = b.step("test", "Run all tests included in src/tests.zig");
+    const test_step = b.step("test", "Run all tests");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");

@@ -584,6 +584,9 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .licenses => {
             try stdout.writeAll(legalDetailsFileContent);
         },
+        .clean_cache => {
+            cleanCache(stdout, stderr);
+        },
         .problem => |problem| {
             try switch (problem) {
                 .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}\n", .{details.flag}),
@@ -2163,38 +2166,39 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
     }
 }
 
-/// Get the roc cache directory for downloaded packages, creating it if needed.
-/// Standard cache locations by platform:
-/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
-/// - Windows: %LOCALAPPDATA%\roc\packages\
+/// Get the roc cache directory for downloaded packages.
+/// Uses CacheConfig for consistent cache directory locations across the codebase.
 fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
-    // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-        defer allocator.free(xdg_cache);
-        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
-    }
-
-    // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
-    if (comptime builtin.os.tag == .windows) {
-        if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
-            defer allocator.free(local_app_data);
-            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
-        }
-    }
-
-    // Fall back to ~/.cache/roc/packages (Unix)
-    if (getEnvVar(allocator, "HOME")) |home| {
-        defer allocator.free(home);
-        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
-    }
-
-    return error.NoCacheDir;
+    const base_dir = try CacheConfig.getDefaultCacheDir(allocator);
+    defer allocator.free(base_dir);
+    return std.fs.path.join(allocator, &.{ base_dir, "packages" });
 }
 
-/// Cross-platform helper to get environment variable.
-/// Returns null if the variable is not set. Caller must free the returned slice.
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
-    return std.process.getEnvVarOwned(allocator, key) catch null;
+/// Delete the Roc cache directory.
+fn cleanCache(stdout: *std.Io.Writer, stderr: *std.Io.Writer) void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const cache_dir = CacheConfig.getDefaultCacheDir(allocator) catch {
+        stderr.print("Error: Could not determine cache directory location\n", .{}) catch {};
+        return;
+    };
+    defer allocator.free(cache_dir);
+
+    // Check if the directory exists
+    std.fs.cwd().access(cache_dir, .{}) catch {
+        stdout.print("Cache directory does not exist: {s}\n", .{cache_dir}) catch {};
+        return;
+    };
+
+    // Delete the directory recursively
+    std.fs.cwd().deleteTree(cache_dir) catch |err| {
+        stderr.print("Error: Failed to delete cache directory {s}: {}\n", .{ cache_dir, err }) catch {};
+        return;
+    };
+
+    stdout.print("Deleted cache directory: {s}\n", .{cache_dir}) catch {};
 }
 
 /// Get list of target directory names to try, in preference order.
