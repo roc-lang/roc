@@ -1253,3 +1253,19 @@ test "List.fold with record accumulator - nested list and record" {
         .no_trace,
     );
 }
+
+// ============================================================================
+// Tests for List.map
+// ============================================================================
+
+test "List.map - chained concat works" {
+    // Test chained concat (foundation for List.map)
+    try runExpectInt(
+        "List.len(List.concat(List.concat([1i64], [2i64]), [3i64]))",
+        3,
+        .no_trace,
+    );
+}
+
+// TODO: List.map tests are pending completion of fold+closure+concat interaction fixes
+// The fold with concat in a closure currently has issues that need investigation

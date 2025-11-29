@@ -15,6 +15,11 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
 
+/// Fixed size for storing allocation metadata (size).
+/// Must be at least max(16, @alignOf(usize)) to ensure proper alignment for all Roc types.
+/// We use 16 because that's Roc's max alignment (for Dec/i128/u128).
+const SIZE_STORAGE_BYTES: usize = 16;
+
 const TestEnv = @This();
 
 allocator: std.mem.Allocator,
@@ -59,11 +64,12 @@ pub fn crashState(self: *TestEnv) CrashState {
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+    // Use a fixed alignment that's at least SIZE_STORAGE_BYTES to ensure consistency
+    // across alloc/dealloc/realloc calls regardless of the requested alignment.
+    const effective_alignment = @max(alloc_args.alignment, SIZE_STORAGE_BYTES);
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(effective_alignment)));
 
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
+    const total_size = alloc_args.length + SIZE_STORAGE_BYTES;
 
     // Allocate memory including space for size metadata
     const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
@@ -73,29 +79,28 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     };
 
     // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + SIZE_STORAGE_BYTES - @sizeOf(usize));
     size_ptr.* = total_size;
 
     // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + SIZE_STORAGE_BYTES);
 }
 
 fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    // Use the fixed SIZE_STORAGE_BYTES - this must match what testRocAlloc used
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
 
     // Read the total size from metadata
     const total_size = size_ptr.*;
 
     // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - SIZE_STORAGE_BYTES);
 
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    // Use the same effective alignment as testRocAlloc
+    const effective_alignment = @max(dealloc_args.alignment, SIZE_STORAGE_BYTES);
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(effective_alignment)));
 
     // Free the memory (including the size metadata)
     const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
@@ -105,31 +110,30 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void 
 fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    // Use the fixed SIZE_STORAGE_BYTES - must match what testRocAlloc used
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
 
     // Read the old total size from metadata
     const old_total_size = old_size_ptr.*;
 
     // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+    const old_base_ptr: [*]align(SIZE_STORAGE_BYTES) u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - SIZE_STORAGE_BYTES);
 
     // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
+    const new_total_size = realloc_args.new_length + SIZE_STORAGE_BYTES;
 
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    // Perform reallocation - use align(SIZE_STORAGE_BYTES) slice to match original allocation
+    const old_slice: []align(SIZE_STORAGE_BYTES) u8 = old_base_ptr[0..old_total_size];
     const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
         std.debug.panic("Out of memory during testRocRealloc", .{});
     };
 
     // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + SIZE_STORAGE_BYTES - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
     // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + SIZE_STORAGE_BYTES);
 }
 
 fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {

@@ -77,7 +77,10 @@ Builtin :: [].{
 		}
 
 		map : List(a), (a -> b) -> List(b)
-		map = |_, _| []
+		map = |list, transform|
+			# Implement using fold + concat for now
+			# TODO: Optimize with in-place update when list is unique and element sizes match
+			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |_, _| []
@@ -853,6 +856,25 @@ Builtin :: [].{
 # Private top-level function for unsafe list access
 # This is a low-level operation that gets replaced by the compiler
 list_get_unsafe : List(item), U64 -> item
+
+# Private top-level function for unsafe list element replacement
+# This is a low-level operation that gets replaced by the compiler
+# Returns { list: the modified list, value: the old value at that index }
+list_replace_unsafe : List(item), U64, item -> { list: List(item), value: item }
+
+# Private top-level function for unsafe list append
+# This is a low-level operation that gets replaced by the compiler
+# Caller must ensure the list has sufficient capacity (via List.with_capacity or List.reserve)
+list_append_unsafe : List(item), item -> List(item)
+
+# Private top-level function to check if a list is unique (refcount == 1)
+# This is a low-level operation that gets replaced by the compiler
+# Returns U8 (0 = false, 1 = true) since Bool is not available at top level
+list_is_unique : List(item) -> U8
+
+# Private top-level function to clone a list (create an independent copy)
+# This is a low-level operation that gets replaced by the compiler
+list_clone : List(item) -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler

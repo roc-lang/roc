@@ -1684,11 +1684,21 @@ pub const Interpreter = struct {
                 const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
                 const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
 
-                // Get element layout
-                const elem_layout_idx = list_a_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                // Get element layout from list_a
+                const elem_layout_idx_a = list_a_arg.layout.data.list;
+                const elem_layout_a = self.runtime_layout_store.getLayout(elem_layout_idx_a);
+                const elem_alignment_a = elem_layout_a.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+
+                // Get element layout from list_b
+                const elem_layout_idx_b = list_b_arg.layout.data.list;
+                const elem_layout_b = self.runtime_layout_store.getLayout(elem_layout_idx_b);
+                const elem_alignment_b = elem_layout_b.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+
+                // Use the layout with larger alignment (more specific type).
+                // This handles the case where list_a is an empty list with polymorphic element type.
+                const elem_layout = if (elem_alignment_b > elem_alignment_a) elem_layout_b else elem_layout_a;
                 const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment = @max(elem_alignment_a, elem_alignment_b);
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
@@ -1717,8 +1727,10 @@ pub const Interpreter = struct {
                     roc_ops,
                 );
 
-                // Allocate space for the result list
-                const result_layout = list_a_arg.layout; // Same layout as input
+                // Allocate space for the result list.
+                // Use the layout with the larger element alignment, since that's the more specific type.
+                // This handles the case where list_a is an empty list with polymorphic element type.
+                const result_layout = if (elem_alignment_b > elem_alignment_a) list_b_arg.layout else list_a_arg.layout;
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
 
@@ -1728,6 +1740,133 @@ pub const Interpreter = struct {
 
                 out.is_initialized = true;
                 return out;
+            },
+            .list_is_unique => {
+                // list_is_unique : List(a) -> U8
+                // Returns 1 if the list has a refcount of 1 (or is empty), 0 otherwise
+                std.debug.assert(args.len == 1);
+
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const is_unique = builtins.list.listIsUnique(roc_list.*);
+
+                // Return as U8 (0 or 1) since Bool isn't available at top level
+                const result_layout = layout.Layout.int(.u8);
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+                try out.setInt(if (is_unique) @as(i128, 1) else @as(i128, 0));
+                out.is_initialized = true;
+                return out;
+            },
+            .list_clone => {
+                // list_clone : List(a) -> List(a)
+                // Creates an independent copy of the list (for safe mutation when shared)
+                std.debug.assert(args.len == 1);
+
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+
+                // Get element layout
+                const elem_layout_idx = list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Clone the list
+                const result_list = builtins.list.listClone(
+                    roc_list.*,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                const result_layout = list_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .list_append_unsafe => {
+                // list_append_unsafe : List(a), a -> List(a)
+                // Appends element to list without capacity checking (caller must ensure capacity)
+                std.debug.assert(args.len == 2);
+
+                const list_arg = args[0];
+                const elem_arg = args[1];
+
+                std.debug.assert(list_arg.ptr != null);
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+
+                // Get element layout
+                const elem_layout_idx = list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+
+                // Get pointer to element data
+                const elem_ptr: ?[*]u8 = if (elem_arg.ptr) |p| @ptrCast(p) else null;
+
+                // Directly manipulate the list (since listAppendUnsafe's CopyFn doesn't
+                // have access to element_size, we inline the logic here)
+                const old_length = roc_list.len();
+                var output = roc_list.*;
+                output.length += 1;
+
+                if (output.bytes) |bytes| {
+                    if (elem_ptr) |source| {
+                        const target = bytes + old_length * elem_size;
+                        @memcpy(target[0..elem_size], source[0..elem_size]);
+                    }
+                }
+
+                // Allocate space for the result list
+                const result_layout = list_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = output;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .list_replace_unsafe => {
+                // list_replace_unsafe : List(a), U64, a -> { list: List(a), value: a }
+                // TODO: Implement properly when needed for in-place list operations
+                std.debug.assert(args.len == 3);
+                std.debug.assert(return_rt_var != null);
+                self.triggerCrash("list_replace_unsafe not yet implemented", false, roc_ops);
+                return error.Crash;
             },
             // Bool operations
             .bool_is_eq => {
