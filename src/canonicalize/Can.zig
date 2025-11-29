@@ -5070,13 +5070,171 @@ pub fn canonicalizeExpr(
             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
-        .suffix_single_question => |_| {
-            const feature = try self.env.insertString("canonicalize suffix_single_question expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        .suffix_single_question => |unary| {
+            // Desugar `expr?` into:
+            //   match expr {
+            //       Ok($q_ok) => $q_ok,
+            //       Err($q_err) => return Err($q_err),
+            //   }
+            const region = self.parse_ir.tokenizedRegionToRegion(unary.region);
+
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the inner expression (the expression before `?`)
+            const can_cond = try self.canonicalizeExpr(unary.expr) orelse return null;
+
+            // Create synthetic identifiers for the Ok value and Err value
+            const ok_val_ident = try self.env.insertIdent(base.Ident.for_text("$q_ok"));
+            const err_val_ident = try self.env.insertIdent(base.Ident.for_text("$q_err"));
+            const ok_tag_ident = try self.env.insertIdent(base.Ident.for_text("Ok"));
+            const err_tag_ident = try self.env.insertIdent(base.Ident.for_text("Err"));
+
+            // Mark the start of scratch match branches
+            const scratch_top = self.env.store.scratchMatchBranchTop();
+
+            // === Branch 1: Ok($q_ok) => $q_ok ===
+            {
+                // Enter a new scope for this branch
+                try self.scopeEnter(self.env.gpa, false);
+                defer self.scopeExit(self.env.gpa) catch {};
+
+                // Create the assign pattern for the Ok value
+                const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
+                    .assign = .{ .ident = ok_val_ident },
+                }, region);
+
+                // Introduce the pattern into scope
+                _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+
+                // Create pattern span for Ok tag argument
+                const ok_patterns_start = self.env.store.scratchPatternTop();
+                try self.env.store.addScratchPattern(ok_assign_pattern_idx);
+                const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
+
+                // Create the Ok tag pattern: Ok($q_ok)
+                const ok_tag_pattern_idx = try self.env.addPattern(Pattern{
+                    .applied_tag = .{
+                        .name = ok_tag_ident,
+                        .args = ok_args_span,
+                    },
+                }, region);
+
+                // Create branch pattern
+                const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+                const ok_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+                    .pattern = ok_tag_pattern_idx,
+                    .degenerate = false,
+                }, region);
+                try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
+                const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+                // Create the branch body: lookup $q_ok
+                const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                    .pattern_idx = ok_assign_pattern_idx,
+                } }, region);
+                // Mark the pattern as used
+                try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
+
+                // Create the Ok branch
+                const ok_branch_idx = try self.env.addMatchBranch(
+                    Expr.Match.Branch{
+                        .patterns = ok_branch_pat_span,
+                        .value = ok_lookup_idx,
+                        .guard = null,
+                        .redundant = @enumFromInt(0),
+                    },
+                    region,
+                );
+                try self.env.store.addScratchMatchBranch(ok_branch_idx);
+            }
+
+            // === Branch 2: Err($q_err) => return Err($q_err) ===
+            {
+                // Enter a new scope for this branch
+                try self.scopeEnter(self.env.gpa, false);
+                defer self.scopeExit(self.env.gpa) catch {};
+
+                // Create the assign pattern for the Err value
+                const err_assign_pattern_idx = try self.env.addPattern(Pattern{
+                    .assign = .{ .ident = err_val_ident },
+                }, region);
+
+                // Introduce the pattern into scope
+                _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, err_val_ident, err_assign_pattern_idx, false, true);
+
+                // Create pattern span for Err tag argument
+                const err_patterns_start = self.env.store.scratchPatternTop();
+                try self.env.store.addScratchPattern(err_assign_pattern_idx);
+                const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
+
+                // Create the Err tag pattern: Err($q_err)
+                const err_tag_pattern_idx = try self.env.addPattern(Pattern{
+                    .applied_tag = .{
+                        .name = err_tag_ident,
+                        .args = err_args_span,
+                    },
+                }, region);
+
+                // Create branch pattern
+                const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+                const err_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+                    .pattern = err_tag_pattern_idx,
+                    .degenerate = false,
+                }, region);
+                try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
+                const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+                // Create the branch body: return Err($q_err)
+                // First, create lookup for $q_err
+                const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                    .pattern_idx = err_assign_pattern_idx,
+                } }, region);
+                // Mark the pattern as used
+                try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+
+                // Create Err($q_err) tag expression
+                const err_tag_args_start = self.env.store.scratchExprTop();
+                try self.env.store.addScratchExpr(err_lookup_idx);
+                const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
+
+                const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
+                    .e_tag = .{
+                        .name = err_tag_ident,
+                        .args = err_tag_args_span,
+                    },
+                }, region);
+
+                // Create return Err($q_err) expression
+                const return_expr_idx = try self.env.addExpr(CIR.Expr{ .e_return = .{
+                    .expr = err_tag_expr_idx,
+                } }, region);
+
+                // Create the Err branch
+                const err_branch_idx = try self.env.addMatchBranch(
+                    Expr.Match.Branch{
+                        .patterns = err_branch_pat_span,
+                        .value = return_expr_idx,
+                        .guard = null,
+                        .redundant = @enumFromInt(0),
+                    },
+                    region,
+                );
+                try self.env.store.addScratchMatchBranch(err_branch_idx);
+            }
+
+            // Create span from scratch branches
+            const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
+
+            // Create the match expression
+            const match_expr = Expr.Match{
+                .cond = can_cond.idx,
+                .branches = branches_span,
+                .exhaustive = @enumFromInt(0), // Will be set during type checking
+            };
+            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .unary_op => |unary| {
             const region = self.parse_ir.tokenizedRegionToRegion(unary.region);

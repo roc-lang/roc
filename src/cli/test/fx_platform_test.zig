@@ -686,10 +686,10 @@ test "fx platform run from different cwd" {
 // BUG REPRODUCTIONS - These tests document known bugs and will fail once fixed
 // =============================================================================
 
-test "BUG: question mark operator not implemented" {
-    // Bug 4: The `?` postfix operator for error propagation is not yet implemented.
-    // Expected behavior once fixed: The code should compile and run successfully.
-    // Current behavior: Reports "NOT IMPLEMENTED" error.
+test "question mark operator works" {
+    // Bug 4 (FIXED): The `?` postfix operator for error propagation now works.
+    // The operator desugars to a match expression that either unwraps Ok values
+    // or early returns Err values.
     const allocator = testing.allocator;
 
     try ensureRocBinary(allocator);
@@ -704,11 +704,8 @@ test "BUG: question mark operator not implemented" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // Currently this should produce a "NOT IMPLEMENTED" error
-    // Once the bug is fixed, this test will fail and should be updated
-    // to expect successful execution
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "NOT IMPLEMENTED") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "suffix_single_question") != null);
+    // The ? operator should unwrap Ok values and return "hello"
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
 }
 
 test "numeric fold produces correct values" {

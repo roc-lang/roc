@@ -9,7 +9,7 @@ This document provides a detailed plan for fixing the remaining bugs found durin
 | 1 | Type annotations on helper functions panic | FIXED | - |
 | 2 | Tuple pattern matching panic | FIXED | - |
 | 3 | Custom type aliases panic | FIXED | - |
-| 4 | `?` operator not implemented | **BUG** | Medium |
+| 4 | `?` operator not implemented | FIXED | Medium |
 | 5-8 | Missing builtins (Num.to_str, List.range, etc.) | Feature Request | - |
 | 9 | Numeric fold produces garbage values | FIXED | Hard |
 | 10 | For loop on list literals segfault | FIXED | - |
@@ -344,5 +344,42 @@ if (resolved.desc.content == .flex) {
 
 **Key Insight:** Integer literals should default to I64, not Dec. The original code was using Dec as the default for all unresolved numeric types, which is incorrect for integer literals. Decimal literals (with fractional parts) are handled separately via `e_dec`, `e_frac_f32`, `e_frac_f64` expression types
 
-### Bug 4 Implementation Notes
-- TBD
+### Bug 4 Implementation Notes (FIXED)
+
+**Root Cause:** The `?` operator was not implemented in canonicalization - it just returned a "NOT IMPLEMENTED" diagnostic.
+
+**Fix Implementation:** Desugar `expr?` into a match expression:
+```roc
+match expr {
+    Ok($q_ok) => $q_ok,
+    Err($q_err) => return Err($q_err),
+}
+```
+
+**Fix Location:** `src/canonicalize/Can.zig` lines 5073-5234
+
+**Implementation Details:**
+1. Canonicalize the inner expression (the expression before `?`)
+2. Create synthetic identifiers for Ok value (`$q_ok`) and Err value (`$q_err`)
+3. Create tag identifiers for `Ok` and `Err`
+4. For each branch, enter a new scope to isolate pattern bindings
+5. Create assign patterns for the inner values
+6. Introduce patterns into scope via `scopeIntroduceInternal`
+7. Create `applied_tag` patterns for `Ok($q_ok)` and `Err($q_err)`
+8. Create match branch patterns and branches
+9. For Ok branch: create `e_lookup_local` to return the unwrapped value
+10. For Err branch: create `e_tag` wrapping the error and `e_return` for early return
+11. Mark both patterns as used via `used_patterns.put` to avoid unused variable warnings
+12. Create the final `e_match` expression
+
+**Key APIs Used:**
+- `self.env.store.scratchPatternTop()` / `addScratchPattern()` - for building pattern spans
+- `self.env.store.scratchMatchBranchPatternTop()` / `addScratchMatchBranchPattern()` - for branch patterns
+- `self.env.addPattern()` - create CIR patterns
+- `self.env.addMatchBranchPattern()` - create match branch patterns
+- `self.env.addMatchBranch()` - create match branches
+- `self.env.addExpr()` - create CIR expressions
+- `self.scopeIntroduceInternal()` - introduce patterns into scope
+- `self.used_patterns.put()` - mark patterns as used
+
+**Test File:** `test/fx/bug_04_question_mark_not_implemented.roc`
