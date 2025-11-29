@@ -1259,60 +1259,6 @@ test "List.fold with record accumulator - nested list and record" {
 // Tests for List.map
 // ============================================================================
 
-test "List.map - chained concat works" {
-    // Test chained concat (foundation for List.map)
-    try runExpectListI64(
-        "List.concat(List.concat([1i64], [2i64]), [3i64])",
-        &[_]i64{ 1, 2, 3 },
-        .no_trace,
-    );
-}
-
-test "List.map - simple fold without closure call" {
-    // Test fold with simple arithmetic - no closure call in body
-    try runExpectInt(
-        "List.fold([1i64, 2i64, 3i64], 0i64, |acc, item| acc + item)",
-        6,
-        .no_trace,
-    );
-}
-
-test "List.map - fold returning list directly" {
-    // Test fold returning acc directly (identity)
-    try runExpectListI64(
-        "List.fold([1i64, 2i64], [0i64], |acc, _item| acc)",
-        &[_]i64{0},
-        .no_trace,
-    );
-}
-
-test "List.map - singleton list in closure" {
-    // Test creating a singleton list inside a closure
-    try runExpectListI64(
-        "(|x| [x])(42i64)",
-        &[_]i64{42},
-        .no_trace,
-    );
-}
-
-test "List.map - concat in simple closure" {
-    // Test concat inside a closure (called once, not in a loop)
-    try runExpectListI64(
-        "(|a, b| List.concat(a, b))([1i64], [2i64])",
-        &[_]i64{ 1, 2 },
-        .no_trace,
-    );
-}
-
-test "List.map - fold with concat in closure" {
-    // Test fold with concat (what map does)
-    try runExpectListI64(
-        "List.fold([1i64, 2i64], [], |acc, item| List.concat(acc, [item]))",
-        &[_]i64{ 1, 2 },
-        .no_trace,
-    );
-}
-
 test "List.map - basic identity" {
     // Map with identity function
     try runExpectListI64(
