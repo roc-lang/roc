@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» List.len(List.keep_if([1, 2, 3, 4, 5], |x| x > 2))
+» List.keep_if([1, 2, 3, 4, 5], |x| x > 2)
 ~~~
 # OUTPUT
-3
+[3, 4, 5]
 # PROBLEMS
 NIL
