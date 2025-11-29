@@ -6336,6 +6336,9 @@ pub const Interpreter = struct {
             final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// True if this block_continue was scheduled after an s_expr statement,
+            /// meaning we should pop and discard the expression's result value
+            should_discard_value: bool = false,
         };
 
         pub const BindDecl = struct {
@@ -8506,15 +8509,18 @@ pub const Interpreter = struct {
             },
             .s_expr => |sx| {
                 // Evaluate expression, discard result, continue with remaining
-                // Push block_continue for remaining statements
-                try work_stack.push(.{ .apply_continuation = .{ .block_continue = .{
-                    .remaining_stmts = remaining_stmts,
-                    .final_expr = final_expr,
-                    .bindings_start = bindings_start,
-                } } });
-                // Push decref to clean up the expression result
-                // We'll handle this by pushing a special continuation or just evaluating and discarding
-                // For now, we'll just evaluate and let the block_continue handle cleanup
+                // Push block_continue for remaining statements (with should_discard_value=true)
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .block_continue = .{
+                            .remaining_stmts = remaining_stmts,
+                            .final_expr = final_expr,
+                            .bindings_start = bindings_start,
+                            .should_discard_value = true, // s_expr result should be discarded
+                        },
+                    },
+                });
+                // Evaluate the expression; block_continue will discard its result
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = sx.expr,
                     .expected_rt_var = null,
@@ -8749,10 +8755,9 @@ pub const Interpreter = struct {
             },
             .block_continue => |bc| {
                 // For s_expr statements, we need to pop and discard the value
-                // Check if there's a value to discard (from s_expr)
-                if (value_stack.items.items.len > 0) {
-                    // Pop and discard any value left from s_expr
-                    const val = value_stack.pop().?;
+                // Only pop if should_discard_value is set (meaning this was scheduled after an s_expr)
+                if (bc.should_discard_value) {
+                    const val = value_stack.pop() orelse return error.Crash;
                     val.decref(&self.runtime_layout_store, roc_ops);
                 }
 

@@ -1267,5 +1267,92 @@ test "List.map - chained concat works" {
     );
 }
 
-// TODO: List.map tests are pending completion of fold+closure+concat interaction fixes
-// The fold with concat in a closure currently has issues that need investigation
+test "List.map - simple fold without closure call" {
+    // Test fold with simple arithmetic - no closure call in body
+    try runExpectInt(
+        "List.fold([1i64, 2i64, 3i64], 0i64, |acc, item| acc + item)",
+        6,
+        .no_trace,
+    );
+}
+
+test "List.map - fold returning list directly" {
+    // Test fold returning acc directly (identity)
+    try runExpectInt(
+        "List.len(List.fold([1i64, 2i64], [0i64], |acc, _item| acc))",
+        1,
+        .no_trace,
+    );
+}
+
+test "List.map - singleton list in closure" {
+    // Test creating a singleton list inside a closure
+    try runExpectInt(
+        "List.len((|x| [x])(42i64))",
+        1,
+        .no_trace,
+    );
+}
+
+test "List.map - concat in simple closure" {
+    // Test concat inside a closure (called once, not in a loop)
+    try runExpectInt(
+        "List.len((|a, b| List.concat(a, b))([1i64], [2i64]))",
+        2,
+        .no_trace,
+    );
+}
+
+test "List.map - fold with concat in closure" {
+    // Test fold with concat (what map does)
+    try runExpectInt(
+        "List.len(List.fold([1i64, 2i64], [], |acc, item| List.concat(acc, [item])))",
+        2,
+        .no_trace,
+    );
+}
+
+test "List.map - basic identity" {
+    // Map with identity function should preserve length
+    try runExpectInt(
+        "List.len(List.map([1i64, 2i64, 3i64], |x| x))",
+        3,
+        .no_trace,
+    );
+}
+
+test "List.map - single element" {
+    // Map on single element list
+    try runExpectInt(
+        "List.len(List.map([42i64], |x| x))",
+        1,
+        .no_trace,
+    );
+}
+
+test "List.map - longer list length preserved" {
+    // Check that map on a longer list preserves length
+    try runExpectInt(
+        "List.len(List.map([1i64, 2i64, 3i64, 4i64, 5i64], |x| x * x))",
+        5,
+        .no_trace,
+    );
+}
+
+test "List.map - doubling preserves length" {
+    // Map with doubling function
+    try runExpectInt(
+        "List.len(List.map([1i64, 2i64, 3i64], |x| x * 2i64))",
+        3,
+        .no_trace,
+    );
+}
+
+test "List.map - adding preserves length" {
+    // Map with adding function
+    try runExpectInt(
+        "List.len(List.map([10i64, 20i64], |x| x + 5i64))",
+        2,
+        .no_trace,
+    );
+}
