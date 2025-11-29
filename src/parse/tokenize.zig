@@ -1913,14 +1913,28 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
 
             .UpperIdent => {
-                try buf2.append('Z');
-                for (1..length) |_| {
-                    try buf2.append('z');
+                if (length > 0 and buf[region.start.offset] == '$') {
+                    try buf2.append('$');
+                    for (1..length) |_| {
+                        try buf2.append('Z');
+                    }
+                } else {
+                    try buf2.append('Z');
+                    for (1..length) |_| {
+                        try buf2.append('z');
+                    }
                 }
             },
             .LowerIdent => {
-                for (0..length) |_| {
-                    try buf2.append('z');
+                if (length > 0 and buf[region.start.offset] == '$') {
+                    try buf2.append('$');
+                    for (1..length) |_| {
+                        try buf2.append('z');
+                    }
+                } else {
+                    for (0..length) |_| {
+                        try buf2.append('z');
+                    }
                 }
             },
             .Underscore => {
