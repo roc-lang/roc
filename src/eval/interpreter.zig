@@ -210,6 +210,14 @@ pub const Interpreter = struct {
     /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
     all_module_envs: []const *const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
+    /// Module envs keyed by translated idents (in runtime_layout_store.env's ident space)
+    /// Used for method lookup on nominal types whose origin_module was translated
+    translated_module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
+    /// Pre-translated module name idents for comparison in getModuleEnvForOrigin
+    /// These are in runtime_layout_store.env's ident space
+    translated_builtin_module: base_pkg.Ident.Idx,
+    translated_env_module: base_pkg.Ident.Idx,
+    translated_app_module: base_pkg.Ident.Idx,
     module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
     current_module_id: u32,
@@ -357,6 +365,10 @@ pub const Interpreter = struct {
             .app_env = app_env,
             .all_module_envs = all_module_envs,
             .module_envs = module_envs,
+            .translated_module_envs = undefined, // Set after runtime_layout_store init
+            .translated_builtin_module = base_pkg.Ident.Idx.NONE,
+            .translated_env_module = base_pkg.Ident.Idx.NONE,
+            .translated_app_module = base_pkg.Ident.Idx.NONE,
             .module_ids = module_ids,
             .import_envs = import_envs,
             .current_module_id = 0, // Current module always gets ID 0
@@ -379,6 +391,79 @@ pub const Interpreter = struct {
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str);
+
+        // Build translated_module_envs for runtime method lookups
+        // This maps module names in runtime_layout_store.env's ident space to their ModuleEnvs
+        var translated_module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
+        errdefer translated_module_envs.deinit(allocator);
+        const layout_env = result.runtime_layout_store.env;
+
+        // Helper to check if a module has a valid module_name_idx
+        // (handles both unset NONE and corrupted undefined values from deserialized data)
+        const hasValidModuleName = struct {
+            fn check(mod_env: *const can.ModuleEnv) bool {
+                // Check for NONE sentinel
+                if (mod_env.module_name_idx.isNone()) return false;
+                // Bounds check - module_name_idx.idx must be within the ident store
+                const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
+                return mod_env.module_name_idx.idx < ident_store_size;
+            }
+        }.check;
+
+        // Add current/root module (skip if module_name_idx is unset, e.g., in tests)
+        if (hasValidModuleName(env)) {
+            const current_name_str = env.getIdent(env.module_name_idx);
+            const translated_current = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(current_name_str));
+            try translated_module_envs.put(allocator, translated_current, env);
+        }
+
+        // Add app module if different from env
+        if (app_env) |a_env| {
+            if (a_env != env and hasValidModuleName(a_env)) {
+                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const translated_app = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(app_name_str));
+                try translated_module_envs.put(allocator, translated_app, a_env);
+            }
+        }
+
+        // Add builtin module
+        if (builtin_module_env) |bme| {
+            if (hasValidModuleName(bme)) {
+                const builtin_name_str = bme.getIdent(bme.module_name_idx);
+                const translated_builtin = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(builtin_name_str));
+                try translated_module_envs.put(allocator, translated_builtin, bme);
+            }
+        }
+
+        // Add all other modules
+        for (all_module_envs) |mod_env| {
+            if (hasValidModuleName(mod_env)) {
+                const mod_name_str = mod_env.getIdent(mod_env.module_name_idx);
+                const translated_mod = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(mod_name_str));
+                // Use put to handle potential duplicates (same module might be in multiple places)
+                try translated_module_envs.put(allocator, translated_mod, mod_env);
+            }
+        }
+
+        result.translated_module_envs = translated_module_envs;
+
+        // Pre-translate module names for comparison in getModuleEnvForOrigin
+        // All translated idents are in runtime_layout_store.env's ident space
+        result.translated_builtin_module = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text("Builtin"));
+
+        // Translate env's module name
+        if (hasValidModuleName(env)) {
+            const env_name_str = env.getIdent(env.module_name_idx);
+            result.translated_env_module = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(env_name_str));
+        }
+
+        // Translate app's module name
+        if (app_env) |a_env| {
+            if (a_env != env and hasValidModuleName(a_env)) {
+                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                result.translated_app_module = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(app_name_str));
+            }
+        }
 
         return result;
     }
@@ -5202,6 +5287,7 @@ pub const Interpreter = struct {
         }
         self.poly_cache.deinit();
         self.module_envs.deinit(self.allocator);
+        self.translated_module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
         self.import_envs.deinit(self.allocator);
         self.var_to_layout_slot.deinit();
@@ -5221,20 +5307,46 @@ pub const Interpreter = struct {
 
     /// Get the module environment for a given origin module identifier.
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
+    /// Note: origin_module may be in runtime_layout_store.env's ident space (after translateTypeVar),
+    /// or in the original ident space (for direct lookups), so we check both maps.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
-        // Check if it's the Builtin module
-        // Use root_env.idents for consistent module comparison across all contexts
-        if (origin_module == self.root_env.idents.builtin_module) {
+        // Check if it's the Builtin module (using pre-translated ident for runtime-translated case)
+        if (origin_module.idx == self.translated_builtin_module.idx) {
             // In shim context, builtins are embedded in the main module env
             // (builtin_module_env is null), so fall back to self.env
             return self.builtin_module_env orelse self.env;
         }
-        // Check if it's the current module
+        // Also check original builtin ident for non-translated case
+        if (origin_module == self.root_env.idents.builtin_module) {
+            return self.builtin_module_env orelse self.env;
+        }
+
+        // Check if it's the current module (both translated and original idents)
+        if (!self.translated_env_module.isNone() and origin_module.idx == self.translated_env_module.idx) {
+            return self.env;
+        }
         if (self.env.module_name_idx == origin_module) {
             return self.env;
         }
-        // Look up in imported modules
-        return self.module_envs.get(origin_module);
+
+        // Check if it's the app module (both translated and original idents)
+        if (self.app_env) |a_env| {
+            if (!self.translated_app_module.isNone() and origin_module.idx == self.translated_app_module.idx) {
+                return a_env;
+            }
+            if (a_env.module_name_idx == origin_module) {
+                return a_env;
+            }
+        }
+
+        // Look up in imported modules (original idents)
+        if (self.module_envs.get(origin_module)) |env| {
+            return env;
+        }
+
+        // Look up in translated module envs (for runtime-translated idents)
+        // This handles the case where origin_module comes from runtime_layout_store.env's ident space
+        return self.translated_module_envs.get(origin_module);
     }
 
     /// Get the numeric module ID for a given origin module identifier.
@@ -6883,7 +6995,9 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
                     const required_type = requires_items[requires_idx_val];
-                    const required_ident = self.env.getIdent(required_type.ident);
+                    // Translate the required ident from platform's store to app's store (once, outside loop)
+                    const required_ident_str = self.env.getIdent(required_type.ident);
+                    const app_required_ident = try @constCast(app_env).insertIdent(base_pkg.Ident.for_text(required_ident_str));
 
                     // Find the matching export in the app
                     const exports = app_env.store.sliceDefs(app_env.exports);
@@ -6893,8 +7007,8 @@ pub const Interpreter = struct {
                         // Get the def's identifier from its pattern
                         const pattern = app_env.store.getPattern(def.pattern);
                         if (pattern == .assign) {
-                            const def_ident_text = app_env.getIdent(pattern.assign.ident);
-                            if (std.mem.eql(u8, def_ident_text, required_ident)) {
+                            // Compare ident indices directly (O(1) instead of string comparison)
+                            if (pattern.assign.ident == app_required_ident) {
                                 found_expr = def.expr;
                                 break;
                             }
