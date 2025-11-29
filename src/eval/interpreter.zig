@@ -1795,10 +1795,9 @@ pub const Interpreter = struct {
 
                 // Access second argument as a record and extract its specific fields
                 const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch unreachable;
-                const sublist_start_index = 0; // sublist_config.findFieldIndex(self.env.idents.sublist_start).?;
-                const sublist_start_stack = sublist_config.getFieldByIndex(sublist_start_index) catch unreachable;
-                const sublist_len_index = 1; //sublist_config.findFieldIndex(self.env.idents.sublist_len).?;
-                const sublist_len_stack = sublist_config.getFieldByIndex(sublist_len_index) catch unreachable;
+                // When fields are alphabetically sorted, 0 will be `len` and 1 will be `start`
+                const sublist_start_stack = sublist_config.getFieldByIndex(1) catch unreachable;
+                const sublist_len_stack = sublist_config.getFieldByIndex(0) catch unreachable;
                 const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
                 const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
                 std.debug.print("\nConfig Record: {{start: {d}, len: {d} }}\n", .{ sublist_start, sublist_len });

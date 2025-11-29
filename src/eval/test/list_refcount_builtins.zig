@@ -59,6 +59,11 @@ test "list refcount builtins - phase 12 limitation documented" {
 // - "e_low_level_lambda - List.drop_at on refcounted List(Str)"
 // - "e_low_level_lambda - List.drop_at on refcounted List(List(Str))"
 //
+// - "e_low_level_lambda - List.sublist on empty list"
+// - "e_low_level_lambda - List.sublist on non-empty list"
+// - "e_low_level_lambda - List.sublist start out of bounds"
+// - "e_low_level_lambda - List.sublist requesting beyond end of list gives you input list"
+//
 // interpreter_style_test.zig:
 // - "interpreter: match list pattern destructures"
 // - "interpreter: match list rest binds slice"
