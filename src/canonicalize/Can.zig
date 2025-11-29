@@ -1134,10 +1134,19 @@ fn processAssociatedItemsSecondPass(
                                     // Skip the next statement since we're processing it now
                                     i = next_i;
 
-                                    // Build qualified name (e.g., "Foo.bar")
+                                    // Build fully qualified method name (e.g., "module.Foo.bar")
+                                    // Methods need module prefix for runtime lookup, even if the type
+                                    // name doesn't have it. This ensures getMethodIdent can find them.
                                     const parent_text = self.env.getIdent(parent_name);
                                     const decl_text = self.env.getIdent(decl_ident);
-                                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                                    const qualified_idx = if (!std.mem.startsWith(u8, parent_text, self.env.module_name) or
+                                        (parent_text.len > self.env.module_name.len and parent_text[self.env.module_name.len] != '.'))
+                                    method_blk: {
+                                        // Parent doesn't have module prefix - add it
+                                        const module_qualified_parent = try self.env.insertQualifiedIdent(self.env.module_name, parent_text);
+                                        const module_qualified_parent_text = self.env.getIdent(module_qualified_parent);
+                                        break :method_blk try self.env.insertQualifiedIdent(module_qualified_parent_text, decl_text);
+                                    } else try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                                     // Canonicalize with the qualified name and type annotation
                                     const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
@@ -1219,10 +1228,19 @@ fn processAssociatedItemsSecondPass(
                 if (pattern == .ident) {
                     const pattern_ident_tok = pattern.ident.ident_tok;
                     if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                        // Build qualified name (e.g., "Foo.bar")
+                        // Build fully qualified method name (e.g., "module.Foo.bar")
+                        // Methods need module prefix for runtime lookup, even if the type
+                        // name doesn't have it. This ensures getMethodIdent can find them.
                         const parent_text = self.env.getIdent(parent_name);
                         const decl_text = self.env.getIdent(decl_ident);
-                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                        const qualified_idx = if (!std.mem.startsWith(u8, parent_text, self.env.module_name) or
+                            (parent_text.len > self.env.module_name.len and parent_text[self.env.module_name.len] != '.'))
+                        method_blk2: {
+                            // Parent doesn't have module prefix - add it
+                            const module_qualified_parent = try self.env.insertQualifiedIdent(self.env.module_name, parent_text);
+                            const module_qualified_parent_text = self.env.getIdent(module_qualified_parent);
+                            break :method_blk2 try self.env.insertQualifiedIdent(module_qualified_parent_text, decl_text);
+                        } else try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);

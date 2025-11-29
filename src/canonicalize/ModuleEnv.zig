@@ -2687,3 +2687,61 @@ pub fn getMethodIdentByIdents(self: *const Self, source_env: *const Self, type_i
 pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
 }
+
+/// Mapping from platform's requires_idx to app's export Expr.Idx.
+/// This bridges the two modules' identifier stores without needing string comparison at runtime.
+pub const RequiredLookupMapping = struct {
+    /// Array indexed by requires_idx, containing the app's Expr.Idx for that required value.
+    /// A value of null means the required value was not found in the app's exports.
+    app_exprs: []?CIR.Expr.Idx,
+
+    pub fn deinit(self: *RequiredLookupMapping, allocator: std.mem.Allocator) void {
+        allocator.free(self.app_exprs);
+        self.* = undefined;
+    }
+};
+
+/// Builds a mapping from platform requires_idx to app export expressions.
+/// This performs the string comparison once during setup (outside src/eval/)
+/// so that the interpreter can use index-based lookup at runtime.
+///
+/// Parameters:
+/// - platform_env: The platform's ModuleEnv (contains requires_types)
+/// - app_env: The app's ModuleEnv (contains exports)
+/// - allocator: Allocator for the mapping array
+///
+/// Returns: A mapping that can be used to resolve e_lookup_required expressions
+pub fn buildRequiredLookupMapping(
+    platform_env: *const Self,
+    app_env: *const Self,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!RequiredLookupMapping {
+    const requires_items = platform_env.requires_types.items.items;
+    const exports = app_env.store.sliceDefs(app_env.exports);
+
+    // Allocate array for mapping
+    const app_exprs = try allocator.alloc(?CIR.Expr.Idx, requires_items.len);
+    @memset(app_exprs, null);
+
+    // For each required type, find the matching export in the app
+    for (requires_items, 0..) |required_type, requires_idx| {
+        const required_ident_text = platform_env.getIdent(required_type.ident);
+
+        // Look up the ident in the app's ident store
+        const app_ident_idx = app_env.getIdentStoreConst().findByString(required_ident_text) orelse continue;
+
+        // Find the export with this ident
+        for (exports) |def_idx| {
+            const def = app_env.store.getDef(def_idx);
+            const pattern = app_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                if (pattern.assign.ident == app_ident_idx) {
+                    app_exprs[requires_idx] = def.expr;
+                    break;
+                }
+            }
+        }
+    }
+
+    return RequiredLookupMapping{ .app_exprs = app_exprs };
+}

@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+
 const trace_eval = build_options.trace_eval;
 const base_pkg = @import("base");
 const types = @import("types");
@@ -206,6 +207,12 @@ pub const Interpreter = struct {
     /// App module for resolving e_lookup_required (platform requires clause)
     /// When the primary env is the platform, this points to the app that provides required values.
     app_env: ?*can.ModuleEnv,
+    /// App's module name ident, translated to the primary env's ident store.
+    /// This allows comparison with origin_module idents from runtime types.
+    app_module_name_in_primary_env: ?base_pkg.Ident.Idx,
+    /// Pre-computed mapping from requires_idx to app export expressions.
+    /// Built during init to avoid string comparison at runtime.
+    required_lookup_mapping: ?can.ModuleEnv.RequiredLookupMapping,
     /// Array of all module environments, indexed by resolved module index
     /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
     all_module_envs: []const *const can.ModuleEnv,
@@ -363,6 +370,16 @@ pub const Interpreter = struct {
             .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
             .app_env = app_env,
+            // Translate app's module name to the primary env's ident store for comparison
+            .app_module_name_in_primary_env = if (app_env) |a_env| blk: {
+                const app_module_name_str = a_env.getIdent(a_env.module_name_idx);
+                break :blk env.insertIdent(base_pkg.Ident.for_text(app_module_name_str)) catch null;
+            } else null,
+            // Build required lookup mapping if we have both platform requires and app env
+            .required_lookup_mapping = if (app_env) |a_env|
+                can.ModuleEnv.buildRequiredLookupMapping(env, a_env, allocator) catch null
+            else
+                null,
             .all_module_envs = all_module_envs,
             .module_envs = module_envs,
             .translated_module_envs = undefined, // Set after runtime_layout_store init
@@ -5303,6 +5320,9 @@ pub const Interpreter = struct {
         self.active_closures.deinit();
         self.def_stack.deinit();
         self.scratch_tags.deinit();
+        if (self.required_lookup_mapping) |*mapping| {
+            mapping.deinit(self.allocator);
+        }
     }
 
     /// Get the module environment for a given origin module identifier.
@@ -6987,35 +7007,20 @@ pub const Interpreter = struct {
             .e_lookup_required => |lookup| {
                 // Required lookups reference values from the app that provides values to the
                 // platform's `requires` clause.
+                // Use pre-computed mapping to avoid string comparison at runtime.
                 if (self.app_env) |app_env| {
-                    // Get the required type info from the platform's requires_types
-                    const requires_items = self.env.requires_types.items.items;
                     const requires_idx_val = @intFromEnum(lookup.requires_idx);
-                    if (requires_idx_val >= requires_items.len) {
+
+                    // Use pre-computed mapping (built during init in src/canonicalize/)
+                    const mapping = self.required_lookup_mapping orelse {
+                        return error.TypeMismatch;
+                    };
+
+                    if (requires_idx_val >= mapping.app_exprs.len) {
                         return error.TypeMismatch;
                     }
-                    const required_type = requires_items[requires_idx_val];
-                    // Translate the required ident from platform's store to app's store (once, outside loop)
-                    const required_ident_str = self.env.getIdent(required_type.ident);
-                    const app_required_ident = try @constCast(app_env).insertIdent(base_pkg.Ident.for_text(required_ident_str));
 
-                    // Find the matching export in the app
-                    const exports = app_env.store.sliceDefs(app_env.exports);
-                    var found_expr: ?can.CIR.Expr.Idx = null;
-                    for (exports) |def_idx| {
-                        const def = app_env.store.getDef(def_idx);
-                        // Get the def's identifier from its pattern
-                        const pattern = app_env.store.getPattern(def.pattern);
-                        if (pattern == .assign) {
-                            // Compare ident indices directly (O(1) instead of string comparison)
-                            if (pattern.assign.ident == app_required_ident) {
-                                found_expr = def.expr;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (found_expr) |app_expr_idx| {
+                    if (mapping.app_exprs[requires_idx_val]) |app_expr_idx| {
                         // Switch to app env for evaluation (like evalLookupExternal)
                         const saved_env = self.env;
                         const saved_bindings_len = self.bindings.items.len;
