@@ -963,7 +963,7 @@ test "interpreter: List.any True on integers" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -983,7 +983,7 @@ test "interpreter: List.any False on unsigned integers" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1003,7 +1003,7 @@ test "interpreter: List.any False on empty list" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1023,7 +1023,7 @@ test "interpreter: List.all False when some elements are False" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1043,7 +1043,7 @@ test "interpreter: List.all True on small integers" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1063,7 +1063,7 @@ test "interpreter: List.all False on empty list" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1083,7 +1083,7 @@ test "interpreter: List.contains is False for a missing element" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1103,7 +1103,7 @@ test "interpreter: List.contains is True when element is found" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1123,7 +1123,7 @@ test "interpreter: List.contains is False on empty list" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
