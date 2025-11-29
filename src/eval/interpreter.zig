@@ -5492,9 +5492,11 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
-                                // Keep the original tag name - it should already exist in the module's ident store
+                                // Translate tag name from source module's ident store to runtime_layout_store's ident store
+                                const source_name_str = module.getIdent(tag.name);
+                                const rt_tag_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
                                 tag.* = .{
-                                    .name = tag.name,
+                                    .name = rt_tag_name,
                                     .args = rt_args_range,
                                 };
                             }
@@ -7199,7 +7201,21 @@ pub const Interpreter = struct {
 
                 const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
                     const name_text = self.env.getIdent(tag.name);
-                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    // Debug: show available tags
+                    var dbg_buf: [512]u8 = undefined;
+                    var dbg_len: usize = 0;
+                    for (tag_list.items) |ti| {
+                        const tn = self.runtime_layout_store.env.getIdent(ti.name);
+                        if (dbg_len + tn.len + 2 < dbg_buf.len) {
+                            if (dbg_len > 0) {
+                                dbg_buf[dbg_len] = ',';
+                                dbg_len += 1;
+                            }
+                            @memcpy(dbg_buf[dbg_len..][0..tn.len], tn);
+                            dbg_len += tn.len;
+                        }
+                    }
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}` in [{s}]", .{ name_text, dbg_buf[0..dbg_len] });
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
@@ -7750,12 +7766,28 @@ pub const Interpreter = struct {
             self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
             return error.Crash;
         }
-        const tu = resolved.desc.content.structure.tag_union;
-        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        // Use appendUnionTags to properly handle tag union extensions
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(rt_var, &tag_list);
         // Find tag index by translating the source ident to the runtime store
-        const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+        const tag_index = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items) orelse {
             const name_text = self.env.getIdent(zero.name);
-            const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+            // Debug: show available tags
+            var dbg_buf: [512]u8 = undefined;
+            var dbg_len: usize = 0;
+            for (tag_list.items) |ti| {
+                const tn = self.runtime_layout_store.env.getIdent(ti.name);
+                if (dbg_len + tn.len + 2 < dbg_buf.len) {
+                    if (dbg_len > 0) {
+                        dbg_buf[dbg_len] = ',';
+                        dbg_len += 1;
+                    }
+                    @memcpy(dbg_buf[dbg_len..][0..tn.len], tn);
+                    dbg_len += tn.len;
+                }
+            }
+            const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}` in [{s}]", .{ name_text, dbg_buf[0..dbg_len] });
             self.triggerCrash(msg, true, roc_ops);
             return error.Crash;
         };
