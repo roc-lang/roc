@@ -5532,7 +5532,7 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
-                                // Translate the tag name from source module's ident store to runtime layout store's ident store
+                                // Translate tag name from source module's ident store to runtime_layout_store's ident store
                                 const source_name_str = module.getIdent(tag.name);
                                 const rt_tag_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
                                 tag.* = .{
@@ -7836,10 +7836,12 @@ pub const Interpreter = struct {
             self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
             return error.Crash;
         }
-        const tu = resolved.desc.content.structure.tag_union;
-        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        // Use appendUnionTags to properly handle tag union extensions
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(rt_var, &tag_list);
         // Find tag index by translating the source ident to the runtime store
-        const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+        const tag_index = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items) orelse {
             const name_text = self.env.getIdent(zero.name);
             const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
             self.triggerCrash(msg, true, roc_ops);

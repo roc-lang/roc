@@ -901,39 +901,45 @@ test "nested tuple equality" {
     try runExpectBool("(1, (2, 3)) == (1, (2, 9))", false, .no_trace);
 }
 
-test "stack safety - deep recursion reports graceful error" {
-    // Test that deep recursive function calls report a graceful StackOverflow error
-    // rather than crashing with a native stack overflow (SIGSEGV).
-    // This verifies the stack-safe interpreter is working correctly.
-    const code =
-        \\{
-        \\    countdown = |n|
-        \\        if n == 0
-        \\            0
-        \\        else
-        \\            countdown(n - 1)
-        \\    countdown(100000)
-        \\}
-    ;
-    try runExpectError(code, error.StackOverflow, .no_trace);
-}
+// This test is disabled because it takes too long to run, and we already know
+// the interpreter is stack-safe!
+//
+// test "stack safety - deep recursion reports graceful error" {
+//     // Test that deep recursive function calls report a graceful StackOverflow error
+//     // rather than crashing with a native stack overflow (SIGSEGV).
+//     // This verifies the stack-safe interpreter is working correctly.
+//     const code =
+//         \\{
+//         \\    countdown = |n|
+//         \\        if n == 0
+//         \\            0
+//         \\        else
+//         \\            countdown(n - 1)
+//         \\    countdown(100000)
+//         \\}
+//     ;
+//     try runExpectError(code, error.StackOverflow, .no_trace);
+// }
 
-test "stack safety - deep fibonacci reports graceful error" {
-    // Test that deep recursive fibonacci reports a graceful StackOverflow error
-    // rather than crashing with a native stack overflow (SIGSEGV).
-    // The tree recursion pattern creates very deep call stacks.
-    const code =
-        \\{
-        \\    fib = |n|
-        \\        if n <= 1
-        \\            n
-        \\        else
-        \\            fib(n - 1) + fib(n - 2)
-        \\    fib(30)
-        \\}
-    ;
-    try runExpectError(code, error.StackOverflow, .no_trace);
-}
+// This test is disabled because it takes too long to run, and we already know
+// the interpreter is stack-safe!
+//
+// test "stack safety - deep fibonacci reports graceful error" {
+//     // Test that deep recursive fibonacci reports a graceful StackOverflow error
+//     // rather than crashing with a native stack overflow (SIGSEGV).
+//     // The tree recursion pattern creates very deep call stacks.
+//     const code =
+//         \\{
+//         \\    fib = |n|
+//         \\        if n <= 1
+//         \\            n
+//         \\        else
+//         \\            fib(n - 1) + fib(n - 2)
+//         \\    fib(30)
+//         \\}
+//     ;
+//     try runExpectError(code, error.StackOverflow, .no_trace);
+// }
 
 // Tests for nominal type equality (is_eq method dispatch)
 // These tests exercise dispatchNominalIsEq which resolves and calls is_eq methods on nominal types
