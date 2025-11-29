@@ -681,3 +681,89 @@ test "fx platform run from different cwd" {
     // Verify stdout contains expected messages
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
 }
+
+// =============================================================================
+// BUG REPRODUCTIONS - These tests document known bugs and will fail once fixed
+// =============================================================================
+
+test "BUG: question mark operator not implemented" {
+    // Bug 4: The `?` postfix operator for error propagation is not yet implemented.
+    // Expected behavior once fixed: The code should compile and run successfully.
+    // Current behavior: Reports "NOT IMPLEMENTED" error.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/bug_04_question_mark_not_implemented.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Currently this should produce a "NOT IMPLEMENTED" error
+    // Once the bug is fixed, this test will fail and should be updated
+    // to expect successful execution
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "NOT IMPLEMENTED") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "suffix_single_question") != null);
+}
+
+test "BUG: numeric fold produces incorrect values" {
+    // Bug 9: Using List.fold with numeric accumulators produces garbage values.
+    // Expected output: "Sum: 15"
+    // Actual output: "Sum: -3446744073709551616" (or similar garbage)
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/bug_09_numeric_fold_wrong.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The bug is that we get garbage values instead of correct sum
+    // Once fixed, this test should check for "Sum: 15"
+    // For now, we verify the bug exists by checking the output is NOT correct
+    if (std.mem.indexOf(u8, run_result.stdout, "Sum: 15") != null) {
+        // Bug has been fixed! Update this test to expect correct behavior
+        std.debug.print("\n*** BUG FIXED: numeric fold now produces correct values! ***\n", .{});
+        std.debug.print("Please update this test to expect correct behavior.\n", .{});
+        return error.BugHasBeenFixed;
+    }
+
+    // Verify we get some output starting with "Sum: " (even if incorrect)
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Sum: ") != null);
+}
+
+test "string literal pattern matching" {
+    // Bug 12 (FIXED): Pattern matching on specific string literals now works correctly.
+    // Regression test to ensure string patterns match properly in match expressions.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/bug_12_string_match_broken.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Verify string patterns match correctly
+    const has_alice = std.mem.indexOf(u8, run_result.stdout, "Hello Alice!") != null;
+    const has_bob = std.mem.indexOf(u8, run_result.stdout, "Hey Bob!") != null;
+
+    try testing.expect(has_alice);
+    try testing.expect(has_bob);
+}

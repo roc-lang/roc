@@ -6348,21 +6348,63 @@ fn canonicalizePattern(
         .string => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.string_tok);
+            // Get the string expression which contains the actual string parts
+            const str_expr = self.parse_ir.store.getExpr(e.expr);
 
-            // TODO: Handle escape sequences
-            // For now, just intern the raw string
-            const literal = try self.env.insertString(token_text);
+            switch (str_expr) {
+                .string => |se| {
+                    // Get the parts of the string expression
+                    const parts = self.parse_ir.store.exprSlice(se.parts);
 
-            const str_pattern = Pattern{
-                .str_literal = .{
-                    .literal = literal,
+                    // For simple string literals, there should be exactly one string_part
+                    if (parts.len == 1) {
+                        const part = self.parse_ir.store.getExpr(parts[0]);
+                        switch (part) {
+                            .string_part => |sp| {
+                                // Get the actual string content from the string_part token
+                                const part_text = self.parse_ir.resolve(sp.token);
+
+                                // Process escape sequences
+                                const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                                defer if (processed_text.ptr != part_text.ptr) {
+                                    self.env.gpa.free(processed_text);
+                                };
+
+                                const literal = try self.env.insertString(processed_text);
+
+                                const str_pattern = Pattern{
+                                    .str_literal = .{
+                                        .literal = literal,
+                                    },
+                                };
+                                const pattern_idx = try self.env.addPattern(str_pattern, region);
+
+                                return pattern_idx;
+                            },
+                            else => {},
+                        }
+                    }
+
+                    // For string patterns with interpolation or multiple parts,
+                    // we need more complex handling (not yet supported)
+                    const malformed = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                        .not_implemented = .{
+                            .feature = try self.env.insertString("string patterns with interpolation"),
+                            .region = region,
+                        },
+                    });
+                    return malformed;
                 },
-            };
-            const pattern_idx = try self.env.addPattern(str_pattern, region);
-
-            return pattern_idx;
+                else => {
+                    // Unexpected expression type in string pattern
+                    const malformed = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                        .pattern_arg_invalid = .{
+                            .region = region,
+                        },
+                    });
+                    return malformed;
+                },
+            }
         },
         .single_quote => |e| {
             return try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
