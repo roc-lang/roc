@@ -967,21 +967,57 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
-        runWithWindowsHandleInheritance(allocs, exe_path, shm_handle) catch |err| {
+        runWithWindowsHandleInheritance(allocs, exe_path, shm_handle, args.app_args) catch |err| {
             return err;
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager) catch |err| {
+        runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager, args.app_args) catch |err| {
             return err;
         };
     }
     std.log.debug("Interpreter execution completed", .{});
 }
 
+/// Append an argument to a command line buffer with proper Windows quoting.
+/// Windows command line parsing rules:
+/// - Arguments containing spaces, tabs, or quotes must be quoted
+/// - Embedded quotes must be escaped with backslash: " -> \"
+/// - Backslashes before quotes must be doubled: \" -> \\"
+fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const u8) !void {
+    const needs_quoting = arg.len == 0 or std.mem.indexOfAny(u8, arg, " \t\"") != null;
+
+    if (!needs_quoting) {
+        try cmd_builder.appendSlice(arg);
+        return;
+    }
+
+    try cmd_builder.append('"');
+    var backslash_count: usize = 0;
+    for (arg) |char| {
+        if (char == '\\') {
+            backslash_count += 1;
+        } else if (char == '"') {
+            // Double all backslashes before quote, then escape the quote
+            // N backslashes + " -> 2N backslashes + \"
+            for (0..backslash_count * 2) |_| try cmd_builder.append('\\');
+            backslash_count = 0;
+            try cmd_builder.appendSlice("\\\"");
+        } else {
+            // Emit accumulated backslashes as-is (not before a quote)
+            for (0..backslash_count) |_| try cmd_builder.append('\\');
+            backslash_count = 0;
+            try cmd_builder.append(char);
+        }
+    }
+    // Double any trailing backslashes before closing quote
+    for (0..backslash_count * 2) |_| try cmd_builder.append('\\');
+    try cmd_builder.append('"');
+}
+
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
-fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
+fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) !void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
         std.log.err("Failed to set handle as inheritable", .{});
@@ -994,9 +1030,23 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     const cwd = try std.fs.cwd().realpathAlloc(allocs.arena, ".");
     const cwd_w = try std.unicode.utf8ToUtf16LeAllocZ(allocs.arena, cwd);
 
-    // Create command line with handle and size as arguments
+    // Create command line with handle and size as arguments, plus any app arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
-    const cmd_line = try std.fmt.allocPrintSentinel(allocs.arena, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size }, 0);
+
+    // Build command line string with proper quoting for Windows
+    var cmd_builder = std.array_list.Managed(u8).initCapacity(allocs.gpa, 256) catch |err| {
+        std.log.err("Failed to allocate command line builder: {}", .{err});
+        return err;
+    };
+    defer cmd_builder.deinit();
+    try cmd_builder.writer().print("\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    for (app_args) |arg| {
+        try cmd_builder.append(' ');
+        try appendWindowsQuotedArg(&cmd_builder, arg);
+    }
+    try cmd_builder.append(0); // null terminator for sentinel
+
+    const cmd_line = cmd_builder.items[0 .. cmd_builder.items.len - 1 :0];
     const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(allocs.arena, cmd_line);
 
     // Set up process creation structures
@@ -1068,7 +1118,7 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
-fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
+fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager, app_args: []const []const u8) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(allocs.arena) catch |err| {
         std.log.err("Failed to get temp cache directory: {}", .{err});
@@ -1106,8 +1156,18 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         return error.FdConfigFailed;
     }
 
+    // Build argv slice using arena allocator (memory lives until arena is freed)
+    const argv = allocs.arena.alloc([]const u8, 1 + app_args.len) catch |err| {
+        std.log.err("Failed to allocate argv: {}", .{err});
+        return err;
+    };
+    argv[0] = temp_exe_path;
+    for (app_args, 0..) |arg, i| {
+        argv[1 + i] = arg;
+    }
+
     // Run the interpreter as a child process from the temp directory
-    var child = std.process.Child.init(&.{temp_exe_path}, allocs.gpa);
+    var child = std.process.Child.init(argv, allocs.gpa);
     child.cwd = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |err| {
         std.log.err("Failed to get current directory: {}", .{err});
         return err;
@@ -1118,7 +1178,7 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     child.stderr_behavior = .Inherit;
 
     // Spawn the child process
-    std.log.debug("Spawning child process: {s}", .{temp_exe_path});
+    std.log.debug("Spawning child process: {s} with {} app args", .{ temp_exe_path, app_args.len });
     std.log.debug("Child process working directory: {s}", .{child.cwd.?});
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
@@ -4419,4 +4479,45 @@ fn generatePackageDocs(
     generatePackageIndex(allocs, output_dir, module_path, shorthands_list.items, module_infos.items) catch |err| {
         std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
     };
+}
+
+test "appendWindowsQuotedArg" {
+    const testing = std.testing;
+
+    // Helper to test the quoting function
+    const testQuote = struct {
+        fn run(input: []const u8, expected: []const u8) !void {
+            var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
+            defer cmd.deinit();
+            try appendWindowsQuotedArg(&cmd, input);
+            try testing.expectEqualStrings(expected, cmd.items);
+        }
+    }.run;
+
+    // Simple arg without spaces - no quoting needed
+    try testQuote("simple", "simple");
+
+    // Arg with spaces - needs quoting
+    try testQuote("hello world", "\"hello world\"");
+
+    // Arg with tab - needs quoting
+    try testQuote("hello\tworld", "\"hello\tworld\"");
+
+    // Empty arg - needs quoting
+    try testQuote("", "\"\"");
+
+    // Arg with embedded quote - needs escaping
+    try testQuote("say \"hello\"", "\"say \\\"hello\\\"\"");
+
+    // Arg with backslash not before quote - unchanged
+    try testQuote("path\\to\\file", "path\\to\\file");
+
+    // Arg with backslash before quote - backslash doubled
+    try testQuote("path\\\"quote", "\"path\\\\\\\"quote\"");
+
+    // Arg with trailing backslash - doubled when quoted
+    try testQuote("path with spaces\\", "\"path with spaces\\\\\"");
+
+    // Arg with multiple trailing backslashes (needs space to trigger quoting)
+    try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
 }

@@ -108,6 +108,32 @@ Builtin :: [].{
 
 			$state
 		}
+
+		any : List(a), (a -> Bool) -> Bool
+		any = |list, predicate| {
+			for item in list {
+				if predicate(item) {
+					return True
+				}
+			}
+			False
+		}
+
+		contains : List(a), a -> Bool where [a.is_eq: a, a -> Bool]
+		contains = |list, elt| {
+			List.any(list, |x| x == elt)
+		}
+
+		all : List(a), (a -> Bool) -> Bool
+		all = |list, predicate| {
+			for item in list {
+				if Bool.not(predicate(item)) {
+					return False
+				}
+			}
+			True
+		}
+
 	}
 
 	Bool := [False, True].{
