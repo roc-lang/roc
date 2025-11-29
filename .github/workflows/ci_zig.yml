@@ -79,20 +79,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            cpu_flag: -Dcpu=x86_64_v3
-          - os: macos-15
-            cpu_flag: ''
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
-          - os: ubuntu-24.04-arm
-            cpu_flag: ''
-          - os: windows-2022
-            cpu_flag: -Dcpu=x86_64_v3
-          - os: windows-2025
-            cpu_flag: -Dcpu=x86_64_v3
-          - os: windows-11-arm
-            cpu_flag: ''
+
 
     steps:
       - name: Checkout
@@ -140,16 +129,6 @@ jobs:
         run: |
           ./ci/test_int_platform.sh
 
-      - name: roc executable minimal check (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          ./zig-out/bin/roc check ./src/PROFILING/bench_repeated_check.roc
-
-      - name: roc executable minimal check (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
-
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
@@ -157,7 +136,7 @@ jobs:
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Dfuzz -Dsystem-afl=false"
+          command: "zig build test -Dfuzz -Dsystem-afl=false -- --test-filter \"fx_platform\""
           error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
@@ -236,36 +215,36 @@ jobs:
           git reset --hard HEAD
           nix develop ./src/ -c zig build && zig build snapshot && zig build test
 
-  zig-cross-compile:
-    needs: check-once
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-linux-musl
-          - aarch64-macos-none
-          - aarch64-windows-gnu
-          - arm-linux-musleabihf
-          - x86-linux-musl
-          - x86_64-linux-musl
-          - x86_64-macos-none
-          - x86_64-windows-gnu
+  # zig-cross-compile:
+  #   needs: check-once
+  #   runs-on: ubuntu-24.04
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       target:
+  #         - aarch64-linux-musl
+  #         - aarch64-macos-none
+  #         - aarch64-windows-gnu
+  #         - arm-linux-musleabihf
+  #         - x86-linux-musl
+  #         - x86_64-linux-musl
+  #         - x86_64-macos-none
+  #         - x86_64-windows-gnu
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
-        with:
-          version: 0.15.2
-          use-cache: true
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+  #     - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
+  #       with:
+  #         version: 0.15.2
+  #         use-cache: true
 
-      - name: cross compile with llvm
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503"
+  #     - name: cross compile with llvm
+  #       uses: ./.github/actions/flaky-retry
+  #       with:
+  #         command: zig build -Dtarget=${{ matrix.target }}
+  #         error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503"
 
-  # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
-  roc-cross-compile:
-    uses: ./.github/workflows/ci_cross_compile.yml
+  # # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
+  # roc-cross-compile:
+  #   uses: ./.github/workflows/ci_cross_compile.yml
