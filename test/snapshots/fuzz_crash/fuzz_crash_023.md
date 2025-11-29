@@ -243,7 +243,7 @@ UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
 NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
 NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_023.md:121:37:121:37
 UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:27
 UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:9
 NOT IMPLEMENTED - :0:0:0:0
@@ -590,10 +590,16 @@ This feature is not yet implemented: alternatives pattern outside match expressi
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize local_dispatch expression
+**UNDEFINED VARIABLE**
+Nothing is named `add` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_023.md:121:37:121:37:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+		                                  ^
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -2248,7 +2254,10 @@ expect {
 													(required
 														(p-assign (ident "rest"))))))))
 								(value
-									(e-runtime-error (tag "not_implemented"))))
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-num (value "12"))
+										(e-num (value "34")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
