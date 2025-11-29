@@ -812,6 +812,31 @@ test "e_low_level_lambda - List.append for list of lists" {
     try testing.expectEqual(@as(i128, 4), len_value);
 }
 
+test "e_low_level_lambda - List.append for list of tuples" {
+    const src =
+        \\x = List.append([(-1, 0, 1), (2, 3, 4), (5, 6, 7)], (-2, -3, -4))
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4), len_value);
+}
+
+test "e_low_level_lambda - List.append for list of records" {
+    const src =
+        \\x = List.append([{x:"1", y: "1"}, {x: "2", y: "4"}, {x: "5", y: "7"}], {x: "2", y: "4"})
+        \\len = List.len(x)
+        \\tail = match List.get(x, 3) { Ok(rec) => rec.x, _ => "wrong"}
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 4), len_value);
+
+    const get_value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(get_value);
+    try testing.expectEqualStrings("\"2\"", get_value);
+}
+
 test "e_low_level_lambda - List.append for already refcounted elt" {
     const src =
         \\new = [8, 9]
