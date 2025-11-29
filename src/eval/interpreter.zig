@@ -1767,7 +1767,36 @@ pub const Interpreter = struct {
                     .roc_ops = roc_ops,
                 };
 
-                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, roc_ops);
+                const copy_fn: builtins.list.CopyFallbackFn = &builtins.list.copy_fallback;
+                // const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
+                //     .scalar => {
+                //         switch (elem_layout.data.scalar.tag) {
+                //             .str => break :copy &builtins.list.copy_str,
+                //             .int => {
+                //                 switch (elem_layout.data.scalar.data.int) {
+                //                     .u8 => break :copy &builtins.list.copy_u8,
+                //                     .u16 => break :copy &builtins.list.copy_u16,
+                //                     .u32 => break :copy &builtins.list.copy_u32,
+                //                     .u64 => break :copy &builtins.list.copy_u64,
+                //                     .u128 => break :copy &builtins.list.copy_u128,
+                //                     .i8 => break :copy &builtins.list.copy_i8,
+                //                     .i16 => break :copy &builtins.list.copy_i16,
+                //                     .i32 => break :copy &builtins.list.copy_i32,
+                //                     .i64 => break :copy &builtins.list.copy_i64,
+                //                     .i128 => break :copy &builtins.list.copy_i128,
+                //                 }
+                //             },
+                //             else => break :copy &builtins.list.copy_fallback,
+                //         }
+                //     },
+                //     .box => break :copy &builtins.list.copy_box,
+                //     .box_of_zst => break :copy &builtins.list.copy_box_zst,
+                //     .list => break :copy &builtins.list.copy_list,
+                //     .list_of_zst => break :copy &builtins.list.copy_list_zst,
+                //     else => break :copy &builtins.list.copy_fallback,
+                // };
+
+                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
                 const result_layout = roc_list_arg.layout; // Same layout as input
