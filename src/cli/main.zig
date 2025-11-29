@@ -625,7 +625,8 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     }
 
     // Create the complete platform shim
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items) catch |err| {
+    // Note: Symbol names include platform-specific prefixes (underscore for macOS)
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
