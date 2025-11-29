@@ -7201,21 +7201,7 @@ pub const Interpreter = struct {
 
                 const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
                     const name_text = self.env.getIdent(tag.name);
-                    // Debug: show available tags
-                    var dbg_buf: [512]u8 = undefined;
-                    var dbg_len: usize = 0;
-                    for (tag_list.items) |ti| {
-                        const tn = self.runtime_layout_store.env.getIdent(ti.name);
-                        if (dbg_len + tn.len + 2 < dbg_buf.len) {
-                            if (dbg_len > 0) {
-                                dbg_buf[dbg_len] = ',';
-                                dbg_len += 1;
-                            }
-                            @memcpy(dbg_buf[dbg_len..][0..tn.len], tn);
-                            dbg_len += tn.len;
-                        }
-                    }
-                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}` in [{s}]", .{ name_text, dbg_buf[0..dbg_len] });
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
@@ -7773,21 +7759,7 @@ pub const Interpreter = struct {
         // Find tag index by translating the source ident to the runtime store
         const tag_index = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items) orelse {
             const name_text = self.env.getIdent(zero.name);
-            // Debug: show available tags
-            var dbg_buf: [512]u8 = undefined;
-            var dbg_len: usize = 0;
-            for (tag_list.items) |ti| {
-                const tn = self.runtime_layout_store.env.getIdent(ti.name);
-                if (dbg_len + tn.len + 2 < dbg_buf.len) {
-                    if (dbg_len > 0) {
-                        dbg_buf[dbg_len] = ',';
-                        dbg_len += 1;
-                    }
-                    @memcpy(dbg_buf[dbg_len..][0..tn.len], tn);
-                    dbg_len += tn.len;
-                }
-            }
-            const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}` in [{s}]", .{ name_text, dbg_buf[0..dbg_len] });
+            const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
             self.triggerCrash(msg, true, roc_ops);
             return error.Crash;
         };
