@@ -1098,8 +1098,18 @@ pub fn listConcat(
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
-    if (list_b.isEmpty()) {
+    // Early return for empty lists - avoid unnecessary allocations
+    if (list_a.isEmpty()) {
+        if (list_b.getCapacity() == 0) {
+            // b could be a seamless slice, so we still need to decref.
+            list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+            return list_a;
+        } else {
+            // list_b has capacity, return it and consume list_a
+            list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+            return list_b;
+        }
+    } else if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
             // a could be a seamless slice, so we still need to decref.
             list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);

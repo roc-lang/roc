@@ -1714,92 +1714,21 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Handle list_of_zst specially to avoid alignment mismatch issues.
-                // When list_of_zst (alignment 1) is concatenated with regular list (alignment 16),
-                // listConcat may try to reallocate with wrong alignment.
-                // TODO: Implement proper list_of_zst handling as a special memory-efficient representation.
-                const list_a_is_zst = list_a_arg.layout.tag == .list_of_zst;
-                const list_b_is_zst = list_b_arg.layout.tag == .list_of_zst;
-
-                // If either list is empty, just return a copy of the other
+                // If either list is empty, just return a copy of the other (avoid allocation)
                 if (list_a.len() == 0) {
-                    // list_a is empty
-                    if (list_b.len() == 0) {
-                        // Both empty - return with proper layout
-                        return try self.pushCopy(list_b_arg, roc_ops);
-                    }
-                    // Return copy of list_b
                     return try self.pushCopy(list_b_arg, roc_ops);
                 }
                 if (list_b.len() == 0) {
-                    // list_b is empty, return a copy of list_a
                     return try self.pushCopy(list_a_arg, roc_ops);
-                }
-
-                // If either list is list_of_zst but non-empty, we have a type error
-                // (can't have non-empty list of zero-sized type in this context)
-                // But for robustness, if one is zst and one is regular, allocate fresh list
-                if (list_a_is_zst or list_b_is_zst) {
-                    // One of the lists has list_of_zst layout but is non-empty
-                    // This shouldn't happen in practice, but handle gracefully by
-                    // creating a new list and copying elements
-                    const total_count = list_a.len() + list_b.len();
-                    var out = try self.pushRaw(result_layout, 0);
-                    out.is_initialized = false;
-                    const header: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-
-                    const runtime_list = builtins.list.RocList.allocateExact(
-                        elem_alignment_u32,
-                        total_count,
-                        elem_size,
-                        elem_layout.isRefcounted(),
-                        roc_ops,
-                    );
-
-                    if (elem_size > 0) {
-                        if (runtime_list.bytes) |buffer| {
-                            // Copy elements from list_a
-                            if (list_a.bytes) |src_a| {
-                                @memcpy(buffer[0 .. list_a.len() * elem_size], src_a[0 .. list_a.len() * elem_size]);
-                            }
-                            // Copy elements from list_b
-                            if (list_b.bytes) |src_b| {
-                                const offset = list_a.len() * elem_size;
-                                @memcpy(buffer[offset .. offset + list_b.len() * elem_size], src_b[0 .. list_b.len() * elem_size]);
-                            }
-                        }
-                    }
-
-                    header.* = runtime_list;
-                    out.is_initialized = true;
-
-                    // Handle refcounting for copied elements
-                    const elements_refcounted = elem_layout.isRefcounted();
-                    if (elements_refcounted) {
-                        var refcount_context_local = RefcountContext{
-                            .layout_store = &self.runtime_layout_store,
-                            .elem_layout = elem_layout,
-                            .roc_ops = roc_ops,
-                        };
-                        if (runtime_list.bytes) |buffer| {
-                            var i: usize = 0;
-                            while (i < total_count) : (i += 1) {
-                                listElementInc(@ptrCast(&refcount_context_local), buffer + i * elem_size);
-                            }
-                        }
-                    }
-
-                    return out;
                 }
 
                 // Determine if elements are refcounted
                 const elements_refcounted = elem_layout.isRefcounted();
 
-                // Always create a fresh list to avoid alignment mismatch issues.
-                // The builtin listConcat tries to reallocate one of the input lists, which
-                // can fail if the list was allocated with a different alignment (e.g., list_of_zst
-                // with alignment 1 vs regular list with alignment 16).
-                // TODO: Optimize this path once list_of_zst alignment tracking is properly fixed.
+                // Create a fresh list by allocating and copying elements.
+                // We can't use the builtin listConcat here because it consumes its input lists
+                // (handles refcounting internally), but we're working with StackValues that
+                // have their own lifetime management - the caller will decref the args.
                 const total_count = list_a.len() + list_b.len();
                 var out = try self.pushRaw(result_layout, 0);
                 out.is_initialized = false;
@@ -1815,9 +1744,11 @@ pub const Interpreter = struct {
 
                 if (elem_size > 0) {
                     if (runtime_list.bytes) |buffer| {
+                        // Copy elements from list_a
                         if (list_a.bytes) |src_a| {
                             @memcpy(buffer[0 .. list_a.len() * elem_size], src_a[0 .. list_a.len() * elem_size]);
                         }
+                        // Copy elements from list_b
                         if (list_b.bytes) |src_b| {
                             const offset = list_a.len() * elem_size;
                             @memcpy(buffer[offset .. offset + list_b.len() * elem_size], src_b[0 .. list_b.len() * elem_size]);
@@ -1825,7 +1756,11 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Handle refcounting for copied elements
+                header.* = runtime_list;
+                out.is_initialized = true;
+
+                // Handle refcounting for copied elements - increment refcount for each element
+                // since we copied them (the elements are now shared with the original lists)
                 if (elements_refcounted) {
                     var refcount_context = RefcountContext{
                         .layout_store = &self.runtime_layout_store,
@@ -1840,8 +1775,6 @@ pub const Interpreter = struct {
                     }
                 }
 
-                header.* = runtime_list;
-                out.is_initialized = true;
                 return out;
             },
             // Bool operations
@@ -6312,8 +6245,9 @@ pub const Interpreter = struct {
             final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
-            /// Whether to pop and discard a value from the previous s_expr statement
-            should_pop_value: bool = false,
+            /// True if this block_continue was scheduled after an s_expr statement,
+            /// meaning we should pop and discard the expression's result value
+            should_discard_value: bool = false,
         };
 
         pub const BindDecl = struct {
@@ -8490,15 +8424,18 @@ pub const Interpreter = struct {
             },
             .s_expr => |sx| {
                 // Evaluate expression, discard result, continue with remaining
-                // Push block_continue for remaining statements with should_pop_value=true
-                // so it knows to pop and discard the s_expr result
-                try work_stack.push(.{ .apply_continuation = .{ .block_continue = .{
-                    .remaining_stmts = remaining_stmts,
-                    .final_expr = final_expr,
-                    .bindings_start = bindings_start,
-                    .should_pop_value = true,
-                } } });
-                // Evaluate the expression; block_continue will pop and discard the result
+                // Push block_continue for remaining statements (with should_discard_value=true)
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .block_continue = .{
+                            .remaining_stmts = remaining_stmts,
+                            .final_expr = final_expr,
+                            .bindings_start = bindings_start,
+                            .should_discard_value = true, // s_expr result should be discarded
+                        },
+                    },
+                });
+                // Evaluate the expression; block_continue will discard its result
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = sx.expr,
                     .expected_rt_var = null,
@@ -8733,13 +8670,9 @@ pub const Interpreter = struct {
             },
             .block_continue => |bc| {
                 // For s_expr statements, we need to pop and discard the value
-                // Only pop if we're continuing after an s_expr (should_pop_value is true)
-                if (bc.should_pop_value) {
-                    // Pop and discard any value left from s_expr
-                    const val = value_stack.pop() orelse {
-                        self.triggerCrash("block_continue: value_stack empty when popping s_expr result", false, roc_ops);
-                        return error.Crash;
-                    };
+                // Only pop if should_discard_value is set (meaning this was scheduled after an s_expr)
+                if (bc.should_discard_value) {
+                    const val = value_stack.pop() orelse return error.Crash;
                     val.decref(&self.runtime_layout_store, roc_ops);
                 }
 

@@ -77,7 +77,10 @@ Builtin :: [].{
 		}
 
 		map : List(a), (a -> b) -> List(b)
-		map = |_, _| []
+		map = |list, transform|
+			# Implement using fold + concat for now
+			# TODO: Optimize with in-place update when list is unique and element sizes match
+			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate|
