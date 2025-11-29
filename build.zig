@@ -1083,12 +1083,24 @@ pub fn build(b: *std.Build) void {
 
     // fx platform effectful functions test - only run when not cross-compiling
     if (isNativeishOrMusl(target)) {
+        // Determine the appropriate target for the fx platform host library.
+        // On Linux, we need to use musl explicitly because the CLI's findHostLibrary
+        // looks for targets/x64musl/libhost.a first, and musl produces proper static binaries.
+        const fx_host_target, const fx_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
+            .linux => switch (target.result.cpu.arch) {
+                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
+                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
+                else => .{ target, null },
+            },
+            else => .{ target, null },
+        };
+
         // Create fx test platform host static library
         const test_platform_fx_host_lib = createTestPlatformHostLib(
             b,
             "test_platform_fx_host",
             "test/fx/platform/host.zig",
-            target,
+            fx_host_target,
             optimize,
             roc_modules,
         );
@@ -1098,6 +1110,14 @@ pub fn build(b: *std.Build) void {
         const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
         copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
         b.getInstallStep().dependOn(&copy_test_fx_host.step);
+
+        // On Linux, also copy to the target-specific directory so findHostLibrary finds it
+        if (fx_host_target_dir) |target_dir| {
+            copy_test_fx_host.addCopyFileToSource(
+                test_platform_fx_host_lib.getEmittedBin(),
+                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, "libhost.a" }),
+            );
+        }
 
         const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
