@@ -21,8 +21,21 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
 }
 
 fn isNativeOrMusl(target: ResolvedTarget) bool {
-    return target.query.isNativeCpu() and target.query.isNativeOs() and
-        (target.query.isNativeAbi() or target.result.abi.isMusl());
+    const is_native_cpu = target.query.isNativeCpu();
+    const is_native_os = target.query.isNativeOs();
+    const is_native_abi = target.query.isNativeAbi();
+    const is_musl = target.result.abi.isMusl();
+    
+    std.debug.print("isNativeOrMusl debug:\n", .{});
+    std.debug.print("  is_native_cpu: {}\n", .{is_native_cpu});
+    std.debug.print("  is_native_os: {}\n", .{is_native_os});
+    std.debug.print("  is_native_abi: {}\n", .{is_native_abi});
+    std.debug.print("  is_musl: {}\n", .{is_musl});
+    
+    const result = is_native_cpu and is_native_os and (is_native_abi or is_musl);
+    std.debug.print("  result: {}\n", .{result});
+    
+    return result;
 }
 
 const TestsSummaryStep = struct {
