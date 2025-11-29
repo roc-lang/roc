@@ -1684,30 +1684,22 @@ pub const Interpreter = struct {
                 const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
                 const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
 
-                // Get element layout from list_a
+                // Note: The builtin listConcat already handles empty list optimization
+                // and proper refcounting, so we don't need to special-case it here.
+
                 const elem_layout_idx_a = list_a_arg.layout.data.list;
                 const elem_layout_a = self.runtime_layout_store.getLayout(elem_layout_idx_a);
-                const elem_alignment_a = elem_layout_a.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-
-                // Get element layout from list_b
-                const elem_layout_idx_b = list_b_arg.layout.data.list;
-                const elem_layout_b = self.runtime_layout_store.getLayout(elem_layout_idx_b);
-                const elem_alignment_b = elem_layout_b.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-
-                // Use the layout with larger alignment (more specific type).
-                // This handles the case where list_a is an empty list with polymorphic element type.
-                const elem_layout = if (elem_alignment_b > elem_alignment_a) elem_layout_b else elem_layout_a;
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = @max(elem_alignment_a, elem_alignment_b);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout_a);
+                const elem_alignment = elem_layout_a.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = elem_layout_a.isRefcounted();
 
                 // Set up context for refcount callbacks
                 var refcount_context = RefcountContext{
                     .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
+                    .elem_layout = elem_layout_a,
                     .roc_ops = roc_ops,
                 };
 
@@ -1727,11 +1719,8 @@ pub const Interpreter = struct {
                     roc_ops,
                 );
 
-                // Allocate space for the result list.
-                // Use the layout with the larger element alignment, since that's the more specific type.
-                // This handles the case where list_a is an empty list with polymorphic element type.
-                const result_layout = if (elem_alignment_b > elem_alignment_a) list_b_arg.layout else list_a_arg.layout;
-                var out = try self.pushRaw(result_layout, 0);
+                // Allocate space for the result list
+                var out = try self.pushRaw(list_a_arg.layout, 0);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
