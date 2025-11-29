@@ -472,13 +472,9 @@ pub const Expr = union(enum) {
         list_len,
         list_is_empty,
         list_get_unsafe,
-        list_replace_unsafe,
-        list_append_unsafe,
         list_concat,
         list_with_capacity,
         list_sort_with,
-        list_is_unique,
-        list_clone,
 
         // Bool operations
         bool_is_eq,

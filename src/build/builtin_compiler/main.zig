@@ -166,18 +166,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
-    if (env.common.findIdent("list_replace_unsafe")) |list_replace_unsafe_ident| {
-        try low_level_map.put(list_replace_unsafe_ident, .list_replace_unsafe);
-    }
-    if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
-        try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
-    }
-    if (env.common.findIdent("list_is_unique")) |list_is_unique_ident| {
-        try low_level_map.put(list_is_unique_ident, .list_is_unique);
-    }
-    if (env.common.findIdent("list_clone")) |list_clone_ident| {
-        try low_level_map.put(list_clone_ident, .list_clone);
-    }
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
     }
