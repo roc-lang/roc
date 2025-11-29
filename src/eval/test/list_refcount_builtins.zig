@@ -52,6 +52,13 @@ test "list refcount builtins - phase 12 limitation documented" {
 // - "e_low_level_lambda - List.with_capacity without capacity, of str (refcounted elements) can concat"
 // - "e_low_level_lambda - List.with_capacity of zero-sized type creates empty list"
 //
+// - "e_low_level_lambda - List.drop_at on an empty list at index 0"
+// - "e_low_level_lambda - List.drop_at on an empty list at index >0"
+// - "e_low_level_lambda - List.drop_at on non-empty list"
+// - "e_low_level_lambda - List.drop_at out of bounds on non-empty list"
+// - "e_low_level_lambda - List.drop_at on refcounted List(Str)"
+// - "e_low_level_lambda - List.drop_at on refcounted List(List(Str))"
+//
 // interpreter_style_test.zig:
 // - "interpreter: match list pattern destructures"
 // - "interpreter: match list rest binds slice"

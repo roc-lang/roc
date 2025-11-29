@@ -132,6 +132,9 @@ Builtin :: [].{
 			True
 		}
 
+		drop_at : List(a), U64 -> List(a)
+
+		sublist : List(a), {start : U64, len : U64} -> List(a)
 	}
 
 	Bool := [False, True].{

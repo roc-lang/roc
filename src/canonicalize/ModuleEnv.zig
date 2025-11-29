@@ -163,6 +163,9 @@ pub const CommonIdents = extern struct {
     // from_utf8 error payload fields (BadUtf8 record)
     problem: Ident.Idx,
     index: Ident.Idx,
+    // sublist argument payload fields
+    // sublist_start: Ident.Idx,
+    // sublist_len: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -228,6 +231,9 @@ pub const CommonIdents = extern struct {
             // from_utf8 error payload fields (BadUtf8 record)
             .problem = try common.insertIdent(gpa, Ident.for_text("problem")),
             .index = try common.insertIdent(gpa, Ident.for_text("index")),
+            // sublist argument payload fields
+            // .sublist_start = try common.insertIdent(gpa, Ident.for_text("start")),
+            // .sublist_len = try common.insertIdent(gpa, Ident.for_text("len")),
         };
     }
 
@@ -296,6 +302,9 @@ pub const CommonIdents = extern struct {
             // from_utf8 error payload fields (BadUtf8 record)
             .problem = common.findIdent("problem") orelse unreachable,
             .index = common.findIdent("index") orelse unreachable,
+            // sublist argument payload fields
+            // .sublist_start = common.findIdent("start") orelse unreachable,
+            // .sublist_len = common.findIdent("len") orelse unreachable,
         };
     }
 };
