@@ -1103,15 +1103,16 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
     _ = ipc.platform.windows.CloseHandle(process_info.hThread);
 
-    // Check exit code
+    // Check exit code and propagate to parent
     if (exit_code != 0) {
-        std.log.err("Child process {s} exited with code: {}", .{ exe_path, exit_code });
+        std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
         if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
             std.log.err("Child process crashed with access violation (segfault)", .{});
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             std.log.err("Child process crashed with exception code: 0x{X}", .{exit_code});
         }
-        return error.ProcessExitedWithError;
+        // Propagate the exit code (truncated to u8 for compatibility)
+        std.process.exit(@truncate(exit_code));
     }
 
     std.log.debug("Child process completed successfully", .{});
@@ -1198,9 +1199,9 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             if (exit_code == 0) {
                 std.log.debug("Child process completed successfully", .{});
             } else {
-                // The host exited with an error - it should have printed any error messages
+                // Propagate the exit code from the child process to our parent
                 std.log.debug("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
-                return error.ProcessExitedWithError;
+                std.process.exit(exit_code);
             }
         },
         .Signal => |signal| {
@@ -1212,7 +1213,8 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             } else if (signal == 9) { // SIGKILL
                 std.log.err("Child process was killed (SIGKILL)", .{});
             }
-            return error.ProcessKilledBySignal;
+            // Standard POSIX convention: exit with 128 + signal number
+            std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
         .Stopped => |signal| {
             std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
